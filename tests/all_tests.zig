@@ -214,6 +214,12 @@ const _test_cluster_3node_election = @import("test_cluster_3node_election.zig");
 // drainReady-and-bridge dispatch test (Task A5b of the same plan)
 const _test_drainready_dispatch = @import("test_drainready_dispatch.zig");
 
+// Subprocess 3-node cluster smoke test (Task A6 of the same plan).
+// NOTE: this test SKIPS via error.SkipZigTest unless ./zig-out/bin/geode
+// exists, so referencing it from the aggregate build is safe even when
+// the binary hasn't been built yet.
+const _test_cluster_3node_subprocess = @import("test_cluster_3node_subprocess.zig");
+
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query
     std.testing.refAllDecls(_advanced_types_operators);
@@ -222,6 +228,7 @@ test "aggregate: geode module loads" {
     std.testing.refAllDecls(_test_cluster_bootstrap);
     std.testing.refAllDecls(_test_cluster_3node_election);
     std.testing.refAllDecls(_test_drainready_dispatch);
+    std.testing.refAllDecls(_test_cluster_3node_subprocess);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);

@@ -82,6 +82,8 @@ pub fn maybeStart(
     env: std.process.Environ.Map,
     cli_cluster_port: ?u16,
     cli_peers: []const []const u8,
+    cluster_cert_path: ?[]const u8,
+    cluster_key_path: ?[]const u8,
 ) Error!?Bootstrap {
     // Standalone mode: no cluster token, nothing to do.
     const cluster_token = env.get("GEODE_CLUSTER_TOKEN") orelse return null;
@@ -151,6 +153,11 @@ pub fn maybeStart(
         .cluster_port = cluster_port,
         .cluster_token = cluster_token,
         .cluster_name = cluster_name,
+        // Forward TLS material so the cluster listener can reuse the certs
+        // cert_gen.ensureCertificatesAtPath wrote into <data-dir>/server.crt
+        // (A6).  Empty string lets the QuicTransport defaults apply.
+        .cert_path = cluster_cert_path orelse "",
+        .key_path = cluster_key_path orelse "",
     };
 
     // ClusterCoordinator.init returns a value (not a pointer); allocate

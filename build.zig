@@ -989,6 +989,30 @@ pub fn build(b: *std.Build) void {
     const drainready_dispatch_step = b.step("test-drainready-dispatch", "Run raft drainReady-and-bridge dispatch test (A5b)");
     drainready_dispatch_step.dependOn(&run_drainready_dispatch_tests.step);
 
+    // Subprocess 3-node cluster smoke test (Task A6 of the 2026-05-25
+    // distributed cluster testing plan).  Spawns three real
+    // `./zig-out/bin/geode serve` child processes on loopback and asserts
+    // that they reach the "Cluster coordinator started" startup log and
+    // elect a single leader within 30s.  Does NOT use any geode internal
+    // module — the test driver only consumes stdout/stderr of the spawned
+    // binaries, so it can run without bringing the full `geode` import
+    // graph into the test artifact (lets us keep the test cheap to
+    // compile).
+    const cluster_3node_subproc_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_3node_subprocess.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_3node_subproc_tests.root_module.link_libc = true;
+    const run_cluster_3node_subproc_tests = b.addRunArtifact(cluster_3node_subproc_tests);
+    // The test reads `./zig-out/bin/geode`, so it requires the install
+    // step to have run.  Wire that dependency explicitly so a fresh
+    // `zig build test-cluster-3node-subprocess` rebuilds the binary first
+    // instead of skipping with "geode binary missing".
+    run_cluster_3node_subproc_tests.step.dependOn(b.getInstallStep());
+    const cluster_3node_subproc_step = b.step("test-cluster-3node-subprocess", "Run subprocess 3-node cluster smoke test (A6)");
+    cluster_3node_subproc_step.dependOn(&run_cluster_3node_subproc_tests.step);
+
     // RaftCommand oneof refactor tests (Task A4b of the 2026-05-25 distributed
     // cluster testing plan). Pins the protobuf-oneof shape of RaftCommand so
     // a future regression that reintroduces `union(enum)` for the submessage

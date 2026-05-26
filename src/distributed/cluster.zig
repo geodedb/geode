@@ -340,6 +340,28 @@ pub const ClusterCoordinator = struct {
     cluster_token: []const u8 = "",
     /// Cluster name, used for OTel attributes and operator-facing logs.
     cluster_name: []const u8 = "geode-cluster",
+    /// TLS certificate path for the intra-cluster QUIC listener.  When the
+    /// server-side `cert_gen` workflow places certs in `<data-dir>/server.crt`,
+    /// the cluster listener needs to reuse those — its own
+    /// `generateSelfSignedCert` path is still unimplemented in Zig 0.16, so a
+    /// missing cert here will hard-fatal the network loop (A6 reproducer).
+    cert_path: []const u8 = "certs/server.crt",
+    /// TLS private key path for the intra-cluster QUIC listener.  Mirrors
+    /// `cert_path` lifetime / fallback semantics.
+    key_path: []const u8 = "certs/server.key",
+
+    /// Outbound raft RPC transport, wired to the inner raft node via
+    /// `RaftNode.setTransport` so that vote / heartbeat traffic produced by
+    /// the inner raft library reaches its target peers over QUIC+TLS.  The
+    /// inbound side is handled by `networkLoop` (a separate QUIC listener
+    /// stored under `network_transport.quic_server`); this field is the
+    /// pure-outbound dispatch path that the RaftLibTransportBridge needs.
+    ///
+    /// Without this field the bridge has no destination to send to and the
+    /// raft library silently drops every RequestVote / AppendEntries —
+    /// which is exactly the symptom of "three nodes start, no leader is
+    /// ever elected" that Task A6 (2026-05-25 plan) is closing.
+    raft_transport: raft_consensus.Transport,
 
     // QUAL-D004: Shutdown signal and pool handles for graceful stop.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -348,6 +370,17 @@ pub const ClusterCoordinator = struct {
     health_pool: ?*pooled.ThreadPool = null,
     replication_pool: ?*pooled.ThreadPool = null,
     connection_pool: ?*pooled.ThreadPool = null,
+    /// Dedicated polling thread for the intra-cluster QUIC endpoint.
+    /// `accept()` blocks on `accepted.items.len > 0` via a CV — connections
+    /// only land in that queue once the endpoint's `poll()` has processed
+    /// the incoming UDP datagrams and completed the TLS handshake.  The
+    /// client-facing transport runs `QuicTransport.pollLoop` on a separate
+    /// thread (see `runPollLoopTask` in `src/server/main.zig`); the
+    /// cluster listener needs the same.  Without this, every outbound
+    /// `connectInsecure` from a peer times out with HandshakeError because
+    /// the server side never processes the ClientHello (Task A6
+    /// 2026-05-25 plan reproducer).
+    cluster_poll_pool: ?*pooled.ThreadPool = null,
 
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
@@ -563,6 +596,16 @@ pub const ClusterCoordinator = struct {
             .cluster_port = config.cluster_port,
             .cluster_token = config.cluster_token,
             .cluster_name = config.cluster_name,
+            .cert_path = config.cert_path,
+            .key_path = config.key_path,
+            // Task A6 (2026-05-25 plan): outbound raft RPC transport.  We
+            // wire it to the inner raft node via `setTransport` in
+            // `start()` (not here) because the RaftLibTransportBridge
+            // stores a `*Transport` pointer and the returned-by-value
+            // ClusterCoordinator's address only becomes stable after the
+            // caller stores it (e.g. cluster_bootstrap heap-allocates the
+            // coordinator and calls start() on the heap pointer).
+            .raft_transport = raft_consensus.Transport.init(allocator),
         };
     }
 
@@ -619,6 +662,11 @@ pub const ClusterCoordinator = struct {
         if (self.network_transport.quic_server) |*server| {
             server.deinit();
         }
+        // Task A6 (2026-05-25 plan): outbound raft transport teardown.
+        // The Transport struct owns a `?quic.QuicTransport` server slot
+        // that we never listen() on (we only use the outbound `send`
+        // path), but its deinit() is a safe no-op when the slot is null.
+        self.raft_transport.deinit();
 
         self.health_monitor.health_checks.deinit(self.allocator);
     }
@@ -626,7 +674,35 @@ pub const ClusterCoordinator = struct {
     // QUAL-D004: start() spawns background threads and returns immediately.
     // Call stop() (or deinit()) to signal shutdown and join all threads.
     pub fn start(self: *ClusterCoordinator) !void {
+        // Task A6 (2026-05-25 plan): wire the outbound raft transport into
+        // the inner raft node now that `self` has a stable address.  The
+        // RaftLibTransportBridge stores `&self.raft_transport` indirectly
+        // (through `RaftNode.transport`), so we MUST do this before the
+        // raft loop starts ticking — otherwise the very first RequestVote
+        // emitted by the inner library hits a null transport and the
+        // election can't progress.
+        self.raft.setTransport(&self.raft_transport);
+
         self.shutdown.store(false, .release);
+
+        // Task A6 (2026-05-25 plan): bring up the QUIC listener BEFORE any
+        // loop thread starts.  Previously networkLoop did this lazily on its
+        // first iteration, which meant the poll-loop thread (added below)
+        // would race against an uninitialised `quic_server` slot.  Doing it
+        // up-front also lets `cluster_poll_pool` and the network accept
+        // loop share the same lifecycle.
+        if (self.network_transport.quic_server == null) {
+            var qt_config = quic.QuicTransport.Config{
+                .address = self.listen_address,
+                .port = self.cluster_port,
+            };
+            if (self.cert_path.len > 0) qt_config.cert_path = self.cert_path;
+            if (self.key_path.len > 0) qt_config.key_path = self.key_path;
+            const qt = try quic.QuicTransport.init(self.allocator, qt_config);
+            self.network_transport.quic_server = qt;
+            try self.network_transport.quic_server.?.listen();
+        }
+
         self.connection_pool = try pooled.ThreadPool.init(self.allocator, .{
             .num_threads = 4,
             .queue_capacity = 128,
@@ -634,6 +710,17 @@ pub const ClusterCoordinator = struct {
         errdefer {
             self.connection_pool.?.deinit();
             self.connection_pool = null;
+        }
+        // Task A6 (2026-05-25 plan): dedicated poll loop for the cluster
+        // QUIC endpoint.  Without this thread, the server side never
+        // processes peer ClientHello packets and every outbound peer
+        // connectInsecure() hangs until waitForHandshake() times out with
+        // QuicError.HandshakeError.  See the long comment on
+        // `cluster_poll_pool` for the full rationale.
+        self.cluster_poll_pool = try startLoopPool(self, runClusterPollLoop);
+        errdefer {
+            self.cluster_poll_pool.?.deinit();
+            self.cluster_poll_pool = null;
         }
         self.raft_pool = try startLoopPool(self, runRaftLoop);
         errdefer {
@@ -679,6 +766,13 @@ pub const ClusterCoordinator = struct {
             pool.deinit();
             self.network_pool = null;
         }
+        // Task A6 (2026-05-25 plan): join the cluster-poll thread before
+        // we destroy the QUIC server below — same race avoidance pattern
+        // as `network_pool` above.
+        if (self.cluster_poll_pool) |pool| {
+            pool.deinit();
+            self.cluster_poll_pool = null;
+        }
         if (self.health_pool) |pool| {
             pool.deinit();
             self.health_pool = null;
@@ -703,29 +797,37 @@ pub const ClusterCoordinator = struct {
     }
 
     fn raftLoop(self: *ClusterCoordinator) !void {
+        // Task A6 follow-on (2026-05-25 plan): emit a periodic role/term log
+        // so the subprocess smoke test (and operators) can observe leader
+        // election progress without attaching a debugger.  Every 100 ticks
+        // (~1 second of wallclock) we log the current raft state and term.
+        // Crucially we emit this through `std.debug.print` which goes to
+        // stderr unconditionally — the scoped logger filters info-level
+        // output by default in release builds, but the harness needs to
+        // see leader election before any other log machinery is set up.
+        var iter: u64 = 0;
+        std.debug.print("[raft] node {d} state=follower term=0 iter=0\n", .{self.node_id});
         while (!self.shutdown.load(.acquire)) {
-            try self.raft.tick();
+            self.raft.tick() catch |err| {
+                std.debug.print("[raft] node {d} tick error: {s}\n", .{ self.node_id, @errorName(err) });
+            };
+            iter += 1;
+            if (iter % 100 == 0) {
+                std.debug.print("[raft] node {d} state={s} term={d} iter={d}\n", .{ self.node_id, @tagName(self.raft.state), self.raft.current_term, iter });
+            }
             compat_sleepNs(10 * std.time.ns_per_ms);
         }
     }
 
     fn networkLoop(self: *ClusterCoordinator) !void {
-        // Initialize (or reuse) QUIC server transport.
-        //
-        // Task A3b (2026-05-25 plan): bind to `self.listen_address` and
-        // `self.cluster_port` from the Config instead of the hardcoded
-        // `0.0.0.0:quic.DEFAULT_PORT`.  Without this fix, two coordinators
-        // on one host both race to grab port 3141 and one of them fails
-        // EADDRINUSE — which is exactly the case the harness multi-node
-        // smoke tests want to cover.
-        if (self.network_transport.quic_server == null) {
-            const qt = try quic.QuicTransport.init(self.allocator, .{
-                .address = self.listen_address,
-                .port = self.cluster_port,
-            });
-            self.network_transport.quic_server = qt;
-            try self.network_transport.quic_server.?.listen();
-        }
+        // Task A3b/A3c/A6 (2026-05-25 plan): the QUIC listener is now
+        // brought up inside `start()` (above) BEFORE any loop thread is
+        // spawned.  That guarantees `cluster_poll_pool` and this accept
+        // loop both observe a fully-initialised `quic_server` from the
+        // first iteration on.  We assert here rather than re-initialise
+        // because a null slot is a programming error, not a recoverable
+        // condition.
+        std.debug.assert(self.network_transport.quic_server != null);
 
         while (!self.shutdown.load(.acquire)) {
             const conn = self.network_transport.quic_server.?.accept() catch |err| switch (err) {
@@ -823,6 +925,21 @@ pub const ClusterCoordinator = struct {
         self.networkLoop() catch |err| {
             log.err("Network loop failed", &.{Attr.string("error", @errorName(err))});
         };
+    }
+
+    /// Drive `QuicTransport.pollLoop` on the cluster-side endpoint so the
+    /// vendor QUIC stack actually processes inbound UDP datagrams.  Without
+    /// this thread, `accept()` (which only blocks on a CV that fires once a
+    /// connection has been fully handshaked into the `accepted` queue) sits
+    /// forever and every outbound peer connect times out with HandshakeError.
+    /// Task A6 (2026-05-25 plan).
+    fn runClusterPollLoop(ctx: *anyopaque) void {
+        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
+        if (self.network_transport.quic_server) |*server| {
+            quic.QuicTransport.pollLoop(server, &self.shutdown);
+        } else {
+            log.err("Cluster poll loop: quic_server is null at startup", &.{});
+        }
     }
 
     fn runHealthLoop(ctx: *anyopaque) void {
@@ -1639,6 +1756,19 @@ pub const ClusterCoordinator = struct {
         /// connection-semaphore in `networkLoop` reads it without going
         /// back to the Config.
         max_connections: u32 = 256,
+        /// TLS certificate path used by the intra-cluster QUIC listener.
+        /// `networkLoop` plumbs this into `quic.QuicTransport.Config.cert_path`.
+        /// The server boot path (`src/server/main.zig`) resolves cert paths
+        /// via `cert_gen.ensureCertificatesAtPath`, writing
+        /// `<data-dir>/server.crt`; passing that same path here lets a
+        /// cluster member reuse the same self-signed cert for both the
+        /// client-facing listener and the peer-facing listener (Task A6
+        /// subprocess smoke).  Empty defaults preserve the QuicTransport
+        /// defaults for older callers.
+        cert_path: []const u8 = "",
+        /// TLS private key path mirroring `cert_path`.  Same lifetime story:
+        /// caller owns the backing memory.
+        key_path: []const u8 = "",
     };
 
     pub const PeerConfig = struct {
