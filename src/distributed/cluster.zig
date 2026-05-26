@@ -722,6 +722,25 @@ pub const ClusterCoordinator = struct {
             self.cluster_poll_pool.?.deinit();
             self.cluster_poll_pool = null;
         }
+
+        // Task A6e (2026-05-26 plan): the outbox drain thread takes
+        // outbound raft RPCs off the `inner_mutex` critical path so
+        // the raft tick loop can run at its full 100 ticks/sec rate
+        // even while QUIC handshakes / writes are in flight.  Must
+        // start BEFORE the raft loop so the very first heartbeat /
+        // RequestVote produced by the inner library has somewhere to
+        // land.
+        try self.raft_transport.startOutboxDrain();
+        errdefer self.raft_transport.stopOutboxDrain();
+
+        // Task A6e: the per-peer client endpoint owns its own UDP
+        // socket and needs `poll()` called on it for the vendor
+        // library to actually push bytes out.  `cluster_poll_pool`
+        // drives the SERVER endpoint only; this thread drives every
+        // PeerConnection that the outbox dispatcher has cached.
+        try self.raft_transport.startClientPoll();
+        errdefer self.raft_transport.stopClientPoll();
+
         self.raft_pool = try startLoopPool(self, runRaftLoop);
         errdefer {
             self.raft_pool.?.deinit();
@@ -785,6 +804,14 @@ pub const ClusterCoordinator = struct {
             pool.deinit();
             self.connection_pool = null;
         }
+
+        // Task A6e (2026-05-26): stop the outbox + client-poll threads
+        // after the raft loops are joined so no producer can enqueue a
+        // new message after the dispatch thread exits.  Stopping the
+        // client poll thread after the cluster poll pool is fine —
+        // both touch independent endpoints (server vs cached clients).
+        self.raft_transport.stopOutboxDrain();
+        self.raft_transport.stopClientPoll();
 
         // Now that no thread can still be in accept(), it is safe to free
         // the QUIC server.  deinit() is the only place that ever destroys

@@ -274,6 +274,17 @@ pub const RpcClient = struct {
     }
 };
 
+/// Task A6e (2026-05-26 plan): one queued outbound raft RPC.  Owned by
+/// `Transport.outbox`; freed by `freeOutboundMessage` once the dispatch
+/// thread has written it to the wire (or determined the peer is
+/// permanently unreachable).
+pub const OutboundEntry = struct {
+    peer: Peer,
+    from: u64,
+    term: u64,
+    msg: Message,
+};
+
 pub const Transport = struct {
     allocator: Allocator,
     server: ?quic.QuicTransport = null,
@@ -300,6 +311,55 @@ pub const Transport = struct {
     peers_mutex: std.Io.Mutex = std.Io.Mutex.init,
     peers: std.AutoHashMap(u64, *PeerConnection) = undefined,
     peers_initialized: bool = false,
+
+    /// Task A6e (2026-05-26 distributed cluster testing plan):
+    /// Outbound message queue.  The raft library's `sendMsg` vtable
+    /// callback fires synchronously from inside `inner.step()` /
+    /// `inner.tick()` while the wrapper's `inner_mutex` is held; if
+    /// `sendMsg` performs blocking QUIC I/O (handshake, write, poll)
+    /// inline, the mutex stays held for the entire round-trip and the
+    /// inbound dispatch thread can't deliver vote / heartbeat responses
+    /// until the next tick releases the lock.  Subprocess election
+    /// runs (live-fire 2026-05-26) showed nodes stuck in candidate/
+    /// follower churn for 30s+ with terms climbing 1 → 9 because the
+    /// receive thread was starved.
+    ///
+    /// The fix: enqueue each outbound message here from the bridge
+    /// (cheap — just a copy of the geode `Message`) and drain on a
+    /// dedicated worker thread that runs OUTSIDE the inner_mutex.
+    /// `Transport.send` (and the underlying QUIC write + poll) only
+    /// touches `outbox_mutex`, so the raft loop never has to wait on
+    /// network I/O while holding raft state locks.
+    outbox_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    outbox: std.ArrayList(OutboundEntry) = .empty,
+    outbox_initialized: bool = false,
+
+    /// Task A6e: dedicated outbox-drain thread.  Spawned by
+    /// `startOutboxDrain` (called from `ClusterCoordinator.start` once
+    /// the cluster QUIC listener is up) and joined by `stopOutboxDrain`
+    /// before `Transport.deinit` runs.  The thread polls the outbox on
+    /// a tight loop (Zig 0.16 dropped `Condition.timedWait`, so we use
+    /// a 1ms nanosleep between snapshots — vastly cheaper than the
+    /// previous 10-30 ms / tick inner_mutex stall, and the actual
+    /// wakeup latency on a queued message is dominated by the QUIC
+    /// poll cadence anyway).  Decoupled from the raft tick so that
+    /// even a 100 ms TLS handshake on first connect doesn't stall
+    /// election progress.
+    outbox_thread: ?std.Thread = null,
+    outbox_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Task A6e: dedicated client-side poll thread.  The QUIC vendor
+    /// library buffers outbound bytes until `poll()` is invoked on the
+    /// originating endpoint — `cluster_poll_pool` drives the SERVER
+    /// endpoint but each `PeerConnection` owns its own client endpoint
+    /// which still needs polling.  Previously `Transport.send` called
+    /// `conn.client.poll(10)` synchronously after every write to flush;
+    /// that 10 ms-per-send cost was a major contributor to the
+    /// inner_mutex starvation.  With this thread, sends are
+    /// fire-and-forget: data lands in the vendor buffer and the poll
+    /// loop pushes it onto the wire within ~1 ms.
+    client_poll_thread: ?std.Thread = null,
+    client_poll_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// Persistent QUIC client + endpoint metadata kept alive across raft
     /// RPCs to a single peer.  `client.deinit()` is deferred to
@@ -329,10 +389,38 @@ pub const Transport = struct {
             .peers_mutex = std.Io.Mutex.init,
             .peers = std.AutoHashMap(u64, *PeerConnection).init(allocator),
             .peers_initialized = true,
+            .outbox_mutex = std.Io.Mutex.init,
+            .outbox = .empty,
+            .outbox_initialized = true,
+            .outbox_thread = null,
+            .outbox_shutdown = std.atomic.Value(bool).init(false),
+            .client_poll_thread = null,
+            .client_poll_shutdown = std.atomic.Value(bool).init(false),
         };
     }
 
     pub fn deinit(self: *Transport) void {
+        // Task A6e: stop the dispatch threads BEFORE we tear down the
+        // peer map.  Both threads read `self.peers` (outbox via
+        // `getOrCreatePeerConnection`, client poll via direct iteration)
+        // so freeing entries while they were still running would race.
+        self.stopOutboxDrain();
+        self.stopClientPoll();
+
+        // Task A6e: drop any messages still sitting in the outbox.
+        // Conversion-allocated slices inside each `Message` (today only
+        // `append_entries.entries`) are freed via `freeOutboundMessage`.
+        if (self.outbox_initialized) {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.outbox_mutex.lockUncancelable(io);
+            for (self.outbox.items) |*entry| {
+                freeOutboundMessage(self.allocator, entry.msg);
+            }
+            self.outbox.deinit(self.allocator);
+            self.outbox_initialized = false;
+            self.outbox_mutex.unlock(io);
+        }
+
         if (self.peers_initialized) {
             const io = std.Io.Threaded.global_single_threaded.io();
             self.peers_mutex.lockUncancelable(io);
@@ -346,6 +434,187 @@ pub const Transport = struct {
         }
         if (self.server) |*s| s.deinit();
         self.server = null;
+    }
+
+    /// Task A6e: append an outbound message to the queue.  Called from
+    /// the bridge `sendImpl` while the wrapper's `inner_mutex` is held.
+    /// Cheap — just a hashmap-free vec append under `outbox_mutex`.
+    /// The actual QUIC write happens later on the dispatch thread.
+    pub fn enqueueOutbound(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.outbox_mutex.lockUncancelable(io);
+        defer self.outbox_mutex.unlock(io);
+        try self.outbox.append(self.allocator, .{ .peer = peer, .from = from, .term = term, .msg = msg });
+        // Dispatch thread polls every 1 ms so we don't need a condvar
+        // signal here; the wakeup latency floor (1 ms) is still 10×
+        // faster than the pre-A6e synchronous-poll path (10 ms / send).
+    }
+
+    /// Task A6e: snapshot-and-swap drain.  Used by the dedicated
+    /// dispatch thread to pull a batch out of the outbox without
+    /// holding `outbox_mutex` for the duration of each network write.
+    /// Returns an owned slice that the caller must `deinit` and whose
+    /// `msg` fields must be freed via `freeOutboundMessage` after
+    /// dispatch.  Callers running on the raft-loop hot path should
+    /// instead let the background thread handle drain; this entry
+    /// point exists so test scaffolding (and in-process drain) can
+    /// flush synchronously.
+    pub fn snapshotOutbox(self: *Transport) std.ArrayList(OutboundEntry) {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.outbox_mutex.lockUncancelable(io);
+        defer self.outbox_mutex.unlock(io);
+        const snap = self.outbox;
+        self.outbox = .empty;
+        return snap;
+    }
+
+    /// Task A6e: dispatch one outbox snapshot inline.  Used by the
+    /// background drain thread and also by the synchronous test path
+    /// via `flushOutboxBlocking`.  Each entry's `msg` is freed after
+    /// the send attempt regardless of outcome — the raft library will
+    /// retry on its next tick if the send failed.
+    pub fn dispatchOutbox(self: *Transport, snap: *std.ArrayList(OutboundEntry)) void {
+        for (snap.items) |entry| {
+            // CANARY: REQ=REQ-DIST-RAFT-A6E-OUTBOX-DISPATCH; FEATURE="Raft Outbox Async Dispatch"; ASPECT=Send; STATUS=TESTED; OWNER=distributed; UPDATED=2026-05-26
+            self.send(entry.peer, entry.from, entry.term, entry.msg) catch |err| {
+                log.debug("raft outbox dispatch failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("peer", entry.peer.id),
+                });
+            };
+            freeOutboundMessage(self.allocator, entry.msg);
+        }
+        snap.deinit(self.allocator);
+    }
+
+    /// Task A6e: synchronous helper used by tests (and by the
+    /// in-process A5 election test) that want to flush queued
+    /// messages without depending on the background drain thread.
+    /// Production code always lets `outbox_thread` do the work.
+    pub fn flushOutboxBlocking(self: *Transport) void {
+        var snap = self.snapshotOutbox();
+        self.dispatchOutbox(&snap);
+    }
+
+    fn outboxDrainLoop(self: *Transport) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (!self.outbox_shutdown.load(.acquire)) {
+            // Snapshot under the lock; release before dispatching so
+            // producers (the raft tick / handleMessage / stepInner
+            // paths) never wait on QUIC I/O.
+            self.outbox_mutex.lockUncancelable(io);
+            const snap = self.outbox;
+            self.outbox = .empty;
+            const have_work = snap.items.len > 0;
+            self.outbox_mutex.unlock(io);
+            if (have_work) {
+                var snap_mut = snap;
+                self.dispatchOutbox(&snap_mut);
+            } else {
+                // Empty: free the zero-cap arraylist (no-op) and idle.
+                var empty_mut = snap;
+                empty_mut.deinit(self.allocator);
+                compat_sleep(1 * std.time.ns_per_ms);
+            }
+        }
+    }
+
+    fn outboxDrainEntry(ctx: ?*anyopaque) void {
+        const self: *Transport = @ptrCast(@alignCast(ctx.?));
+        self.outboxDrainLoop();
+    }
+
+    pub fn startOutboxDrain(self: *Transport) !void {
+        if (self.outbox_thread != null) return;
+        self.outbox_shutdown.store(false, .release);
+        // Use std.Thread directly because we want a single dedicated
+        // worker (the existing `pooled.ThreadPool` would also work, but
+        // the raft transport sits below the cluster layer that owns
+        // those pools — keeping the thread native avoids a circular
+        // dependency on cluster.zig and matches the lifecycle of
+        // `client_poll_thread` below).
+        self.outbox_thread = try std.Thread.spawn(.{}, outboxDrainEntry, .{@as(?*anyopaque, @ptrCast(self))});
+    }
+
+    pub fn stopOutboxDrain(self: *Transport) void {
+        if (self.outbox_thread) |t| {
+            self.outbox_shutdown.store(true, .release);
+            t.join();
+            self.outbox_thread = null;
+        }
+    }
+
+    fn clientPollLoop(self: *Transport) void {
+        // Poll every cached peer client endpoint with a 0 ms timeout so
+        // we never block here.  500 µs between iterations matches the
+        // cluster-poll thread's tempo on the server side and keeps the
+        // wire-to-wire latency under ~1 ms even when the raft tick loop
+        // is busy producing messages.
+        //
+        // CRITICAL: snapshot the peer pointer list before polling so we
+        // don't hold `peers_mutex` while calling into the vendor library.
+        // The vendor library takes its own per-connection locks; nesting
+        // our peers_mutex around those locks would invert the lock order
+        // observed by `getOrCreatePeerConnection` (vendor → ours during
+        // handshake) and deadlock.  A stale pointer here is impossible
+        // because `evictPeerConnection` is the only deletion site and it
+        // also runs under `peers_mutex`.  We use a small inline buffer
+        // for the snapshot to avoid allocator pressure on the hot path.
+        var snap_buf: [16]*PeerConnection = undefined;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (!self.client_poll_shutdown.load(.acquire)) {
+            var snap_len: usize = 0;
+            self.peers_mutex.lockUncancelable(io);
+            var it = self.peers.iterator();
+            while (it.next()) |entry| {
+                if (snap_len >= snap_buf.len) break;
+                const pc = entry.value_ptr.*;
+                if (pc.established) {
+                    snap_buf[snap_len] = pc;
+                    snap_len += 1;
+                }
+            }
+            self.peers_mutex.unlock(io);
+            for (snap_buf[0..snap_len]) |pc| {
+                pc.client.poll(0) catch {};
+            }
+            compat_sleep(500 * std.time.ns_per_us);
+        }
+    }
+
+    fn clientPollEntry(ctx: ?*anyopaque) void {
+        const self: *Transport = @ptrCast(@alignCast(ctx.?));
+        self.clientPollLoop();
+    }
+
+    pub fn startClientPoll(self: *Transport) !void {
+        if (self.client_poll_thread != null) return;
+        self.client_poll_shutdown.store(false, .release);
+        self.client_poll_thread = try std.Thread.spawn(.{}, clientPollEntry, .{@as(?*anyopaque, @ptrCast(self))});
+    }
+
+    pub fn stopClientPoll(self: *Transport) void {
+        if (self.client_poll_thread) |t| {
+            self.client_poll_shutdown.store(true, .release);
+            t.join();
+            self.client_poll_thread = null;
+        }
+    }
+
+    /// Task A6e: eagerly establish a persistent connection to `peer` so
+    /// the first RaftRPC doesn't pay the TLS-handshake latency on the
+    /// critical path.  Best-effort: a failure here is logged and
+    /// silently ignored (the next `send` will retry).  Called by
+    /// `ClusterCoordinator.start` once the local QUIC listener is up.
+    pub fn preconnectPeer(self: *Transport, peer: Peer) void {
+        const conn = self.getOrCreatePeerConnection(peer) catch |err| {
+            log.debug("raft transport preconnect failed", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("peer", peer.id),
+            });
+            return;
+        };
+        _ = conn;
     }
 
     pub fn listen(self: *Transport, address: []const u8, port: u16) !void {
@@ -409,20 +678,23 @@ pub const Transport = struct {
                 Attr.uint("peer", peer.id),
             });
         };
-        // Drive the sender endpoint long enough to flush the data
-        // (payload + FIN) out on the wire before `s.deinit()` runs.  The
-        // connection itself stays alive — only this stream is closed —
-        // so we don't have the "qc.deinit races finish()" hazard from
-        // the original A6b code; but the receiver still needs to see
-        // the bytes before the deferred `closeStream` sends a redundant
-        // FIN.  10ms matches the heartbeat budget and is plenty on
-        // loopback for a payload-sized round-trip.
-        conn.client.poll(10) catch |err| {
-            log.warn("raft transport poll-after-finish failed", &.{
-                Attr.string("error", @errorName(err)),
-                Attr.uint("peer", peer.id),
-            });
-        };
+        // Task A6e (2026-05-26): the previous code synchronously called
+        // `conn.client.poll(10)` here to flush the payload + FIN onto
+        // the wire.  That blocked the caller (the bridge `sendImpl`,
+        // which runs under the wrapper's `inner_mutex` when invoked
+        // from the raft tick / step path) for up to 10 ms per send.
+        // With 2 peers and a 10 ms tick, the raft loop was effectively
+        // running at 33 ticks / sec, starving the receive thread that
+        // needed the same mutex to dispatch vote responses.  Election
+        // never converged — three nodes split-voted indefinitely with
+        // terms climbing 1 → 9 in the 30 s subprocess smoke window.
+        //
+        // The dedicated `client_poll_thread` now polls every cached
+        // peer client endpoint at 500 µs intervals, so bytes still
+        // reach the wire within ~1 ms of `finish()` but the bridge
+        // returns immediately.  `dispatchOutbox` (which runs OFF the
+        // raft tick path) is the only caller that ever touches QUIC,
+        // and even it doesn't have to block for the flush.
     }
 
     /// Look up or construct a persistent peer connection.  The
@@ -514,7 +786,18 @@ fn connectWithTLS(qc: *quic.QuicClient, allocator: Allocator, host: []const u8, 
             try qc.connect(host, port);
         }
     }
-    try qc.waitForHandshake(10);
+    // Task A6e (2026-05-26): the previous 10s timeout was disastrous on
+    // the outbox dispatch path: every send to a peer that's still
+    // booting or transiently unreachable stalls the dispatch thread for
+    // 10 SECONDS, during which the queue fills with retries that ALL
+    // pay the same cost (each evicts the cached connection, so the
+    // next send pays the full handshake again).  Loopback TLS over
+    // QUIC completes in <50 ms on a healthy host; 1 second covers
+    // first-boot races (the test brings node N up before node N+1) and
+    // the worst-case post-quantum key exchange.  Long enough to be
+    // robust, short enough that even a permanent failure only burns
+    // 3 × 1 s per round of retries instead of 30 s.
+    try qc.waitForHandshake(1);
 }
 
 // ---- Persistent storage (file-backed term & votedFor) ----
@@ -976,6 +1259,20 @@ fn freeMessage(_: Allocator, _: *Message) void {
 
 fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
     // Log entries own command data which may need freeing
+}
+
+/// Task A6e (2026-05-26): free heap-owned slices inside an outbound
+/// `Message`.  Today only `append_entries.entries` is owned (allocated
+/// by `raftLibMessageToGeode`).  Vote / vote-response / install-snapshot
+/// variants either own no slices or share slices with the raft library
+/// (which manages their lifetime independently of the outbox).
+pub fn freeOutboundMessage(allocator: Allocator, msg: Message) void {
+    switch (msg) {
+        .append_entries => |ae| {
+            if (ae.entries.len > 0) allocator.free(ae.entries);
+        },
+        else => {},
+    }
 }
 
 // ---- Command serialization (tag-prefix format) ----
@@ -1563,11 +1860,51 @@ const RaftLibTransportBridge = struct {
 
     fn sendImpl(ptr: *anyopaque, to: u64, msg: raft_lib.Message) void {
         const node: *RaftNode = @ptrCast(@alignCast(ptr));
-        node.dispatchRaftLibMessageWithDest(to, msg) catch |err| {
-            log.warn("raft bridge send failed", &.{
+        // Task A6e (2026-05-26): the bridge runs synchronously from
+        // inside `inner.step()` / `inner.tick()`, which the wrapper
+        // calls while `inner_mutex` is held.  Performing the QUIC
+        // write inline (the previous behaviour) stalled the receive
+        // thread for as long as the network handshake / poll loop
+        // took — easily 10-100 ms on the first peer connect.  We now
+        // do the cheap part inline (raft_lib -> geode conversion,
+        // peer lookup) and hand the actual `send` off to the
+        // Transport's dispatch thread.
+        const transport = node.transport orelse {
+            log.debug("raft bridge: no transport set", &.{Attr.uint("to", to)});
+            return;
+        };
+        const peer = node.findPeerById(to) orelse {
+            log.debug("raft bridge: unknown destination peer", &.{Attr.uint("to", to)});
+            return;
+        };
+        const geode_msg = raftLibMessageToGeode(node.allocator, msg) catch |err| {
+            log.warn("raft bridge: conversion failed", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("to", to),
             });
+            return;
+        };
+        // Synchronous dispatch path is preserved for tests that wire a
+        // `send_override` — those callers want immediate capture and
+        // don't care about latency.  When no override is set, route
+        // through the outbox so the QUIC I/O happens off the raft
+        // critical path.
+        if (transport.send_override != null) {
+            transport.send(peer, node.id, node.inner.current_term, geode_msg) catch |err| {
+                log.warn("raft bridge: synchronous send failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("to", to),
+                });
+            };
+            freeOutboundMessage(node.allocator, geode_msg);
+            return;
+        }
+        transport.enqueueOutbound(peer, node.id, node.inner.current_term, geode_msg) catch |err| {
+            log.warn("raft bridge: enqueueOutbound failed; dropping message", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("to", to),
+            });
+            freeOutboundMessage(node.allocator, geode_msg);
         };
     }
 };

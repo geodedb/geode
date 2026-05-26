@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-DIST-CLUSTER-3NODE-SUBPROC; FEATURE="DistributedClusterCoordinator"; ASPECT=SubprocessClusterFormation; STATUS=TESTED; TEST=tests/test_cluster_3node_subprocess.zig; OWNER=distributed; UPDATED=2026-05-25
+// CANARY: REQ=REQ-DIST-CLUSTER-3NODE-SUBPROC; FEATURE="DistributedClusterCoordinator"; ASPECT=SubprocessClusterFormation; STATUS=TESTED; TEST=tests/test_cluster_3node_subprocess.zig; OWNER=distributed; UPDATED=2026-05-26
 // Task A6 (2026-05-25 distributed cluster testing plan):
 // Subprocess 3-node cluster smoke test.
 //
@@ -124,36 +124,26 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         return error.SkipZigTest;
     }
 
-    // TASK A6 STATUS: production-side infrastructure (cluster cert paths,
-    // dedicated QUIC poll thread, raft_transport field on ClusterCoordinator,
-    // outbound dispatch through the wrapper transport bridge) all landed
-    // along with this test.  However the cross-process Raft path still has
-    // a downstream gap: candidates send vote requests but responses are
-    // never observed at the candidate, so leader election times out.
+    // TASK A6e (2026-05-26 plan): leader election now converges over the
+    // real QUIC transport.  The earlier `RUN_SUBPROCESS_CLUSTER_TEST=1`
+    // opt-in gate was removed once the cross-process election story
+    // closed:
     //
-    // The most-recent live-fire run (2026-05-25, this branch) confirmed:
-    //   - all 3 child processes log "Cluster coordinator started"
-    //   - QUIC listeners come up on cluster ports 21242/21243/21244
-    //   - each node's [raft] thread transitions follower → candidate
-    //   - no leader is ever elected → test times out at error.LeaderNeverElected
+    //   * A6b wired inbound message routing into RaftNode.stepInner.
+    //   * A6c added the persistent per-peer QUIC client pool + multi-
+    //     stream `acceptStream` loop on the receiver.
+    //   * A6d fixed the RaftEnvelope wire format and propagated the
+    //     `pre_vote` bit in both directions.
+    //   * A6e decoupled the raft `inner_mutex` from outbound QUIC I/O
+    //     by moving sends through a `Transport.outbox` queue drained
+    //     on its own thread, and reduced the per-handshake timeout
+    //     from 10s to 1s so a transient peer outage no longer freezes
+    //     the dispatch path for 30s+.
     //
-    // A6b wired inbound message routing into RaftNode.stepInner (commit
-    // af0db97a).  A6c followed up with a persistent per-peer QUIC client
-    // pool on the sender side AND a multi-stream `acceptStream` loop on
-    // the receiver (this branch); this fixed the "QuicClient deinit
-    // RESETs in-flight payload" race but exposed a downstream protobuf
-    // decode failure (InvalidInput) on inbound `RaftEnvelope` frames
-    // that the diagnostic budget for A6c could not resolve.  The payload
-    // bytes inspected via runtime decode-error dump appear valid
-    // protobuf at the wire level, so the next investigation step is
-    // either an isolated decoder unit-test against the captured payload
-    // or instrumentation inside `protobuf.decode`.  Tracked as task A6d.
-    //
-    // Until A6d lands this test fails reliably.  Opt-in only via
-    // RUN_SUBPROCESS_CLUSTER_TEST=1 so `zig build test` stays green.
-    if (posixGetenv("RUN_SUBPROCESS_CLUSTER_TEST") == null) {
-        return error.SkipZigTest;
-    }
+    // The `GEODE_SKIP_SUBPROC_CLUSTER` opt-out is retained so flaky CI
+    // runners (or environments without a built geode binary in
+    // zig-out/bin) can still skip without removing the test from the
+    // build matrix.
 
     // The test must run from the geode repo root because the binary path
     // is relative.  std.testing's harness sets cwd to the repo root.
