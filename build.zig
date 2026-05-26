@@ -1142,6 +1142,25 @@ pub fn build(b: *std.Build) void {
     const cluster_forward_to_shard_step = b.step("test-cluster-forward-to-shard", "Run cross-node read forwarding smoke test (A3e)");
     cluster_forward_to_shard_step.dependOn(&run_cluster_forward_to_shard_tests.step);
 
+    // SHOW CLUSTER STATUS GQL surface (Task A7 of the 2026-05-25 distributed
+    // cluster testing plan).  Two assertions:
+    //   * standalone mode (no global ClusterCoordinator wired) returns a
+    //     single synthetic row with role=standalone.
+    //   * 3-node in-process cluster returns exactly 3 rows, exactly one
+    //     role=leader, and a consistent leader_id across all rows.
+    // Drives the same InProcessTransport rig as A5 / A3d for the cluster
+    // half — keeps the run time under 10s.
+    const show_cluster_status_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_show_cluster_status.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    show_cluster_status_tests.root_module.addImport("geode", root_mod);
+    show_cluster_status_tests.root_module.link_libc = true;
+    const run_show_cluster_status_tests = b.addRunArtifact(show_cluster_status_tests);
+    const show_cluster_status_step = b.step("test-show-cluster-status", "Run SHOW CLUSTER STATUS smoke tests (A7)");
+    show_cluster_status_step.dependOn(&run_show_cluster_status_tests.step);
+
     // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
     // distributed cluster testing plan).  Confirms that
     // RaftNode.setTransport installs the bridge into the inner raft library

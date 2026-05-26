@@ -5432,6 +5432,18 @@ pub const Parser = struct {
             } else if (std.ascii.eqlIgnoreCase(type_str, "GRANTS") or std.ascii.eqlIgnoreCase(type_str, "GRANT")) {
                 // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ParserDispatch; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
                 break :blk .grants_for;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "CLUSTER")) {
+                // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ParserDispatch; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
+                // SHOW CLUSTER STATUS — neither CLUSTER nor STATUS are
+                // reserved keywords, so we match them as identifiers via
+                // case-insensitive lexeme comparison.  This avoids growing
+                // the reserved-keyword set and keeps both words available
+                // as user identifiers everywhere else in the grammar.
+                if (self.cur.kind != .identifier or !std.ascii.eqlIgnoreCase(self.cur.lexeme, "STATUS")) {
+                    return self.unexpected("expected STATUS after SHOW CLUSTER");
+                }
+                self.advance();
+                break :blk .cluster_status;
             } else {
                 return error.UnexpectedToken;
             }
