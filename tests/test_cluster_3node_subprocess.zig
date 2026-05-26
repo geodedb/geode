@@ -137,12 +137,19 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     //   - each node's [raft] thread transitions follower → candidate
     //   - no leader is ever elected → test times out at error.LeaderNeverElected
     //
-    // The next blocker is wiring the inbound side of the cluster QUIC
-    // transport: networkLoop accepts connections, but the messages they
-    // carry are not being routed back into RaftNode.stepInner so the
-    // raft library never sees peer responses.  Tracked as task A6b.
+    // A6b wired inbound message routing into RaftNode.stepInner (commit
+    // af0db97a).  A6c followed up with a persistent per-peer QUIC client
+    // pool on the sender side AND a multi-stream `acceptStream` loop on
+    // the receiver (this branch); this fixed the "QuicClient deinit
+    // RESETs in-flight payload" race but exposed a downstream protobuf
+    // decode failure (InvalidInput) on inbound `RaftEnvelope` frames
+    // that the diagnostic budget for A6c could not resolve.  The payload
+    // bytes inspected via runtime decode-error dump appear valid
+    // protobuf at the wire level, so the next investigation step is
+    // either an isolated decoder unit-test against the captured payload
+    // or instrumentation inside `protobuf.decode`.  Tracked as task A6d.
     //
-    // Until A6b lands this test fails reliably.  Opt-in only via
+    // Until A6d lands this test fails reliably.  Opt-in only via
     // RUN_SUBPROCESS_CLUSTER_TEST=1 so `zig build test` stays green.
     if (posixGetenv("RUN_SUBPROCESS_CLUSTER_TEST") == null) {
         return error.SkipZigTest;

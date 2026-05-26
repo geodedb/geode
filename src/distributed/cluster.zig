@@ -969,53 +969,102 @@ pub const ClusterCoordinator = struct {
         _ = self.active_connections.fetchAdd(1, .release);
         defer _ = self.active_connections.fetchSub(1, .release);
 
-        // Accept a single stream (simple model for now)
-        const stream = try conn.acceptStream();
-        // Stream/connection cleanup handled by transport on deinit (no explicit close)
-        while (true) {
-            const frame_res = raft_consensus.readRaftFrame(self.allocator, stream) catch |err| switch (err) {
-                error.EndOfStream => break,
+        // Task A6c (2026-05-25 distributed cluster testing plan):
+        // The sender now keeps a persistent QuicClient per peer and opens
+        // a fresh bidirectional stream for every raft RPC.  The receiver
+        // therefore has to accept streams in a loop for the lifetime of
+        // the connection — handling just one stream (the original
+        // pattern) drops every RPC after the first.
+        //
+        // The vendor QUIC library re-queues the same stream_id every time
+        // new data arrives on it (see queueIncomingStream comment in
+        // zig-pkg/quic-*/src/quic/connection/methods_c.zig).  For our
+        // "one raft frame per stream, then FIN" usage that means we may
+        // accept a stream_id we have already drained — `readRaftFrame`
+        // would then see an empty + FIN'd stream and return EndOfStream.
+        // Dedupe by tracking which stream_ids we have already handled on
+        // this connection.
+        var seen_streams = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen_streams.deinit();
+
+        while (!self.shutdown.load(.acquire)) {
+            const stream = conn.acceptStream() catch |err| switch (err) {
                 error.WouldBlock => {
                     compat_sleepNs(200 * std.time.ns_per_us);
                     continue;
                 },
-                else => return err,
+                else => {
+                    // Connection-level error: peer closed, draining, etc.
+                    // Drop the connection and let the caller fall through
+                    // to cleanup.  Don't bubble up here — we don't want a
+                    // single bad connection to crash the network thread.
+                    log.debug("acceptStream returned error; ending connection handler", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return;
+                },
             };
-            defer frame_res.deinit(self.allocator);
 
-            // SEC-D001: Always validate cluster token on incoming Raft frames.
-            // Reject frames without valid token regardless of whether env var is set.
-            if (!cluster_auth.validateClusterToken(frame_res.auth_token)) {
-                log.warn("Raft frame rejected: invalid or missing cluster token", &.{
-                    Attr.uint("from", frame_res.from),
-                });
+            // Drop duplicates surfaced by the vendor's re-queue semantics.
+            if (seen_streams.contains(stream.stream_id)) {
+                conn.destroyStream(stream);
                 continue;
             }
+            seen_streams.put(stream.stream_id, {}) catch {};
 
-            // SEC-D009: Validate nonce to prevent replay attacks.
-            if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
-                log.warn("Raft frame rejected: replay or missing nonce", &.{
-                    Attr.uint("from", frame_res.from),
-                    Attr.uint("nonce", frame_res.nonce),
-                });
-                continue;
-            }
-
-            // SEC-D009: Reject replayed frames
-            if (!self.replay_guard.check(frame_res.from, frame_res.term)) {
-                log.warn("Rejected replayed Raft frame", &.{
-                    Attr.uint("from", frame_res.from),
-                    Attr.uint("term", frame_res.term),
-                });
-                continue;
-            }
-
-            self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
-                log.err("Raft handleMessage error", &.{
-                    Attr.string("error", @errorName(e)),
+            // Each stream carries a single raft frame.  Read once, then
+            // discard the stream — the next RPC arrives on a fresh
+            // stream which `acceptStream` will surface on the next
+            // iteration.
+            self.readOneRaftFrameAndDispatch(stream) catch |err| {
+                log.debug("readOneRaftFrameAndDispatch error", &.{
+                    Attr.string("error", @errorName(err)),
                 });
             };
+            conn.destroyStream(stream);
         }
+    }
+
+    /// Read exactly one raft frame from `stream`, apply security checks,
+    /// and dispatch into the raft state machine.  Best-effort: any error
+    /// surfaces as a debug log and a non-zero return; the connection
+    /// handler keeps the connection open and accepts the next stream.
+    fn readOneRaftFrameAndDispatch(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
+        const frame_res = try raft_consensus.readRaftFrame(self.allocator, stream);
+        defer frame_res.deinit(self.allocator);
+
+        // SEC-D001: Always validate cluster token on incoming Raft frames.
+        // Reject frames without valid token regardless of whether env var is set.
+        if (!cluster_auth.validateClusterToken(frame_res.auth_token)) {
+            log.warn("Raft frame rejected: invalid or missing cluster token", &.{
+                Attr.uint("from", frame_res.from),
+            });
+            return;
+        }
+
+        // SEC-D009: Validate nonce to prevent replay attacks.
+        if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
+            log.warn("Raft frame rejected: replay or missing nonce", &.{
+                Attr.uint("from", frame_res.from),
+                Attr.uint("nonce", frame_res.nonce),
+            });
+            return;
+        }
+
+        // SEC-D009: Reject replayed frames
+        if (!self.replay_guard.check(frame_res.from, frame_res.term)) {
+            log.warn("Rejected replayed Raft frame", &.{
+                Attr.uint("from", frame_res.from),
+                Attr.uint("term", frame_res.term),
+            });
+            return;
+        }
+
+        self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
+            log.err("Raft handleMessage error", &.{
+                Attr.string("error", @errorName(e)),
+            });
+        };
     }
 
     fn handleClusterMessage(self: *ClusterCoordinator, msg: Message) !Response {
