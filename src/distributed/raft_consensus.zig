@@ -224,10 +224,16 @@ const quic = if (builtin.is_test) struct {
         pub fn getStream(_: *QuicClient) !*QuicClientStream {
             return undefined;
         }
+        // Task A6b: test-mode stub for the same poll() call the production
+        // path uses to flush in-flight FIN before tearing the client down.
+        pub fn poll(_: *QuicClient, _: u32) !void {}
     };
     pub const QuicClientStream = struct {
         pub fn writeAll(_: *QuicClientStream, _: []const u8) !void {}
         pub fn deinit(_: *QuicClientStream) void {}
+        // Task A6b: test-mode stub for the finish() call the production
+        // path uses to signal stream FIN to the peer.
+        pub fn finish(_: *QuicClientStream) !void {}
     };
     pub const QuicTransport = struct {
         pub fn init(_: anytype, _: anytype) !QuicTransport {
@@ -312,6 +318,32 @@ pub const Transport = struct {
         const s = try qc.getStream();
         defer s.deinit();
         try writeRaftFrame(self.allocator, s, from, term, msg);
+        // Task A6b (2026-05-25 distributed cluster testing plan):
+        // Without an explicit FIN the deferred `s.deinit()` calls
+        // `closeStream(stream_id, 0)` which sends RESET_STREAM, and
+        // the QUIC vendor library discards in-flight data — the
+        // receiver's `readRaftFrame` loop on the cluster networkLoop
+        // then sees the frame either truncated (InvalidInput from
+        // protobuf decode) or completely missing (WouldBlock until the
+        // retry budget elapses).  Sending FIN flushes the stream
+        // cleanly so the receiver always gets the full envelope.
+        s.finish() catch |err| {
+            log.warn("raft transport finish failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        // Poll the client endpoint briefly so the FIN and any pending
+        // payload actually leave the wire before `qc.deinit()` tears
+        // the QUIC endpoint down.  Without this, the closing endpoint
+        // races the OS-level UDP send and the receiver typically sees
+        // the connection drop before reading the frame body.  10ms is
+        // long enough on loopback for a single RTT + retransmit, well
+        // within the raft tick budget.
+        qc.poll(10) catch |err| {
+            log.warn("raft transport poll-after-finish failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
     }
 };
 
@@ -544,12 +576,29 @@ pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message)
     const proto_msg = try messageToProto(allocator, msg);
     // SEC-D009: Generate cryptographic nonce for replay protection.
     // SEC-D001: Include cluster token for inter-node authentication.
+    //
+    // Task A6b (2026-05-25 distributed cluster testing plan): the env-var
+    // pointer returned by `posixGetenv` points into libc's environ table,
+    // which is NOT allocator-owned.  Assigning it directly to the
+    // envelope's `auth_token` field worked at encode time but tripped an
+    // "Invalid free" panic inside `envelope.deinit(allocator)` below
+    // because the protobuf generic deinit unconditionally calls
+    // `allocator.free` on non-empty string fields (protobuf.zig:1108).
+    // The panic killed the raft worker on the very first tick before any
+    // RequestVote actually made it onto the wire, which surfaced upstream
+    // as "no leader ever elected" in the A6 subprocess test.  Dupe the
+    // token into the allocator so the envelope owns it cleanly.
+    const env_token = posixGetenv("GEODE_CLUSTER_TOKEN") orelse "";
+    const owned_token: []const u8 = if (env_token.len > 0)
+        try allocator.dupe(u8, env_token)
+    else
+        "";
     var envelope = raft_schema.RaftEnvelope{
         .term = term,
         .from = from,
         .nonce = nonce_tracker.NonceTracker.generateNonce(),
         .message = proto_msg,
-        .auth_token = posixGetenv("GEODE_CLUSTER_TOKEN") orelse "",
+        .auth_token = owned_token,
     };
     defer envelope.deinit(allocator);
 
@@ -1417,6 +1466,68 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
             .done = is.done,
         } },
         .install_snapshot_response => |isr| Message{ .install_snapshot_response = .{
+            .term = isr.term,
+            .success = isr.success,
+        } },
+    };
+}
+
+/// Convert a geode-shaped Message (over-the-wire protobuf) back into the
+/// raft_lib.Message the raft library expects on its `step()` input.
+/// Inverse of `raftLibMessageToGeode`.
+///
+/// Task A6b (2026-05-25 distributed cluster testing plan): this is the
+/// inbound counterpart of the bridge sendImpl path.  `networkLoop`
+/// accepts a peer QUIC connection, reads a framed envelope, decodes it
+/// into a geode `Message`, and feeds the raft_lib equivalent into the
+/// inner raft node via `RaftNode.stepInner`.  We deliberately keep the
+/// `AppendEntries.entries` field empty here: the current cluster wire
+/// format encodes RequestVote / heartbeat traffic only (matching
+/// `messageToProto`), so callers that observe append_entries traffic
+/// can safely treat the entries slice as `&.{}`.  The full LogEntry
+/// round-trip is wired by the `handleMessage` path which deserializes
+/// entries inline.
+pub fn geodeMessageToRaftLib(msg: Message) raft_lib.Message {
+    return switch (msg) {
+        .request_vote => |rv| raft_lib.Message{ .request_vote = .{
+            .term = rv.term,
+            .candidate_id = rv.candidate_id,
+            .last_log_index = rv.last_log_index,
+            .last_log_term = rv.last_log_term,
+            .pre_vote = rv.pre_vote,
+        } },
+        .request_vote_response => |rvr| raft_lib.Message{ .request_vote_response = .{
+            .term = rvr.term,
+            .vote_granted = rvr.vote_granted,
+            .pre_vote = false,
+        } },
+        .append_entries => |ae| raft_lib.Message{ .append_entries = .{
+            .term = ae.term,
+            .leader_id = ae.leader_id,
+            .prev_log_index = ae.prev_log_index,
+            .prev_log_term = ae.prev_log_term,
+            .entries = &.{},
+            .leader_commit = ae.leader_commit,
+        } },
+        .append_entries_response => |aer| raft_lib.Message{ .append_entries_response = .{
+            .term = aer.term,
+            .success = aer.success,
+            .match_index = aer.match_index,
+            .conflict_index = 0,
+            .conflict_term = 0,
+        } },
+        .install_snapshot => |is| raft_lib.Message{ .install_snapshot = .{
+            .term = is.term,
+            .leader_id = is.leader_id,
+            .last_included_index = is.last_included_index,
+            .last_included_term = is.last_included_term,
+            .offset = is.offset,
+            .data = is.data,
+            .done = is.done,
+            .checksum = std.mem.zeroes([32]u8),
+            .config = .{ .voters = &.{}, .voters_outgoing = &.{}, .is_joint = false },
+        } },
+        .install_snapshot_response => |isr| raft_lib.Message{ .install_snapshot_response = .{
             .term = isr.term,
             .success = isr.success,
         } },
