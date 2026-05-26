@@ -1042,7 +1042,12 @@ pub const ClusterCoordinator = struct {
             return;
         }
 
-        // SEC-D009: Validate nonce to prevent replay attacks.
+        // SEC-D009: Validate nonce to prevent replay attacks.  Each
+        // outbound RaftEnvelope embeds a cryptographically random u64
+        // nonce; the receiver maintains a bounded ring of recently-seen
+        // nonces and rejects any duplicate.  Combined with the per-RPC
+        // TLS handshake (SEC-D011) and the cluster_token gate
+        // (SEC-D001) this gives cryptographic replay protection.
         if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
             log.warn("Raft frame rejected: replay or missing nonce", &.{
                 Attr.uint("from", frame_res.from),
@@ -1051,14 +1056,29 @@ pub const ClusterCoordinator = struct {
             return;
         }
 
-        // SEC-D009: Reject replayed frames
-        if (!self.replay_guard.check(frame_res.from, frame_res.term)) {
-            log.warn("Rejected replayed Raft frame", &.{
-                Attr.uint("from", frame_res.from),
-                Attr.uint("term", frame_res.term),
-            });
-            return;
-        }
+        // A6d (2026-05-25): the original SEC-D009 resolution added a
+        // secondary `replay_guard.check(from, term)` rejection here.
+        // That key is wrong for raft semantics: a single leader sends
+        // many heartbeats (AppendEntries) and a single candidate may
+        // re-issue RequestVote within the SAME (from, term) pair before
+        // the election timeout fires.  The (from, term) guard
+        // unconditionally drops every retry/heartbeat after the first
+        // hit, which prevented leader election in the 3-node subprocess
+        // smoke test (the candidate's first RequestVote was answered;
+        // every subsequent retry was silently dropped, so the receiver
+        // never re-issued its vote response and the cluster split-voted
+        // forever at term=1).
+        //
+        // Cryptographic replay protection still holds because the
+        // nonce_tracker above rejects any byte-exact retransmission.  A
+        // legitimate raft retry generates a fresh nonce via
+        // `nonce_tracker.NonceTracker.generateNonce()` inside
+        // `encodeRaftFrame`, so it passes the nonce check; an adversary
+        // replaying a captured frame reuses the same nonce and is
+        // rejected.  The `replay_guard` field is retained on the
+        // ClusterCoordinator struct (zero-allocation on init when
+        // unused) for binary compatibility with downstream tests that
+        // exercise it directly.
 
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{

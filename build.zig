@@ -1164,6 +1164,23 @@ pub fn build(b: *std.Build) void {
     const raft_command_refactor_step = b.step("test-raft-command-refactor", "Run RaftCommand oneof refactor regression tests (A4b)");
     raft_command_refactor_step.dependOn(&run_raft_command_refactor_tests.step);
 
+    // A6d regression cover.  RaftEnvelope encode/decode round-trip.
+    // Pins the schema's field-number layout so a future edit that
+    // reintroduces a collision between RaftEnvelope's scalar fields and
+    // the inner RaftMessage oneof's submessage field numbers breaks the
+    // suite at this test rather than silently re-blocking 3-node leader
+    // election.
+    const raft_envelope_roundtrip_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_envelope_roundtrip.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_envelope_roundtrip_tests.root_module.addImport("raft_schema", raft_schema_mod);
+    raft_envelope_roundtrip_tests.root_module.addImport("protobuf", protobuf_mod);
+    const run_raft_envelope_roundtrip_tests = b.addRunArtifact(raft_envelope_roundtrip_tests);
+    const raft_envelope_roundtrip_step = b.step("test-raft-envelope-roundtrip", "Run RaftEnvelope encode/decode round-trip regression tests (A6d)");
+    raft_envelope_roundtrip_step.dependOn(&run_raft_envelope_roundtrip_tests.step);
+
     // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
     // src/graph_store.zig. The graph_store module needs logging as a named import.
     // Do NOT add geode here — graph_store.zig is transitively included in geode and adding
@@ -2137,6 +2154,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_cluster_coord_config_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_bootstrap_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_raft_command_refactor_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_raft_envelope_roundtrip_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);
