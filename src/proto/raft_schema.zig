@@ -322,11 +322,17 @@ pub const RequestVoteResponse = struct {
     term: u64 = 0,
     vote_granted: bool = false,
     voter_id: u64 = 0,
+    /// A6d: pre-vote phase echo bit.  Pre-vote is enabled by default in
+    /// the embedded raft library (node.zig:43); the candidate counts
+    /// only responses whose pre_vote bit matches its current phase, so
+    /// the response MUST carry it through to avoid stalling election.
+    pre_vote: bool = false,
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
         .vote_granted = fd(2, .{ .scalar = .bool }),
         .voter_id = fd(3, .{ .scalar = .uint64 }),
+        .pre_vote = fd(4, .{ .scalar = .bool }),
     };
 
     pub fn deinit(self: *RequestVoteResponse, allocator: std.mem.Allocator) void {
@@ -433,20 +439,59 @@ pub const RaftMessage = union(enum) {
 };
 
 pub const RaftEnvelope = struct {
+    // A6d (2026-05-25): two interacting protobuf-0.1.3 decoder quirks
+    // combined to drop every inbound RaftEnvelope on the floor:
+    //
+    //   1. Several RaftEnvelope scalar fields shared a wire field number
+    //      with one of the inner RaftMessage oneof variants (RaftMessage
+    //      uses field numbers 1..6):
+    //        term  = fd(1) collided with request_vote          = fd(1)
+    //        from  = fd(2) collided with request_vote_response = fd(2)
+    //      The decoder walks the parent's _desc_table fields in order
+    //      and, on a wire tag of (say) field 1 LEN, matched against
+    //      `term` (varint) first and tripped the wire-type guard at
+    //      wire.zig:729 with error.InvalidInput.
+    //
+    //   2. The decoder's `inline for` over _desc_table fields uses a
+    //      `comptime break` at the end of every iteration.  When it
+    //      reaches the `.oneof` field and the inner desc table holds no
+    //      match for the current tag, the oneof switch's
+    //      `else skipField(...)` consumes the wire bytes and the
+    //      comptime break exits the loop — so any subsequent _desc_table
+    //      field whose field_number matched the tag would never be
+    //      processed.
+    //
+    // Both quirks are addressed by:
+    //
+    //   * Renumbering ALL scalar fields out of the 1..6 range so they
+    //     can never collide with a current or future RaftMessage oneof
+    //     variant.  Specifically: term -> 12, from -> 13, nonce keeps
+    //     10, auth_token keeps 11.  Field numbers 7..9 are intentionally
+    //     reserved for future RaftMessage oneof variants (e.g.
+    //     install_snapshot_chunk, transfer_leader, pre_vote, ...).
+    //   * Reordering _desc_table so the `message` oneof is the LAST
+    //     entry.  This way the decoder's inline-for visits every
+    //     concrete scalar field before falling through to the oneof's
+    //     catch-all skipField branch.
+    //
+    // This is a wire-incompatible change but the protocol has only ever
+    // been spoken between geode peers built from the same source tree,
+    // and the 3-node subprocess test in tests/test_cluster_3node_subprocess.zig
+    // exercises both encode and decode of every envelope shape end-to-end.
     term: u64 = 0,
     from: u64 = 0,
     /// SEC-D009: Cryptographic nonce for replay protection.
     /// Each frame carries a random nonce; receivers reject frames with previously-seen nonces.
     nonce: u64 = 0,
-    message: ?RaftMessage = null,
     auth_token: []const u8 = "",
+    message: ?RaftMessage = null,
 
     pub const _desc_table = .{
-        .term = fd(1, .{ .scalar = .uint64 }),
-        .from = fd(2, .{ .scalar = .uint64 }),
+        .term = fd(12, .{ .scalar = .uint64 }),
+        .from = fd(13, .{ .scalar = .uint64 }),
         .nonce = fd(10, .{ .scalar = .uint64 }),
-        .message = fd(null, .{ .oneof = RaftMessage }),
         .auth_token = fd(11, .{ .scalar = .string }),
+        .message = fd(null, .{ .oneof = RaftMessage }),
     };
 
     pub fn deinit(self: *RaftEnvelope, allocator: std.mem.Allocator) void {

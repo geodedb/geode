@@ -673,6 +673,12 @@ pub const RequestVoteResponse = struct {
     term: u64,
     vote_granted: bool,
     voter_id: u64,
+    /// A6d: must echo the candidate's `pre_vote` flag.  The raft library's
+    /// pre-vote phase (enabled by default in node.zig:43) counts only
+    /// responses whose `pre_vote` matches the candidate's current phase;
+    /// dropping this bit caused subprocess candidates to never accumulate
+    /// a quorum.
+    pre_vote: bool = false,
 };
 
 pub const AppendEntries = struct {
@@ -845,15 +851,21 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
 fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
     _ = allocator;
     return switch (msg) {
-        .request_vote => |rv| .{ .request_vote = .{
-            .term = rv.term,
-            .candidate_id = rv.candidate_id,
-            .last_log_index = rv.last_log_index,
-            .last_log_term = rv.last_log_term,
-        } },
+        .request_vote => |rv| .{
+            .request_vote = .{
+                .term = rv.term,
+                .candidate_id = rv.candidate_id,
+                .last_log_index = rv.last_log_index,
+                .last_log_term = rv.last_log_term,
+                // A6d: propagate the pre-vote phase bit on the outbound wire.
+                .pre_vote = rv.pre_vote,
+            },
+        },
         .request_vote_response => |rvr| .{ .request_vote_response = .{
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
+            .voter_id = rvr.voter_id,
+            .pre_vote = rvr.pre_vote,
         } },
         // raft_schema.AppendEntries.entries is an ArrayList that holds the
         // log entries to replicate.  We construct it empty here because the
@@ -898,17 +910,30 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
 fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
     _ = allocator;
     return switch (msg) {
-        .request_vote => |rv| .{ .request_vote = .{
-            .term = rv.term,
-            .candidate_id = rv.candidate_id,
-            .last_log_index = rv.last_log_index,
-            .last_log_term = rv.last_log_term,
-            .pre_vote = false,
-        } },
+        .request_vote => |rv| .{
+            .request_vote = .{
+                .term = rv.term,
+                .candidate_id = rv.candidate_id,
+                .last_log_index = rv.last_log_index,
+                .last_log_term = rv.last_log_term,
+                // A6d: pre_vote is part of the wire schema and must be
+                // propagated.  Hard-coding it to false here caused the
+                // embedded raft library's pre-vote handshake to fail end-to-end:
+                // candidates issued pre_vote=true RequestVotes (and bumped
+                // current_term + 1 in request_term), peers always saw
+                // pre_vote=false on inbound, so they treated every request as
+                // a real vote and bumped their term unconditionally on
+                // msg.term > current_term.  No leader was ever elected
+                // because all 3 candidates ended up at the same higher term
+                // every round-trip.
+                .pre_vote = rv.pre_vote,
+            },
+        },
         .request_vote_response => |rvr| .{ .request_vote_response = .{
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
-            .voter_id = 0,
+            .voter_id = rvr.voter_id,
+            .pre_vote = rvr.pre_vote,
         } },
         .append_entries => |ae| .{ .append_entries = .{
             .term = ae.term,
@@ -1115,6 +1140,19 @@ pub const RaftNode = struct {
     state: State,
     current_term: u64,
 
+    /// A6d follow-on (2026-05-26): serialize concurrent access to the
+    /// embedded raft library's mutable state.  Before this mutex landed,
+    /// the cluster coordinator's `raftLoop` (calling `tick()` every
+    /// 10ms) and the QUIC accept thread (calling `handleMessage()` on
+    /// every inbound frame) could both reach `self.inner.*` at the same
+    /// instant.  Once leader election started working (post-A6d wire
+    /// fix + pre_vote propagation), the elected leader's first
+    /// `sendHeartbeats` could observe `replication_state` being
+    /// `becomeFollower`-nulled by the receive thread, surfacing as
+    /// `incorrect alignment` inside the inner library's hash-map
+    /// metadata pointer.
+    inner_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
     // External raft library node
     inner: raft_lib.RaftNode,
     // Heap-allocated so the Storage vtable interface (which captures
@@ -1195,6 +1233,7 @@ pub const RaftNode = struct {
             .id = id,
             .state = .follower,
             .current_term = 0,
+            .inner_mutex = std.Io.Mutex.init,
             .inner = inner,
             .storage_ptr = storage_ptr,
             .peers = peers,
@@ -1263,6 +1302,9 @@ pub const RaftNode = struct {
     /// through `handleMessage` (which decodes the geode Message wire
     /// format first).
     pub fn stepInner(self: *RaftNode, from: u64, msg: raft_lib.Message) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
         try self.inner.step(from, msg);
         self.drainReady();
     }
@@ -1272,6 +1314,9 @@ pub const RaftNode = struct {
     }
 
     pub fn tick(self: *RaftNode) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
         try self.inner.tick(null);
         self.drainReady();
     }
@@ -1292,7 +1337,7 @@ pub const RaftNode = struct {
             .request_vote_response => |rvr| .{ .request_vote_response = .{
                 .term = rvr.term,
                 .vote_granted = rvr.vote_granted,
-                .pre_vote = false,
+                .pre_vote = rvr.pre_vote,
             } },
             .append_entries => |ae| blk: {
                 // Convert geode LogEntry[] to raft_lib Entry[]
@@ -1339,6 +1384,17 @@ pub const RaftNode = struct {
                 .success = isr.success,
             } },
         };
+
+        // A6d follow-on: serialize inner-library mutation across the
+        // raft tick thread (cluster.zig:raftLoop) and the QUIC accept
+        // thread (cluster.zig:readOneRaftFrameAndDispatch).  Without the
+        // mutex, a concurrent `becomeFollower` from the receive thread
+        // could null out replication_state mid-`sendHeartbeats`,
+        // surfacing as an "incorrect alignment" panic on the hash-map
+        // metadata pointer.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
 
         // raft-0.1.3 RaftNode.step takes (from, msg); the older 3-arg form
         // (with a trailing thread-pool param) is gone.
@@ -1564,6 +1620,9 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
                 // counterpart does not.  Set to 0 — the receiver fills it
                 // from the wire envelope's `from` field.
                 .voter_id = 0,
+                // A6d: preserve the pre-vote phase bit so the candidate
+                // can count this response in its current phase.
+                .pre_vote = rvr.pre_vote,
             },
         },
         .append_entries => |ae| blk: {
@@ -1637,11 +1696,15 @@ pub fn geodeMessageToRaftLib(msg: Message) raft_lib.Message {
             .last_log_term = rv.last_log_term,
             .pre_vote = rv.pre_vote,
         } },
-        .request_vote_response => |rvr| raft_lib.Message{ .request_vote_response = .{
-            .term = rvr.term,
-            .vote_granted = rvr.vote_granted,
-            .pre_vote = false,
-        } },
+        .request_vote_response => |rvr| raft_lib.Message{
+            .request_vote_response = .{
+                .term = rvr.term,
+                .vote_granted = rvr.vote_granted,
+                // A6d: preserve the pre-vote phase bit so the candidate
+                // can count this response in its current phase.
+                .pre_vote = rvr.pre_vote,
+            },
+        },
         .append_entries => |ae| raft_lib.Message{ .append_entries = .{
             .term = ae.term,
             .leader_id = ae.leader_id,
