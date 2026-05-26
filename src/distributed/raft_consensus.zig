@@ -387,6 +387,16 @@ pub const Transport = struct {
         /// map (which now owns that ref).
         refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 
+        /// A6f (2026-05-26): serialize all access to the QUIC vendor library
+        /// for this connection. The library's internal stream-tracking
+        /// HashMap is not thread-safe — concurrent `poll()` (from
+        /// clientPollLoop) and `getStream()`/`finish()` (from send) on the
+        /// same QuicClient produce a segfault inside `dropAckedStreamTracking`
+        /// → `fetchRemove` → `getIndex` (the HashMap's metadata pointer is
+        /// read after free). Holding this mutex around every client.* call
+        /// prevents the race.
+        client_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
         fn deinit(self: *PeerConnection) void {
             self.client.deinit();
             self.allocator.free(self.endpoint);
@@ -610,7 +620,12 @@ pub const Transport = struct {
             }
             self.peers_mutex.unlock(io);
             for (snap_buf[0..snap_len]) |pc| {
+                // A6f: serialize against send's getStream/finish on the same
+                // QuicClient. The vendor library's stream-tracking HashMap
+                // is not thread-safe.
+                pc.client_mutex.lockUncancelable(io);
                 pc.client.poll(0) catch {};
+                pc.client_mutex.unlock(io);
                 if (pc.release()) {
                     // Eviction completed while we were polling; we hold the
                     // last reference and must deinit.
@@ -688,6 +703,13 @@ pub const Transport = struct {
         // our refcount; evictPeerConnection (which also bumps+releases)
         // is safe to call inside this scope.
         defer self.releasePeerConnection(conn);
+
+        // A6f: serialize all subsequent client.* calls against the poll
+        // loop on the same connection. The vendor QUIC library's internal
+        // stream-tracking HashMap segfaults under concurrent access.
+        const io_send = std.Io.Threaded.global_single_threaded.io();
+        conn.client_mutex.lockUncancelable(io_send);
+        defer conn.client_mutex.unlock(io_send);
 
         const s = conn.client.getStream() catch |err| {
             // The cached connection is no longer usable (vendor library
