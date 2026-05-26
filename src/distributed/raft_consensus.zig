@@ -377,13 +377,15 @@ pub const Transport = struct {
         port: u16,
 
         /// Refcount for safe concurrent eviction-vs-poll (A6f, 2026-05-26).
-        /// `clientPollLoop` and `send` each bump this around their use of
-        /// `client.poll()` / `client.getStream()`. `evictPeerConnection`
-        /// removes the entry from the map under `peers_mutex` (so no new
-        /// callers can acquire a ref) and then waits for refcount → 0
-        /// before deinit. Without this, the pollLoop snapshot pattern
-        /// race-with-evict crashes inside the QUIC vendor library.
-        refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        /// Semantics: entries in `Transport.peers` carry an implicit ref of 1
+        /// (the map's ownership). `clientPollLoop` and `send` each bump+drop
+        /// a transient ref around their use of `client.poll()` /
+        /// `client.getStream()`. `evictPeerConnection` removes the entry
+        /// from the map and drops the map's implicit ref; whichever thread
+        /// observes the final 1→0 transition owns the deinit. Initial value
+        /// is 1 because the entry is created and immediately placed in the
+        /// map (which now owns that ref).
+        refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 
         fn deinit(self: *PeerConnection) void {
             self.client.deinit();
@@ -806,17 +808,13 @@ pub const Transport = struct {
     /// Remove a cached peer connection (typically after observing an
     /// error on `getStream`/`writeRaftFrame`).
     ///
-    /// A6f (2026-05-26): we cannot deinit the PeerConnection while
-    /// clientPollLoop may still be holding a reference (it acquires under
-    /// peers_mutex but releases outside). Pattern: remove from the map
-    /// under the lock to deny new acquisitions, then atomically decrement
-    /// the eviction reference we implicitly hold. If the refcount was
-    /// already 0 (no concurrent poll in flight) we deinit here; otherwise
-    /// the last `release()` caller in clientPollLoop will observe the
-    /// transition and deinit.
-    ///
-    /// Note: we deliberately use `acquire` semantics on the bump and
-    /// rely on `release()`'s acq_rel fetchSub to publish writes.
+    /// A6f (2026-05-26): the map entry carries an implicit refcount of 1
+    /// (the map's ownership). Eviction removes from the map and drops
+    /// that implicit ref. If no concurrent send/poll holds a transient
+    /// ref, refcount transitions 1→0 here and we own the deinit.
+    /// Otherwise the transient holder's `release` will observe 1→0 and
+    /// deinit. Removing from the map under peers_mutex denies new
+    /// acquisitions (getOrCreatePeerConnection has to look it up again).
     fn evictPeerConnection(self: *Transport, peer_id: u64) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.peers_mutex.lockUncancelable(io);
@@ -824,12 +822,8 @@ pub const Transport = struct {
         self.peers_mutex.unlock(io);
         if (maybe_kv) |kv| {
             const pc = kv.value;
-            // Bump the refcount by one so the contract "the caller that
-            // observes the count transition 1 → 0 owns the deinit" is
-            // simple: we always release after pollLoop has finished its
-            // iteration. If we're the only one (no in-flight poll), we
-            // transition 1 → 0 immediately and own the deinit ourselves.
-            pc.acquire();
+            // Drop the map's implicit ref. If the count is now 0 we own
+            // the deinit; otherwise a concurrent send/poll holder will.
             if (pc.release()) pc.deinit();
         }
     }
