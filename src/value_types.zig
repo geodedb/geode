@@ -156,7 +156,7 @@ pub const Env = struct {
     /// Track whether this Env owns its arrays and should free them
     owned: bool = false,
     /// Reference to TimeSeries store (GAP-004 wiring)
-    timeseries_store: ?*const @import("timeseries_lib").Store = null,
+    timeseries_store: ?*const @import("timeseries/timeseries.zig").Store = null,
     /// Optional opaque execution context pointer for subquery evaluation
     exec_context: ?*anyopaque = null,
 

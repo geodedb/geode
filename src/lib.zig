@@ -284,7 +284,7 @@ pub const benchmarks = struct {
     pub const variance_config = @import("benchmarks/variance_config.zig");
 };
 // Time-series module
-pub const timeseries = @import("timeseries_lib");
+pub const timeseries = @import("timeseries/timeseries.zig");
 
 // Re-export index modules for specialized data types
 pub const index = struct {

@@ -38,7 +38,7 @@ fn compat_sleep(ns: u64) void {
 }
 
 const timeseries_lib = @import("timeseries_lib");
-const timeseries = timeseries_lib;
+const timeseries = @import("timeseries_wrapper");
 const chunk_storage = timeseries_lib.chunk_storage;
 const gql_functions = @import("gql_functions");
 

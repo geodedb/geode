@@ -15,7 +15,7 @@ const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const audit = @import("../security/audit.zig");
-const ts_mod = @import("timeseries_lib");
+const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 
 const Allocator = std.mem.Allocator;
