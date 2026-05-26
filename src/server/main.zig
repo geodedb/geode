@@ -1146,6 +1146,14 @@ pub fn main() !void {
             process_env,
             config.cluster_port,
             config.peers,
+            // Reuse the same TLS material the client-facing listener was
+            // configured with (cert_gen.ensureCertificatesAtPath wrote them
+            // into <data-dir>/server.crt above).  Without this plumbing the
+            // cluster QuicTransport falls back to "certs/server.crt"
+            // relative to CWD and `generateSelfSignedCert` is still a stub
+            // in Zig 0.16 — networkLoop hard-fatals.  Task A6 (2026-05-25).
+            cert_path,
+            key_path,
         ) catch |err| {
             log.err("Cluster bootstrap failed; refusing to start", &.{Attr.string("error", @errorName(err))});
             return err;
