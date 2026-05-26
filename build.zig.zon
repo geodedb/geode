@@ -303,6 +303,10 @@
             .hash = "timeseries-0.1.4-iAEwOuvJBAB2usEMffEDGGWXXPAFA-4TsgiicNgQP9GU",
         },
 
+        .timeseries_storage = .{
+            .path = "../../../../../../devnw/zig/timeseries-storage",
+        },
+
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
             .url = "git+https://gitlab.com/devnw/zig/auth.git#v0.1.4",

@@ -17,14 +17,353 @@
 // CANARY: REQ=REQ-TS-PERSIST-003; FEATURE="TimeSeriesSync"; ASPECT=Shutdown; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
 
 const ts_lib = @import("timeseries_lib");
+const ts_storage = @import("timeseries_storage_lib");
+const thread_pool = @import("thread_pool");
+const std = @import("std");
 
 // Re-export core store types at the same names the rest of Geode expects.
 pub const Point = ts_lib.Point;
 pub const PointF64 = ts_lib.PointF64;
 pub const SeriesKey = ts_lib.SeriesKey;
 pub const Series = ts_lib.Series;
-pub const Store = ts_lib.Store;
-pub const StoreConfig = ts_lib.StoreConfig;
+
+pub const StoreConfig = struct {
+    data_dir: ?[]const u8 = null,
+    chunk_config: ChunkConfig = .{},
+};
+
+pub const Store = struct {
+    allocator: std.mem.Allocator,
+    engine: ?*ts_storage.engine.Engine,
+    pool: ?*thread_pool.ThreadPool,
+    config: StoreConfig,
+    series_cache: std.AutoHashMap(u128, *Series),
+
+    pub fn init(allocator: std.mem.Allocator) Store {
+        return .{
+            .allocator = allocator,
+            .engine = null,
+            .pool = null,
+            .config = .{},
+            .series_cache = std.AutoHashMap(u128, *Series).init(allocator),
+        };
+    }
+
+    pub fn initWithConfig(allocator: std.mem.Allocator, config: StoreConfig) !Store {
+        if (config.data_dir == null) return init(allocator);
+
+        // We create a dedicated thread pool for the timeseries engine
+        const pool_ptr = try allocator.create(thread_pool.ThreadPool);
+        errdefer allocator.destroy(pool_ptr);
+
+        pool_ptr.* = try thread_pool.ThreadPool.init(allocator, .{
+            .min_threads = 2,
+            .max_threads = 4,
+        });
+        errdefer pool_ptr.deinit();
+
+        const engine_config = ts_storage.engine.Config{
+            .data_dir = try std.fmt.allocPrint(allocator, "{s}/timeseries", .{config.data_dir.?}),
+            .max_memtable_points = config.chunk_config.max_points_per_chunk,
+        };
+
+        const engine_ptr = try allocator.create(ts_storage.engine.Engine);
+        errdefer allocator.destroy(engine_ptr);
+
+        engine_ptr.* = try ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr);
+
+        return Store{
+            .allocator = allocator,
+            .engine = engine_ptr,
+            .pool = pool_ptr,
+            .config = config,
+            .series_cache = std.AutoHashMap(u128, *Series).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Store) void {
+        var it = self.series_cache.valueIterator();
+        while (it.next()) |s_ptr| {
+            const s = s_ptr.*;
+            s.points.deinit(self.allocator);
+            self.allocator.free(s.key.metric);
+            self.allocator.destroy(s);
+        }
+        self.series_cache.deinit();
+
+        if (self.engine) |eng| {
+            eng.deinit();
+            self.allocator.free(eng.config.data_dir);
+            self.allocator.destroy(eng);
+            self.engine = null;
+        }
+        if (self.pool) |p| {
+            p.deinit();
+            self.allocator.destroy(p);
+            self.pool = null;
+        }
+    }
+
+    pub fn loadFromDisk(self: *Store) !void {
+        // Engine's init() already replays WAL and loads segments.
+        _ = self;
+    }
+
+    pub fn sync(self: *Store) !void {
+        if (self.engine) |eng| {
+            try eng.sync();
+        }
+    }
+
+    fn hashKeyStatic(k: SeriesKey) u128 {
+        var h1 = std.hash.Wyhash.init(0);
+        h1.update(std.mem.asBytes(&k.device_id));
+        h1.update(k.metric);
+        const x1 = h1.final();
+        var h2 = std.hash.Wyhash.init(0x517cc1b727220a95);
+        h2.update(std.mem.asBytes(&k.device_id));
+        h2.update(k.metric);
+        const x2 = h2.final();
+        return (@as(u128, x1) << 64) | @as(u128, x2);
+    }
+
+    pub fn hashKey(self: *Store, k: SeriesKey) u128 {
+        _ = self;
+        return hashKeyStatic(k);
+    }
+
+    pub fn insertMany(self: *Store, key: SeriesKey, pts: []const Point) !void {
+        if (pts.len == 0) return;
+        const sid = self.hashKey(key);
+
+        // Update cache if it exists, or create it
+        const series = try self.getOrCreateSeries(key);
+        try series.points.appendSlice(self.allocator, pts);
+
+        // Sort the cache array to maintain invariants
+        const cmpFn = struct {
+            fn less(_: void, a: Point, b: Point) bool {
+                return if (a.ts == b.ts) a.value < b.value else a.ts < b.ts;
+            }
+        }.less;
+        std.mem.sort(Point, series.points.items, {}, cmpFn);
+
+        if (self.engine) |eng| {
+            const engine_pts = @as([]const ts_storage.types.Point, @ptrCast(pts));
+            try eng.appendPoints(sid, engine_pts);
+        }
+    }
+
+    pub fn last(self: *Store, key: SeriesKey) ?Point {
+        if (self.engine) |eng| {
+            const sid = self.hashKey(key);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+
+            var iter = eng.queryPoints(arena.allocator(), sid, 0, std.math.maxInt(i64)) catch return null;
+            var last_pt: ?ts_storage.types.Point = null;
+            while (iter.next()) |pt| {
+                last_pt = pt;
+            }
+            if (last_pt) |p| {
+                return Point{ .ts = p.ts, .value = p.value };
+            }
+            return null;
+        } else {
+            if (self.series_cache.get(self.hashKey(key))) |s| {
+                if (s.points.items.len > 0) return s.points.items[s.points.items.len - 1];
+            }
+            return null;
+        }
+    }
+
+    pub fn valueBefore(self: *Store, key: SeriesKey, ts: i64) ?Point {
+        if (self.engine) |eng| {
+            const sid = self.hashKey(key);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+
+            var iter = eng.queryPoints(arena.allocator(), sid, 0, ts - 1) catch return null;
+            var last_pt: ?ts_storage.types.Point = null;
+            while (iter.next()) |pt| {
+                last_pt = pt;
+            }
+            if (last_pt) |p| {
+                return Point{ .ts = p.ts, .value = p.value };
+            }
+            return null;
+        } else {
+            if (self.series_cache.get(self.hashKey(key))) |s| {
+                var last_p: ?Point = null;
+                for (s.points.items) |p| {
+                    if (p.ts >= ts) break;
+                    last_p = p;
+                }
+                return last_p;
+            }
+            return null;
+        }
+    }
+
+    pub fn queryRange(self: *Store, key: SeriesKey, start_ts: i64, end_ts: i64, allocator: std.mem.Allocator) ![]Point {
+        var points: std.ArrayList(Point) = .empty;
+        errdefer points.deinit(allocator);
+
+        if (self.engine) |eng| {
+            const sid = self.hashKey(key);
+            var iter = try eng.queryPoints(allocator, sid, start_ts, end_ts);
+
+            while (iter.next()) |pt| {
+                try points.append(allocator, .{ .ts = pt.ts, .value = pt.value });
+            }
+        } else {
+            if (self.series_cache.get(self.hashKey(key))) |s| {
+                for (s.points.items) |p| {
+                    if (p.ts >= start_ts and p.ts < end_ts) {
+                        try points.append(allocator, p);
+                    }
+                }
+            }
+        }
+        return points.toOwnedSlice(allocator);
+    }
+
+    pub fn getSeries(self: *Store, key: SeriesKey) ?*Series {
+        if (self.series_cache.get(self.hashKey(key))) |s| return s;
+        if (self.engine != null) {
+            return self.getOrCreateSeries(key) catch null;
+        }
+        return null;
+    }
+
+    fn getOrCreateSeries(self: *Store, key: SeriesKey) !*Series {
+        const hk = self.hashKey(key);
+        if (self.series_cache.get(hk)) |s| return s;
+
+        const s = try self.allocator.create(Series);
+        s.* = .{
+            .key = .{
+                .device_id = key.device_id,
+                .metric = try self.allocator.dupe(u8, key.metric),
+            },
+            .points = .empty,
+        };
+
+        if (self.engine) |eng| {
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            var iter = try eng.queryPoints(arena.allocator(), hk, 0, std.math.maxInt(i64));
+            while (iter.next()) |pt| {
+                try s.points.append(self.allocator, .{ .ts = pt.ts, .value = pt.value });
+            }
+        }
+
+        try self.series_cache.put(hk, s);
+        return s;
+    }
+
+    pub fn timeBucketAvg(
+        self: *Store,
+        key: SeriesKey,
+        bucket_seconds: i64,
+        start_ts: i64,
+        end_ts: i64,
+        allocator: std.mem.Allocator,
+    ) ![]ts_lib.store.BucketAvgRow {
+        const points = try self.queryRange(key, start_ts, end_ts, allocator);
+        defer allocator.free(points);
+
+        var results: std.ArrayList(ts_lib.store.BucketAvgRow) = .empty;
+        errdefer results.deinit(allocator);
+
+        if (end_ts <= start_ts) return results.toOwnedSlice(allocator);
+
+        const bucket_ms = bucket_seconds;
+        var current_bucket_start = start_ts;
+        var pt_idx: usize = 0;
+
+        while (current_bucket_start < end_ts) : (current_bucket_start += bucket_ms) {
+            const bucket_end = current_bucket_start + bucket_ms;
+            var sum: i128 = 0;
+            var count: i64 = 0;
+
+            while (pt_idx < points.len and points[pt_idx].ts < bucket_end) {
+                sum += points[pt_idx].value;
+                count += 1;
+                pt_idx += 1;
+            }
+
+            if (count > 0) {
+                const avg: i64 = @intCast(@divTrunc(sum, count));
+                try results.append(allocator, .{ .ts = current_bucket_start, .avg = avg });
+            } else {
+                try results.append(allocator, .{ .ts = current_bucket_start, .avg = null });
+            }
+        }
+
+        return results.toOwnedSlice(allocator);
+    }
+
+    pub fn sampleBy(
+        self: *Store,
+        key: SeriesKey,
+        interval_ms: i64,
+        start_ts: i64,
+        end_ts: i64,
+        agg: ts_lib.store.Aggregation,
+        allocator: std.mem.Allocator,
+    ) ![]ts_lib.store.SampleRow {
+        const points = try self.queryRange(key, start_ts, end_ts, allocator);
+        defer allocator.free(points);
+
+        var results: std.ArrayList(ts_lib.store.SampleRow) = .empty;
+        errdefer results.deinit(allocator);
+
+        if (end_ts <= start_ts) return results.toOwnedSlice(allocator);
+
+        var current_bucket_start = start_ts;
+        var pt_idx: usize = 0;
+
+        while (current_bucket_start < end_ts) : (current_bucket_start += interval_ms) {
+            const bucket_end = current_bucket_start + interval_ms;
+
+            var sum: i128 = 0;
+            var count: i64 = 0;
+            var min: i64 = std.math.maxInt(i64);
+            var max: i64 = std.math.minInt(i64);
+            var first: ?i64 = null;
+            var last_val: ?i64 = null;
+
+            while (pt_idx < points.len and points[pt_idx].ts < bucket_end) {
+                const val = points[pt_idx].value;
+                if (first == null) first = val;
+                last_val = val;
+                sum += val;
+                count += 1;
+                if (val < min) min = val;
+                if (val > max) max = val;
+                pt_idx += 1;
+            }
+
+            var result_val: ?i64 = null;
+            if (count > 0) {
+                switch (agg) {
+                    .avg => result_val = @intCast(@divTrunc(sum, count)),
+                    .sum => result_val = @intCast(sum),
+                    .min => result_val = min,
+                    .max => result_val = max,
+                    .count => result_val = count,
+                    .first => result_val = first,
+                    .last => result_val = last_val,
+                }
+            }
+
+            try results.append(allocator, .{ .ts = current_bucket_start, .value = result_val });
+        }
+
+        return results.toOwnedSlice(allocator);
+    }
+};
 pub const ChunkConfig = ts_lib.ChunkConfig;
 pub const ChunkStorage = ts_lib.ChunkStorage;
 
@@ -36,7 +375,7 @@ pub const lib = ts_lib;
 // Tests -- verify that the external library types work through this wrapper.
 // ---------------------------------------------------------------------------
 
-const std = @import("std");
+//const std = @import("std");
 
 test "ts: insert/order/last/asof" {
     const allocator = std.testing.allocator;
