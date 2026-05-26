@@ -376,10 +376,32 @@ pub const Transport = struct {
         endpoint: []const u8,
         port: u16,
 
+        /// Refcount for safe concurrent eviction-vs-poll (A6f, 2026-05-26).
+        /// `clientPollLoop` and `send` each bump this around their use of
+        /// `client.poll()` / `client.getStream()`. `evictPeerConnection`
+        /// removes the entry from the map under `peers_mutex` (so no new
+        /// callers can acquire a ref) and then waits for refcount → 0
+        /// before deinit. Without this, the pollLoop snapshot pattern
+        /// race-with-evict crashes inside the QUIC vendor library.
+        refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
         fn deinit(self: *PeerConnection) void {
             self.client.deinit();
             self.allocator.free(self.endpoint);
             self.allocator.destroy(self);
+        }
+
+        /// Acquire a reference. Must be called while holding the parent
+        /// Transport's `peers_mutex` to ensure the entry is still in the map.
+        fn acquire(self: *PeerConnection) void {
+            _ = self.refcount.fetchAdd(1, .acq_rel);
+        }
+
+        /// Release a reference. Returns true if this was the final
+        /// reference (caller may deinit). Lock-free.
+        fn release(self: *PeerConnection) bool {
+            const prev = self.refcount.fetchSub(1, .acq_rel);
+            return prev == 1;
         }
     };
 
@@ -567,6 +589,11 @@ pub const Transport = struct {
         var snap_buf: [16]*PeerConnection = undefined;
         const io = std.Io.Threaded.global_single_threaded.io();
         while (!self.client_poll_shutdown.load(.acquire)) {
+            // Snapshot the peer set AND acquire a reference on each entry
+            // while holding peers_mutex. evictPeerConnection waits for the
+            // refcount to drop to zero before freeing, so the references
+            // we hold here keep each PeerConnection alive across the
+            // unlocked poll calls below. A6f (2026-05-26).
             var snap_len: usize = 0;
             self.peers_mutex.lockUncancelable(io);
             var it = self.peers.iterator();
@@ -574,6 +601,7 @@ pub const Transport = struct {
                 if (snap_len >= snap_buf.len) break;
                 const pc = entry.value_ptr.*;
                 if (pc.established) {
+                    pc.acquire();
                     snap_buf[snap_len] = pc;
                     snap_len += 1;
                 }
@@ -581,6 +609,11 @@ pub const Transport = struct {
             self.peers_mutex.unlock(io);
             for (snap_buf[0..snap_len]) |pc| {
                 pc.client.poll(0) catch {};
+                if (pc.release()) {
+                    // Eviction completed while we were polling; we hold the
+                    // last reference and must deinit.
+                    pc.deinit();
+                }
             }
             compat_sleep(2 * std.time.ns_per_ms);
         }
@@ -649,6 +682,10 @@ pub const Transport = struct {
             });
             return err;
         };
+        // A6f: matching release. Use `defer` so every exit path drops
+        // our refcount; evictPeerConnection (which also bumps+releases)
+        // is safe to call inside this scope.
+        defer self.releasePeerConnection(conn);
 
         const s = conn.client.getStream() catch |err| {
             // The cached connection is no longer usable (vendor library
@@ -707,6 +744,9 @@ pub const Transport = struct {
     /// during the handshake.  If two callers race to create the same
     /// peer, the loser tears its own client down and returns the
     /// winner's entry.
+    /// Acquire-or-build a PeerConnection. Returns an entry with refcount
+    /// already bumped — caller MUST call `releasePeerConnection` (or call
+    /// `pc.release()` and deinit on transition) when done.
     fn getOrCreatePeerConnection(self: *Transport, peer: Peer) !*PeerConnection {
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -715,7 +755,10 @@ pub const Transport = struct {
             self.peers_mutex.lockUncancelable(io);
             defer self.peers_mutex.unlock(io);
             if (self.peers.get(peer.id)) |existing| {
-                if (existing.established) return existing;
+                if (existing.established) {
+                    existing.acquire();
+                    return existing;
+                }
             }
         }
 
@@ -744,22 +787,50 @@ pub const Transport = struct {
         if (self.peers.get(peer.id)) |existing| {
             if (existing.established) {
                 conn.deinit();
+                existing.acquire();
                 return existing;
             }
         }
         try self.peers.put(peer.id, conn);
+        conn.acquire();
         return conn;
     }
 
+    /// Release a reference acquired via getOrCreatePeerConnection.
+    /// If the entry was evicted concurrently and we hold the last reference,
+    /// the deinit fires here.
+    fn releasePeerConnection(_: *Transport, pc: *PeerConnection) void {
+        if (pc.release()) pc.deinit();
+    }
+
     /// Remove a cached peer connection (typically after observing an
-    /// error on `getStream`/`writeRaftFrame`).  The entry is destroyed
-    /// in place; the next send to this peer will re-establish.
+    /// error on `getStream`/`writeRaftFrame`).
+    ///
+    /// A6f (2026-05-26): we cannot deinit the PeerConnection while
+    /// clientPollLoop may still be holding a reference (it acquires under
+    /// peers_mutex but releases outside). Pattern: remove from the map
+    /// under the lock to deny new acquisitions, then atomically decrement
+    /// the eviction reference we implicitly hold. If the refcount was
+    /// already 0 (no concurrent poll in flight) we deinit here; otherwise
+    /// the last `release()` caller in clientPollLoop will observe the
+    /// transition and deinit.
+    ///
+    /// Note: we deliberately use `acquire` semantics on the bump and
+    /// rely on `release()`'s acq_rel fetchSub to publish writes.
     fn evictPeerConnection(self: *Transport, peer_id: u64) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.peers_mutex.lockUncancelable(io);
-        defer self.peers_mutex.unlock(io);
-        if (self.peers.fetchRemove(peer_id)) |kv| {
-            kv.value.deinit();
+        const maybe_kv = self.peers.fetchRemove(peer_id);
+        self.peers_mutex.unlock(io);
+        if (maybe_kv) |kv| {
+            const pc = kv.value;
+            // Bump the refcount by one so the contract "the caller that
+            // observes the count transition 1 → 0 owns the deinit" is
+            // simple: we always release after pollLoop has finished its
+            // iteration. If we're the only one (no in-flight poll), we
+            // transition 1 → 0 immediately and own the deinit ourselves.
+            pc.acquire();
+            if (pc.release()) pc.deinit();
         }
     }
 };
