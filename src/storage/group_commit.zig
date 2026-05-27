@@ -29,6 +29,18 @@ const StorageAdapter = graph_storage_adapter.StorageAdapter;
 const PropKV = StorageAdapter.PropKV;
 const PropertyValue = graph_store.PropertyValue;
 
+const shard_coalesce_wait_ns: u64 = 100 * std.time.ns_per_us;
+
+fn sleepNs(ns: u64) void {
+    if (ns == 0) return;
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 /// Tag-union of supported apply operations.  Each variant carries the
 /// inputs the three bulk helpers accept plus an `ApplyResult` slot that
 /// the coordinator fills in before waking the submitter.
@@ -96,6 +108,14 @@ pub const ApplyOp = union(enum) {
         /// `bulkMergeNodeWithReservedId(..., apply_on_match = true)`.
         apply_on_match: bool = false,
     },
+    // CANARY: REQ=REQ-QUIC-HC-109; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeCoordinator; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
+    bulk_merge_node_props: struct {
+        label: []const u8,
+        merge_props: []const PropKV,
+        on_create_props: []const PropKV,
+        result: ApplyResult,
+        assigned_id: u64 = 0,
+    },
 
     pub fn resultPtr(self: *ApplyOp) *ApplyResult {
         return switch (self.*) {
@@ -103,6 +123,7 @@ pub const ApplyOp = union(enum) {
             .bulk_insert_edge => |*p| &p.result,
             .bulk_match_create_edge => |*p| &p.result,
             .bulk_merge_node => |*p| &p.result,
+            .bulk_merge_node_props => |*p| &p.result,
         };
     }
 
@@ -118,6 +139,7 @@ pub const ApplyOp = union(enum) {
             .bulk_insert_edge => |p| p.source_id,
             .bulk_match_create_edge => |p| p.source_id,
             .bulk_merge_node => |p| p.assigned_id,
+            .bulk_merge_node_props => |p| p.assigned_id,
         };
     }
 };
@@ -256,6 +278,10 @@ pub const ShardedCoordinator = struct {
                 const store = graph_store.getGlobalStore(graph_store.global_allocator());
                 p.assigned_id = store.reserveNodeId();
             },
+            .bulk_merge_node_props => |*p| {
+                const store = graph_store.getGlobalStore(graph_store.global_allocator());
+                p.assigned_id = store.reserveNodeId();
+            },
             .bulk_insert_edge => {},
             .bulk_match_create_edge => |*p| {
                 if (self.adapter.lookupNodeByMergeKey(
@@ -339,6 +365,19 @@ pub const ShardedCoordinator = struct {
                     return;
                 }
                 s.queue_not_empty.waitUncancelable(io, &s.queue_mutex);
+            }
+            // CANARY: REQ=REQ-QUIC-HC-013; FEATURE="CoordinatorMicroBatch"; ASPECT=ShardWorkerCoalescing; STATUS=IMPL; OWNER=storage; UPDATED=2026-05-26
+            //
+            // Submitters wait synchronously for their ApplyResult, so without a
+            // short coalescing window each shard worker often wakes and drains a
+            // one-item batch. That defeats the coordinator's WAL/index batching
+            // under high fan-in. Drop the mutex for a brief 100us window, then
+            // drain whatever arrived; low-concurrency latency only pays this
+            // cost when a write is already queued.
+            if (s.queue.len < max_batch and self.should_stop.load(.acquire) == 0) {
+                s.queue_mutex.unlock(io);
+                sleepNs(shard_coalesce_wait_ns);
+                s.queue_mutex.lockUncancelable(io);
             }
             var batch_len: usize = 0;
             while (batch_len < max_batch) : (batch_len += 1) {
@@ -442,6 +481,19 @@ pub const ShardedCoordinator = struct {
                         p.merge_value,
                         p.on_create_props,
                         p.apply_on_match,
+                    )) |id| {
+                        res.node_or_edge_id = id;
+                    } else |e| {
+                        res.err = e;
+                    }
+                },
+                .bulk_merge_node_props => |p| {
+                    if (self.adapter.bulkMergeNodeWithReservedIdMultiProp(
+                        self.graph_name,
+                        p.assigned_id,
+                        p.label,
+                        p.merge_props,
+                        p.on_create_props,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| {

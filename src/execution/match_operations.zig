@@ -429,25 +429,31 @@ pub fn countNodesFastPath(
         }
     }
 
-    // All preconditions met — delegate to the store counter. Mirror
-    // `executeMatchQueryImpl` and use a `ReadView` so concurrent writers
-    // don't serialize the count behind them (epoch-based snapshot; zero
-    // overhead when no concurrent mutations, deep-clone fallback when
-    // there are).
+    // All preconditions met — delegate to the store counter.
     //
-    // GAP-0753: Prefer the handler-installed `QueryReadSession` snapshot
-    // (via `getGlobalStore`) so we read from the pre-captured deep-clone
-    // instead of the live store. When no session is installed this falls
-    // back to the live store + ReadView as before.
+    // REQ-QUIC-HC-017: When the QUIC handler has already installed an active
+    // read store while holding the graph read lock, count directly from that
+    // store. Creating a ReadView in that scope can observe a mutation epoch
+    // drift and attempt to reacquire the global read lock on the same thread,
+    // which turns mixed count/read + CREATE traffic into a request stall.
+    // Legacy callers without an active read store keep the ReadView fallback.
     //
     // GAP-0811: For single-label counts, route through
     // `countNodesByLabel` which is O(1) on the label posting list when
     // tenant filtering is not active. For unlabeled counts we keep
     // `countNodesForGraph`.
-    const writable_store = graph_store.getGlobalStore(allocator);
-    var read_view = graph_store.ReadView.init(allocator, writable_store);
-    defer read_view.deinit();
-    const store = read_view.getReadStore();
+    var fallback_read_view: graph_store.ReadView = undefined;
+    var fallback_read_view_active = false;
+    defer if (fallback_read_view_active) fallback_read_view.deinit();
+
+    const store = if (graph_store.getActiveQueryReadStore()) |active_read_store| blk: {
+        break :blk active_read_store;
+    } else blk: {
+        const writable_store = graph_store.getGlobalStore(allocator);
+        fallback_read_view = graph_store.ReadView.init(allocator, writable_store);
+        fallback_read_view_active = true;
+        break :blk fallback_read_view.getReadStore();
+    };
     const n: usize = if (head.labels.len == 1)
         store.countNodesByLabel(filter_graph, head.labels[0], filter_tenant)
     else

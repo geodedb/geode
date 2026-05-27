@@ -10,8 +10,9 @@ pub const max_total_streams_per_connection: u32 = max_additional_streams_per_con
 /// Default maximum number of concurrent stream handler threads across ALL
 /// connections. With the per-connection cap of 65 streams, 100 connections
 /// could spawn up to 6,500 OS threads. This global cap prevents thread
-/// exhaustion while still allowing substantial concurrency.
-pub const default_max_global_stream_threads: u32 = 256;
+/// exhaustion while still allowing high-fanout single-stream clients to be
+/// serviced without forcing most first streams back onto the shared pool.
+pub const default_max_global_stream_threads: u32 = 1024;
 
 pub const ThrottleError = error{
     /// The global stream thread limit has been reached and the wait

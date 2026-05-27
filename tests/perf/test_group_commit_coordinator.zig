@@ -143,6 +143,51 @@ test "group commit: smoke — single submit creates one node" {
     try testing.expectEqual(before + 1, store.nodes.count());
 }
 
+test "REQ-QUIC-HC-016: group commit reserves shard-aligned engine slots" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
+    _ = try adapter.getOrCreateGraph("default");
+
+    const coord = try group_commit.getOrStartCoordinator(testing.allocator, adapter, "default");
+    defer group_commit.shutdownAllCoordinators();
+
+    const labels = [_][]const u8{"ShardAligned"};
+    const props = [_]adapter_mod.StorageAdapter.PropKV{
+        .{ .key = "seq", .value = .{ .Int = 42 } },
+    };
+    const node_id = try submitInsertNode(coord, &labels, &props);
+
+    const im = store.getIdMap("default") orelse return error.IdMapMissing;
+    const slot_id = im.nodeSlot(@as(u128, node_id)) orelse return error.NodeSlotMappingMissing;
+
+    const public_shard = geode.sharded_store.shardIndex(node_id);
+    const slot_shard = @as(usize, @intCast(slot_id % @as(u64, @intCast(geode.sharded_store.SHARD_COUNT))));
+    try testing.expectEqual(public_shard, slot_shard);
+
+    const persisted = try adapter.getNodeProperty(
+        "default",
+        slot_id,
+        graph_store.INTERNAL_NODE_ID_PROPERTY_KEY,
+        testing.allocator,
+    ) orelse return error.PropertyNotFound;
+    defer adapter_mod.freeOwnedStorageProperty(testing.allocator, persisted);
+    var expected_buf: [16]u8 = undefined;
+    const expected = std.fmt.bufPrint(&expected_buf, "{x:0>16}", .{node_id}) catch unreachable;
+    switch (persisted) {
+        .string => |text| try testing.expectEqualStrings(expected, text),
+        else => return error.UnexpectedPropertyType,
+    }
+
+    const seq = store.getNodeProperty(node_id, "seq") orelse return error.PropertyNotFound;
+    switch (seq) {
+        .Int => |value| try testing.expectEqual(@as(i64, 42), value),
+        else => return error.UnexpectedPropertyType,
+    }
+}
+
 // ----------------------------------------------------------------------
 // Shutdown: all in-flight ops complete before stop() returns.
 // ----------------------------------------------------------------------
@@ -321,6 +366,52 @@ test "group commit: error propagates to submitter" {
     try testing.expectEqual(@as(anyerror, error.MergeValueNotIndexable), op.resultPtr().err.?);
 
     group_commit.shutdownAllCoordinators();
+}
+
+test "REQ-QUIC-HC-109: group commit multi-property MERGE dedupes tuple" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
+    _ = try adapter.getOrCreateGraph("default");
+
+    const coord = try group_commit.getOrStartCoordinator(testing.allocator, adapter, "default");
+    defer group_commit.shutdownAllCoordinators();
+
+    const before = store.nodes.count();
+    const merge_props = [_]adapter_mod.StorageAdapter.PropKV{
+        .{ .key = "worker", .value = .{ .Int = 7 } },
+        .{ .key = "seq", .value = .{ .Int = 3 } },
+    };
+    adapter_mod.resetLookupCounters();
+
+    var first = group_commit.ApplyOp{ .bulk_merge_node_props = .{
+        .label = "HCParallel",
+        .merge_props = &merge_props,
+        .on_create_props = &.{},
+        .result = .{},
+    } };
+    const first_id = try coord.submit(&first);
+    try testing.expect(first_id != 0);
+
+    var second = group_commit.ApplyOp{ .bulk_merge_node_props = .{
+        .label = "HCParallel",
+        .merge_props = &merge_props,
+        .on_create_props = &.{},
+        .result = .{},
+    } };
+    const second_id = try coord.submit(&second);
+    try testing.expectEqual(first_id, second_id);
+    try testing.expectEqual(before + 1, store.nodes.count());
+    try testing.expect(adapter_mod.getExactNodePropertyLookupCount() > 0);
+    try testing.expectEqual(@as(u64, 0), adapter_mod.getLabelScanLookupCount());
+
+    const node = store.nodes.getPtr(first_id) orelse return error.NodeNotFound;
+    const worker = node.properties.get("worker") orelse return error.PropertyNotFound;
+    const seq = node.properties.get("seq") orelse return error.PropertyNotFound;
+    try testing.expect(worker == .Int and worker.Int == 7);
+    try testing.expect(seq == .Int and seq.Int == 3);
 }
 
 // ----------------------------------------------------------------------

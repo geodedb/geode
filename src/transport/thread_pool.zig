@@ -128,6 +128,10 @@ pub const ThreadPoolConfig = struct {
     queue_capacity: usize = 1024,
     /// Thread stack size (0 = default).
     stack_size: usize = 0,
+    /// Dedicated workers reserved for `.lane = .blocking`. Set to 0 for
+    /// pools that never call `submitBlocking`; all workers then serve the
+    /// default lane.
+    blocking_workers: u32 = 1,
     /// Name prefix for worker threads (ignored — retained for source compat).
     name_prefix: []const u8 = "geode-worker",
     /// How long an idle worker parks on its wake condvar before its
@@ -188,18 +192,18 @@ pub const ThreadPool = struct {
 
     /// Initialize the thread pool.
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
-        // Upstream thread_pool 0.2.0 enforces: if allow_blocking_lane = true
-        // then blocking_workers > 0 and strictly less than max_threads.
+        // Upstream thread_pool enforces: if allow_blocking_lane = true then
+        // blocking_workers > 0 and strictly less than max_threads.
         // `submitBlocking` routes to `.lane = .blocking`, reserved for
         // serialized long-lived work (cert gen, audit writes, keepalive
-        // loops), so the blocking lane must always be enabled. We keep
-        // `blocking_workers = 1` (load-bearing invariant, asserted by
-        // tests/test_thread_pool_lane_parallelism.zig) and require at
-        // least 2 total threads so the default lane has a worker.
-        // `submit` / `submitDefault` route to the `.default` lane, which
-        // owns `num_threads - 1` workers.
+        // loops). QUIC connection/stream pools do not use submitBlocking and
+        // opt out so every worker can serve default-lane socket tasks.
         const requested = effectiveThreadCount(config);
         const num: usize = @max(requested, 2);
+        const blocking_workers: u32 = if (config.blocking_workers == 0)
+            0
+        else
+            @min(config.blocking_workers, @as(u32, @intCast(num - 1)));
         const workers = try allocator.alloc(WorkerStub, num);
         errdefer allocator.free(workers);
         var inner = try ext_pool.ThreadPool.init(allocator, .{
@@ -217,8 +221,8 @@ pub const ThreadPool = struct {
             // 2026-04-23: propagate the caller's deinit timeout through
             // to the upstream pool (default 2 s, was 30 s upstream).
             .deinit_timeout_ns = config.deinit_timeout_ns,
-            .allow_blocking_lane = true,
-            .blocking_workers = 1,
+            .allow_blocking_lane = blocking_workers > 0,
+            .blocking_workers = blocking_workers,
         });
         errdefer inner.deinit();
         const self = try allocator.create(Self);
@@ -240,13 +244,13 @@ pub const ThreadPool = struct {
     /// Submit a work item to the thread pool's default lane.
     /// Returns true if submitted, false if queue is full.
     ///
-    /// Routes to `.lane = .default` — serviced by all non-blocking workers
-    /// (with `num_threads = N` and `blocking_workers = 1` the default lane
-    /// has `N - 1` workers). This is the right entry point for generic
-    /// parallel work (connection handlers, stream handlers, background
-    /// dispatch); pre-fix it routed to the 1-wide `.blocking` lane and
-    /// deadlocked under >1 concurrent long-lived task. See Task #31 triage
-    /// at docs/performance/2026-04-24-sharding/TASK-31-TRIAGE.md.
+    /// Routes to `.lane = .default`, serviced by all non-blocking workers.
+    /// Pools configured with `blocking_workers = 0` dedicate every worker to
+    /// this lane. This is the right entry point for generic parallel work
+    /// (connection handlers, stream handlers, background dispatch); pre-fix it
+    /// routed to the 1-wide `.blocking` lane and deadlocked under >1 concurrent
+    /// long-lived task. See Task #31 triage at
+    /// docs/performance/2026-04-24-sharding/TASK-31-TRIAGE.md.
     ///
     /// Callers who genuinely need the 1-wide blocking lane (cert gen, audit
     /// writes, keepalive loops) must use `submitBlocking` explicitly.

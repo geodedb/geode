@@ -1,5 +1,88 @@
 const std = @import("std");
 
+fn moduleRootMatches(module: *std.Build.Module, owner: *std.Build, sub_path: []const u8) bool {
+    const lazy_path = module.root_source_file orelse return false;
+    return switch (lazy_path) {
+        .src_path => |src| src.owner == owner and std.mem.eql(u8, src.sub_path, sub_path),
+        else => false,
+    };
+}
+
+fn findModuleByRoot(
+    b: *std.Build,
+    root: *std.Build.Module,
+    owner: *std.Build,
+    sub_path: []const u8,
+) ?*std.Build.Module {
+    var seen = std.AutoHashMap(*std.Build.Module, void).init(b.allocator);
+    defer seen.deinit();
+    return findModuleByRootInner(&seen, root, owner, sub_path);
+}
+
+fn findModuleByRootInner(
+    seen: *std.AutoHashMap(*std.Build.Module, void),
+    module: *std.Build.Module,
+    owner: *std.Build,
+    sub_path: []const u8,
+) ?*std.Build.Module {
+    if (seen.contains(module)) return null;
+    seen.put(module, {}) catch @panic("OOM");
+
+    if (moduleRootMatches(module, owner, sub_path)) return module;
+
+    var imports = module.import_table.iterator();
+    while (imports.next()) |entry| {
+        if (findModuleByRootInner(seen, entry.value_ptr.*, owner, sub_path)) |found| return found;
+    }
+    return null;
+}
+
+fn sourceInList(path: []const u8, paths: []const []const u8) bool {
+    for (paths) |candidate| {
+        if (std.mem.eql(u8, path, candidate)) return true;
+    }
+    return false;
+}
+
+fn addImportToModulesByRoot(
+    b: *std.Build,
+    root: *std.Build.Module,
+    owner: *std.Build,
+    paths: []const []const u8,
+    import_name: []const u8,
+    import_module: *std.Build.Module,
+) void {
+    var seen = std.AutoHashMap(*std.Build.Module, void).init(b.allocator);
+    defer seen.deinit();
+    addImportToModulesByRootInner(&seen, root, owner, paths, import_name, import_module);
+}
+
+fn addImportToModulesByRootInner(
+    seen: *std.AutoHashMap(*std.Build.Module, void),
+    module: *std.Build.Module,
+    owner: *std.Build,
+    paths: []const []const u8,
+    import_name: []const u8,
+    import_module: *std.Build.Module,
+) void {
+    if (seen.contains(module)) return;
+    seen.put(module, {}) catch @panic("OOM");
+
+    const should_add = if (module.root_source_file) |lazy_path| switch (lazy_path) {
+        .src_path => |src| src.owner == owner and sourceInList(src.sub_path, paths),
+        else => false,
+    } else false;
+
+    var imports = module.import_table.iterator();
+    while (imports.next()) |entry| {
+        addImportToModulesByRootInner(seen, entry.value_ptr.*, owner, paths, import_name, import_module);
+    }
+
+    if (should_add) {
+        module.addImport(import_name, import_module);
+    }
+}
+
 pub fn precommit(b: *std.Build) void {
     const detect_secrets = b.addSystemCommand(&.{"detect_secrets"});
 
@@ -227,12 +310,56 @@ pub fn build(b: *std.Build) void {
     const json_mod = json_dep.module("json");
     json_mod.addImport("uri", uri_mod);
 
-    // QUIC v1/v2 protocol - RFC 9000
-    const quic_ext_dep = b.dependency("quic", .{
+    // Thread Pool - Bounded, lock-free thread pool with work-stealing.
+    // Defined before QUIC so Geode can wire a bounded, allocator-compliant
+    // parallel facade into the QUIC package internals instead of the package's
+    // page_allocator-backed default global pool.
+    const thread_pool_dep = b.dependency("thread_pool", .{
         .target = target,
         .optimize = optimize,
     });
+    const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
+
+    // QUIC v1/v2 protocol - RFC 9000
+    // CANARY: REQ=REQ-QUIC-HC-003; FEATURE="QUIC High-Concurrency Requests"; ASPECT=VendorParallelPoolGating; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+    // Disable the QUIC package's hidden global thread pool for batch crypto
+    // and recovery. Geode already owns bounded server/client worker pools, and
+    // the package pool uses raw defaults plus page_allocator lifetime. QUIC
+    // still imports its "parallel" facade from recovery when the option is
+    // false, so Geode wires a serial fallback module into those internals below.
+    const quic_ext_dep = b.dependency("quic", .{
+        .target = target,
+        .optimize = optimize,
+        .thread_pool = false,
+    });
     const quic_ext_mod = quic_ext_dep.module("quic");
+    const quic_parallel_serial_mod = b.createModule(.{
+        .root_source_file = b.path("src/transport/quic_parallel_serial.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const quic_crypto_for_serial = findModuleByRoot(
+        b,
+        quic_ext_mod,
+        quic_ext_dep.builder,
+        "src/quic/crypto_quic.zig",
+    ) orelse @panic("quic dependency no longer exposes src/quic/crypto_quic.zig");
+    quic_parallel_serial_mod.addImport("quic_crypto", quic_crypto_for_serial);
+    quic_parallel_serial_mod.addImport("thread_pool", thread_pool_ext_mod);
+    addImportToModulesByRoot(
+        b,
+        quic_ext_mod,
+        quic_ext_dep.builder,
+        &.{
+            "lib.zig",
+            "src/quic/packet.zig",
+            "src/quic/packet/packet.zig",
+            "src/quic/recovery/recovery.zig",
+            "src/quic/endpoint.zig",
+        },
+        "parallel",
+        quic_parallel_serial_mod,
+    );
 
     // Official Zig client library shipped as a sibling repository.
     const zig_client_dep = b.dependency("geode_client_zig", .{
@@ -240,6 +367,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zig_client_real_mod = zig_client_dep.module("geode_client");
+    // Keep the embedded Zig client on the same QUIC module instance as the
+    // server. geode_client_zig names its transport import "quic", while Geode
+    // names the same dependency "vendor_quic"; allowing both module instances
+    // into one build creates a Zig module diamond and can re-enable the hidden
+    // package pool in client paths.
+    zig_client_real_mod.addImport("quic", quic_ext_mod);
 
     // ==========================================================================
     // Phase 3 External Library Dependencies (Integration Libraries)
@@ -369,11 +502,8 @@ pub fn build(b: *std.Build) void {
     // import site). thread-pool@v0.2.4's with_otel option is
     // deprecated-and-ignored upstream, so dropping it here is a no-op
     // for runtime behaviour.
-    const thread_pool_dep = b.dependency("thread_pool", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
+    // `thread_pool_ext_mod` is initialized above because the QUIC dependency
+    // wiring also needs it for the Geode-owned parallel crypto facade.
 
     // ==========================================================================
     // Phase 6 External Library Dependencies (Extracted Core Libraries)
@@ -445,6 +575,7 @@ pub fn build(b: *std.Build) void {
     // Centralized logging module using external slog library
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
     logging_mod.addImport("slog", slog_mod);
+    const quic_response_metrics_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic_response_metrics.zig"), .target = target, .optimize = optimize });
 
     // QUIC Transport Module - Uses external QUIC library (Phase 2 migration complete)
     // The external quic library provides the same API as the vendored version
@@ -452,6 +583,7 @@ pub fn build(b: *std.Build) void {
     transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
     transport_quic_mod.addImport("logging", logging_mod);
     transport_quic_mod.addImport("dns", dns_mod);
+    transport_quic_mod.addImport("quic_response_metrics", quic_response_metrics_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
@@ -526,6 +658,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("shard_worker_tls", shard_worker_tls_mod);
     // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
     root_mod.addImport("transport/quic", transport_quic_mod);
+    root_mod.addImport("quic_response_metrics", quic_response_metrics_mod);
     root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
     root_mod.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool for query execution
     root_mod.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
@@ -646,6 +779,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("logging", logging_mod);
     // Missing imports required by src/cli/main.zig
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
+    geode_exe.root_module.addImport("quic_response_metrics", quic_response_metrics_mod);
     geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
 
     // Link with OpenSSL for QUIC/TLS crypto operations (external library)
@@ -721,7 +855,8 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         geode_exe.root_module.link_libc = true;
     }
-    b.installArtifact(geode_exe);
+    const install_geode_exe = b.addInstallArtifact(geode_exe, .{});
+    b.getInstallStep().dependOn(&install_geode_exe.step);
 
     // Unified CLI only; legacy geodec/geoded binaries removed.
 
@@ -2475,6 +2610,60 @@ pub fn build(b: *std.Build) void {
     const perf_d_admission_wake_step = b.step("test-perf-d-admission-wake", "PERF-D follow-up: QuicTransport admission-loop futex wake regression (issue #816)");
     perf_d_admission_wake_step.dependOn(&run_perf_d_admission_wake_tests.step);
     shardDep(test_step, &perf_d_admission_wake_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // QUIC-HC-001: PollSync no longer hand-rolls timed waits with
+    // nanosleep. Readers park on a futex generation and wake immediately
+    // when the poll thread advances packet delivery.
+    // CANARY: REQ=REQ-QUIC-HC-001; FEATURE="QUIC High-Concurrency Wakeups"; ASPECT=PollSyncBuild; STATUS=TESTED; OWNER=transport; UPDATED=2026-05-25
+    const quic_pollsync_wake_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_pollsync_wake.zig"), .target = target, .optimize = optimize }) });
+    quic_pollsync_wake_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    quic_pollsync_wake_tests.root_module.link_libc = true;
+    const run_quic_pollsync_wake_tests = b.addRunArtifact(quic_pollsync_wake_tests);
+    const quic_pollsync_wake_step = b.step("test-quic-pollsync-wake", "Run QUIC PollSync futex wake regression tests");
+    quic_pollsync_wake_step.dependOn(&run_quic_pollsync_wake_tests.step);
+    shardDep(test_step, &quic_pollsync_wake_tests.step, 1, test_shard_loads, test_shard_index);
+
+    const quic_condition_cadence_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_condition_timedwait_cadence.zig"), .target = target, .optimize = optimize }) });
+    quic_condition_cadence_tests.root_module.link_libc = true;
+    const run_quic_condition_cadence_tests = b.addRunArtifact(quic_condition_cadence_tests);
+    const quic_condition_cadence_step = b.step("test-quic-condition-cadence", "Run QUIC hand-rolled timedWait cadence audit");
+    quic_condition_cadence_step.dependOn(&run_quic_condition_cadence_tests.step);
+    shardDep(test_step, &quic_condition_cadence_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // QUIC-HC-029: Geode-owned bounded parallel facade for the QUIC package.
+    // This compiles the facade against the current quic package API and runs
+    // real batch crypto/recovery work through the smp_allocator-backed pool.
+    const quic_parallel_facade_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_parallel_facade.zig"), .target = target, .optimize = optimize }) });
+    quic_parallel_facade_tests.root_module.addImport("quic_parallel", quic_parallel_serial_mod);
+    quic_parallel_facade_tests.root_module.link_libc = true;
+    const run_quic_parallel_facade_tests = b.addRunArtifact(quic_parallel_facade_tests);
+    const quic_parallel_facade_step = b.step("test-quic-parallel-facade", "Run QUIC bounded parallel facade unit tests");
+    quic_parallel_facade_step.dependOn(&run_quic_parallel_facade_tests.step);
+    shardDep(test_step, &quic_parallel_facade_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // QUIC-HC-002: Real-server integration guard for many concurrent QUIC
+    // clients issuing a mixed read/write workload. This is an executable, not
+    // a Zig test, because builtin.is_test enables verbose byte dumps in the
+    // QUIC dependency and turns the regression into allocator churn.
+    // CANARY: REQ=REQ-QUIC-HC-002; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ParallelReadWriteE2EBuild; STATUS=TESTED; OWNER=transport; UPDATED=2026-05-25
+    const quic_high_concurrency_e2e = b.addExecutable(.{ .name = "e2e_quic_high_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_high_concurrency.zig"), .target = target, .optimize = optimize }) });
+    quic_high_concurrency_e2e.root_module.addImport("geode", root_mod);
+    quic_high_concurrency_e2e.root_module.addImport("protobuf", protobuf_mod);
+    quic_high_concurrency_e2e.root_module.addImport("schema", schema_mod);
+    quic_high_concurrency_e2e.root_module.addImport("transport/quic", transport_quic_mod);
+    quic_high_concurrency_e2e.root_module.link_libc = true;
+    if (enable_openssl) {
+        quic_high_concurrency_e2e.root_module.linkSystemLibrary("ssl", .{});
+        quic_high_concurrency_e2e.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        quic_high_concurrency_e2e.root_module.linkSystemLibrary("dl", .{});
+    }
+    const run_quic_high_concurrency_e2e_tests = b.addRunArtifact(quic_high_concurrency_e2e);
+    run_quic_high_concurrency_e2e_tests.step.dependOn(&install_geode_exe.step);
+    const quic_high_concurrency_e2e_step = b.step("test-quic-high-concurrency-e2e", "Run QUIC high-concurrency read/write integration test");
+    quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
+    test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
 
     // Issue #746: QueryDeadlineState lifetime regression test — pins the
     // contract that `finish()` must join the watchdog thread before
@@ -4675,6 +4864,8 @@ pub fn build(b: *std.Build) void {
     otel_metrics_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
     shardDep(test_step, &run_otel_metrics_tests.step, 1, test_shard_loads, test_shard_index);
+    const otel_metrics_step = b.step("test-otel-facade-smoke", "Run OTel metrics facade smoke tests");
+    otel_metrics_step.dependOn(&run_otel_metrics_tests.step);
 
     // Tracer-pipeline regression test: facade tracer() emits spans through
     // a wired TracerProvider into an in-memory recorder. Reproduces and

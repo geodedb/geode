@@ -23,6 +23,10 @@ pub const ProgramAnalysis = struct {
     traits: QueryTraits = .{},
     target: ?*const ast.Statement = null,
     union_part_count: usize = 0,
+    /// True iff the executable row query cannot touch graph storage. This is
+    /// deliberately narrower than "read-only": graph reads still need the
+    /// snapshot/read-lock path, while pure scalar projections can run lock-free.
+    is_store_free: bool = false,
     /// GAP-0805 / M1.3: True iff this query is a simple point read —
     /// a single-node MATCH with a single literal label and a single
     /// property equality (value is a parameter or literal), no
@@ -115,6 +119,7 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
             analysis.traits.has_filter_eq = hasEqExpr(q.filter_clause);
             analysis.traits.has_union = false;
             analysis.union_part_count = 1;
+            analysis.is_store_free = isStoreFreeQuery(&q);
             analysis.is_point_read = isPointReadQuery(&q);
         },
         .Union => |u| {
@@ -257,6 +262,71 @@ pub fn isMutatingCallStatement(call_stmt: *const ast.CallStatement) bool {
     return switch (call_stmt.*) {
         .Procedure => |proc| procedure_access.classifyCallProcedure(proc) == .mutating,
         .Subquery => |sq| isMutatingStatement(sq.statement),
+    };
+}
+
+/// CANARY: REQ=REQ-QUIC-HC-110; FEATURE="High-Concurrency Store-Free Reads"; ASPECT=LockBypassClassifier; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+///
+/// Detect a pure scalar `RETURN` query that cannot read or mutate graph
+/// storage. False positives here would skip the graph snapshot/read-lock path,
+/// so this accepts only the small expression subset needed by high-fanout
+/// health/checkpoint queries such as `RETURN 1 AS c`.
+pub fn isStoreFreeQuery(q: *const ast.Query) bool {
+    if (isQueryMutating(q)) return false;
+    if (q.optional_match) return false;
+    if (q.match.chains.len != 0) return false;
+    if (q.where_clause != null) return false;
+    if (q.filter_clause != null) return false;
+    if (q.with_clause != null) return false;
+    if (q.cte_list != null) return false;
+    if (q.group_by != null) return false;
+    if (q.having != null) return false;
+    if (q.order_by != null) return false;
+    if (q.limit != null or q.limit_param != null) return false;
+    if (q.offset != null or q.offset_param != null) return false;
+    if (q.unwind_clause != null) return false;
+    if (q.call_clause != null) return false;
+    if (q.initial_call_subquery != null) return false;
+    if (q.for_statement != null) return false;
+    if (q.next_query != null) return false;
+    if (q.merge_statement != null) return false;
+    if (q.let_bindings.len != 0) return false;
+    if (q.inline_let_bindings.len != 0) return false;
+    if (q.path_variable != null) return false;
+    if (q.ret.distinct) return false;
+    if (q.ret.items.len == 0) return false;
+
+    for (q.ret.items) |item| {
+        if (!isStoreFreeScalarExpr(&item.expr)) return false;
+    }
+    return true;
+}
+
+fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
+    return switch (expr.*) {
+        .Null,
+        .Int,
+        .Bool,
+        .String,
+        .Decimal,
+        .SmallIntLit,
+        .BigIntLit,
+        .RealLit,
+        .DoubleLit,
+        .CharLit,
+        .VarcharLit,
+        .TextLit,
+        .Date,
+        .DateTime,
+        .Time,
+        .LocalDateTime,
+        .Param,
+        => true,
+        .Unary => |u| isStoreFreeScalarExpr(u.expr),
+        .Binary => |b| isStoreFreeScalarExpr(b.left) and isStoreFreeScalarExpr(b.right),
+        .IsNull => |v| isStoreFreeScalarExpr(v.target),
+        .IsUnknown => |v| isStoreFreeScalarExpr(v.target),
+        else => false,
     };
 }
 
@@ -439,6 +509,36 @@ test "isMutatingProgram: mutating CALL procedure is a mutation" {
     const prog, var arena = try parseProgram("CALL geode.auth.user_create('alice', 'p4ssw0rd1')");
     defer arena.deinit();
     try std.testing.expect(isMutatingProgram(&prog));
+}
+
+// --- REQ-QUIC-HC-110: store-free scalar read detection ---
+
+test "isStoreFreeQuery: scalar RETURN is store-free" {
+    const prog, var arena = try parseProgram("RETURN 1 AS c");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(analysis.is_store_free);
+}
+
+test "isStoreFreeQuery: scalar arithmetic RETURN is store-free" {
+    const prog, var arena = try parseProgram("RETURN 1 + 2 AS c");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(analysis.is_store_free);
+}
+
+test "isStoreFreeQuery: MATCH query is not store-free even when returning a scalar" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) RETURN 1 AS c");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_store_free);
+}
+
+test "isStoreFreeQuery: function calls are conservative and keep the store path" {
+    const prog, var arena = try parseProgram("RETURN abs(-1) AS c");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_store_free);
 }
 
 // --- GAP-0805 / M1.3: point-read detection ---

@@ -2022,7 +2022,7 @@ REQ-GQL-074,Network Transport,QUICTLSComprehensive,TESTED,,,wire,2025-09-22,test
 REQ-GQL-074,Network Transport,QUICTLSConfig,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,BENCHED,,,wire,2025-09-22,tests/benchmark_quic_frame_latency_variance.zig
 REQ-GQL-074,QUIC Transport,ClientHandshakeStallRegression,TESTED,,,transport,2026-04-16,tests/test_quic_handshake_stall_regression.sh
-REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,,,transport,2026-04-16,tests/test_quic_condition_timedwait_cadence.zig
+REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,,,transport,2026-05-25,tests/test_quic_condition_timedwait_cadence.zig
 REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,tests/test_quic_raft_smoke.zig
 REQ-GQL-074,RaftFrameEntriesArray,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
@@ -3601,7 +3601,7 @@ REQ-PERF-ASYNC-001,AsynchronousIO,Performance,TESTED,,,performance,2025-10-04,sr
 REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,TESTED,,,performance,2026-01-16,src/performance/async_io_simple.zig
 REQ-PERF-ASYNC-001,SimpleAsynchronousIO,Performance,TESTED,,,performance,2025-10-04,src/performance/simple_async_io.zig
 REQ-PERF-ASYNC-CONN-001,AsyncConnectionHandling,ThreadPool,IMPL,,,server,2026-01-27,src/server/main.zig
-REQ-PERF-ASYNC-CONN-002,AsyncConnectionHandling,ThreadPoolInit,IMPL,,,server,2026-01-27,src/server/main.zig
+REQ-PERF-ASYNC-CONN-002,AsyncConnectionHandling,ThreadPoolInit,IMPL,,,server,2026-05-25,src/server/main.zig
 REQ-PERF-ASYNC-CONN-TEST-001,AsyncConnectionHandling,UnitTests,TESTED,,,server,2026-01-27,src/server/test_async_connection.zig
 REQ-PERF-BATCH-001,Performance,BatchProcessing,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-PERF-BENCH-001,MultiLabelIntersection,BenchmarkFixture,TESTED,,,engine,2026-04-09,src/graph_store.zig
@@ -3893,6 +3893,99 @@ REQ-QUIC-CONN-CLEANUP-002,QUICConnectionCleanup,ConnectionList,TESTED,,,transpor
 REQ-QUIC-CONN-CLEANUP-003,ConnectionMemoryManagement,ProperCleanup,EXEMPT,,,server,2025-12-27,src/server/quic_connection_handler.zig
 REQ-QUIC-CONN-CLEANUP-003,QUICConnectionCleanup,DestructorPattern,TESTED,,,transport,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-QUIC-FLOW-001,QUICProtocol,FlowControl,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-QUIC-HC-001,QUIC High-Concurrency Wakeups,PollSyncBuild,TESTED,,,transport,2026-05-25,build.zig
+REQ-QUIC-HC-001,QUIC High-Concurrency Wakeups,PollSyncFutexWake,TESTED,,,transport,2026-05-25,tests/test_quic_pollsync_wake.zig
+REQ-QUIC-HC-002,QUIC High-Concurrency Requests,ParallelReadWriteE2E,TESTED,,,transport,2026-05-25,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-002,QUIC High-Concurrency Requests,ParallelReadWriteE2EBuild,TESTED,,,transport,2026-05-25,build.zig
+REQ-QUIC-HC-003,QUIC High-Concurrency Requests,VendorParallelPoolGating,IMPL,,,transport,2026-05-25,build.zig
+REQ-QUIC-HC-004,QUIC High-Concurrency Shutdown,ConnectionDrainSignal,IMPL,,,transport,2026-05-25,src/transport/quic.zig
+REQ-QUIC-HC-004,QUIC High-Concurrency Shutdown,PollLoopLifetime,IMPL,,,transport,2026-05-25,src/server/main.zig
+REQ-QUIC-HC-005,QUIC High-Concurrency Client Wait,ProtoReadDeadline,TESTED,,,transport,2026-05-25,tests/proto_test_util.zig
+REQ-QUIC-HC-005,QUIC High-Concurrency Client Wait,StreamReadPollCadence,TESTED,,,transport,2026-05-25,src/transport/quic.zig
+REQ-QUIC-HC-006,QUIC High-Concurrency Mutations,DefaultSimpleCreateFastPath,TESTED,,,transport,2026-05-25,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-007,SessionAuthEpoch,HotPathValidation,TESTED,,,security,2026-05-25,src/security/user_management.zig
+REQ-QUIC-HC-008,QUIC High-Concurrency Reads,CountReadSnapshotBypass,TESTED,,,transport,2026-05-25,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-009,High-Concurrency Allocator,ServerAllocator,IMPL,,,transport,2026-05-25,src/server/main.zig
+REQ-QUIC-HC-010,High-Concurrency Connection Admission,MetricsPoolIsolation,IMPL,,,transport,2026-05-25,src/server/main.zig
+REQ-QUIC-HC-011,DetachedFirstStream,ConnectionAdmission,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-012,DetachedConnectionAdmission,HelloFanout,IMPL,,,transport,2026-05-26,src/server/main.zig
+REQ-QUIC-HC-013,CoordinatorMicroBatch,ShardWorkerCoalescing,IMPL,,,storage,2026-05-26,src/storage/group_commit.zig
+REQ-QUIC-HC-014,BoundedHelloAdmission,ConnectionThreadLifetime,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-015,High-Concurrency Mutations,AtomicNodeIdReservation,IMPL,,,storage,2026-05-26,src/graph_store.zig
+REQ-QUIC-HC-016,High-Concurrency Mutations,ShardAlignedBulkNodeCreate,IMPL,,,storage,2026-05-26,src/graph_store.zig
+REQ-QUIC-HC-017,ActiveReadStoreReuse,IMPL,TESTED,,,transport,2026-05-25,src/graph_store.zig
+REQ-QUIC-HC-018,QUIC High-Concurrency Worker Fanout,StreamPoolSizing,TESTED,,,transport,2026-05-25,src/server/main.zig
+REQ-QUIC-HC-019,QUIC High-Concurrency Setup,ConnectHelloRetry,TESTED,,,transport,2026-05-26,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-020,ConfigurableStreamThrottle,RegistryPreallocation,TESTED,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-020,ConfigurableStreamThrottle,ServerEnv,TESTED,,,transport,2026-05-26,src/server/main.zig
+REQ-QUIC-HC-021,HighFanoutConnectionLimit,ServerEnv,TESTED,,,transport,2026-05-26,src/server/main.zig
+REQ-QUIC-HC-022,HighConcurrencyMutations,ShardTxnPropertyFastPath,TESTED,,,storage,2026-05-26,src/graph_store.zig
+REQ-QUIC-HC-022,HighConcurrencyMutations,ShardTxnPropertyFastPath,TESTED,,,storage,2026-05-26,src/storage/graph_storage_adapter.zig
+REQ-QUIC-HC-023,QUIC High-Concurrency Diagnostics,ClientExecTimeout,TESTED,,,transport,2026-05-26,tests/proto_test_util.zig
+REQ-QUIC-HC-024,QUIC High-Concurrency Diagnostics,ServerStderrPassThrough,TESTED,,,transport,2026-05-26,tests/proto_test_util.zig
+REQ-QUIC-HC-025,QUIC High-Concurrency Reads,ServerReadBackoff,TESTED,,,transport,2026-05-26,src/transport/quic.zig
+REQ-QUIC-HC-026,QUIC High-Concurrency Requests,PersistentStreamFairness,TESTED,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-027,QUIC High-Concurrency Requests,PersistentFollowupBackoff,TESTED,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-029,QUIC High-Concurrency Requests,BoundedParallelCrypto,IMPL,,,transport,2026-05-26,src/transport/quic_parallel_serial.zig
+REQ-QUIC-HC-029,QUIC High-Concurrency Requests,BoundedParallelCryptoTest,TESTED,,,transport,2026-05-26,tests/test_quic_parallel_facade.zig
+REQ-QUIC-HC-030,QUIC High-Concurrency Requests,MultiplexingGate,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-030,QUIC High-Concurrency Requests,MultiplexingGate,IMPL,,,transport,2026-05-26,src/server/server_init.zig
+REQ-QUIC-HC-030,QUIC High-Concurrency Requests,SingleStreamStressMode,TESTED,,,transport,2026-05-26,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-031,QUIC High-Concurrency Setup,HandshakeTimeout,IMPL,,,transport,2026-05-26,tests/proto_test_util.zig
+REQ-QUIC-HC-032,High-Concurrency Label Counts,LabelPostingLocking,IMPL,,,storage,2026-05-26,src/graph_store.zig
+REQ-QUIC-HC-032,High-Concurrency Label Counts,LabelPostingLocking,IMPL,,,storage,2026-05-26,src/graph_store.zig
+REQ-QUIC-HC-034,QUIC High-Concurrency Requests,EndpointSideSetDestroyCleanup,IMPL,,,transport,2026-05-26,src/transport/quic.zig
+REQ-QUIC-HC-036,QUIC High-Concurrency Requests,BoundedPollWakeFanout,IMPL,,,transport,2026-05-26,src/transport/quic.zig
+REQ-QUIC-HC-037,QUIC High-Concurrency Requests,PerConnectionRxWake,IMPL,,,transport,2026-05-26,src/transport/quic.zig
+REQ-QUIC-HC-037,QUIC High-Concurrency Requests,PerConnectionRxWake,IMPL,,,transport,2026-05-26,src/transport/quic.zig
+REQ-QUIC-HC-039,QUIC High-Concurrency Requests,QueryMetricThreadSafety,IMPL,,,monitoring,2026-05-26,src/monitoring/otel_metrics.zig
+REQ-QUIC-HC-039,QUIC High-Concurrency Requests,QueryMetricThreadSafety,TESTED,,,monitoring,2026-05-26,tests/test_otel_facade_smoke.zig
+REQ-QUIC-HC-041,QUIC High-Concurrency Client,PostWriteFlush,IMPL,,,transport,2026-05-26,tests/proto_test_util.zig
+REQ-QUIC-HC-042,QUIC High-Concurrency Requests,RequestBurstShaping,IMPL,,,transport,2026-05-26,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-043,QUIC High-Concurrency Client,SinglePacketFramedWrites,IMPL,,,transport,2026-05-26,tests/proto_test_util.zig
+REQ-QUIC-HC-044,QUIC High-Concurrency Requests,BoundedDetachedFirstStreams,IMPL,,,transport,2026-05-26,src/server/main.zig
+REQ-QUIC-HC-044,QUIC High-Concurrency Requests,BoundedDetachedFirstStreams,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-044,QUIC High-Concurrency Requests,BoundedDetachedFirstStreams,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-053,QUIC High-Concurrency Requests,MultiPollWorkers,IMPL,,,transport,2026-05-26,src/server/main.zig
+REQ-QUIC-HC-054,QUIC High-Concurrency Requests,CooperativeFirstStreams,IMPL,,,transport,2026-05-26,src/server/main.zig
+REQ-QUIC-HC-054,QUIC High-Concurrency Requests,CooperativeFirstStreams,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-054,QUIC High-Concurrency Requests,CooperativeFirstStreams,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-054,QUIC High-Concurrency Requests,CooperativeFirstStreams,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-054,QUIC High-Concurrency Requests,CooperativeFirstStreams,IMPL,,,transport,2026-05-26,src/server/server_init.zig
+REQ-QUIC-HC-057,QUIC High-Concurrency Requests,StressHarnessTeardown,IMPL,,,transport,2026-05-26,tests/proto_test_util.zig
+REQ-QUIC-HC-060,QUIC High-Concurrency Requests,PartialSubmitWaitGroup,IMPL,,,transport,2026-05-26,src/transport/quic_parallel_serial.zig
+REQ-QUIC-HC-067,QUIC High-Concurrency Requests,FirstStreamSchedulerFIFO,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-068,QUIC High-Concurrency Requests,AuthSingleFlight,IMPL,,,security,2026-05-26,src/security/user_management.zig
+REQ-QUIC-HC-071,QUIC High-Concurrency Requests,HarnessFirstStreamThreadCap,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-072,QUIC High-Concurrency Setup,TimeoutEdgeReadySettle,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-073,QUIC High-Concurrency Requests,SchedulerNonBlockingCleanup,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-075,QUIC High-Concurrency Requests,ServerWriteWouldBlockRetry,IMPL,,,transport,2026-05-27,src/transport/quic.zig
+REQ-QUIC-HC-077,QUIC High-Concurrency Requests,BatchedExecuteResponseWrite,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-078,QUIC High-Concurrency Requests,ResponseWriteMetrics,IMPL,,,transport,2026-05-27,src/transport/quic_response_metrics.zig
+REQ-QUIC-HC-083,QUIC High-Concurrency Requests,ServerWriteCongestionDeadline,IMPL,,,transport,2026-05-27,src/transport/quic.zig
+REQ-QUIC-HC-084,QUIC High-Concurrency Requests,ClientWriteCongestionDeadline,IMPL,,,transport,2026-05-27,src/transport/quic.zig
+REQ-QUIC-HC-085,QUIC High-Concurrency Requests,HarnessConnectionHeadroom,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-087,QUIC High-Concurrency Requests,PerConnectionTxCreditWake,IMPL,,,transport,2026-05-27,src/transport/quic.zig
+REQ-QUIC-HC-088,QUIC High-Concurrency Requests,ConfigurableInitialCwnd,IMPL,,,transport,2026-05-27,src/transport/quic.zig
+REQ-QUIC-HC-089,QUIC High-Concurrency Requests,BatchedEmptyMutationSuccess,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-091,QUIC High-Concurrency Requests,AuthSingleFlightLaneCollapse,IMPL,,,security,2026-05-27,src/security/user_management.zig
+REQ-QUIC-HC-099,QUIC High-Concurrency Requests,InWorkloadMutationVerifier,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-100,QUIC High-Concurrency Requests,CooperativeSchedulerMissedWakeSweep,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-101,QUIC High-Concurrency Setup,BoundedHelloRetryWindow,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-103,QUIC High-Concurrency Requests,RetryTailRegressionCounters,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-104,High-Concurrency Query Cache,AstMissSingleFlight,TESTED,,,engine,2026-05-27,src/server/query_ast_cache.zig
+REQ-QUIC-HC-105,High-Concurrency Query Cache,PlanMissSingleFlight,TESTED,,,engine,2026-05-27,src/server/query_plan_cache.zig
+REQ-QUIC-HC-108,High-Concurrency First Streams,CooperativeBatchBudget,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-109,High-Concurrency Mutations,MultiPropertyMergeCoordinator,IMPL,,,storage,2026-05-27,src/storage/group_commit.zig
+REQ-QUIC-HC-109,High-Concurrency Mutations,MultiPropertyMergeFastPath,IMPL,,,storage,2026-05-27,src/execution/bulk_ingest.zig
+REQ-QUIC-HC-109,High-Concurrency Mutations,MultiPropertyMergeTupleLocks,IMPL,,,storage,2026-05-27,src/storage/graph_storage_adapter.zig
+REQ-QUIC-HC-110,High-Concurrency Store-Free Reads,LockBypassClassifier,TESTED,,,transport,2026-05-27,src/query/query_traits.zig
+REQ-QUIC-HC-110,High-Concurrency Store-Free Reads,QUICLockBypass,TESTED,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-111,High-Concurrency Mutations,MultiPropertyMergeIndexedProbe,TESTED,,,storage,2026-05-27,src/storage/graph_storage_adapter.zig
+REQ-QUIC-HC-114,High-Concurrency Setup,ConfigurableHelloReadTimeout,IMPL,,,transport,2026-05-27,src/server/server_init.zig
+REQ-QUIC-HC-118,High-Concurrency Test Harness,BoundedDriverThreadStacks,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-119,High-Concurrency Test Client,SubMillisecondReadPolling,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig
+REQ-QUIC-HC-120,High-Concurrency Test Client,PostReadAckFlush,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

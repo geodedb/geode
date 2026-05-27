@@ -61,7 +61,7 @@ pub const StallSnapshot = struct {
 /// single `std.Io.Mutex` guards all access.  The watchdog read path
 /// holds the mutex while iterating; both `register` and `unregister`
 /// hold it briefly.  All operations are O(n) in the registry size
-/// (n ≤ `default_max_global_stream_threads` ≈ 256), which is fine
+/// (bounded by the configured global stream-thread cap), which is fine
 /// for the 5 s watchdog cadence and the handler add/remove edges.
 pub const Registry = struct {
     mu: std.Io.Mutex = std.Io.Mutex.init,
@@ -76,6 +76,13 @@ pub const Registry = struct {
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
         self.entries.deinit(gpa);
+    }
+
+    pub fn reserveCapacity(self: *Registry, gpa: std.mem.Allocator, capacity: usize) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        try self.entries.ensureTotalCapacity(gpa, capacity);
     }
 
     /// Add a reader to the registry.  Each registered reader must be

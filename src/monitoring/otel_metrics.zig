@@ -941,8 +941,14 @@ const QueryMetrics = struct {
 };
 
 var g_query: ?QueryMetrics = null;
+// CANARY: REQ=REQ-QUIC-HC-039; FEATURE="QUIC High-Concurrency Requests"; ASPECT=QueryMetricThreadSafety; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-05-26
+// The vendored OTel metric SDK is not safe for concurrent lazy init/record
+// from hundreds of query threads. Guard query metric handles and add/record
+// calls behind one small facade mutex so instrumentation cannot crash the
+// server during high-fanout QUIC workloads.
+var g_query_mu: std.Io.Mutex = std.Io.Mutex.init;
 
-fn ensureQuery() !*QueryMetrics {
+fn ensureQueryLocked() !*QueryMetrics {
     if (g_query) |*q| return q;
     const m = meter();
     g_query = QueryMetrics{
@@ -1003,12 +1009,18 @@ fn ensureQuery() !*QueryMetrics {
 }
 
 pub fn incQueryActive(qt: QueryType) void {
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     q.active.add(1, &.{.{ .key = "geode.query.type", .value = .{ .string = @tagName(qt) } }});
 }
 
 pub fn decQueryActive(qt: QueryType) void {
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     q.active.add(-1, &.{.{ .key = "geode.query.type", .value = .{ .string = @tagName(qt) } }});
 }
 
@@ -1016,7 +1028,10 @@ pub fn decQueryActive(qt: QueryType) void {
 /// count and duration sample are always correlated (per spec §4.3).
 pub fn recordQueryExecution(op: []const u8, summary: []const u8, qt: QueryType, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
     _ = summary;
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     var buf: [4]attrs.Entry = undefined;
     var n: usize = 0;
     buf[n] = .{ .key = "db.operation.name", .value = .{ .string = op } };
@@ -1034,7 +1049,10 @@ pub fn recordQueryExecution(op: []const u8, summary: []const u8, qt: QueryType, 
 }
 
 pub fn recordQueryParse(duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     var buf: [2]attrs.Entry = undefined;
     var n: usize = 0;
     buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
@@ -1047,12 +1065,18 @@ pub fn recordQueryParse(duration_s: f64, outcome: Outcome, error_type: ?[]const 
 }
 
 pub fn recordQueryParseError(error_type: []const u8) void {
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     q.parse_error_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
 }
 
 pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []const u8) void {
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     q.plan_duration.record(duration_s, &.{
         .{ .key = "db.operation.name", .value = .{ .string = op } },
         .{ .key = "geode.planner.strategy", .value = .{ .string = planner_strategy } },
@@ -1061,12 +1085,18 @@ pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []cons
 
 pub fn recordQueryRowsReturned(op: []const u8, summary: []const u8, rows: u64) void {
     _ = summary;
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     q.rows_returned.record(@floatFromInt(rows), &.{.{ .key = "db.operation.name", .value = .{ .string = op } }});
 }
 
 pub fn recordQueryTimeout(op: []const u8, kind: TimeoutKind) void {
-    const q = ensureQuery() catch return;
+    const io = initIo();
+    g_query_mu.lockUncancelable(io);
+    defer g_query_mu.unlock(io);
+    const q = ensureQueryLocked() catch return;
     q.timeout_count.add(1, &.{
         .{ .key = "db.operation.name", .value = .{ .string = op } },
         .{ .key = "geode.timeout.kind", .value = .{ .string = @tagName(kind) } },

@@ -235,3 +235,67 @@ test "submitBlocking: blocking lane remains 1-wide (no regression)" {
     // Blocking lane invariant: max 1 task in flight at any time.
     try testing.expect(ctx.max_concurrent.load(.acquire) == 1);
 }
+
+test "blocking_workers=0: submitBlocking disabled and default lane owns all workers" {
+    const num_workers: usize = 4;
+    const pool = try ThreadPool.init(testing.allocator, .{
+        .num_threads = num_workers,
+        .queue_capacity = 64,
+        .blocking_workers = 0,
+    });
+    defer pool.deinit();
+
+    const empty_ts = try testing.allocator.alloc(u64, 0);
+    defer testing.allocator.free(empty_ts);
+    var dummy_ctx = BarrierCtx{
+        .started_count = std.atomic.Value(u32).init(0),
+        .finished_count = std.atomic.Value(u32).init(0),
+        .release = std.atomic.Value(bool).init(true),
+        .start_ts = empty_ts,
+        .max_concurrent = std.atomic.Value(u32).init(0),
+        .current_concurrent = std.atomic.Value(u32).init(0),
+    };
+    try testing.expectError(error.BlockingLaneDisabled, pool.submitBlocking(WorkItem{
+        .context = @ptrCast(&dummy_ctx),
+        .callback = barrierTask,
+    }));
+
+    const n: u32 = @intCast(num_workers);
+    const start_ts = try testing.allocator.alloc(u64, n);
+    defer testing.allocator.free(start_ts);
+    @memset(start_ts, 0);
+
+    var ctx = BarrierCtx{
+        .started_count = std.atomic.Value(u32).init(0),
+        .finished_count = std.atomic.Value(u32).init(0),
+        .release = std.atomic.Value(bool).init(false),
+        .start_ts = start_ts,
+        .max_concurrent = std.atomic.Value(u32).init(0),
+        .current_concurrent = std.atomic.Value(u32).init(0),
+    };
+
+    var submitted: u32 = 0;
+    while (submitted < n) : (submitted += 1) {
+        try testing.expect(pool.submitDefault(WorkItem{
+            .context = @ptrCast(&ctx),
+            .callback = barrierTask,
+        }));
+    }
+
+    const deadline = monoNanos() + 500 * std.time.ns_per_ms;
+    while (ctx.started_count.load(.acquire) < n) {
+        if (monoNanos() > deadline) break;
+        sleepNs(1 * std.time.ns_per_ms);
+    }
+
+    const started = ctx.started_count.load(.acquire);
+    ctx.release.store(true, .release);
+    const drain_deadline = monoNanos() + 2 * std.time.ns_per_s;
+    while (ctx.finished_count.load(.acquire) < started) {
+        if (monoNanos() > drain_deadline) break;
+        sleepNs(1 * std.time.ns_per_ms);
+    }
+
+    try testing.expectEqual(n, started);
+    try testing.expect(ctx.max_concurrent.load(.acquire) >= n);
+}

@@ -40,14 +40,62 @@ pub fn lastLoadHadChecksumError() bool {
     return false;
 }
 
-/// Generate a time-based unique 64-bit ID using UUIDv7.
-/// Takes the upper 64 bits of a full UUIDv7 (u128) for backward compatibility
-/// with the u64-based Node.id / Edge.id fields throughout the codebase.
-/// The upper 64 bits contain: 48-bit timestamp | 4-bit version(7) | 12-bit sequence,
-/// which preserves time-sortability and uniqueness.
+const node_id_sequence_mask: u64 = 0x0fff;
+const node_id_version_bits: u64 = 0x7000;
+const node_id_timestamp_mask: u64 = 0x0000_ffff_ffff_ffff;
+var g_last_time_based_node_id = std.atomic.Value(u64).init(0);
+
+fn encodeTimeBasedNodeId(ms: u64, seq: u16) u64 {
+    return ((ms & node_id_timestamp_mask) << 16) |
+        node_id_version_bits |
+        (@as(u64, seq) & node_id_sequence_mask);
+}
+
+fn realtimeMillis() u64 {
+    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * 1000 + nsec / std.time.ns_per_ms;
+}
+
+// CANARY: REQ=REQ-QUIC-HC-015; FEATURE="High-Concurrency Mutations"; ASPECT=AtomicNodeIdReservation; STATUS=IMPL; OWNER=storage; UPDATED=2026-05-26
+/// Generate a time-based unique 64-bit ID without taking the UUIDv7 global
+/// mutex or issuing a randomness syscall. GraphStore historically called
+/// generateUuidV7() and then discarded the lower random 64 bits; under
+/// mutation fan-out that made node-id reservation a process-wide bottleneck.
+/// The retained layout is the same upper-half shape: 48-bit logical
+/// millisecond timestamp | 4-bit version(7) | 12-bit sequence.
 fn generateTimeBasedId() u64 {
-    const uuid7 = id_map_mod.generateUuidV7();
-    return @truncate(uuid7 >> 64);
+    const now_ms = realtimeMillis();
+    const now_base = encodeTimeBasedNodeId(now_ms, 0);
+
+    var observed = g_last_time_based_node_id.load(.acquire);
+    while (true) {
+        const candidate = if (observed < now_base)
+            now_base
+        else blk: {
+            const seq = observed & node_id_sequence_mask;
+            if (seq < node_id_sequence_mask) break :blk observed + 1;
+
+            // More than 4096 ids in one millisecond: advance the logical
+            // timestamp rather than blocking writers until wall-clock catches up.
+            const logical_ms = ((observed >> 16) & node_id_timestamp_mask) + 1;
+            break :blk encodeTimeBasedNodeId(logical_ms, 0);
+        };
+
+        if (g_last_time_based_node_id.cmpxchgWeak(observed, candidate, .acq_rel, .acquire)) |next| {
+            observed = next;
+        } else {
+            return candidate;
+        }
+    }
 }
 
 // Field-Level Encryption Storage Hooks
@@ -527,6 +575,15 @@ pub const GraphStore = struct {
     // — so the strict ordering is `labels_rwlock` → `perf_c_refcount_mutex`.
     // Tier 1 per CLAUDE.md (alongside merge_prop_index_mutex).
     perf_c_refcount_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
+    //
+    // Group-commit shard writers mutate `label_index` while holding the
+    // whole-graph rwlock in SHARED mode. The legacy label-index contract
+    // assumed an exclusive graph lock protected the outer HashMap; mixed
+    // count/read + CREATE traffic therefore let countNodesByLabel race a
+    // posting-list insert. This mutex guards the outer map and is held while
+    // a posting's leaf mutex is held, so rehash cannot move a locked posting.
+    label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-825 (issue #825): per-store rwlock that serialises the
     // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
     // `removeNodeLabel`, and their `NoSave` variants) against the
@@ -1573,13 +1630,62 @@ pub const GraphStore = struct {
             try im.insertNodeWithSlot(@as(u128, reserved_id), persisted_node.slot_id);
         }
 
+        try self.insertReservedNodeInMemory(reserved_id, labels, graph_name, tenant);
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-016; FEATURE="High-Concurrency Mutations"; ASPECT=ShardAlignedBulkNodeCreate; STATUS=IMPL; OWNER=storage; UPDATED=2026-05-26
+    /// Register an already-persisted storage-engine slot for a reserved public
+    /// node id, then populate the in-memory compatibility store. This is used
+    /// by the group-commit write path after it allocates the engine slot on the
+    /// same shard as the coordinator batch, avoiding the normal adapter create
+    /// path which would allocate a different engine slot and defeat batching.
+    pub fn createNodeWithReservedIdAndSlotGraphAndTenant(
+        self: *GraphStore,
+        reserved_id: u64,
+        slot_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        tenant: []const u8,
+    ) !void {
+        try self.ensureGraph(graph_name);
+        const im = try self.getOrCreateIdMap(graph_name);
+        try im.insertNodeWithSlot(@as(u128, reserved_id), slot_id);
+        errdefer _ = im.removeNode(@as(u128, reserved_id));
+
+        try self.insertReservedNodeInMemory(reserved_id, labels, graph_name, tenant);
+    }
+
+    pub fn createNodeWithReservedIdAndSlotAndGraph(
+        self: *GraphStore,
+        reserved_id: u64,
+        slot_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+    ) !void {
+        const tenant = fle_integration.getCurrentTenantId();
+        return self.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, tenant);
+    }
+
+    fn insertReservedNodeInMemory(
+        self: *GraphStore,
+        reserved_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        tenant: []const u8,
+    ) !void {
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
+        errdefer self.allocator.free(labels_copy);
+        var copied_labels: usize = 0;
         for (labels, 0..) |label, i| {
             labels_copy[i] = try self.allocator.dupe(u8, label);
+            copied_labels += 1;
         }
+        errdefer for (labels_copy[0..copied_labels]) |label| self.allocator.free(label);
 
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(graph_name_copy);
         const tenant_id_copy = try self.allocator.dupe(u8, tenant);
+        errdefer self.allocator.free(tenant_id_copy);
 
         const node = Node{
             .id = reserved_id,
@@ -1765,10 +1871,7 @@ pub const GraphStore = struct {
         // all greater than any previously inserted ID for this graph +
         // label — so appending preserves the sorted invariant.
         for (labels) |label| {
-            const posting = try self.ensureLabelPostingList(graph_name, label);
-            posting.lock();
-            defer posting.unlock();
-            try posting.list.ensureUnusedCapacity(self.allocator, n);
+            try self.ensureLabelPostingCapacity(graph_name, label, n);
         }
 
         // Allocate result slice (caller-owned, caller's allocator).
@@ -1861,10 +1964,12 @@ pub const GraphStore = struct {
     }
 
     /// Resolve (graph, label) → pointer to the `LabelPosting` entry in
-    /// `label_index`, creating the entry on first sight. The returned pointer
-    /// is stable as long as the outer map is not rehashed; the caller must
-    /// still take `posting.mutex` before mutating or iterating `posting.list`.
-    fn ensureLabelPostingList(self: *GraphStore, graph_name: []const u8, label: []const u8) !*LabelPosting {
+    /// `label_index`, creating the entry on first sight.
+    ///
+    /// Caller must hold `label_index_mutex`. Holding that outer mutex while
+    /// using the returned pointer prevents `StringHashMap` rehash from moving
+    /// the posting while its leaf mutex is locked.
+    fn ensureLabelPostingListLocked(self: *GraphStore, graph_name: []const u8, label: []const u8) !*LabelPosting {
         var buf: [512]u8 = undefined;
         const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
             const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
@@ -1889,6 +1994,17 @@ pub const GraphStore = struct {
         return result.value_ptr;
     }
 
+    fn ensureLabelPostingCapacity(self: *GraphStore, graph_name: []const u8, label: []const u8, additional: usize) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+        posting.lock();
+        defer posting.unlock();
+        try posting.list.ensureUnusedCapacity(self.allocator, additional);
+    }
+
     /// Append-only label-index insert. Used only by the batch path where
     /// the caller guarantees the new id is greater than every id already
     /// present for this (graph, label) — which holds for the batch path
@@ -1896,7 +2012,11 @@ pub const GraphStore = struct {
     /// back to a sorted insert if the monotonic invariant is accidentally
     /// violated (e.g. clock skew), so correctness is preserved.
     fn appendToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
-        const posting = try self.ensureLabelPostingList(graph_name, label);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        const posting = try self.ensureLabelPostingListLocked(graph_name, label);
         posting.lock();
         defer posting.unlock();
         const items = posting.list.items;
@@ -2250,7 +2370,11 @@ pub const GraphStore = struct {
     // rwlock held by the caller — this function only protects the inner
     // `ArrayList(u64)` via `LabelPosting.mutex`.
     pub fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
-        const posting = try self.ensureLabelPostingList(graph_name, label);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        const posting = try self.ensureLabelPostingListLocked(graph_name, label);
         posting.lock();
         defer posting.unlock();
         try sortedInsertLocked(&posting.list, self.allocator, node_id);
@@ -2291,6 +2415,10 @@ pub const GraphStore = struct {
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
         const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
         defer self.allocator.free(key);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
 
         if (self.label_index.getPtr(key)) |posting| {
             var should_remove_key = false;
@@ -2891,7 +3019,18 @@ pub const GraphStore = struct {
             }
         }
 
-        // --- In-memory store update (always, regardless of adapter) ---
+        try self.setNodePropertiesBatchInMemoryOnly(node_id, entries);
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-022; FEATURE="HighConcurrencyMutations"; ASPECT=ShardTxnPropertyFastPath; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
+    /// Update only GraphStore's in-memory compatibility store.
+    ///
+    /// The QUIC group-commit fast path has already written the properties
+    /// through the shard-pinned storage transaction. Calling the full
+    /// `setNodePropertiesBatch` path there re-enters the adapter, contends on
+    /// the adapter-level graph lookup mutex, and opens redundant property
+    /// work after the shard worker already owns the correct shard lock.
+    pub fn setNodePropertiesBatchInMemoryOnly(self: *GraphStore, node_id: u64, entries: []const BatchPropertyEntry) !void {
         if (self.nodes.getPtr(node_id)) |node| {
             for (entries) |entry| {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
@@ -3313,15 +3452,31 @@ pub const GraphStore = struct {
         label: []const u8,
         tenant: ?[]const u8,
     ) usize {
-        const posting = self.getNodesByLabel(graph_name, label) orelse return 0;
+        // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
+        //
+        // Group-commit writers update label postings while sharing the
+        // whole-graph rwlock with readers. Count must therefore take the same
+        // outer/leaf label-index locks as writers instead of aliasing the live
+        // ArrayList through getNodesByLabel().
+        var key_buf: [512]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return 0;
+        const mutable_self: *GraphStore = @constCast(self);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mutable_self.label_index_mutex.lockUncancelable(io);
+        defer mutable_self.label_index_mutex.unlock(io);
+
+        const posting = mutable_self.label_index.getPtr(key) orelse return 0;
+        posting.lock();
+        defer posting.unlock();
+
         if (tenant == null) {
             // O(1) — `removeFromLabelIndex` keeps the posting list in sync on
             // delete, so `.len` is the exact live count.
-            return posting.len;
+            return posting.list.items.len;
         }
         const tid = tenant.?;
         var count: usize = 0;
-        for (posting) |node_id| {
+        for (posting.list.items) |node_id| {
             const node = self.nodes.get(node_id) orelse continue;
             if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
             count += 1;
@@ -7142,6 +7297,11 @@ pub fn pushActiveQueryReadStore(store: *GraphStore) ?*GraphStore {
     return previous;
 }
 
+// CANARY: REQ=REQ-QUIC-HC-017; FEATURE="ActiveReadStoreReuse"; ASPECT=IMPL; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
+pub fn getActiveQueryReadStore() ?*GraphStore {
+    return g_active_query_read_store;
+}
+
 pub fn popActiveQueryReadStore(previous: ?*GraphStore) void {
     g_active_query_read_store = previous;
 }
@@ -7493,6 +7653,46 @@ test "TestLabelIndexBasic" {
     try testing.expect(result != null);
     try testing.expect(result.?.len == 1);
     try testing.expect(result.?[0] == node_id);
+}
+
+test "REQ-QUIC-HC-015: node id reservation is lock-free unique under parallel writers" {
+    const worker_count = 16;
+    const ids_per_worker = 2048;
+    const total_ids = worker_count * ids_per_worker;
+
+    const Worker = struct {
+        fn run(out: []u64) void {
+            for (out) |*slot| {
+                slot.* = generateTimeBasedId();
+            }
+        }
+    };
+
+    const ids = try testing.allocator.alloc(u64, total_ids);
+    defer testing.allocator.free(ids);
+
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads, 0..) |*thread, i| {
+        const start = i * ids_per_worker;
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{ids[start .. start + ids_per_worker]});
+    }
+    for (&threads) |*thread| thread.join();
+
+    var seen = std.AutoHashMap(u64, void).init(testing.allocator);
+    defer seen.deinit();
+    try seen.ensureTotalCapacity(@intCast(total_ids));
+
+    var shard_counts: [sharded_store.SHARD_COUNT]usize = [_]usize{0} ** sharded_store.SHARD_COUNT;
+    for (ids) |id| {
+        try testing.expect((id & 0xf000) == node_id_version_bits);
+        const prior = try seen.getOrPut(id);
+        try testing.expect(!prior.found_existing);
+        shard_counts[sharded_store.shardIndex(id)] += 1;
+    }
+
+    for (shard_counts) |count| {
+        try testing.expect(count > 0);
+    }
 }
 
 test "TestLabelIndexMultipleNodes" {

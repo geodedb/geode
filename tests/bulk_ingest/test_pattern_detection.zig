@@ -223,10 +223,29 @@ test "rejects MERGE with ON MATCH SET clause" {
     );
 }
 
-test "rejects MERGE with multi-property filter" {
+test "detects MERGE with multi-property filter" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
         "MERGE (n:Widget {a: 1, b: 2})",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.simple_node_merge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqualStrings("Widget", spec.label);
+    try testing.expectEqual(@as(usize, 2), spec.merge_props.len);
+    try testing.expectEqualStrings("a", spec.merge_props[0].key);
+    try testing.expectEqualStrings("b", spec.merge_props[1].key);
+}
+
+test "rejects multi-property MERGE with ON MATCH SET clause" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:Widget {a: 1, b: 2}) ON MATCH SET n.updated = 1",
         allocator,
     );
     defer pr.deinit();

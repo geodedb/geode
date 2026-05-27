@@ -103,6 +103,7 @@ pub const TestEnv = struct {
 
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,
+    threaded: std.Io.Threaded,
     child: std.process.Child,
     // Zig 0.16: std.process.EnvMap → std.process.Environ.Map.  Same
     // role (mutable child-process env override), different module path.
@@ -115,9 +116,18 @@ pub const ServerHandle = struct {
         // a synchronous test helper — the process-global single-threaded
         // io vtable is the right fit (same shape every other stdio site
         // in this repo uses).
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.child.kill(io);
-        _ = self.child.wait(io) catch {};
+        const io = self.threaded.io();
+        // CANARY: REQ=REQ-QUIC-HC-057; FEATURE="QUIC High-Concurrency Requests"; ASPECT=StressHarnessTeardown; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+        //
+        // High-fanout failure cases can leave the server's graceful shutdown
+        // path waiting on a stuck pool worker after SIGTERM. The E2E harness is
+        // isolating a throwaway data dir, so teardown must hard-stop the child
+        // and reap it instead of letting a failed stress run hang the build.
+        if (self.child.id) |pid| {
+            posix.kill(pid, .KILL) catch {};
+            _ = self.child.wait(io) catch {};
+        }
+        self.threaded.deinit();
         if (self.env_map) |*env| {
             env.deinit();
         }
@@ -145,6 +155,14 @@ fn compat_milliTimestamp() i64 {
     const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
     if (rc != 0) return 0;
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_monoNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    if (rc != 0) return 0;
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
 }
 fn compat_sleep(ns: u64) void {
     const sec: i64 = @intCast(ns / std.time.ns_per_s);
@@ -220,6 +238,27 @@ pub fn defaultPassword() []const u8 {
     return DefaultAuth.password;
 }
 
+fn isTruthyEnvValue(value: []const u8) bool {
+    if (value.len == 0) return false;
+    if (std.mem.eql(u8, value, "0")) return false;
+    if (std.ascii.eqlIgnoreCase(value, "false")) return false;
+    if (std.ascii.eqlIgnoreCase(value, "no")) return false;
+    if (std.ascii.eqlIgnoreCase(value, "off")) return false;
+    return true;
+}
+
+fn envPairsContainTruthy(pairs: ?[]const []const u8, name: []const u8) bool {
+    if (pairs) |items| {
+        for (items) |kv| {
+            const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
+            if (std.mem.eql(u8, kv[0..eq], name) and isTruthyEnvValue(kv[eq + 1 ..])) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 pub fn spawnServer(
     allocator: std.mem.Allocator,
     args: []const []const u8,
@@ -231,7 +270,9 @@ pub fn spawnServer(
     // `Environ.createMap`.  Same behavior: snapshot the parent's env,
     // optionally overlay the test defaults + caller-supplied KVs, then
     // hand the map to the child via `SpawnOptions.environ_map`.
-    const io = std.Io.Threaded.global_single_threaded.io();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    errdefer threaded.deinit();
+    const io = threaded.io();
 
     // Zig 0.16: build the child env map from /proc/self/environ
     // (NUL-separated key=value entries from the parent process's
@@ -284,18 +325,32 @@ pub fn spawnServer(
         }
     }
 
+    // CANARY: REQ=REQ-QUIC-HC-024; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ServerStderrPassThrough; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    //
+    // High-fanout QUIC regressions often show up first as server-side handoff
+    // warnings. Keep the default quiet for ordinary tests, but allow focused
+    // stress runs to inherit child stderr/stdout without switching to pipes
+    // that can block if the server logs heavily.
+    const inherit_server_stdio = envPairsContainTruthy(env, "GEODE_TEST_INHERIT_SERVER_STDERR") or blk: {
+        if (map.get("GEODE_TEST_INHERIT_SERVER_STDERR")) |value| {
+            break :blk isTruthyEnvValue(value);
+        }
+        break :blk false;
+    };
+
     const child = try std.process.spawn(io, .{
         .argv = args,
         .environ_map = &map,
         // Zig 0.16: SpawnOptions renamed `*_behavior` to bare
         // `stdin` / `stdout` / `stderr` of `StdIo` enum.
         .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .ignore,
+        .stdout = if (inherit_server_stdio) .inherit else .ignore,
+        .stderr = if (inherit_server_stdio) .inherit else .ignore,
     });
 
     return ServerHandle{
         .allocator = allocator,
+        .threaded = threaded,
         .child = child,
         .env_map = map,
     };
@@ -596,6 +651,11 @@ pub const QuicProtoClient = struct {
     session_id: []const u8 = "",
 
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !QuicProtoClient {
+        return connectWithHandshakeTimeout(allocator, addr, 5);
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-031; FEATURE="QUIC High-Concurrency Setup"; ASPECT=HandshakeTimeout; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    pub fn connectWithHandshakeTimeout(allocator: std.mem.Allocator, addr: []const u8, handshake_timeout_secs: u32) !QuicProtoClient {
         const parsed = try parseAddr(addr);
         var client = quic.QuicClient.init(allocator);
         errdefer client.deinit();
@@ -603,7 +663,7 @@ pub const QuicProtoClient = struct {
         client.connectInsecure(parsed.host, parsed.port, true) catch |err| {
             return err;
         };
-        try client.waitForHandshake(5);
+        try client.waitForHandshake(@max(handshake_timeout_secs, 1));
         const stream = try client.getStream();
         return .{ .allocator = allocator, .client = client, .stream = stream };
     }
@@ -631,25 +691,49 @@ pub const QuicProtoClient = struct {
         try protobuf.encode(&aw.writer, self.allocator, packet);
 
         const body = aw.writer.buffer[0..aw.writer.end];
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(body.len), .big);
-        try self.stream.writeAll(&len_buf);
-        try self.stream.writeAll(body);
+        // CANARY: REQ=REQ-QUIC-HC-043; FEATURE="QUIC High-Concurrency Client"; ASPECT=SinglePacketFramedWrites; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        // Keep the length prefix and protobuf body in one stream write. The
+        // QUIC stream writer emits one packet per write call for small payloads;
+        // splitting the frame doubles the UDP burst during high-fanout query
+        // starts and makes the server recover avoidable packet loss.
+        const framed = try self.allocator.alloc(u8, 4 + body.len);
+        defer self.allocator.free(framed);
+        std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
+        @memcpy(framed[4..], body);
+        try self.stream.writeAll(framed);
+        // CANARY: REQ=REQ-QUIC-HC-041; FEATURE="QUIC High-Concurrency Client"; ASPECT=PostWriteFlush; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+        // writeStream queues frames on the client endpoint. In high-fanout
+        // tests, waiting until the first response read WouldBlock to poll the
+        // endpoint can leave hundreds of EXECUTE frames unflushed for one
+        // scheduler turn. Poll once after every framed write so request data
+        // is visible to the server before the caller waits for a response.
+        try self.client.poll(0);
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-005; FEATURE="QUIC High-Concurrency Client Wait"; ASPECT=ProtoReadDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
+    fn waitForReadProgress(self: *QuicProtoClient, deadline_ns: u64) !void {
+        if (compat_monoNs() >= deadline_ns) return error.Timeout;
+        // CANARY: REQ=REQ-QUIC-HC-119; FEATURE="High-Concurrency Test Client"; ASPECT=SubMillisecondReadPolling; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+        //
+        // In 1024+ local-client runs, a blocking 1ms poll per WouldBlock makes
+        // the driver threads, not the server, dominate tail latency. Drive any
+        // already-arrived datagrams immediately, then park briefly to yield CPU.
+        try self.client.poll(0);
+        const now_ns = compat_monoNs();
+        if (now_ns >= deadline_ns) return error.Timeout;
+        compat_sleep(@min(@as(u64, 100 * std.time.ns_per_us), deadline_ns - now_ns));
+        if (compat_monoNs() >= deadline_ns) return error.Timeout;
     }
 
     fn readPacket(self: *QuicProtoClient, allocator: std.mem.Allocator, timeout_ms: u32) !schema.ServerPacket {
         var len_buf: [4]u8 = undefined;
         var total_read: usize = 0;
-        var attempts: usize = 0;
-        const max_attempts = @max(@as(usize, 1), timeout_ms / 10);
+        const deadline_ns = compat_monoNs() + @as(u64, timeout_ms) * std.time.ns_per_ms;
 
         while (total_read < 4) {
             const n = self.stream.read(len_buf[total_read..]) catch |err| {
                 if (err == error.WouldBlock) {
-                    attempts += 1;
-                    if (attempts > max_attempts) return error.Timeout;
-                    try self.client.poll(1);
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    try self.waitForReadProgress(deadline_ns);
                     continue;
                 }
                 return err;
@@ -665,14 +749,10 @@ pub const QuicProtoClient = struct {
         defer allocator.free(msg_bytes);
 
         total_read = 0;
-        attempts = 0;
         while (total_read < msg_len) {
             const n = self.stream.read(msg_bytes[total_read..]) catch |err| {
                 if (err == error.WouldBlock) {
-                    attempts += 1;
-                    if (attempts > max_attempts) return error.Timeout;
-                    try self.client.poll(1);
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    try self.waitForReadProgress(deadline_ns);
                     continue;
                 }
                 return err;
@@ -682,23 +762,27 @@ pub const QuicProtoClient = struct {
         }
 
         var reader: std.Io.Reader = .fixed(msg_bytes);
-        return try protobuf.decode(schema.ServerPacket, &reader, allocator);
+        const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+        // CANARY: REQ=REQ-QUIC-HC-120; FEATURE="High-Concurrency Test Client"; ASPECT=PostReadAckFlush; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+        //
+        // Client poll() processes inbound STREAM packets and queues ACK state.
+        // High-fanout tests keep completed clients parked at a barrier; without
+        // one post-read flush those ACKs can sit until teardown, forcing the
+        // server into PTO retransmits for responses the client already read.
+        try self.client.poll(0);
+        return packet;
     }
 
     fn drainBytes(self: *QuicProtoClient, len: u64, timeout_ms: u32) !void {
         var remaining: u64 = len;
-        var attempts: usize = 0;
-        const max_attempts = @max(@as(usize, 1), timeout_ms / 10);
+        const deadline_ns = compat_monoNs() + @as(u64, timeout_ms) * std.time.ns_per_ms;
         var buf: [4096]u8 = undefined;
 
         while (remaining > 0) {
             const chunk: usize = @intCast(@min(remaining, @as(u64, buf.len)));
             const n = self.stream.read(buf[0..chunk]) catch |err| {
                 if (err == error.WouldBlock) {
-                    attempts += 1;
-                    if (attempts > max_attempts) return error.Timeout;
-                    try self.client.poll(1);
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    try self.waitForReadProgress(deadline_ns);
                     continue;
                 }
                 return err;
@@ -709,6 +793,10 @@ pub const QuicProtoClient = struct {
     }
 
     pub fn hello(self: *QuicProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8) !HelloResult {
+        return self.helloWithTimeout(allocator, username, password, 5000);
+    }
+
+    pub fn helloWithTimeout(self: *QuicProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8, timeout_ms: u32) !HelloResult {
         const req = schema.HelloRequest{
             .username = username,
             .password = password,
@@ -719,7 +807,7 @@ pub const QuicProtoClient = struct {
         };
         try self.writeMessage(.{ .hello = req });
 
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacket(allocator, timeout_ms);
         defer packet.deinit(allocator);
 
         const msg = packet.quic orelse return error.InvalidMessage;
@@ -967,6 +1055,18 @@ pub const QuicProtoClient = struct {
         params: std.ArrayList(schema.Param),
         page_size: u32,
     ) !ExecResult {
+        return self.executeAndCollectWithTimeout(allocator, query, params, page_size, 5);
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-023; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ClientExecTimeout; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    pub fn executeAndCollectWithTimeout(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        query: []const u8,
+        params: std.ArrayList(schema.Param),
+        page_size: u32,
+        query_timeout_secs: u32,
+    ) !ExecResult {
         try self.ensureHello(allocator);
         const QuicProtocolAdapter = struct {
             client: *QuicProtoClient,
@@ -984,10 +1084,10 @@ pub const QuicProtoClient = struct {
             fn readServerMessage(
                 proto: *query_runner.ProtocolClient,
                 alloc: std.mem.Allocator,
-                timeout_secs: u32,
+                read_timeout_secs: u32,
             ) !schema.QuicServerMessage {
                 const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
-                const timeout_ms = @as(u32, @intCast(@max(timeout_secs, 1) * 1000));
+                const timeout_ms = @as(u32, @intCast(@max(read_timeout_secs, 1) * 1000));
                 while (true) {
                     const packet = adapter_self.client.readPacket(alloc, timeout_ms) catch |err| {
                         if (err == error.EndOfStream) return error.EndOfStream;
@@ -1014,7 +1114,7 @@ pub const QuicProtoClient = struct {
             .session_id = self.session_id,
             .query_text = query,
             .format = "json",
-            .timeout_secs = 5,
+            .timeout_secs = query_timeout_secs,
             .page_size = page_size,
             .params = params,
         });
@@ -1032,7 +1132,7 @@ pub const QuicProtoClient = struct {
         const req = schema.ExecuteRequest{
             .session_id = self.session_id,
             .query = query,
-            .params = std.ArrayList(schema.Param){},
+            .params = std.ArrayList(schema.Param).empty,
         };
         try self.writeMessage(.{ .execute = req });
 
@@ -1175,7 +1275,7 @@ pub const GrpcProtoClient = struct {
 };
 
 pub fn emptyParams() std.ArrayList(schema.Param) {
-    return std.ArrayList(schema.Param){};
+    return std.ArrayList(schema.Param).empty;
 }
 
 pub fn makeIntParam(allocator: std.mem.Allocator, name: []const u8, value: i64) !schema.Param {

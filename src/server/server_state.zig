@@ -361,8 +361,13 @@ pub const ServerState = struct {
     // Type is user_management.Role but we use u8 enum value to avoid circular dep
     authenticated_role: ?u8 = null,
     authenticated_auth_version: u64 = 0,
+    authenticated_auth_validation_epoch: u64 = 0,
     // Whether the authenticated user must change their password before running queries
     password_reset_required: bool = false,
+    // Per-session FLE role requested during HELLO. Owned by ServerState so
+    // worker-thread handoff can re-install the role without borrowing from
+    // the decoded protobuf packet.
+    fle_user_role: ?[]const u8 = null,
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
     // Current graph for this session (set by USE GRAPH command)

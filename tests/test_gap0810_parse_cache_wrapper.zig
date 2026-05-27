@@ -46,3 +46,65 @@ test "parseGqlCached: second identical call returns cache hit" {
         },
     }
 }
+
+test "query_ast_cache_shared_singleflight" {
+    const worker_count = 32;
+    const allocator = std.testing.allocator;
+    var cache = geode.SharedAstCache.init(allocator, 64);
+    defer cache.deinit();
+
+    const WorkerCtx = struct {
+        cache: *geode.SharedAstCache,
+        query: []const u8,
+        ready: *std.atomic.Value(u32),
+        start: *std.atomic.Value(bool),
+        successes: *std.atomic.Value(u32),
+        failures: *std.atomic.Value(u32),
+
+        fn run(ctx: *@This()) void {
+            _ = ctx.ready.fetchAdd(1, .release);
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+
+            var handle = switch (geode.parseGqlCached(ctx.cache, ctx.query, .{}) catch {
+                _ = ctx.failures.fetchAdd(1, .monotonic);
+                return;
+            }) {
+                .Ok => |h| h,
+                .Err => {
+                    _ = ctx.failures.fetchAdd(1, .monotonic);
+                    return;
+                },
+            };
+            defer handle.release();
+            _ = ctx.successes.fetchAdd(1, .release);
+        }
+    };
+
+    var ready = std.atomic.Value(u32).init(0);
+    var start = std.atomic.Value(bool).init(false);
+    var successes = std.atomic.Value(u32).init(0);
+    var failures = std.atomic.Value(u32).init(0);
+    var ctx = WorkerCtx{
+        .cache = &cache,
+        .query = "RETURN 1 AS c",
+        .ready = &ready,
+        .start = &start,
+        .successes = &successes,
+        .failures = &failures,
+    };
+
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, WorkerCtx.run, .{&ctx});
+    }
+    while (ready.load(.acquire) < worker_count) std.atomic.spinLoopHint();
+    start.store(true, .release);
+    for (&threads) |thread| thread.join();
+
+    try std.testing.expectEqual(@as(u32, 0), failures.load(.acquire));
+    try std.testing.expectEqual(@as(u32, worker_count), successes.load(.acquire));
+
+    const stats = cache.stats();
+    try std.testing.expectEqual(@as(u64, 1), stats.miss_count);
+    try std.testing.expectEqual(@as(u64, worker_count - 1), stats.hit_count);
+}

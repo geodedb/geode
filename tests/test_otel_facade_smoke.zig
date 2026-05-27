@@ -123,6 +123,57 @@ test "query metrics register" {
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
 
+const QueryMetricsThreadCtx = struct {
+    worker_id: usize,
+    iterations: usize,
+
+    fn run(ctx: *QueryMetricsThreadCtx) void {
+        const qt: otel_metrics.QueryType = if ((ctx.worker_id & 1) == 0) .read else .write;
+        var i: usize = 0;
+        while (i < ctx.iterations) : (i += 1) {
+            const op = if (((ctx.worker_id + i) % 3) == 0) "CREATE" else "MATCH";
+            otel_metrics.incQueryActive(qt);
+            otel_metrics.recordQueryParse(0.0001, .success, null);
+            otel_metrics.recordQueryPlan(op, 0.0002, "cbo");
+            otel_metrics.recordQueryRowsReturned(op, op, @intCast((ctx.worker_id + i) % 128));
+            otel_metrics.recordQueryExecution(op, op, qt, 0.001, .success, null);
+            if ((i % 17) == 0) {
+                otel_metrics.recordQueryTimeout(op, .request);
+            }
+            otel_metrics.decQueryActive(qt);
+        }
+    }
+};
+
+test "query metrics record concurrently without SDK mutex crash" {
+    // CANARY: REQ=REQ-QUIC-HC-039; FEATURE="QUIC High-Concurrency Requests"; ASPECT=QueryMetricThreadSafety; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-05-26
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    const worker_count = 64;
+    const iterations = 64;
+    var contexts: [worker_count]QueryMetricsThreadCtx = undefined;
+    var threads: [worker_count]std.Thread = undefined;
+
+    for (&contexts, 0..) |*ctx, i| {
+        ctx.* = .{
+            .worker_id = i,
+            .iterations = iterations,
+        };
+        threads[i] = try std.Thread.spawn(.{}, QueryMetricsThreadCtx.run, .{ctx});
+    }
+    for (&threads) |thread| thread.join();
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_query_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_query_execution_duration") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_query_timeout_count") != null);
+}
+
 test "transaction metrics register" {
     const gpa = std.testing.allocator;
     try otel_metrics.initForTesting(gpa);

@@ -44,6 +44,15 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 
+fn compat_sleepNs(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.
 fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
     const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
@@ -60,6 +69,7 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
 const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
+const quic_response_metrics = @import("quic_response_metrics");
 const query_plan_cache = geode.query_plan_cache;
 // Per-mutation wall-clock timing instrumentation (Task 1, throughput plan).
 const mutation_timing = geode.mutation_timing;
@@ -139,6 +149,60 @@ const index_manager = geode.index_manager;
 var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.GlobalStreamThrottle.init(
     stream_registry.default_max_global_stream_threads,
 );
+const first_stream_owner_stack_size = 1024 * 1024;
+const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
+const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
+// CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+//
+// A persistent query stream is hot for several consecutive messages: EXECUTE,
+// PULL, and follow-up requests often arrive before the scheduler rotates back.
+// Keep the slice bounded for fairness, but make it large enough that steady
+// workloads do not pay a global ready-queue round trip every fourth message.
+const first_stream_scheduler_messages_per_tick: u32 = 8;
+
+// CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+//
+// First-stream owners are long-lived persistent stream loops. Spawning one OS
+// thread per authenticated connection keeps 256-way fanout simple, but at
+// 512+ it starves the single QUIC poller and stalls packet delivery. Bound the
+// detached owner count separately from the global stream admission cap; overflow
+// first streams stay admitted but run through the shared stream pool.
+const FirstStreamDetachGate = struct {
+    active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    max: std.atomic.Value(u32) = std.atomic.Value(u32).init(default_detached_first_stream_owner_threads),
+
+    fn configure(self: *@This(), max_threads: u32) void {
+        self.max.store(@max(max_threads, 1), .release);
+    }
+
+    fn tryAcquire(self: *@This()) bool {
+        const max_threads = self.max.load(.acquire);
+        var observed = self.active.load(.acquire);
+        while (observed < max_threads) {
+            if (self.active.cmpxchgWeak(observed, observed + 1, .acq_rel, .acquire)) |next| {
+                observed = next;
+            } else {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn release(self: *@This()) void {
+        const prev = self.active.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+    }
+
+    fn count(self: *const @This()) u32 {
+        return self.active.load(.acquire);
+    }
+
+    fn limit(self: *const @This()) u32 {
+        return self.max.load(.acquire);
+    }
+};
+
+var g_first_stream_detach_gate = FirstStreamDetachGate{};
 
 /// Monotonic-clock reader used by `BufferedProtoReader.recordActivity`
 /// for per-stream stall detection (#864 §10).  Mirrors the helper in
@@ -203,6 +267,11 @@ pub fn setMaxGlobalStreamThreads(max: u32) void {
     g_stream_throttle = stream_registry.GlobalStreamThrottle.init(effective);
 }
 
+// CANARY: REQ=REQ-QUIC-HC-020; FEATURE="ConfigurableStreamThrottle"; ASPECT=RegistryPreallocation; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+pub fn reserveProtoReaderRegistryCapacity(gpa: std.mem.Allocator, capacity: usize) !void {
+    try g_proto_reader_registry.reserveCapacity(gpa, capacity);
+}
+
 /// Return the current number of active stream handler threads globally.
 pub fn getGlobalStreamThreadCount() u32 {
     return g_stream_throttle.count();
@@ -214,6 +283,20 @@ pub fn getGlobalStreamThreadCount() u32 {
 /// dashboard side.
 pub fn getMaxGlobalStreamThreads() u32 {
     return g_stream_throttle.max;
+}
+
+// CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+pub fn setMaxDetachedFirstStreamOwners(max: u32) void {
+    const effective = if (max == 0) default_detached_first_stream_owner_threads else max;
+    g_first_stream_detach_gate.configure(effective);
+}
+
+pub fn getDetachedFirstStreamOwnerCount() u32 {
+    return g_first_stream_detach_gate.count();
+}
+
+pub fn getMaxDetachedFirstStreamOwners() u32 {
+    return g_first_stream_detach_gate.limit();
 }
 
 /// Counter incremented whenever a new peer-initiated stream is rejected
@@ -446,35 +529,7 @@ fn executeBulkSimpleCreate(
         mut_sample.markLockReleased();
     }
 
-    // Wire response: schema with 0 columns + one page with 0 rows
-    // final=true + status 00000 — identical to the regular executor
-    // output for a no-RETURN CREATE statement.
-    {
-        var schema_arena = std.heap.ArenaAllocator.init(gpa);
-        defer schema_arena.deinit();
-        const sa = schema_arena.allocator();
-        const status = try proto_util.buildStatus(sa, "00000", &.{});
-        const schema_def = schema.SchemaDefinition{
-            .columns = std.ArrayList(schema.ColumnDefinition).empty,
-        };
-        const schema_resp = schema.ExecutionResponse{
-            .status = status,
-            .payload = .{ .schema = schema_def },
-        };
-        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
-    }
-    {
-        var page_arena = std.heap.ArenaAllocator.init(gpa);
-        defer page_arena.deinit();
-        const pa = page_arena.allocator();
-        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
-        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
-        const page_resp = schema.ExecutionResponse{
-            .status = page_status,
-            .payload = .{ .page = page },
-        };
-        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
-    }
+    try sendEmptySuccessResult(gpa, stream);
 
     mut_sample.record("bulk_simple_create");
 
@@ -494,32 +549,7 @@ fn sendBulkEdgeSuccessResponse(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
 ) !void {
-    {
-        var schema_arena = std.heap.ArenaAllocator.init(gpa);
-        defer schema_arena.deinit();
-        const sa = schema_arena.allocator();
-        const status = try proto_util.buildStatus(sa, "00000", &.{});
-        const schema_def = schema.SchemaDefinition{
-            .columns = std.ArrayList(schema.ColumnDefinition).empty,
-        };
-        const schema_resp = schema.ExecutionResponse{
-            .status = status,
-            .payload = .{ .schema = schema_def },
-        };
-        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
-    }
-    {
-        var page_arena = std.heap.ArenaAllocator.init(gpa);
-        defer page_arena.deinit();
-        const pa = page_arena.allocator();
-        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
-        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
-        const page_resp = schema.ExecutionResponse{
-            .status = page_status,
-            .payload = .{ .page = page },
-        };
-        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
-    }
+    try sendEmptySuccessResult(gpa, stream);
 }
 
 /// Task 12 (enterprise-ingest-throughput) fast-path dispatcher for the
@@ -812,11 +842,20 @@ fn executeBulkSimpleMerge(
         .{ .names = ctx.query_param_names, .values = ctx.query_param_values },
     );
 
-    // Resolve the merge filter value (literal or parameter).  The detector
+    // Resolve the merge filter values (literal or parameter). The detector
     // already screened `isScalarPropExpr`, so eval must succeed for any
     // pattern we accepted — a failure here is a programming error.
-    const merge_value_val = try geode_eval.evalExpr(eval_allocator, spec.merge_value.*, env);
-    const merge_value_pv = try property_codec.valueToPropertyValue(eval_allocator, merge_value_val);
+    var merge_kvs_buf: [32]geode.graph_storage_adapter.StorageAdapter.PropKV = undefined;
+    var merge_kvs: []geode.graph_storage_adapter.StorageAdapter.PropKV = if (spec.merge_props.len <= merge_kvs_buf.len)
+        merge_kvs_buf[0..spec.merge_props.len]
+    else
+        try eval_allocator.alloc(geode.graph_storage_adapter.StorageAdapter.PropKV, spec.merge_props.len);
+    for (spec.merge_props, 0..) |prop, i| {
+        const v = try geode_eval.evalExpr(eval_allocator, prop.value.*, env);
+        const pv = try property_codec.valueToPropertyValue(eval_allocator, v);
+        merge_kvs[i] = .{ .key = prop.key, .value = pv };
+    }
+    const merge_value_pv = merge_kvs[0].value;
 
     // Evaluate all ON CREATE SET property values upfront.  The detector
     // already guaranteed each is scalar.
@@ -853,7 +892,7 @@ fn executeBulkSimpleMerge(
     // the create branch.  Going straight to Phase 2 keeps the apply
     // atomic with the merge_prop_index update.
     var found_in_phase1 = false;
-    if (!spec.apply_on_match) {
+    if (!spec.apply_on_match and merge_kvs.len == 1) {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
         const res = adapter.lookupNodeByMergeKey(
@@ -895,15 +934,41 @@ fn executeBulkSimpleMerge(
             };
             mut_sample.markLockAcquired();
 
-            var op = group_commit.ApplyOp{ .bulk_merge_node = .{
-                .label = spec.label,
-                .merge_key = spec.merge_key,
-                .merge_value = merge_value_pv,
-                .on_create_props = kvs,
-                .result = .{},
-                .apply_on_match = spec.apply_on_match,
-            } };
+            var op = if (merge_kvs.len == 1)
+                group_commit.ApplyOp{ .bulk_merge_node = .{
+                    .label = spec.label,
+                    .merge_key = spec.merge_key,
+                    .merge_value = merge_value_pv,
+                    .on_create_props = kvs,
+                    .result = .{},
+                    .apply_on_match = spec.apply_on_match,
+                } }
+            else
+                group_commit.ApplyOp{ .bulk_merge_node_props = .{
+                    .label = spec.label,
+                    .merge_props = merge_kvs,
+                    .on_create_props = kvs,
+                    .result = .{},
+                } };
             _ = coord.submit(&op) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
+            mut_sample.markExecuteDone();
+            mut_sample.markLockReleased();
+        } else if (merge_kvs.len > 1) {
+            mut_sample.markLockAcquired();
+            const store = graph_store.getGlobalStore(graph_store.global_allocator());
+            const reserved_id = store.reserveNodeId();
+            const node_id_res = adapter.bulkMergeNodeWithReservedIdMultiProp(
+                query_graph_name,
+                reserved_id,
+                spec.label,
+                merge_kvs,
+                kvs,
+            );
+            _ = node_id_res catch |err| {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
@@ -954,35 +1019,7 @@ fn executeBulkSimpleMerge(
         mut_sample.markExecuteDone();
     }
 
-    // Wire response: identical shape to the other bulk fast-paths —
-    // schema with 0 columns + one page with 0 rows (final=true) + status
-    // 00000 — matches regular-executor output for a no-RETURN MERGE.
-    {
-        var schema_arena = std.heap.ArenaAllocator.init(gpa);
-        defer schema_arena.deinit();
-        const sa = schema_arena.allocator();
-        const status = try proto_util.buildStatus(sa, "00000", &.{});
-        const schema_def = schema.SchemaDefinition{
-            .columns = std.ArrayList(schema.ColumnDefinition).empty,
-        };
-        const schema_resp = schema.ExecutionResponse{
-            .status = status,
-            .payload = .{ .schema = schema_def },
-        };
-        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
-    }
-    {
-        var page_arena = std.heap.ArenaAllocator.init(gpa);
-        defer page_arena.deinit();
-        const pa = page_arena.allocator();
-        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
-        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
-        const page_resp = schema.ExecutionResponse{
-            .status = page_status,
-            .payload = .{ .page = page },
-        };
-        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
-    }
+    try sendEmptySuccessResult(gpa, stream);
 
     mut_sample.record("bulk_simple_merge");
 
@@ -1026,9 +1063,11 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
 
     const msg_bytes = aw.writer.buffer[0..aw.writer.end];
     const msg_len: u32 = @intCast(msg_bytes.len);
+    _ = quic_response_metrics.response_messages_started_total.fetchAdd(1, .monotonic);
+    _ = quic_response_metrics.response_encode_bytes_total.fetchAdd(msg_len, .monotonic);
 
     // #688: Single writeAll with length prefix prepended to avoid two QUIC
-    // mutex acquisitions per response.  Allocate a combined buffer, copy
+    // mutex acquisitions per response. Allocate a combined buffer, copy
     // the 4-byte big-endian length header followed by the payload, and
     // send in one call.
     const framed = try allocator.alloc(u8, 4 + msg_bytes.len);
@@ -1036,6 +1075,7 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
     std.mem.writeInt(u32, framed[0..4], msg_len, .big);
     @memcpy(framed[4..], msg_bytes);
     try stream.writeAll(framed);
+    _ = quic_response_metrics.response_messages_completed_total.fetchAdd(1, .monotonic);
 }
 
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
@@ -1118,6 +1158,69 @@ const BufferedProtoReader = struct {
         };
     }
 
+    fn decodeBufferedMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
+        const unread = self.buffer.items[self.start_index..];
+        if (unread.len < 4) return null;
+
+        const len_bytes = unread[0..4];
+        const msg_len = std.mem.readInt(u32, len_bytes, .big);
+        if (msg_len > 16 * 1024 * 1024) {
+            log.err("MessageTooLarge: msg_len={d} bytes_in_buf={d} start_index={d}", &.{ Attr.int("msg_len", @intCast(msg_len)), Attr.int("buf_len", @intCast(self.buffer.items.len)), Attr.int("start", @intCast(self.start_index)) });
+            return error.MessageTooLarge;
+        }
+
+        if (unread.len < 4 + msg_len) return null;
+
+        const msg_bytes = unread[4..][0..msg_len];
+        var reader: std.Io.Reader = .fixed(msg_bytes);
+        const msg = protobuf.decode(schema.ClientPacket, &reader, self.allocator) catch |err| {
+            log.warn("Failed to decode Protobuf message", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+
+        self.start_index += 4 + msg_len;
+        self.compactBuffer();
+        _ = proto_reader_metrics.messages_delivered_total.fetchAdd(1, .monotonic);
+        proto_reader_metrics.recordActivity();
+        self.recordActivity();
+        return msg;
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    /// Non-blocking variant used by the cooperative first-stream scheduler.
+    /// It returns WouldBlock as soon as the current stream has no readable
+    /// bytes, letting the scheduler move to another connection instead of
+    /// pinning a worker on this one.
+    pub fn nextMessageNonBlocking(self: *BufferedProtoReader) !?schema.ClientPacket {
+        while (true) {
+            if (try self.decodeBufferedMessage()) |msg| return msg;
+
+            const n = self.stream.read(&self.read_buf) catch |err| {
+                if (err == error.WouldBlock) {
+                    _ = proto_reader_metrics.would_block_loop_iterations_total.fetchAdd(1, .monotonic);
+                    proto_reader_metrics.recordActivity();
+                    self.recordActivity();
+                }
+                return err;
+            };
+
+            if (n == 0) {
+                if (self.start_index == self.buffer.items.len) {
+                    _ = proto_reader_metrics.eof_total.fetchAdd(1, .monotonic);
+                    proto_reader_metrics.recordActivity();
+                    self.recordActivity();
+                    return null;
+                }
+                return error.UnexpectedEndOfStream;
+            }
+
+            _ = proto_reader_metrics.bytes_read_total.fetchAdd(@as(u64, n), .monotonic);
+            proto_reader_metrics.recordActivity();
+            self.recordActivity();
+            try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
+        }
+    }
+
     // Reads the next length-prefixed message.
     // Length is 4 bytes Big Endian.
     pub fn nextMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
@@ -1125,40 +1228,10 @@ const BufferedProtoReader = struct {
         const max_would_block_attempts: usize = 300000; // 300s at 1ms sleep — matches QUIC idle timeout
 
         while (true) {
-            // Check if we have enough data for length header
-            const unread = self.buffer.items[self.start_index..];
-            if (unread.len >= 4) {
-                const len_bytes = unread[0..4];
-                const msg_len = std.mem.readInt(u32, len_bytes, .big);
-
-                // Sanity check length (e.g., 16MB)
-                if (msg_len > 16 * 1024 * 1024) {
-                    log.err("MessageTooLarge: msg_len={d} bytes_in_buf={d} start_index={d}", &.{ Attr.int("msg_len", @intCast(msg_len)), Attr.int("buf_len", @intCast(self.buffer.items.len)), Attr.int("start", @intCast(self.start_index)) });
-                    return error.MessageTooLarge;
-                }
-
-                if (unread.len >= 4 + msg_len) {
-                    // We have the full message
-                    const msg_bytes = unread[4..][0..msg_len];
-
-                    // Decode using schema
-                    var reader: std.Io.Reader = .fixed(msg_bytes);
-                    const msg = protobuf.decode(schema.ClientPacket, &reader, self.allocator) catch |err| {
-                        log.warn("Failed to decode Protobuf message", &.{Attr.string("error", @errorName(err))});
-                        return err;
-                    };
-
-                    // Consume bytes
-                    self.start_index += 4 + msg_len;
-                    self.compactBuffer();
-                    _ = proto_reader_metrics.messages_delivered_total.fetchAdd(1, .monotonic);
-                    proto_reader_metrics.recordActivity();
-                    self.recordActivity();
-                    return msg;
-                }
-            }
+            if (try self.decodeBufferedMessage()) |msg| return msg;
 
             // Need more data
+            const read_generation = self.stream.readGeneration();
             const n = self.stream.read(&self.read_buf) catch |err| {
                 if (err == error.WouldBlock) {
                     would_block_attempts += 1;
@@ -1168,20 +1241,11 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    // #540: Wait for the dedicated poll thread to deliver data.
-                    // Handler threads do NOT call poll(0) themselves — that
-                    // contends on ep.mu with 30+ threads and serializes all I/O.
-                    // The dedicated pollLoop thread in quic.zig runs at 50μs
-                    // intervals and broadcasts poll_cv on every cycle.
-                    if (self.stream.poll_sync) |ps| {
-                        ps.waitForPoll(2 * std.time.ns_per_ms);
-                    } else {
-                        {
-                            const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
-                            var rem: std.os.linux.timespec = undefined;
-                            _ = std.os.linux.nanosleep(&req, &rem);
-                        }
-                    }
+                    // QUIC-HC-037: wait on this connection's RX generation.
+                    // The vendored endpoint bumps it when STREAM data or FIN
+                    // is delivered to this connection, so high fan-out readers
+                    // avoid the endpoint-wide poll wake herd.
+                    self.stream.waitForReadGeneration(read_generation, quic_transport.server_handler_wait_for_poll_ns);
                     continue;
                 }
                 return err;
@@ -1235,6 +1299,69 @@ fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStr
     try writeServerPacket(allocator, stream, .{ .quic = msg_copy });
 }
 
+// CANARY: REQ=REQ-QUIC-HC-077; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BatchedExecuteResponseWrite; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+fn sendQuicMessagesBatched(
+    allocator: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    messages: []const schema.QuicServerMessage,
+) !void {
+    _ = quic_response_metrics.response_batches_started_total.fetchAdd(1, .monotonic);
+    var framed: std.ArrayList(u8) = .empty;
+    defer framed.deinit(allocator);
+
+    for (messages) |msg| {
+        var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 1024) catch return error.OutOfMemory;
+        defer aw.deinit();
+
+        try protobuf.encode(&aw.writer, allocator, schema.ServerPacket{ .quic = msg });
+        const msg_bytes = aw.writer.buffer[0..aw.writer.end];
+        const msg_len: u32 = @intCast(msg_bytes.len);
+        _ = quic_response_metrics.response_messages_started_total.fetchAdd(1, .monotonic);
+        _ = quic_response_metrics.response_encode_bytes_total.fetchAdd(msg_len, .monotonic);
+
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, msg_len, .big);
+        try framed.appendSlice(allocator, &len_buf);
+        try framed.appendSlice(allocator, msg_bytes);
+    }
+
+    try stream.writeAll(framed.items);
+    _ = quic_response_metrics.response_messages_completed_total.fetchAdd(@intCast(messages.len), .monotonic);
+    _ = quic_response_metrics.response_batches_completed_total.fetchAdd(1, .monotonic);
+}
+
+// CANARY: REQ=REQ-QUIC-HC-089; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BatchedEmptyMutationSuccess; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+fn sendEmptySuccessResult(
+    allocator: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+) !void {
+    var response_arena = std.heap.ArenaAllocator.init(allocator);
+    defer response_arena.deinit();
+    const ra = response_arena.allocator();
+
+    const schema_status = try proto_util.buildStatus(ra, "00000", &.{});
+    const schema_def = schema.SchemaDefinition{
+        .columns = std.ArrayList(schema.ColumnDefinition).empty,
+    };
+    const schema_resp = schema.ExecutionResponse{
+        .status = schema_status,
+        .payload = .{ .schema = schema_def },
+    };
+
+    const page = try proto_util.buildDataPageFromRows(ra, &.{}, true, false, &.{});
+    const page_status = try proto_util.buildStatus(ra, "00000", &.{});
+    const page_resp = schema.ExecutionResponse{
+        .status = page_status,
+        .payload = .{ .page = page },
+    };
+
+    const batched = [_]schema.QuicServerMessage{
+        .{ .execute = schema_resp },
+        .{ .execute = page_resp },
+    };
+    try sendQuicMessagesBatched(ra, stream, &batched);
+}
+
 fn sendExecuteError(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -1274,6 +1401,19 @@ fn appendFlagToResult(allocator: std.mem.Allocator, result: *execution.Execution
     // Duplicate flag if result owns memory, otherwise string literal is fine
     const flag_to_add = if (result.owns_value_memory) try allocator.dupe(u8, flag) else flag;
     try result.flags.append(allocator, flag_to_add);
+}
+
+fn replaceOwnedOptionalString(allocator: std.mem.Allocator, slot: *?[]const u8, next: ?[]const u8) !void {
+    if (slot.*) |current| {
+        if (next) |candidate| {
+            if (std.mem.eql(u8, current, candidate)) return;
+        }
+        allocator.free(current);
+        slot.* = null;
+    }
+    if (next) |value| {
+        slot.* = try allocator.dupe(u8, value);
+    }
 }
 
 /// Extract variable name and property name from a property access expression.
@@ -1384,8 +1524,14 @@ pub const SharedConnState = struct {
     authenticated_role: ?u8 = null,
     /// Authenticated auth_version captured at HELLO.
     authenticated_auth_version: u64 = 0,
+    /// Auth invalidation epoch observed after the last successful validation.
+    authenticated_auth_validation_epoch: u64 = 0,
     /// Whether the user must reset their password.
     password_reset_required: bool = false,
+    /// Tenant id captured from HELLO session config (owned).
+    tenant_id: ?[]const u8 = null,
+    /// FLE role captured from HELLO (owned).
+    fle_user_role: ?[]const u8 = null,
     /// Session graph binding (owned, heap-allocated). Null if not bound.
     current_graph: ?[]const u8 = null,
     /// Whether the session was bound to a graph via DSN/HELLO.
@@ -1437,7 +1583,16 @@ pub const SharedConnState = struct {
         }
         self.authenticated_role = state.authenticated_role;
         self.authenticated_auth_version = state.authenticated_auth_version;
+        self.authenticated_auth_validation_epoch = state.authenticated_auth_validation_epoch;
         self.password_reset_required = state.password_reset_required;
+        if (state.session_config) |cfg| {
+            if (cfg.tenant_id) |tid| {
+                self.tenant_id = try self.allocator.dupe(u8, tid);
+            }
+        }
+        if (state.fle_user_role) |role| {
+            self.fle_user_role = try self.allocator.dupe(u8, role);
+        }
         self.graph_bound = state.graph_bound;
         if (state.exec_session) |sess| {
             if (sess.graph) |g| {
@@ -1448,6 +1603,8 @@ pub const SharedConnState = struct {
 
     pub fn deinit(self: *SharedConnState) void {
         if (self.authenticated_user) |u| self.allocator.free(u);
+        if (self.tenant_id) |tid| self.allocator.free(tid);
+        if (self.fle_user_role) |role| self.allocator.free(role);
         if (self.current_graph) |g| self.allocator.free(g);
         if (self.pending_result) |*r| r.deinit(self.allocator);
         if (self.pending_node_scan_stream) |*s| s.deinit();
@@ -1462,6 +1619,51 @@ pub const SharedConnState = struct {
 
     pub fn unregisterActiveStream(self: *SharedConnState, stream_id: u64) void {
         _ = self.active_stream_registry.unregister(stream_id);
+    }
+
+    pub fn releaseActiveStream(self: *SharedConnState) void {
+        const prev = self.active_streams.fetchSub(1, .release);
+        std.debug.assert(prev > 0);
+        // Wake both the connection-owner drain waiter and the acceptor's
+        // stream-slot admission waiter.  One stream slot was freed, so one
+        // futex waiter is enough; the condition signal preserves the existing
+        // owner wait contract.
+        self.streams_cv.signal(std.Io.Threaded.global_single_threaded.io());
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.active_streams.raw, 1);
+    }
+
+    pub fn waitForStreamSlot(self: *SharedConnState, limit: u32, timeout_ns: u64) void {
+        if (timeout_ns == 0) return;
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const start_ns = monoNsFromHandler();
+        var remaining_ns = timeout_ns;
+
+        while (self.active_streams.load(.acquire) >= limit) {
+            const observed = self.active_streams.load(.acquire);
+            if (observed < limit) return;
+
+            const timeout: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(remaining_ns)),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &self.active_streams.raw, observed, timeout) catch |err| switch (err) {
+                error.Canceled => return,
+            };
+
+            const elapsed_ns = monoNsFromHandler() -| start_ns;
+            if (elapsed_ns >= timeout_ns) return;
+            remaining_ns = timeout_ns - elapsed_ns;
+        }
+    }
+
+    pub fn waitForAllStreamsDrained(self: *SharedConnState) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (true) {
+            const observed = self.active_streams.load(.acquire);
+            if (observed == 0) return;
+            std.Io.futexWaitUncancelable(io, u32, &self.active_streams.raw, observed);
+        }
     }
 
     pub fn syncGraphFromState(self: *SharedConnState, state: *const ServerState) !void {
@@ -1487,7 +1689,14 @@ pub const SharedConnState = struct {
         }
         self.authenticated_role = state.authenticated_role;
         self.authenticated_auth_version = state.authenticated_auth_version;
+        self.authenticated_auth_validation_epoch = state.authenticated_auth_validation_epoch;
         self.password_reset_required = state.password_reset_required;
+        try replaceOwnedOptionalString(
+            self.allocator,
+            &self.tenant_id,
+            if (state.session_config) |cfg| cfg.tenant_id else null,
+        );
+        try replaceOwnedOptionalString(self.allocator, &self.fle_user_role, state.fle_user_role);
 
         if (self.current_graph) |graph| {
             self.allocator.free(graph);
@@ -1553,6 +1762,10 @@ pub const StreamAcceptorContext = struct {
     /// The owner waits on this before letting its stack frame unwind so
     /// `conn` stays alive while the acceptor is still dereferencing it.
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Futex generation paired with `done`. The public done flag remains a
+    /// bool for the leaked-connection reaper/tests, while the owner can wait
+    /// without a fixed sleep loop during high connection close churn.
+    done_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Outstanding refs.  Initialized to 2 (owner + acceptor); each
     /// caller invokes `release()` exactly once when finished.  The
     /// last release frees the heap struct.
@@ -1598,6 +1811,30 @@ pub const StreamAcceptorContext = struct {
         const prev = self.refcount.fetchAdd(1, .acq_rel);
         std.debug.assert(prev > 0);
     }
+
+    pub fn markDone(self: *StreamAcceptorContext) void {
+        self.done.store(true, .release);
+        _ = self.done_generation.fetchAdd(1, .release);
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.done_generation.raw, std.math.maxInt(u32));
+    }
+
+    pub fn waitUntilDone(self: *StreamAcceptorContext, timeout_ns: u64) bool {
+        if (self.done.load(.acquire)) return true;
+        if (timeout_ns == 0) return self.done.load(.acquire);
+
+        const observed = self.done_generation.load(.acquire);
+        if (self.done.load(.acquire)) return true;
+
+        const timeout: std.Io.Timeout = .{ .duration = .{
+            .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
+            .clock = .awake,
+        } };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        io.futexWaitTimeout(u32, &self.done_generation.raw, observed, timeout) catch |err| switch (err) {
+            error.Canceled => return self.done.load(.acquire),
+        };
+        return self.done.load(.acquire);
+    }
 };
 
 const SessionAuthStatus = enum {
@@ -1607,7 +1844,77 @@ const SessionAuthStatus = enum {
 };
 
 fn isIdleStreamReadError(err: anyerror) bool {
-    return err == error.EndOfStream or err == error.Timeout;
+    return err == error.EndOfStream or err == error.Timeout or err == error.Closed;
+}
+
+fn installThreadLocalSessionState(state: *const ServerState) void {
+    fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+    audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+    fle_integration.setCurrentUserRole(state.fle_user_role);
+}
+
+fn clearThreadLocalSessionState() void {
+    fle_integration.clearCurrentThreadState();
+    audit_mod.setCurrentAuditTenantId(null);
+}
+
+fn releaseQuotaTenant(gpa: std.mem.Allocator, quota_tenant_id: *?[]const u8) void {
+    if (quota_tenant_id.*) |tid| {
+        if (tenant_quota.getGlobalQuotaManager()) |qm| {
+            qm.releaseConnection(tid);
+        }
+        gpa.free(tid);
+        quota_tenant_id.* = null;
+    }
+}
+
+fn deinitQuicServerState(gpa: std.mem.Allocator, state: *ServerState, context: []const u8) void {
+    const store_for_teardown = graph_store.getGlobalStore(gpa);
+    state.tearDownForStreamClose(store_for_teardown) catch |err| {
+        log.warn("orphan-txn teardown failed", &.{
+            Attr.string("context", context),
+            Attr.string("error", @errorName(err)),
+        });
+    };
+    state.resetResult();
+    if (state.current_graph) |g| {
+        gpa.free(g);
+        state.current_graph = null;
+    }
+    if (state.exec_session) |*sess| {
+        sess.deinit();
+        state.exec_session = null;
+    }
+    if (state.session_config) |*cfg| {
+        cfg.deinit();
+        state.session_config = null;
+    }
+    if (state.authenticated_user) |u| {
+        gpa.free(u);
+        state.authenticated_user = null;
+    }
+    if (state.authenticated_password) |p| {
+        std.crypto.secureZero(u8, @constCast(p));
+        gpa.free(p);
+        state.authenticated_password = null;
+    }
+    if (state.fle_user_role) |role| {
+        gpa.free(role);
+        state.fle_user_role = null;
+    }
+    state.txn_manager.deinit();
+    for (state.inserted_values.items) |item| {
+        state.allocator.free(item.value);
+    }
+    state.inserted_values.deinit(state.allocator);
+    state.catalog_schemas.deinit();
+    state.catalog_graphs.deinit();
+    var gt_iter = state.graph_types.iterator();
+    while (gt_iter.next()) |entry| {
+        state.allocator.free(entry.key_ptr.*);
+        state.allocator.free(entry.value_ptr.name);
+    }
+    state.graph_types.deinit();
 }
 
 /// Entry point for additional (non-first) stream handler threads.
@@ -1623,11 +1930,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     defer {
         stream.close();
         cs.unregisterActiveStream(stream.stream_id);
-        _ = cs.active_streams.fetchSub(1, .release);
-        // GAP-0274: Signal the drain waiter that a stream closed.
-        // PERF-P1-001: signal() not broadcast() — only one waiter
-        // (either drain at shutdown or acceptor at stream limit).
-        cs.streams_cv.signal(std.Io.Threaded.global_single_threaded.io());
+        cs.releaseActiveStream();
         // PERF-P1-004: Release the global stream thread slot so another
         // connection's stream can proceed.
         g_stream_throttle.release();
@@ -1656,7 +1959,15 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     }
     state.authenticated_role = cs.authenticated_role;
     state.authenticated_auth_version = cs.authenticated_auth_version;
+    state.authenticated_auth_validation_epoch = cs.authenticated_auth_validation_epoch;
     state.password_reset_required = cs.password_reset_required;
+    if (cs.tenant_id) |tid| {
+        state.session_config = geode.server_state.SessionConfiguration.init(gpa);
+        state.session_config.?.tenant_id = gpa.dupe(u8, tid) catch null;
+    }
+    if (cs.fle_user_role) |role| {
+        state.fle_user_role = gpa.dupe(u8, role) catch null;
+    }
 
     // Bind to the same graph as the connection.
     cs.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -1685,40 +1996,11 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
         state.inline_results_max_rows = ec.inline_results_max_rows;
     }
 
+    installThreadLocalSessionState(&state);
+    defer clearThreadLocalSessionState();
+
     defer {
-        // R3 (2026-04-22): roll back any orphaned in-flight transaction
-        // BEFORE freeing session state that the rollback path reads
-        // (current_graph, etc).  This is the stream-close seam — the
-        // client disconnected mid-txn, or the QUIC library reported a
-        // spurious FIN.
-        const store_for_teardown = graph_store.getGlobalStore(gpa);
-        state.tearDownForStreamClose(store_for_teardown) catch |err| {
-            log.warn("orphan-txn teardown failed on stream close", &.{
-                Attr.string("error", @errorName(err)),
-            });
-        };
-        state.resetResult();
-        if (state.current_graph) |g| gpa.free(g);
-        if (state.exec_session) |*sess| sess.deinit();
-        if (state.session_config) |*cfg| cfg.deinit();
-        if (state.authenticated_user) |u| gpa.free(u);
-        if (state.authenticated_password) |p| {
-            std.crypto.secureZero(u8, @constCast(p));
-            gpa.free(p);
-        }
-        state.txn_manager.deinit();
-        for (state.inserted_values.items) |item| {
-            state.allocator.free(item.value);
-        }
-        state.inserted_values.deinit(state.allocator);
-        state.catalog_schemas.deinit();
-        state.catalog_graphs.deinit();
-        var gt_iter = state.graph_types.iterator();
-        while (gt_iter.next()) |entry| {
-            state.allocator.free(entry.key_ptr.*);
-            state.allocator.free(entry.value_ptr.name);
-        }
-        state.graph_types.deinit();
+        deinitQuicServerState(gpa, &state, "additional stream close");
     }
 
     // Run the query loop for this stream.
@@ -1742,7 +2024,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
     // refcount keeps `ctx` alive until we exit, and accessing `ctx`
     // fields (including `shutdown` / `done`) is always safe.
     defer {
-        ctx.done.store(true, .release);
+        ctx.markDone();
         ctx.release();
     }
     while (!ctx.shutdown.load(.acquire)) {
@@ -1752,17 +2034,14 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
         // Check the total per-connection stream limit, including the first
         // stream that bootstraps the session before the acceptor starts.
         if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
-            // GAP-0274: Zig 0.16 compat — Io.Condition.timedWait removed; fall
-            // back to a raw nanosleep while we wait for streams to drain.
-            {
-                const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
-            }
+            conn_state.waitForStreamSlot(stream_registry.max_total_streams_per_connection, 5 * std.time.ns_per_ms);
             continue;
         }
 
-        // Non-blocking attempt to accept a new stream
+        // Non-blocking attempt to accept a new stream. Snapshot the
+        // per-connection RX generation before checking the queue so a STREAM
+        // frame that lands between the check and wait cannot be missed.
+        const read_generation = conn.readGeneration();
         if (conn.tryAcceptStream()) |new_stream| {
             const is_new_stream = conn_state.registerActiveStream(new_stream.stream_id) catch |err| {
                 log.warn("Failed to register multiplexed stream", &.{
@@ -1812,8 +2091,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 log.warn("Failed to allocate stream handler context", &.{});
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
-                _ = conn_state.active_streams.fetchSub(1, .release);
-                conn_state.streams_cv.signal(std.Io.Threaded.global_single_threaded.io()); // PERF-P1-001: signal, not broadcast
+                conn_state.releaseActiveStream();
                 g_stream_throttle.release();
                 continue;
             };
@@ -1824,20 +2102,14 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 .conn_state = conn_state,
             };
 
-            // Use a dedicated OS thread per active stream here, not the
-            // shared parallel wrapper. The wrapper targets bounded CPU work; these
-            // handlers are long-lived, blocking I/O loops whose lifetime is not
-            // naturally expressed as fork/join. Reusing wrapper workers for them
-            // would tie heartbeat-scheduled tasks to socket waits.
             if (!stream_pool.submit(.{
                 .context = @ptrCast(handler_ctx),
                 .callback = handleAdditionalStream,
             })) {
-                log.warn("Failed to spawn stream handler thread", &.{});
+                log.warn("Failed to submit stream handler task", &.{});
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
-                _ = conn_state.active_streams.fetchSub(1, .release);
-                conn_state.streams_cv.signal(std.Io.Threaded.global_single_threaded.io()); // PERF-P1-001: signal, not broadcast
+                conn_state.releaseActiveStream();
                 g_stream_throttle.release();
                 gpa.destroy(handler_ctx);
                 continue;
@@ -1859,10 +2131,8 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
             // despite UAF risk" guard in handleQuicConnection's defer,
             // and ultimately crash the server.  Just sleeping here is
             // both correct (the poll thread keeps running) and lets the
-            // loop re-check `shutdown` every ~1 ms.
-            const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            // loop re-check `shutdown` whenever the next poll cycle lands.
+            conn.waitForReadGeneration(read_generation, quic_transport.server_handler_wait_for_poll_ns);
         }
     }
 }
@@ -1872,13 +2142,14 @@ fn runStreamAcceptorLoop(ctx: *anyopaque) void {
     streamAcceptorLoop(acceptor_ctx);
 }
 
-/// Run the protobuf message loop for a single QUIC stream.
-/// Used by both the first stream (inline in handleQuicConnection) and
-/// additional multiplexed streams (in handleAdditionalStream).
-fn runStreamQueryLoop(
+/// Run the protobuf message loop using an already-owned reader.
+/// This lets the first-stream owner preserve bytes buffered while reading
+/// HELLO before handing the stream off to the stream pool.
+fn runStreamQueryLoopWithReader(
     gpa: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
     stream: *quic_transport.QuicStream,
+    line_reader: *BufferedProtoReader,
     state: *ServerState,
     conn_state: ?*SharedConnState,
     disable_estimates: bool,
@@ -1886,36 +2157,15 @@ fn runStreamQueryLoop(
     memcurve_profile: bool,
     peer_ip: []const u8,
 ) void {
-    var line_reader = BufferedProtoReader.init(gpa, transport, stream) catch return;
-    line_reader.peer_addr = peer_ip;
-    // #864 §10 per-stream stall observability: hand the reader to the
-    // process-wide registry so the watchdog can detect this specific
-    // stream stalling while others keep delivering messages.  Register
-    // failure (OOM) is non-fatal — we simply lose the per-stream
-    // signal for this stream; the global proto_reader_idle_ns gauge
-    // still covers the all-streams-stuck case.
-    g_proto_reader_registry.register(gpa, line_reader.registryHandle()) catch |reg_err| {
-        log.warn("proto_reader registry append failed; per-stream stall signal disabled for this stream", &.{
-            Attr.string("error", @errorName(reg_err)),
-        });
-    };
-    defer {
-        g_proto_reader_registry.unregister(@ptrCast(&line_reader));
-        line_reader.deinit();
-    }
-
+    _ = transport;
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (isIdleStreamReadError(err)) return;
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
-                    ps.waitForPoll(2 * std.time.ns_per_ms);
+                    ps.waitForPoll(quic_transport.server_handler_wait_for_poll_ns);
                 } else {
-                    {
-                        const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
-                        var rem: std.os.linux.timespec = undefined;
-                        _ = std.os.linux.nanosleep(&req, &rem);
-                    }
+                    compat_sleepNs(100 * std.time.ns_per_us);
                 }
                 continue;
             }
@@ -1974,7 +2224,662 @@ fn runStreamQueryLoop(
                 log.warn("Failed to sync shared graph context", &.{Attr.string("error", @errorName(err))});
             };
         }
+
+        // CANARY: REQ=REQ-QUIC-HC-026; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PersistentStreamFairness; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-027; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PersistentFollowupBackoff; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+        //
+        // Under 700+ persistent first streams, clients that receive an early
+        // response can immediately re-enter this loop with their next request
+        // while tail clients are still waiting for their first response. Yield
+        // at normal fanout, and add a small bounded sleep only when stream
+        // owner pressure is high enough that pure yielding still lets the same
+        // hot subset of owners dominate the run queue.
+        const active_stream_handlers = g_stream_throttle.count();
+        if (active_stream_handlers > 512) {
+            const excess: u64 = @intCast(active_stream_handlers - 512);
+            const delay_ns = @min(excess * 10 * std.time.ns_per_us, 3 * std.time.ns_per_ms);
+            compat_sleepNs(delay_ns);
+        } else {
+            std.Thread.yield() catch {};
+        }
     }
+}
+
+/// Run the protobuf message loop for a single QUIC stream.
+/// Additional multiplexed streams start with an empty reader. The first stream
+/// uses `runStreamQueryLoopWithReader` directly so buffered post-HELLO bytes
+/// are not discarded during worker handoff.
+fn runStreamQueryLoop(
+    gpa: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    conn_state: ?*SharedConnState,
+    disable_estimates: bool,
+    compact_profile: bool,
+    memcurve_profile: bool,
+    peer_ip: []const u8,
+) void {
+    var line_reader = BufferedProtoReader.init(gpa, transport, stream) catch return;
+    line_reader.peer_addr = peer_ip;
+    // #864 §10 per-stream stall observability: hand the reader to the
+    // process-wide registry so the watchdog can detect this specific
+    // stream stalling while others keep delivering messages.  Register
+    // failure (OOM) is non-fatal — we simply lose the per-stream
+    // signal for this stream; the global proto_reader_idle_ns gauge
+    // still covers the all-streams-stuck case.
+    g_proto_reader_registry.register(gpa, line_reader.registryHandle()) catch |reg_err| {
+        log.warn("proto_reader registry append failed; per-stream stall signal disabled for this stream", &.{
+            Attr.string("error", @errorName(reg_err)),
+        });
+    };
+    defer {
+        g_proto_reader_registry.unregister(@ptrCast(&line_reader));
+        line_reader.deinit();
+    }
+
+    runStreamQueryLoopWithReader(
+        gpa,
+        transport,
+        stream,
+        &line_reader,
+        state,
+        conn_state,
+        disable_estimates,
+        compact_profile,
+        memcurve_profile,
+        peer_ip,
+    );
+}
+
+fn shutdownAcceptorOwner(
+    gpa: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    conn: *quic_transport.QuicConnection,
+    acceptor_ctx: *StreamAcceptorContext,
+    acceptor_submitted: bool,
+    destroy_conn: *bool,
+) void {
+    if (acceptor_submitted) {
+        acceptor_ctx.shutdown.store(true, .release);
+        const wait_warn_ms: i64 = 5_000;
+        const wait_deadline_ms: i64 = 30_000;
+        const wait_start = compat_milliTimestamp();
+        var last_warn_ms: i64 = wait_start;
+        while (!acceptor_ctx.done.load(.acquire)) {
+            _ = acceptor_ctx.waitUntilDone(200 * std.time.ns_per_ms);
+            const now = compat_milliTimestamp();
+            const elapsed = now - wait_start;
+            if (elapsed > wait_deadline_ms) {
+                log.err("acceptor wait deadline exceeded; leaking conn to avoid UAF", &.{
+                    Attr.int("elapsed_ms", @intCast(elapsed)),
+                });
+                destroy_conn.* = false;
+                if (g_leaked_conn_registry) |reg| {
+                    acceptor_ctx.addRef();
+                    reg.register(gpa, transport, conn, .{
+                        .self = @ptrCast(acceptor_ctx),
+                        .is_done = acceptorCtxIsDone,
+                        .release = acceptorCtxRelease,
+                    }) catch |reg_err| {
+                        acceptor_ctx.release();
+                        log.warn("failed to register leaked conn for reaping; falling back to QUIC idle timeout", &.{
+                            Attr.string("error", @errorName(reg_err)),
+                        });
+                    };
+                }
+                break;
+            }
+            if (elapsed > wait_warn_ms and now - last_warn_ms > 1_000) {
+                log.warn("acceptor still running after shutdown signal", &.{
+                    Attr.int("elapsed_ms", @intCast(elapsed)),
+                });
+                last_warn_ms = now;
+            }
+        }
+    }
+    acceptor_ctx.release();
+}
+
+const FirstStreamOwnerContext = struct {
+    allocator: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    conn: *quic_transport.QuicConnection,
+    stream: *quic_transport.QuicStream,
+    state: ServerState,
+    conn_state: SharedConnState,
+    reader: BufferedProtoReader,
+    federation_manager: geode.distributed.query_planner.FederationManager,
+    dist_planner: geode.distributed.query_planner.DistributedQueryPlanner,
+    acceptor_ctx: ?*StreamAcceptorContext = null,
+    acceptor_submitted: bool = false,
+    quota_tenant_id: ?[]const u8 = null,
+    peer_ip: []const u8 = "unknown",
+    peer_ip_allocated: bool = false,
+    stream_throttle_acquired: bool = false,
+    detached_first_stream_acquired: bool = false,
+    reader_registered: bool = false,
+    cooperative_scheduler: ?*FirstStreamScheduler = null,
+    cooperative_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    cooperative_queued: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    cooperative_needs_reschedule: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    cooperative_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    cooperative_force_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    cooperative_generation_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+};
+
+fn registerFirstStreamReader(ctx: *FirstStreamOwnerContext) void {
+    if (ctx.reader_registered) return;
+    const gpa = ctx.allocator;
+    g_proto_reader_registry.register(gpa, ctx.reader.registryHandle()) catch |reg_err| {
+        log.warn("proto_reader registry append failed; per-stream stall signal disabled for first stream", &.{
+            Attr.string("error", @errorName(reg_err)),
+        });
+        return;
+    };
+    ctx.reader_registered = true;
+}
+
+fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
+    const gpa = ctx.allocator;
+    var destroy_conn = true;
+
+    if (ctx.reader_registered) {
+        g_proto_reader_registry.unregister(@ptrCast(&ctx.reader));
+        ctx.reader_registered = false;
+    }
+    ctx.reader.deinit();
+
+    if (ctx.detached_first_stream_acquired) {
+        g_first_stream_detach_gate.release();
+        ctx.detached_first_stream_acquired = false;
+    }
+    if (ctx.cooperative_scheduler != null) {
+        ctx.cooperative_done.store(true, .release);
+        ctx.stream.clearReadReadyNotifier();
+        ctx.cooperative_scheduler = null;
+    }
+    if (ctx.stream_throttle_acquired) {
+        g_stream_throttle.release();
+        ctx.stream_throttle_acquired = false;
+    }
+
+    ctx.stream.close();
+
+    if (ctx.acceptor_ctx) |acceptor_ctx| {
+        shutdownAcceptorOwner(gpa, ctx.transport, ctx.conn, acceptor_ctx, ctx.acceptor_submitted, &destroy_conn);
+        ctx.acceptor_ctx = null;
+        ctx.acceptor_submitted = false;
+    }
+
+    ctx.conn_state.unregisterActiveStream(ctx.stream.stream_id);
+    ctx.conn_state.releaseActiveStream();
+    ctx.conn_state.waitForAllStreamsDrained();
+    ctx.conn_state.deinit();
+
+    ctx.dist_planner.deinit();
+    ctx.federation_manager.deinit();
+    releaseQuotaTenant(gpa, &ctx.quota_tenant_id);
+    deinitQuicServerState(gpa, &ctx.state, "first stream close");
+    if (destroy_conn) ctx.transport.destroyConnection(ctx.conn);
+    if (ctx.peer_ip_allocated) gpa.free(ctx.peer_ip);
+    gpa.destroy(ctx);
+}
+
+fn cleanupFirstStreamOwnerAsync(ctx: *FirstStreamOwnerContext) void {
+    cleanupFirstStreamOwner(ctx);
+}
+
+fn processFirstStreamPacket(
+    gpa: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    stream: *quic_transport.QuicStream,
+    line_reader: *BufferedProtoReader,
+    state: *ServerState,
+    conn_state: ?*SharedConnState,
+    disable_estimates: bool,
+    compact_profile: bool,
+    memcurve_profile: bool,
+    peer_ip: []const u8,
+    packet: *schema.ClientPacket,
+) bool {
+    _ = transport;
+    const msg = packet.quic orelse {
+        log.err("Received empty ClientPacket", &.{});
+        sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{}) catch return false;
+        return true;
+    };
+
+    {
+        const om = @import("otel_metrics");
+        const otel_lib = @import("otel");
+        const op_name: []const u8 = "QUERY";
+        om.incTransportInflight(op_name);
+        defer om.decTransportInflight(op_name);
+        const t0_ns = otel_lib.internal.clock.unixNanoNow();
+
+        handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
+            const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
+            const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
+            log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
+            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {};
+            return true;
+        };
+        const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
+        const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+        om.recordTransportRequest(op_name, dur_s, .success, null);
+    }
+
+    if (conn_state) |shared| {
+        shared.syncGraphFromState(state) catch |err| {
+            log.warn("Failed to sync shared graph context", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    _ = line_reader;
+    return true;
+}
+
+// CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+pub const FirstStreamScheduler = struct {
+    allocator: std.mem.Allocator = undefined,
+    contexts: std.ArrayList(*FirstStreamOwnerContext) = .empty,
+    ready_queue: std.ArrayList(*FirstStreamOwnerContext) = .empty,
+    ready_head: usize = 0,
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    ready_cv: std.Io.Condition = std.Io.Condition.init,
+    ready_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    workers: []std.Thread = &.{},
+    next_index: usize = 0,
+    last_idle_sweep_ns: u64 = 0,
+
+    pub fn init(self: *FirstStreamScheduler, allocator: std.mem.Allocator, worker_count: usize) !void {
+        self.* = .{
+            .allocator = allocator,
+            .contexts = .empty,
+            .ready_queue = .empty,
+            .ready_head = 0,
+            .mutex = std.Io.Mutex.init,
+            .ready_cv = std.Io.Condition.init,
+            .ready_generation = std.atomic.Value(u32).init(0),
+            .shutdown = std.atomic.Value(bool).init(false),
+            .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
+            .next_index = 0,
+            .last_idle_sweep_ns = 0,
+        };
+        errdefer allocator.free(self.workers);
+
+        for (self.workers, 0..) |*worker, i| {
+            errdefer {
+                self.shutdown.store(true, .release);
+                var j: usize = 0;
+                while (j < i) : (j += 1) self.workers[j].join();
+            }
+            worker.* = try std.Thread.spawn(.{}, workerMain, .{self});
+        }
+    }
+
+    pub fn deinit(self: *FirstStreamScheduler) void {
+        self.shutdown.store(true, .release);
+        {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.mutex.lockUncancelable(io);
+            _ = self.ready_generation.fetchAdd(1, .release);
+            self.ready_cv.broadcast(io);
+            io.futexWake(u32, &self.ready_generation.raw, std.math.maxInt(u32));
+            self.mutex.unlock(io);
+        }
+        for (self.workers) |*worker| worker.join();
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        var remaining = self.contexts;
+        self.contexts = .empty;
+        var ready = self.ready_queue;
+        self.ready_queue = .empty;
+        self.ready_head = 0;
+        self.mutex.unlock(io);
+
+        ready.deinit(self.allocator);
+        for (remaining.items) |ctx| {
+            ctx.cooperative_done.store(true, .release);
+            ctx.stream.clearReadReadyNotifier();
+            cleanupFirstStreamOwner(ctx);
+        }
+        remaining.deinit(self.allocator);
+        self.allocator.free(self.workers);
+        self.workers = &.{};
+    }
+
+    pub fn submit(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) !void {
+        registerFirstStreamReader(ctx);
+        ctx.cooperative_scheduler = self;
+        ctx.cooperative_done.store(false, .release);
+        ctx.cooperative_running.store(false, .release);
+        ctx.cooperative_queued.store(false, .release);
+        ctx.cooperative_needs_reschedule.store(false, .release);
+        ctx.cooperative_force_ready.store(false, .release);
+        ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        try self.contexts.append(self.allocator, ctx);
+        self.mutex.unlock(io);
+
+        ctx.stream.setReadReadyNotifier(@ptrCast(ctx), firstStreamReadyCallback);
+        // Prime the owner once so data that arrived between HELLO completion
+        // and callback installation is observed without waiting for another
+        // STREAM frame.
+        try self.enqueueReady(ctx);
+    }
+
+    fn workerMain(self: *FirstStreamScheduler) void {
+        self.workerLoop();
+    }
+
+    fn workerLoop(self: *FirstStreamScheduler) void {
+        while (!self.shutdown.load(.acquire)) {
+            if (self.takeReady()) |ctx| {
+                if (ctx.cooperative_done.load(.acquire)) continue;
+                if (ctx.cooperative_running.cmpxchgWeak(false, true, .acq_rel, .acquire)) |_| {
+                    ctx.cooperative_needs_reschedule.store(true, .release);
+                    continue;
+                }
+                const done = processCooperativeFirstStream(ctx);
+                if (done) {
+                    ctx.cooperative_done.store(true, .release);
+                    self.removeContext(ctx);
+                    // CANARY: REQ=REQ-QUIC-HC-073; FEATURE="QUIC High-Concurrency Requests"; ASPECT=SchedulerNonBlockingCleanup; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+                    //
+                    // Connection cleanup can wait for QUIC teardown and stream
+                    // drain. Running it on the cooperative scheduler worker
+                    // starves the ready queue after the first worker-count
+                    // streams finish, so detach cleanup and keep the scheduler
+                    // focused on request processing.
+                    const cleanup_thread = std.Thread.spawn(
+                        .{ .stack_size = first_stream_owner_stack_size },
+                        cleanupFirstStreamOwnerAsync,
+                        .{ctx},
+                    ) catch |err| {
+                        log.warn("Failed to detach first-stream cleanup, running inline", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                        cleanupFirstStreamOwner(ctx);
+                        continue;
+                    };
+                    cleanup_thread.detach();
+                } else {
+                    // Clear `running` before consuming reschedule flags. If a
+                    // STREAM frame arrives after the non-blocking read returned
+                    // WouldBlock, the RX-ready callback must either enqueue the
+                    // owner directly or leave a flag this worker observes here.
+                    ctx.cooperative_running.store(false, .release);
+                    const force = ctx.cooperative_force_ready.swap(false, .acq_rel);
+                    const reschedule = ctx.cooperative_needs_reschedule.swap(false, .acq_rel);
+                    if (force or reschedule) {
+                        self.enqueueReady(ctx) catch |err| {
+                            log.warn("Failed to requeue cooperative first-stream owner", &.{
+                                Attr.string("error", @errorName(err)),
+                            });
+                        };
+                    }
+                }
+                continue;
+            }
+        }
+    }
+
+    fn dequeueReadyLocked(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
+        if (self.ready_head >= self.ready_queue.items.len) {
+            self.ready_queue.clearRetainingCapacity();
+            self.ready_head = 0;
+            return null;
+        }
+
+        // CANARY: REQ=REQ-QUIC-HC-067; FEATURE="QUIC High-Concurrency Requests"; ASPECT=FirstStreamSchedulerFIFO; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        //
+        // FIFO avoids starving older HELLO streams during a 512+ connection
+        // burst. Keep a head index so dequeue stays O(1) while preserving
+        // fairness.
+        const ctx = self.ready_queue.items[self.ready_head];
+        self.ready_head += 1;
+        if (self.ready_head >= self.ready_queue.items.len) {
+            self.ready_queue.clearRetainingCapacity();
+            self.ready_head = 0;
+        } else if (self.ready_head > 1024 and self.ready_head * 2 >= self.ready_queue.items.len) {
+            std.mem.copyForwards(
+                *FirstStreamOwnerContext,
+                self.ready_queue.items[0 .. self.ready_queue.items.len - self.ready_head],
+                self.ready_queue.items[self.ready_head..],
+            );
+            self.ready_queue.items.len -= self.ready_head;
+            self.ready_head = 0;
+        }
+        ctx.cooperative_queued.store(false, .release);
+        return ctx;
+    }
+
+    fn takeChangedContextLocked(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
+        const len = self.contexts.items.len;
+        if (len == 0) {
+            self.next_index = 0;
+            return null;
+        }
+
+        var idx = if (self.next_index < len) self.next_index else 0;
+        var scanned: usize = 0;
+        while (scanned < len) : (scanned += 1) {
+            const ctx = self.contexts.items[idx];
+            idx += 1;
+            if (idx >= len) idx = 0;
+
+            if (ctx.cooperative_done.load(.acquire)) continue;
+            if (ctx.cooperative_running.load(.acquire)) continue;
+            if (ctx.cooperative_queued.load(.acquire)) continue;
+
+            const force = ctx.cooperative_force_ready.load(.acquire);
+            const current_generation = ctx.stream.readGeneration();
+            const seen_generation = ctx.cooperative_generation_seen.load(.acquire);
+            if (force or current_generation != seen_generation) {
+                self.next_index = idx;
+                return ctx;
+            }
+        }
+
+        self.next_index = idx;
+        return null;
+    }
+
+    fn shouldSweepIdleContextsLocked(self: *FirstStreamScheduler) bool {
+        if (self.contexts.items.len == 0) return false;
+        const now = monoNsFromHandler();
+        if (self.last_idle_sweep_ns == 0 or now -| self.last_idle_sweep_ns >= first_stream_scheduler_idle_sweep_ns) {
+            self.last_idle_sweep_ns = now;
+            return true;
+        }
+        return false;
+    }
+
+    fn takeReady(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (true) {
+            self.mutex.lockUncancelable(io);
+            if (self.dequeueReadyLocked()) |ctx| {
+                self.mutex.unlock(io);
+                return ctx;
+            }
+            if (self.shutdown.load(.acquire)) {
+                self.mutex.unlock(io);
+                return null;
+            }
+
+            // CANARY: REQ=REQ-QUIC-HC-100; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeSchedulerMissedWakeSweep; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+            //
+            // RX-ready callbacks can be lost during close-heavy fan-out when a
+            // stream is idle for the whole burst and only receives a verifier
+            // query afterwards. A low-frequency sweep compares each stream's
+            // per-connection RX generation with the last generation observed
+            // at WouldBlock, giving long-idle connections a bounded recovery
+            // path without polling every worker on every scheduler wait.
+            if (self.shouldSweepIdleContextsLocked()) {
+                if (self.takeChangedContextLocked()) |ctx| {
+                    self.mutex.unlock(io);
+                    return ctx;
+                }
+            }
+
+            const observed = self.ready_generation.load(.acquire);
+            self.mutex.unlock(io);
+
+            const timeout: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(first_stream_scheduler_idle_sweep_ns),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &self.ready_generation.raw, observed, timeout) catch |err| switch (err) {
+                error.Canceled => return null,
+            };
+        }
+    }
+
+    fn enqueueReady(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) !void {
+        if (ctx.cooperative_done.load(.acquire)) return;
+        if (ctx.cooperative_queued.cmpxchgWeak(false, true, .acq_rel, .acquire)) |_| {
+            return;
+        }
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        errdefer {
+            ctx.cooperative_queued.store(false, .release);
+            self.mutex.unlock(io);
+        }
+        try self.ready_queue.append(self.allocator, ctx);
+        _ = self.ready_generation.fetchAdd(1, .release);
+        self.ready_cv.signal(io);
+        io.futexWake(u32, &self.ready_generation.raw, 1);
+        self.mutex.unlock(io);
+    }
+
+    fn removeContext(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
+        var ready_idx: usize = self.ready_head;
+        while (ready_idx < self.ready_queue.items.len) {
+            if (self.ready_queue.items[ready_idx] == ctx) {
+                _ = self.ready_queue.swapRemove(ready_idx);
+                if (self.ready_head > self.ready_queue.items.len) {
+                    self.ready_head = self.ready_queue.items.len;
+                }
+                continue;
+            }
+            ready_idx += 1;
+        }
+        ctx.cooperative_queued.store(false, .release);
+
+        var i: usize = 0;
+        while (i < self.contexts.items.len) : (i += 1) {
+            if (self.contexts.items[i] == ctx) {
+                _ = self.contexts.swapRemove(i);
+                if (self.contexts.items.len == 0) {
+                    self.next_index = 0;
+                } else if (self.next_index >= self.contexts.items.len) {
+                    self.next_index = 0;
+                }
+                return;
+            }
+        }
+    }
+};
+
+var g_first_stream_scheduler: ?*FirstStreamScheduler = null;
+
+pub fn setFirstStreamScheduler(scheduler: ?*FirstStreamScheduler) void {
+    g_first_stream_scheduler = scheduler;
+}
+
+fn firstStreamReadyCallback(ctx_ptr: *anyopaque, _: *quic_transport.QuicInnerConnection) void {
+    const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(ctx_ptr));
+    if (ctx.cooperative_done.load(.acquire)) return;
+    if (ctx.cooperative_running.load(.acquire)) {
+        ctx.cooperative_needs_reschedule.store(true, .release);
+        return;
+    }
+    const scheduler = ctx.cooperative_scheduler orelse return;
+    scheduler.enqueueReady(ctx) catch |err| {
+        ctx.cooperative_queued.store(false, .release);
+        log.warn("Failed to queue cooperative first-stream owner", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
+fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
+    const gpa = ctx.allocator;
+    installThreadLocalSessionState(&ctx.state);
+    defer clearThreadLocalSessionState();
+
+    var processed: u32 = 0;
+    while (processed < first_stream_scheduler_messages_per_tick) : (processed += 1) {
+        const read_generation = ctx.stream.readGeneration();
+        const packet_opt = ctx.reader.nextMessageNonBlocking() catch |err| {
+            if (err == error.WouldBlock) {
+                ctx.cooperative_generation_seen.store(read_generation, .release);
+                return false;
+            }
+            if (isIdleStreamReadError(err)) return true;
+            log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
+            return true;
+        };
+
+        if (packet_opt == null) return true;
+        var packet = packet_opt.?;
+        defer packet.deinit(gpa);
+
+        if (!processFirstStreamPacket(
+            gpa,
+            ctx.transport,
+            ctx.stream,
+            &ctx.reader,
+            &ctx.state,
+            &ctx.conn_state,
+            ctx.conn_state.disable_estimates,
+            ctx.conn_state.compact_profile,
+            ctx.conn_state.memcurve_profile,
+            ctx.peer_ip,
+            &packet,
+        )) return true;
+    }
+
+    ctx.cooperative_force_ready.store(true, .release);
+    return false;
+}
+
+// CANARY: REQ=REQ-QUIC-HC-011; FEATURE="DetachedFirstStream"; ASPECT=ConnectionAdmission; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+fn handleFirstStreamOwner(ctx_ptr: *anyopaque) void {
+    const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(ctx_ptr));
+    defer cleanupFirstStreamOwner(ctx);
+
+    installThreadLocalSessionState(&ctx.state);
+    defer clearThreadLocalSessionState();
+
+    registerFirstStreamReader(ctx);
+
+    runStreamQueryLoopWithReader(
+        ctx.allocator,
+        ctx.transport,
+        ctx.stream,
+        &ctx.reader,
+        &ctx.state,
+        &ctx.conn_state,
+        ctx.conn_state.disable_estimates,
+        ctx.conn_state.compact_profile,
+        ctx.conn_state.memcurve_profile,
+        ctx.peer_ip,
+    );
 }
 
 // CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -2032,20 +2937,15 @@ pub fn handleQuicConnection(
     // client will still get reaped, just by the QUIC layer's
     // 300s idle timeout instead).
     const max_total_wait_ms: u64 = 30_000;
+    const first_stream_wait_start_ns = monoNsFromHandler();
     var total_waited_us: u64 = 0;
     while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
+        const read_generation = conn.readGeneration();
         if (conn.inner.hasIncomingStreams()) break;
         // Dedicated poll thread handles packet delivery — no handler poll needed.
-        {
-            const ns: u64 = backoff_us * std.time.ns_per_us;
-            const req = std.os.linux.timespec{
-                .sec = @intCast(ns / std.time.ns_per_s),
-                .nsec = @intCast(ns % std.time.ns_per_s),
-            };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
-        }
-        total_waited_us += backoff_us;
+        conn.waitForReadGeneration(read_generation, backoff_us * std.time.ns_per_us);
+        const wait_after_ns = monoNsFromHandler();
+        total_waited_us = @intCast((wait_after_ns -| first_stream_wait_start_ns) / std.time.ns_per_us);
         backoff_us = @min(backoff_us * 2, max_backoff_us);
         if (poll_attempts > 0 and poll_attempts % 10 == 0) {
             log.debug("No streams yet, retrying", &.{
@@ -2069,7 +2969,8 @@ pub fn handleQuicConnection(
     log.debug("Attempting to accept stream", &.{});
     const stream = try conn.acceptStream();
     log.debug("Stream accepted successfully", &.{});
-    defer stream.close();
+    var stream_handed_off = false;
+    defer if (!stream_handed_off) stream.close();
 
     // Initialize state
     var state = ServerState{
@@ -2093,54 +2994,21 @@ pub fn handleQuicConnection(
 
     // GAP-0289: Track which tenant acquired a connection quota slot so we can release it on close.
     var quota_tenant_id: ?[]const u8 = null;
+    var state_handed_off = false;
 
     // Ensure cleanup of per-connection state.
     defer {
         // GAP-0285: Clear per-thread FLE state (tenant_id and role) to prevent stale
         // state from leaking into a subsequent connection that reuses this thread.
         // CANARY: REQ=REQ-FLE-ROLE-ISOLATION-003; FEATURE="FLERoleIsolation"; ASPECT=QUICCleanup; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
-        fle_integration.clearCurrentThreadState();
-        // GAP-0285: Also clear per-thread audit tenant_id.
-        audit_mod.setCurrentAuditTenantId(null);
+        clearThreadLocalSessionState();
 
         // GAP-0289: Release connection quota slot for this tenant.
-        if (quota_tenant_id) |tid| {
-            if (tenant_quota.getGlobalQuotaManager()) |qm| {
-                qm.releaseConnection(tid);
-            }
-            gpa.free(tid);
-        }
+        releaseQuotaTenant(gpa, &quota_tenant_id);
 
-        // R3 (2026-04-22): roll back any orphaned in-flight transaction
-        // BEFORE freeing session state that the rollback path reads.
-        const store_for_teardown = graph_store.getGlobalStore(gpa);
-        state.tearDownForStreamClose(store_for_teardown) catch |err| {
-            log.warn("orphan-txn teardown failed on connection close", &.{
-                Attr.string("error", @errorName(err)),
-            });
-        };
-        state.resetResult();
-        if (state.current_graph) |g| gpa.free(g);
-        if (state.exec_session) |*sess| sess.deinit();
-        if (state.session_config) |*cfg| cfg.deinit();
-        if (state.authenticated_user) |u| gpa.free(u);
-        if (state.authenticated_password) |p| {
-            std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
-            gpa.free(p);
+        if (!state_handed_off) {
+            deinitQuicServerState(gpa, &state, "connection close");
         }
-        state.txn_manager.deinit();
-        for (state.inserted_values.items) |item| {
-            state.allocator.free(item.value);
-        }
-        state.inserted_values.deinit(state.allocator);
-        state.catalog_schemas.deinit();
-        state.catalog_graphs.deinit();
-        var gt_iter = state.graph_types.iterator();
-        while (gt_iter.next()) |entry| {
-            state.allocator.free(entry.key_ptr.*);
-            state.allocator.free(entry.value_ptr.name);
-        }
-        state.graph_types.deinit();
     }
 
     // #683: Use cached env config instead of per-connection getEnvVarOwned syscalls.
@@ -2160,9 +3028,14 @@ pub fn handleQuicConnection(
 
     // Initialize distributed query planner for federation-aware optimization
     var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
-    defer federation_manager.deinit();
     var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
-    defer dist_planner.deinit();
+    var distributed_planner_handed_off = false;
+    defer {
+        if (!distributed_planner_handed_off) {
+            dist_planner.deinit();
+            federation_manager.deinit();
+        }
+    }
     state.federation_manager = &federation_manager;
     state.distributed_planner = &dist_planner;
 
@@ -2199,38 +3072,58 @@ pub fn handleQuicConnection(
     // CANARY: REQ=REQ-SEC-RATE-LIMIT-005; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
     const peer_ip = conn.getPeerAddressString(gpa);
     const peer_ip_allocated = !std.mem.eql(u8, peer_ip, "unknown");
-    defer if (peer_ip_allocated) gpa.free(peer_ip);
+    var peer_ip_handed_off = false;
+    defer if (peer_ip_allocated and !peer_ip_handed_off) gpa.free(peer_ip);
 
     // ── Phase 1: HELLO on first stream ─────────────────────────────────────
     // Wait for the first message (expected to be HELLO) and process it.
     // This keeps the handshake flow identical to the pre-multiplexing code.
+    // CANARY: REQ=REQ-QUIC-HC-014; FEATURE="BoundedHelloAdmission"; ASPECT=ConnectionThreadLifetime; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+    //
+    // Detached connection-admission threads must be short-lived. Bound the
+    // post-stream HELLO read as well as the pre-stream wait so an idle peer
+    // cannot keep an admission thread alive indefinitely. The timeout is
+    // cached at startup so high-fanout deployments can align it with client
+    // retry budgets without per-connection environment lookups.
+    const hello_read_timeout_ns: u64 = env_config.quic_hello_read_timeout_ms * std.time.ns_per_ms;
+    const hello_read_start_ns = monoNsFromHandler();
     var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
     line_reader.peer_addr = peer_ip;
+    var line_reader_handed_off = false;
+    var line_reader_registered = false;
     // #864 §10 per-stream stall observability — see runStreamQueryLoop.
-    g_proto_reader_registry.register(gpa, line_reader.registryHandle()) catch |reg_err| {
+    if (g_proto_reader_registry.register(gpa, line_reader.registryHandle())) |_| {
+        line_reader_registered = true;
+    } else |reg_err| {
         log.warn("proto_reader registry append failed; per-stream stall signal disabled for this stream", &.{
             Attr.string("error", @errorName(reg_err)),
         });
-    };
+    }
     defer {
-        g_proto_reader_registry.unregister(@ptrCast(&line_reader));
-        line_reader.deinit();
+        if (!line_reader_handed_off) {
+            if (line_reader_registered) {
+                g_proto_reader_registry.unregister(@ptrCast(&line_reader));
+            }
+            line_reader.deinit();
+        }
     }
 
     // Read and process the first message (HELLO).
     const hello_done = hello_blk: {
         while (true) {
+            if (monoNsFromHandler() -| hello_read_start_ns >= hello_read_timeout_ns) {
+                log.warn("Timed out waiting for QUIC HELLO message", &.{
+                    Attr.int("timeout_ms", @intCast(hello_read_timeout_ns / std.time.ns_per_ms)),
+                });
+                return;
+            }
             const packet_opt = line_reader.nextMessage() catch |err| {
                 if (err == error.EndOfStream) return;
                 if (err == error.WouldBlock) {
                     if (stream.poll_sync) |ps| {
-                        ps.waitForPoll(2 * std.time.ns_per_ms);
+                        ps.waitForPoll(quic_transport.server_handler_wait_for_poll_ns);
                     } else {
-                        {
-                            const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
-                            var rem: std.os.linux.timespec = undefined;
-                            _ = std.os.linux.nanosleep(&req, &rem);
-                        }
+                        compat_sleepNs(100 * std.time.ns_per_us);
                     }
                     continue;
                 }
@@ -2306,17 +3199,18 @@ pub fn handleQuicConnection(
     _ = try conn_state.registerActiveStream(stream.stream_id);
     // First stream counts as active.
     _ = conn_state.active_streams.fetchAdd(1, .release);
+    var conn_state_handed_off = false;
     defer {
-        conn_state.unregisterActiveStream(stream.stream_id);
-        _ = conn_state.active_streams.fetchSub(1, .release);
-        // GAP-0274: Wait for ALL additional stream handlers to finish before
-        // freeing conn_state. Uses condition variable instead of busy-wait.
-        conn_state.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        while (conn_state.active_streams.load(.acquire) > 0) {
-            conn_state.streams_cv.waitUncancelable(std.Io.Threaded.global_single_threaded.io(), &conn_state.streams_mu);
+        if (!conn_state_handed_off) {
+            conn_state.unregisterActiveStream(stream.stream_id);
+            conn_state.releaseActiveStream();
+            // GAP-0274 / QUIC-HC-002: Wait for ALL additional stream handlers to
+            // finish before freeing conn_state. Park on the same active-stream
+            // futex word that handlers wake on release, avoiding condition-variable
+            // lost-wake races during high close churn.
+            conn_state.waitForAllStreamsDrained();
+            conn_state.deinit();
         }
-        conn_state.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        conn_state.deinit();
     }
 
     // SP Tasks 2+3 (2026-04-25): stream_pool and acceptor_pool are now owned by
@@ -2326,202 +3220,191 @@ pub fn handleQuicConnection(
     // closes × 5 = ~1800 zombie threads, starving the QUIC packet pump).
     // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
 
-    // 2026-04-28 lifetime rewrite: the acceptor context is HEAP-allocated
-    // and refcounted (owner=1, acceptor=1).  This eliminates the previous
-    // UAF crash where a popped-stack `acceptor_ctx` was dereferenced by
-    // a still-running acceptor (segfault at address 0x6 in
-    // `streamAcceptorLoop`'s first `shutdown.load(.acquire)`).  See the
-    // `StreamAcceptorContext` doc-comment for the full rationale.
-    const acceptor_ctx = StreamAcceptorContext.create(
-        gpa,
-        transport,
-        conn,
-        &conn_state,
-        stream_pool,
-    ) catch |err| {
-        log.warn("Failed to allocate acceptor context, single-stream mode", &.{
+    const first_ctx = gpa.create(FirstStreamOwnerContext) catch |err| {
+        log.warn("Failed to allocate first-stream owner context, running inline", &.{
             Attr.string("error", @errorName(err)),
         });
-        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
+        runStreamQueryLoopWithReader(
+            gpa,
+            transport,
+            stream,
+            &line_reader,
+            &state,
+            &conn_state,
+            disable_estimates,
+            compact_profile,
+            memcurve_profile,
+            peer_ip,
+        );
         return;
     };
-    var acceptor_submitted = false;
-    defer {
-        // Owner side of the lifetime contract:
-        //   1. Signal `shutdown=true` so the acceptor exits its loop.
-        //   2. Wait up to `wait_deadline_ms` for `done=true` so we know
-        //      the acceptor is no longer dereferencing `conn` (which the
-        //      destroy_conn-gated defer would otherwise free).
-        //   3. If the acceptor exited cleanly within the deadline:
-        //      release our refcount; conn destruction proceeds normally.
-        //   4. If the deadline expires (the acceptor is genuinely
-        //      stuck): clear `destroy_conn` so conn is LEAKED instead
-        //      of freed under the still-running acceptor.  Release our
-        //      refcount.  The acceptor will eventually exit on its own
-        //      (it sees `shutdown=true` once unblocked) and drop the
-        //      last ref, freeing the heap struct.  The conn struct
-        //      leaks but the QUIC protocol-level idle timeout (300 s
-        //      default) reaps the underlying connection eventually.
+    if (line_reader_registered) {
+        g_proto_reader_registry.unregister(@ptrCast(&line_reader));
+        line_reader_registered = false;
+    }
+    first_ctx.* = .{
+        .allocator = gpa,
+        .transport = transport,
+        .conn = conn,
+        .stream = stream,
+        .state = state,
+        .conn_state = conn_state,
+        .reader = line_reader,
+        .federation_manager = federation_manager,
+        .dist_planner = dist_planner,
+        .quota_tenant_id = quota_tenant_id,
+        .peer_ip = peer_ip,
+        .peer_ip_allocated = peer_ip_allocated,
+    };
+    first_ctx.dist_planner.federation_manager = &first_ctx.federation_manager;
+    first_ctx.state.federation_manager = &first_ctx.federation_manager;
+    first_ctx.state.distributed_planner = &first_ctx.dist_planner;
+    first_ctx.state.shared_conn = &first_ctx.conn_state;
+    first_ctx.conn_state.peer_ip = first_ctx.peer_ip;
+
+    state_handed_off = true;
+    distributed_planner_handed_off = true;
+    conn_state_handed_off = true;
+    line_reader_handed_off = true;
+    stream_handed_off = true;
+    peer_ip_handed_off = true;
+    quota_tenant_id = null;
+    destroy_conn = false;
+
+    // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    //
+    // CLI batch mode opens additional streams on an authenticated QUIC
+    // connection, so multiplexing stays enabled by default. High-fanout
+    // one-stream clients can disable this acceptor to avoid creating one idle
+    // long-lived task per connection during the HELLO fan-out.
+    if (env_config.quic_stream_multiplexing_enabled) {
+        // 2026-04-28 lifetime rewrite: the acceptor context is HEAP-allocated
+        // and refcounted (owner=1, acceptor=1).  This eliminates the previous
+        // UAF crash where a popped-stack `acceptor_ctx` was dereferenced by
+        // a still-running acceptor (segfault at address 0x6 in
+        // `streamAcceptorLoop`'s first `shutdown.load(.acquire)`).  See the
+        // `StreamAcceptorContext` doc-comment for the full rationale.
+        const acceptor_ctx = StreamAcceptorContext.create(
+            gpa,
+            transport,
+            conn,
+            &first_ctx.conn_state,
+            stream_pool,
+        ) catch |err| {
+            log.warn("Failed to allocate acceptor context, single-stream mode", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            handleFirstStreamOwner(@ptrCast(first_ctx));
+            return;
+        };
+        first_ctx.acceptor_ctx = acceptor_ctx;
+        // 2026-04-28 ROOT-CAUSE FIX: use submit() (default lane, ~63 workers)
+        // not submitBlocking() (blocking lane, ONLY 1 WORKER).  submitBlocking's
+        // name describes the backpressure policy (block if queue full), not the
+        // lane — but its implementation routes to `.lane = .blocking` which has
+        // a single dedicated worker.  With 8 active conns the previous code
+        // serialized all acceptors through that one worker; the first acceptor
+        // (whose conn was still actively reading its first stream) never exited,
+        // and the other 7 acceptor tasks sat in the blocking-lane queue forever
+        // — owners spinning on `done.load()=false` because their acceptor's
+        // `done.store(true)` was waiting in the queue.  Symptom in production:
         //
-        // Why not wait forever?  The pre-deadline version (b6ec55c3)
-        // hung connection-handler threads indefinitely under heavy
-        // ep.mu contention — visible in production as
-        //     WARN acceptor still running after shutdown signal elapsed_ms=300000+
-        // bursts on PID 2625755 with quic_active_connections=8.  See
-        // tests/test_acceptor_owner_bail.zig for the contract this fix
-        // pins.
+        //   WARN acceptor still running after shutdown signal elapsed_ms=300000+
         //
-        // Why not free conn anyway?  The acceptor's tryAcceptStream
-        // dereferences `conn`; if conn were freed, the next iteration
-        // segfaults at conn.quic_connection access (the same UAF that
-        // motivated the heap-allocated ctx in the first place).
-        if (acceptor_submitted) {
-            acceptor_ctx.shutdown.store(true, .release);
-            const wait_warn_ms: i64 = 5_000;
-            const wait_deadline_ms: i64 = 30_000;
-            const wait_start = compat_milliTimestamp();
-            var last_warn_ms: i64 = wait_start;
-            while (!acceptor_ctx.done.load(.acquire)) {
-                const req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_us };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
-                const now = compat_milliTimestamp();
-                const elapsed = now - wait_start;
-                if (elapsed > wait_deadline_ms) {
-                    log.err("acceptor wait deadline exceeded; leaking conn to avoid UAF", &.{
-                        Attr.int("elapsed_ms", @intCast(elapsed)),
-                    });
-                    destroy_conn = false;
-                    // #864 / qa-seed deadlock §6.5: hand the leaked conn
-                    // to the process-wide reaper so it gets reclaimed
-                    // when the acceptor eventually exits, instead of
-                    // having to wait for the QUIC 300s idle timeout.
-                    // We bump the acceptor_ctx refcount by one so the
-                    // reaper holds its own reference; the existing
-                    // `acceptor_ctx.release()` after this defer remains
-                    // unchanged.  Registration failure (e.g., OOM during
-                    // append) is non-fatal: we simply fall back to the
-                    // legacy leak behavior, since the reaper is purely
-                    // additive on top of the safety bail.
-                    if (g_leaked_conn_registry) |reg| {
-                        acceptor_ctx.addRef();
-                        reg.register(gpa, transport, conn, .{
-                            .self = @ptrCast(acceptor_ctx),
-                            .is_done = acceptorCtxIsDone,
-                            .release = acceptorCtxRelease,
-                        }) catch |reg_err| {
-                            // Drop the ref we just added; we never made
-                            // it into the registry, so nothing else will
-                            // release it.
-                            acceptor_ctx.release();
-                            log.warn("failed to register leaked conn for reaping; falling back to QUIC idle timeout", &.{
-                                Attr.string("error", @errorName(reg_err)),
-                            });
-                        };
-                    }
-                    break;
-                }
-                if (elapsed > wait_warn_ms and now - last_warn_ms > 1_000) {
-                    log.warn("acceptor still running after shutdown signal", &.{
-                        Attr.int("elapsed_ms", @intCast(elapsed)),
-                    });
-                    last_warn_ms = now;
-                }
+        // The default lane has ~63 workers (acceptor_pool num_threads=64 minus
+        // 1 reserved for the blocking lane) and a 256-task queue.  With ≤ 16
+        // production conns we never come close to saturating it.  If submit()
+        // does return false on queue-full we fall back to single-stream mode
+        // like the previous error path.
+        if (!acceptor_pool.submit(.{
+            .context = @ptrCast(acceptor_ctx),
+            .callback = runStreamAcceptorLoop,
+        })) {
+            log.warn("Failed to start stream acceptor (queue full), single-stream mode", &.{});
+            // The acceptor's ref will never be released because its task
+            // never starts.  Drop it here so the deferred owner release
+            // brings the refcount to zero and frees the heap struct.
+            acceptor_ctx.release();
+            handleFirstStreamOwner(@ptrCast(first_ctx));
+            return;
+        }
+        first_ctx.acceptor_submitted = true;
+    }
+
+    // ── Phase 3: First stream query loop (bounded detached owner) ──────────
+    //
+    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    if (!env_config.quic_stream_multiplexing_enabled and env_config.quic_cooperative_first_streams_enabled) {
+        if (g_first_stream_scheduler) |scheduler| {
+            scheduler.submit(first_ctx) catch |err| {
+                log.warn("Failed to schedule cooperative first-stream owner, falling back to detached owner", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+            if (first_ctx.cooperative_scheduler != null) {
+                return;
             }
         }
-        acceptor_ctx.release();
     }
-    // 2026-04-28 ROOT-CAUSE FIX: use submit() (default lane, ~63 workers)
-    // not submitBlocking() (blocking lane, ONLY 1 WORKER).  submitBlocking's
-    // name describes the backpressure policy (block if queue full), not the
-    // lane — but its implementation routes to `.lane = .blocking` which has
-    // a single dedicated worker.  With 8 active conns the previous code
-    // serialized all acceptors through that one worker; the first acceptor
-    // (whose conn was still actively reading its first stream) never exited,
-    // and the other 7 acceptor tasks sat in the blocking-lane queue forever
-    // — owners spinning on `done.load()=false` because their acceptor's
-    // `done.store(true)` was waiting in the queue.  Symptom in production:
-    //
-    //   WARN acceptor still running after shutdown signal elapsed_ms=300000+
-    //
-    // The default lane has ~63 workers (acceptor_pool num_threads=64 minus
-    // 1 reserved for the blocking lane) and a 256-task queue.  With ≤ 16
-    // production conns we never come close to saturating it.  If submit()
-    // does return false on queue-full we fall back to single-stream mode
-    // like the previous error path.
-    if (!acceptor_pool.submit(.{
-        .context = @ptrCast(acceptor_ctx),
-        .callback = runStreamAcceptorLoop,
-    })) {
-        log.warn("Failed to start stream acceptor (queue full), single-stream mode", &.{});
-        // The acceptor's ref will never be released because its task
-        // never starts.  Drop it here so the deferred owner release
-        // brings the refcount to zero and frees the heap struct.
-        acceptor_ctx.release();
-        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
-        return;
-    }
-    acceptor_submitted = true;
 
-    // ── Phase 3: First stream query loop (inline) ────────────────────────
-    // The first stream's remaining messages are processed on this thread.
-    // This reuses the existing line_reader that already consumed the HELLO.
-    while (true) {
-        const packet_opt = line_reader.nextMessage() catch |err| {
-            if (isIdleStreamReadError(err)) {
-                break;
-            }
-            if (err == error.WouldBlock) {
-                if (stream.poll_sync) |ps| {
-                    ps.waitForPoll(2 * std.time.ns_per_ms);
-                } else {
-                    {
-                        const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
-                        var rem: std.os.linux.timespec = undefined;
-                        _ = std.os.linux.nanosleep(&req, &rem);
-                    }
+    // REQ-QUIC-HC-011 follow-up: the first stream must leave the connection
+    // admission thread after HELLO, but unbounded per-first-stream detached
+    // threads starve endpoint polling at 512+ fanout. Use the existing global
+    // stream throttle as admission control, detach only while the detached-owner
+    // gate has capacity, and route overflow owners through the shared stream
+    // pool. Extra multiplexed streams still use the shared stream pool.
+    if (g_stream_throttle.acquire(10 * std.time.ns_per_ms)) |_| {
+        first_ctx.stream_throttle_acquired = true;
+        if (g_first_stream_detach_gate.tryAcquire()) {
+            first_ctx.detached_first_stream_acquired = true;
+            const first_arg: *anyopaque = @ptrCast(first_ctx);
+            const first_thread = std.Thread.spawn(
+                .{ .stack_size = first_stream_owner_stack_size },
+                handleFirstStreamOwner,
+                .{first_arg},
+            ) catch |err| {
+                first_ctx.detached_first_stream_acquired = false;
+                g_first_stream_detach_gate.release();
+                log.warn("Failed to spawn first-stream owner, falling back to shared stream pool", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                if (!stream_pool.submit(.{
+                    .context = @ptrCast(first_ctx),
+                    .callback = handleFirstStreamOwner,
+                })) {
+                    log.warn("Failed to submit first-stream owner, running inline", &.{});
+                    handleFirstStreamOwner(@ptrCast(first_ctx));
                 }
-                continue;
+                return;
+            };
+            first_thread.detach();
+        } else {
+            log.debug("Detached first-stream owner limit reached, using shared stream pool", &.{
+                Attr.int("active_detached", @intCast(g_first_stream_detach_gate.count())),
+                Attr.int("max_detached", @intCast(g_first_stream_detach_gate.limit())),
+            });
+            if (!stream_pool.submit(.{
+                .context = @ptrCast(first_ctx),
+                .callback = handleFirstStreamOwner,
+            })) {
+                log.warn("Failed to submit first-stream owner, running inline", &.{});
+                handleFirstStreamOwner(@ptrCast(first_ctx));
             }
-            log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
-            break;
-        };
-
-        if (packet_opt == null) break;
-        var packet = packet_opt.?;
-        defer packet.deinit(gpa);
-
-        const msg = packet.quic orelse {
-            log.err("Received empty ClientPacket", &.{});
-            sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{}) catch return;
-            continue;
-        };
-
-        handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
-            log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
-            continue;
-        };
-
-        conn_state.syncGraphFromState(&state) catch |err| {
-            log.warn("Failed to sync shared graph context", &.{Attr.string("error", @errorName(err))});
-        };
+        }
+    } else |_| {
+        log.warn("Global stream thread limit reached for first stream, falling back to shared stream pool", &.{
+            Attr.int("active_global", @intCast(g_stream_throttle.count())),
+            Attr.int("max_global", @intCast(g_stream_throttle.max)),
+        });
+        if (!stream_pool.submit(.{
+            .context = @ptrCast(first_ctx),
+            .callback = handleFirstStreamOwner,
+        })) {
+            log.warn("Failed to submit first-stream owner, running inline", &.{});
+            handleFirstStreamOwner(@ptrCast(first_ctx));
+        }
     }
-
-    // First stream ended (EOF or error). Close it but keep the connection alive
-    // for any remaining multiplexed streams. The defer stack will:
-    // 1. Wait for active_streams to reach 0 (conn_state defer)
-    // 2. Shut down the acceptor thread (acceptor_shutdown defer)
-    // 3. Destroy the connection (transport.destroyConnection defer)
-    //
-    // Without this, destroyConnection fires immediately when the first stream
-    // closes, killing all multiplexed streams with EOF.
-    stream.close();
-
-    // Keep accepting new streams while existing ones are active.
-    // The acceptor thread handles this, so we just wait here.
-    // active_streams was decremented by the conn_state defer for the first stream.
-    // The conn_state wait loop handles waiting for additional streams.
+    return;
 }
 
 /// Resolve the audit logger for the current query context.
@@ -2887,14 +3770,20 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
     }
     state.authenticated_role = null;
     state.authenticated_auth_version = 0;
+    state.authenticated_auth_validation_epoch = 0;
     state.password_reset_required = false;
+    if (state.fle_user_role) |role| {
+        gpa.free(role);
+        state.fle_user_role = null;
+    }
+    fle_integration.setCurrentUserRole(null);
 }
 
 fn validateSessionAuth(gpa: std.mem.Allocator, state: *ServerState) !SessionAuthStatus {
     if (!user_mgmt.isAuthEnabled()) return .ok;
     const username = state.authenticated_user orelse return .missing;
     if (state.authenticated_auth_version == 0) return .ok;
-    if (try user_mgmt.isSessionAuthCurrent(username, state.authenticated_auth_version)) {
+    if (try user_mgmt.isSessionAuthCurrentCached(username, state.authenticated_auth_version, &state.authenticated_auth_validation_epoch)) {
         return .ok;
     }
     invalidateAuthenticatedSession(gpa, state);
@@ -2996,6 +3885,7 @@ fn handleClientMessage(
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_role = @intFromEnum(user_mgmt.Role.ReadWrite);
                 state.authenticated_auth_version = 0;
+                state.authenticated_auth_validation_epoch = user_mgmt.authInvalidationEpoch();
                 // GAP-0293: Zero plaintext password — federation auth complete, no need to retain
                 state.authenticated_password = null;
                 // GAP-0490: mTLS enforcement for federation connections (opportunistic — log only)
@@ -3041,6 +3931,7 @@ fn handleClientMessage(
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_role = @intFromEnum(auth_result.role);
                 state.authenticated_auth_version = auth_result.auth_version;
+                state.authenticated_auth_validation_epoch = user_mgmt.authInvalidationEpoch();
                 state.password_reset_required = auth_result.password_reset_required;
                 // GAP-0293: Zero plaintext password immediately after successful auth.
                 // Authentication has already completed — no need to retain password in memory.
@@ -3064,6 +3955,10 @@ fn handleClientMessage(
 
             // GAP-0271: Set FLE role from HELLO request with injection validation.
             // Always reset role on new connection to prevent stale role leakage.
+            if (state.fle_user_role) |old_role| {
+                gpa.free(old_role);
+                state.fle_user_role = null;
+            }
             if (hello_req.role) |requested_role| {
                 if (requested_role.len > 0) {
                     // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
@@ -3075,7 +3970,8 @@ fn handleClientMessage(
                         }
                     }
                     if (role_valid) {
-                        fle_integration.setCurrentUserRole(requested_role);
+                        state.fle_user_role = try gpa.dupe(u8, requested_role);
+                        fle_integration.setCurrentUserRole(state.fle_user_role);
                     } else {
                         log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
                         fle_integration.setCurrentUserRole(null);
@@ -3662,7 +4558,11 @@ fn handleClientMessage(
             // response serialization and network send, to avoid holding the global
             // write lock during slow I/O operations.
             // P1: Per-graph locking — queries against different graphs no longer serialize.
-            const needs_store_lock = analysis.kind != .explain;
+            // CANARY: REQ=REQ-QUIC-HC-110; FEATURE="High-Concurrency Store-Free Reads"; ASPECT=QUICLockBypass; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+            // Pure scalar row queries such as `RETURN 1 AS c` do not touch
+            // graph storage, so they should not contend with mutation-heavy
+            // workloads on the graph read/snapshot path.
+            const needs_store_lock = analysis.kind != .explain and !(analysis.kind == .rows and analysis.is_store_free);
             const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
 
             // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
@@ -3695,6 +4595,80 @@ fn handleClientMessage(
             }
 
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+
+            // CANARY: REQ=REQ-QUIC-HC-008; FEATURE="QUIC High-Concurrency Reads"; ASPECT=CountReadSnapshotBypass; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
+            //
+            // Count-only reads already have an executor fast path, but the
+            // handler used to deep-clone a QueryReadSession before the executor
+            // could reach it. Under mixed read/write fan-out that made cheap
+            // `MATCH (n:Label) RETURN count(n)` requests queue behind snapshots
+            // and writers. Execute that shape under a brief shared read lock,
+            // then release the lock before protobuf serialization.
+            if (needs_store_lock and !is_mutation) count_fast_path_blk: {
+                const target = analysis.target orelse break :count_fast_path_blk;
+                if (target.* != .Query) break :count_fast_path_blk;
+
+                const fast_count_tenant: ?[]const u8 = blk: {
+                    if (exec_context.tenant_id) |tid| {
+                        if (!std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) break :blk tid;
+                    }
+                    break :blk null;
+                };
+
+                const count_lock = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
+                var count_lock_held = true;
+                defer if (count_lock_held) graph_store.releaseGraphLock(count_lock);
+
+                const live_store = graph_store.getWritableGlobalStore(gpa);
+                const prev_read_store = graph_store.pushActiveQueryReadStore(live_store);
+                defer graph_store.popActiveQueryReadStore(prev_read_store);
+
+                const prev_ctx = execution.pushActiveContext(&exec_context);
+                defer execution.popActiveContext(prev_ctx);
+
+                if (try execution.countNodesFastPath(gpa, target.Query, query_graph_name, fast_count_tenant)) |fast_result| {
+                    var exec_result = fast_result;
+                    defer exec_result.deinit(gpa);
+
+                    graph_store.releaseGraphLock(count_lock);
+                    count_lock_held = false;
+
+                    for (flags.items) |flag| {
+                        try appendFlagToResult(gpa, &exec_result, flag);
+                    }
+
+                    {
+                        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+                        defer schema_arena.deinit();
+                        const sa = schema_arena.allocator();
+                        const status = try proto_util.buildStatus(sa, "00000", exec_result.flags.items);
+                        const schema_def = try proto_util.buildSchemaDefinition(sa, &exec_result);
+                        const schema_resp = schema.ExecutionResponse{
+                            .status = status,
+                            .payload = .{ .schema = schema_def },
+                        };
+                        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
+                    }
+
+                    {
+                        var page_arena = std.heap.ArenaAllocator.init(gpa);
+                        defer page_arena.deinit();
+                        const pa = page_arena.allocator();
+                        const page = try proto_util.buildDataPage(pa, &exec_result, 0, 1, false, &.{});
+                        const page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
+                        const page_resp = schema.ExecutionResponse{
+                            .status = page_status,
+                            .payload = .{ .page = page },
+                        };
+                        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                    }
+
+                    auditQueryExecution(state, query_text, is_mutation);
+                    syncGraphFromSession(state);
+                    updateTxnStateFromProgram(state, &parse_result.program);
+                    return;
+                }
+            }
 
             // Task 11 (enterprise-ingest-throughput): bulk-ingest fast path.
             // When GEODE_BULK_INGEST is set AND the parsed statement matches
@@ -3729,28 +4703,38 @@ fn handleClientMessage(
                 }
             }
 
-            // Edge merge latency fix (2026-04-29): promote `match_create_edge`
-            // through the bulk fast path when no transaction is active even
-            // if `GEODE_BULK_INGEST=1` was not opt-in.  The regular dispatch
-            // below acquires the per-graph EXCLUSIVE write lock and holds it
-            // for the full MATCH-cartesian + CREATE + WAL-fsync window,
-            // which produced p99 ≥ 1.6 s on simple `MATCH (a:L {k:?}),
-            // (b:L {k:?}) CREATE (a)-[:R {props}]->(b)` even at
-            // concurrency=1 (see `benchmarks/loadtest/preFix_baseline_edge
-            // _create_with_props.json`).  `executeBulkMatchCreateEdge`
-            // resolves endpoints under the SHARED lock and only takes the
-            // EXCLUSIVE lock for the create + property apply (~tens of µs),
-            // routing through the group-commit coordinator when enabled so
-            // 8 concurrent workers no longer head-of-line behind one slow
-            // statement.  Gated on `!state.in_txn` so the undo log still
-            // captures inserts inside `BEGIN ... ROLLBACK` (the bulk path
-            // intentionally skips the undo log; the regression spec
-            // `2pc-rollback-edge-create-undone` covers this boundary).
-            if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled()) {
+            // Default mutation fast paths (2026-05-25): promote simple
+            // no-RETURN scalar CREATEs and match-create-edge statements through
+            // the direct adapter paths when no transaction is active, even if
+            // `GEODE_BULK_INGEST=1` was not opt-in.
+            //
+            // CANARY: REQ=REQ-QUIC-HC-006; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=DefaultSimpleCreateFastPath; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
+            //
+            // The regular dispatch below acquires the per-graph EXCLUSIVE
+            // write lock and holds it across the full executor path. Under
+            // mixed high-concurrency request fan-out, this makes read snapshots
+            // queue behind every simple mutation. The fast paths keep the
+            // exclusive critical section to the adapter apply step and produce
+            // the same no-RETURN wire shape. They remain gated on `!state.in_txn`
+            // because they intentionally skip the undo log; transactional
+            // rollback coverage stays on the regular executor path.
+            if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
+                if (bulk_shape == .simple_node_create) {
+                    try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
+                    return;
+                }
                 if (bulk_shape == .match_create_edge) {
                     if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
                         try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
+                        return;
+                    }
+                    // Spec/detector disagreement — fall through to the
+                    // general executor as the original block does.
+                }
+                if (bulk_shape == .simple_node_merge) {
+                    if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
+                        try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
                     }
                     // Spec/detector disagreement — fall through to the
@@ -4241,38 +5225,53 @@ fn handleClientMessage(
                         }
                     }
 
-                    // Arena allocator for schema definition serialization (Issue #446)
+                    // Send schema plus the first data page in one stream write.
+                    // This avoids a two-packet burst for the common small-result
+                    // path while preserving the existing inline EXECUTE protocol.
                     {
-                        var schema_arena = std.heap.ArenaAllocator.init(gpa);
-                        defer schema_arena.deinit();
-                        const sa = schema_arena.allocator();
-                        const status = try proto_util.buildStatus(sa, "00000", exec_result.flags.items);
-                        const schema_def = try proto_util.buildSchemaDefinition(sa, &exec_result);
+                        var response_arena = std.heap.ArenaAllocator.init(gpa);
+                        defer response_arena.deinit();
+                        const ra = response_arena.allocator();
+
+                        const status = try proto_util.buildStatus(ra, "00000", exec_result.flags.items);
+                        const schema_def = try proto_util.buildSchemaDefinition(ra, &exec_result);
                         const schema_resp = schema.ExecutionResponse{
                             .status = status,
                             .payload = .{ .schema = schema_def },
                         };
-                        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
-                    }
 
-                    // Send ALL result pages inline as EXECUTE responses.
-                    // This avoids the PULL round-trip which is unreliable under
-                    // concurrent load due to a QUIC library stream FIN race.
-                    {
                         const page_size: usize = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
                         var sent_rows: usize = 0;
-                        while (sent_rows < exec_result.rows.len or sent_rows == 0) {
+                        const first_page = try proto_util.buildDataPage(ra, &exec_result, sent_rows, page_size, ordered, order_keys);
+                        sent_rows += first_page.rows.items.len;
+                        const first_page_final = first_page.final;
+                        const page_status = try proto_util.buildStatus(ra, "00000", exec_result.flags.items);
+                        const page_resp = schema.ExecutionResponse{
+                            .status = page_status,
+                            .payload = .{ .page = first_page },
+                        };
+
+                        const batched = [_]schema.QuicServerMessage{
+                            .{ .execute = schema_resp },
+                            .{ .execute = page_resp },
+                        };
+                        try sendQuicMessagesBatched(ra, stream, &batched);
+
+                        // Send any remaining pages inline as EXECUTE responses.
+                        // This avoids the PULL round-trip which is unreliable under
+                        // concurrent load due to a QUIC library stream FIN race.
+                        while (!first_page_final and sent_rows < exec_result.rows.len) {
                             var page_arena = std.heap.ArenaAllocator.init(gpa);
                             defer page_arena.deinit();
                             const pa = page_arena.allocator();
                             const page = try proto_util.buildDataPage(pa, &exec_result, sent_rows, page_size, ordered, order_keys);
                             sent_rows += page.rows.items.len;
-                            const page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
-                            const page_resp = schema.ExecutionResponse{
-                                .status = page_status,
+                            const next_page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
+                            const next_page_resp = schema.ExecutionResponse{
+                                .status = next_page_status,
                                 .payload = .{ .page = page },
                             };
-                            try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                            try sendQuicMessage(pa, stream, .{ .execute = next_page_resp });
                             if (page.final) break;
                         }
                     }
@@ -4908,6 +5907,7 @@ test "SharedConnState registerActiveStream deduplicates requeued stream ids" {
 test "isIdleStreamReadError treats timeout as idle shutdown" {
     try std.testing.expect(isIdleStreamReadError(error.EndOfStream));
     try std.testing.expect(isIdleStreamReadError(error.Timeout));
+    try std.testing.expect(isIdleStreamReadError(error.Closed));
     try std.testing.expect(!isIdleStreamReadError(error.WouldBlock));
 }
 
@@ -4958,6 +5958,71 @@ test "global stream throttle acquire and release are symmetric" {
     g_stream_throttle.release();
     g_stream_throttle.release();
     try std.testing.expectEqual(@as(u32, 0), getGlobalStreamThreadCount());
+}
+
+test "detached first-stream owner gate is configurable and bounded" {
+    setMaxDetachedFirstStreamOwners(2);
+    defer setMaxDetachedFirstStreamOwners(0);
+
+    try std.testing.expectEqual(@as(u32, 2), getMaxDetachedFirstStreamOwners());
+    try std.testing.expectEqual(@as(u32, 0), getDetachedFirstStreamOwnerCount());
+
+    try std.testing.expect(g_first_stream_detach_gate.tryAcquire());
+    try std.testing.expect(g_first_stream_detach_gate.tryAcquire());
+    try std.testing.expectEqual(@as(u32, 2), getDetachedFirstStreamOwnerCount());
+    try std.testing.expect(!g_first_stream_detach_gate.tryAcquire());
+
+    g_first_stream_detach_gate.release();
+    try std.testing.expect(g_first_stream_detach_gate.tryAcquire());
+
+    g_first_stream_detach_gate.release();
+    g_first_stream_detach_gate.release();
+    try std.testing.expectEqual(@as(u32, 0), getDetachedFirstStreamOwnerCount());
+
+    setMaxDetachedFirstStreamOwners(0);
+    try std.testing.expectEqual(default_detached_first_stream_owner_threads, getMaxDetachedFirstStreamOwners());
+}
+
+test "SharedConnState: waitForStreamSlot wakes when active stream releases" {
+    const allocator = std.testing.allocator;
+    var state = SharedConnState{ .allocator = allocator };
+    defer state.deinit();
+
+    _ = state.active_streams.fetchAdd(1, .release);
+
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(s: *SharedConnState) void {
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            s.releaseActiveStream();
+        }
+    }.run, .{&state});
+
+    state.waitForStreamSlot(1, 1 * std.time.ns_per_s);
+    thread.join();
+    try std.testing.expect(state.active_streams.load(.acquire) < 1);
+}
+
+test "SharedConnState: waitForAllStreamsDrained parks until release" {
+    const allocator = std.testing.allocator;
+    var state = SharedConnState{ .allocator = allocator };
+    defer state.deinit();
+
+    _ = state.active_streams.fetchAdd(1, .release);
+
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(s: *SharedConnState) void {
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            s.releaseActiveStream();
+        }
+    }.run, .{&state});
+
+    state.waitForAllStreamsDrained();
+    thread.join();
+    try std.testing.expectEqual(@as(u32, 0), state.active_streams.load(.acquire));
 }
 
 // =============================================================================
@@ -5073,10 +6138,42 @@ test "StreamAcceptorContext: shutdown/done atomics survive owner release" {
     // Acceptor side: read shutdown (should be true), write done.  These
     // accesses MUST NOT crash — the heap struct is still alive.
     try std.testing.expectEqual(true, ctx.shutdown.load(.acquire));
-    ctx.done.store(true, .release);
+    ctx.markDone();
     try std.testing.expectEqual(true, ctx.done.load(.acquire));
+    try std.testing.expect(ctx.done_generation.load(.acquire) > 0);
 
     // Acceptor's release brings refcount to 0 and frees.
+    ctx.release();
+}
+
+test "StreamAcceptorContext: waitUntilDone wakes on markDone" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(c: *StreamAcceptorContext) void {
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            c.markDone();
+        }
+    }.run, .{ctx});
+
+    try std.testing.expect(ctx.waitUntilDone(1 * std.time.ns_per_s));
+    thread.join();
+    ctx.release();
     ctx.release();
 }
 
@@ -5158,8 +6255,8 @@ test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or 
                     break;
                 }
             }
-            // Mirror the real defer order: store done=true, then release.
-            c.done.store(true, .release);
+            // Mirror the real defer order: mark done, then release.
+            c.markDone();
             c.release();
         }
     };

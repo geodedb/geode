@@ -107,6 +107,90 @@ pub fn pollCycleMaxNs(ctx_ptr: *anyopaque) u64 {
     return ctx.transport.getPollCycleMaxNs();
 }
 
+/// Max observed endpoint transport-poll phase latency in nanoseconds.
+pub fn pollTransportMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollTransportMaxNs();
+}
+
+/// Max observed endpoint receive/process phase latency in nanoseconds.
+pub fn pollRecvProcessMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvProcessMaxNs();
+}
+
+/// Max observed short-header datagram processing latency per poll cycle.
+pub fn pollRecvShortHeaderMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortHeaderMaxNs();
+}
+
+pub fn pollRecvShortEndpointMapMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortEndpointMapMaxNs();
+}
+
+pub fn pollRecvShortRxSerialWaitMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortRxSerialWaitMaxNs();
+}
+
+pub fn pollRecvShortConnLockWaitMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortConnLockWaitMaxNs();
+}
+
+pub fn pollRecvShortDecryptMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortDecryptMaxNs();
+}
+
+pub fn pollRecvShortFrameProcessMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortFrameProcessMaxNs();
+}
+
+pub fn pollRecvShortAckSendMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvShortAckSendMaxNs();
+}
+
+/// Max observed Initial datagram processing latency per poll cycle.
+pub fn pollRecvInitialMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvInitialMaxNs();
+}
+
+/// Max observed Handshake datagram processing latency per poll cycle.
+pub fn pollRecvHandshakeMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvHandshakeMaxNs();
+}
+
+/// Max observed fallback datagram processing latency per poll cycle.
+pub fn pollRecvFallbackMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollRecvFallbackMaxNs();
+}
+
+/// Max observed endpoint pending-handshake retry phase latency in nanoseconds.
+pub fn pollPendingHsSendMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollPendingHsSendMaxNs();
+}
+
+/// Max observed endpoint timer-expiry phase latency in nanoseconds.
+pub fn pollTimerProcessMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollTimerProcessMaxNs();
+}
+
+/// Max observed endpoint PTO-dirty recompute phase latency in nanoseconds.
+pub fn pollPtoDirtyMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollPtoDirtyMaxNs();
+}
+
 /// Cumulative count of pollLoop cycles whose `poll(0)` exceeded the 2 ms
 /// handler waitForPoll timeout (#864 §6.6).  Each overrun means at least
 /// one handler missed that cycle's broadcast and re-entered its

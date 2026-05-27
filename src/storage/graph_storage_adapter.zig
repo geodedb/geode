@@ -170,6 +170,20 @@ const NodePropertyExactIndex = struct {
         return null;
     }
 
+    fn copy(self: *NodePropertyExactIndex, allocator: Allocator, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
+        const probe_key = try self.encodeKey(label_id, property_key, value_hash);
+        defer self.allocator.free(probe_key);
+
+        if (self.postings.get(probe_key)) |list| {
+            return try allocator.dupe(u64, list.items);
+        }
+        return try allocator.alloc(u64, 0);
+    }
+
     fn encodeKey(self: *const NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u8 {
         const total_len = 4 + 4 + property_key.len + 8;
         const key = try self.allocator.alloc(u8, total_len);
@@ -493,6 +507,8 @@ fn shouldExposePropertyKey(key: []const u8) bool {
 // ManagedGraph — one engine instance + its label dictionary
 // ============================================================================
 
+const merge_tuple_lock_count: usize = 256;
+
 /// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
 pub const ManagedGraph = struct {
@@ -538,6 +554,15 @@ pub const ManagedGraph = struct {
     /// probes acquire this SHARED for the fast-path lookup;
     /// insert-if-absent takes it EXCLUSIVE.
     merge_prop_index_lock: std.Io.RwLock = std.Io.RwLock.init,
+
+    /// CANARY: REQ=REQ-QUIC-HC-109; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeTupleLocks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
+    ///
+    /// Striped mutexes for multi-property node MERGE. Single-property MERGE
+    /// uses `merge_prop_index_lock`; multi-property MERGE needs to serialize
+    /// only requests for the same property tuple while still allowing shard
+    /// writes for unrelated tuples to proceed under `rwlock` SHARED.
+    merge_tuple_locks: [merge_tuple_lock_count]std.Io.Mutex =
+        [_]std.Io.Mutex{std.Io.Mutex.init} ** merge_tuple_lock_count,
 
     /// Brief-hold mutex covering the other outer-StringHashMap
     /// metadata operations that shard writers touch indirectly
@@ -1433,13 +1458,11 @@ pub const StorageAdapter = struct {
     ///      ops like RESTORE).
     ///   2. Take `shard_locks[shardIndex(reserved_id)]` EXCLUSIVE
     ///      (serialises writes to this shard's state).
-    ///   3. Take `mg.string_indexes_mutex` briefly for the outer
-    ///      StringHashMap operations (graph registration, label
-    ///      index getOrPut).  Held only around the
-    ///      `createNodeWithReservedIdAndGraph` call.
-    ///   4. Write properties via `setNodeProperty` under the shard
-    ///      lock only (the property chain is sharded because the
-    ///      node_id keys into the sharded store).
+    ///   3. Allocate the storage-engine slot from the same shard worker,
+    ///      attach labels and the hidden public-id property in the active
+    ///      shard statement txn, then register the public-id→slot mapping.
+    ///   4. Write properties via `setNodePropertiesBatch` under the shard
+    ///      lock only.
     ///
     /// Called by `ShardedCoordinator.applyShardBatch` in Task 6.
     /// Does NOT open a statement txn on its own — the coordinator
@@ -1489,16 +1512,114 @@ pub const StorageAdapter = struct {
         mg.shard_locks[idx].lockUncancelable(io);
         defer mg.shard_locks[idx].unlock(io);
 
-        mg.string_indexes_mutex.lockUncancelable(io);
-        const create_result = store.createNodeWithReservedIdAndGraph(reserved_id, labels, graph_name);
-        mg.string_indexes_mutex.unlock(io);
-        try create_result;
+        const node_shard = mg.engine.shards[idx];
 
-        // Property writes touch the sharded store only; no further
-        // string-index lock needed (setNodeProperty operates on the
-        // per-node properties map, not any outer StringHashMap).
-        for (props) |kv| {
-            try store.setNodeProperty(reserved_id, kv.key, kv.value);
+        // REQ-QUIC-HC-016: allocate the dense engine slot from the same
+        // shard the coordinator selected for the public id. The previous path
+        // called GraphStore.createNodeWithReservedIdAndGraph(), which
+        // re-entered adapter.createNode() and round-robined a new engine slot
+        // that often belonged to another shard; property writes then missed
+        // the shard-pinned statement txn and committed one-by-one.
+        //
+        // Keep `mg.string_indexes_mutex` out of the page/WAL work below. It
+        // only protects string-keyed metadata maps (label dictionary and
+        // GraphStore indexes), so holding it while doing putNode/putProperty
+        // serializes otherwise-independent shard workers.
+        const slot_id = try node_shard.allocNode();
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
+            shardLocalTxnForNode(s.txn_id, slot_id)
+        else
+            null;
+        const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
+        const own_txn = stmt_local == null;
+        errdefer if (own_txn) {
+            node_shard.abortTxn(local_txn) catch {};
+        };
+
+        var rec = gs.node.NodeRec{
+            .out_head = 0,
+            .in_head = 0,
+            .prop_head = 0,
+            .label_head = 0,
+            .label_count = 0,
+            .flags = 0,
+            ._pad = .{ 0, 0, 0, 0 },
+            .txn_stamp = 1,
+        };
+        try node_shard.putNodeTxn(slot_id, rec, local_txn);
+
+        var label_ids_buf: [16]gs.LabelId = undefined;
+        const label_ids: []gs.LabelId = if (labels.len <= label_ids_buf.len)
+            label_ids_buf[0..labels.len]
+        else
+            try self.allocator.alloc(gs.LabelId, labels.len);
+        defer if (labels.len > label_ids_buf.len) self.allocator.free(label_ids);
+
+        {
+            mg.string_indexes_mutex.lockUncancelable(io);
+            defer mg.string_indexes_mutex.unlock(io);
+            for (labels, 0..) |lbl, i| {
+                label_ids[i] = try mg.label_dict.getOrCreate(lbl);
+            }
+        }
+
+        for (label_ids) |label_id| {
+            try node_shard.addLabelTxn(slot_id, label_id, local_txn);
+        }
+
+        rec = (try node_shard.getNode(slot_id)) orelse return error.NodeNotFound;
+        var id_buf: [16]u8 = undefined;
+        const id_text = std.fmt.bufPrint(&id_buf, "{x:0>16}", .{reserved_id}) catch unreachable;
+        const prop_head = try node_shard.putPropertyTxn(
+            rec.prop_head,
+            graph_store.INTERNAL_NODE_ID_PROPERTY_KEY,
+            .{ .string = id_text },
+            local_txn,
+        );
+        rec.prop_head = prop_head;
+        try node_shard.putNodeTxn(slot_id, rec, local_txn);
+
+        // CANARY: REQ=REQ-QUIC-HC-022; FEATURE="HighConcurrencyMutations"; ASPECT=ShardTxnPropertyFastPath; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
+        //
+        // Property writes touch the already-created node and, because the
+        // slot_id was allocated from `idx`, can stay inside the same
+        // shard-pinned statement txn opened by the coordinator. Do the
+        // storage/index writes directly here instead of routing back through
+        // GraphStore.setNodePropertiesBatch, which would re-enter the adapter
+        // graph lookup mutex and redo shard routing for every bulk CREATE.
+        if (props.len > 0) {
+            for (props) |kv| {
+                const storage_val = try toStorageProperty(self.allocator, kv.value);
+                defer freeTemporaryStorageProperty(self.allocator, storage_val);
+                const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn);
+                rec.prop_head = new_prop_head;
+                for (label_ids) |label_id| {
+                    try addIndexedNodeProperty(mg, label_id, slot_id, kv.key, storage_val);
+                }
+            }
+            try node_shard.putNodeTxn(slot_id, rec, local_txn);
+        }
+
+        {
+            mg.string_indexes_mutex.lockUncancelable(io);
+            defer mg.string_indexes_mutex.unlock(io);
+            try store.createNodeWithReservedIdAndSlotAndGraph(reserved_id, slot_id, labels, graph_name);
+        }
+        if (own_txn) try node_shard.commitTxn(local_txn);
+
+        if (props.len > 0) {
+            var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+            const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+                entries_buf[0..props.len]
+            else
+                try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+            defer if (props.len > entries_buf.len) self.allocator.free(entries);
+
+            for (props, 0..) |kv, i| {
+                entries[i] = .{ .key = kv.key, .value = kv.value };
+            }
+            try store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries);
         }
         return reserved_id;
     }
@@ -1710,6 +1831,79 @@ pub const StorageAdapter = struct {
         }
 
         return reserved_id;
+    }
+
+    /// Multi-property MERGE fast path for no-RETURN node patterns such as:
+    ///
+    ///     MERGE (:HCParallel {worker: 1, seq: 2})
+    ///
+    /// The regular executor holds the whole-graph EXCLUSIVE lock across parse
+    /// environment setup, label scans, create, and property writes. Under high
+    /// parallel mutation fan-out that makes every worker queue on
+    /// `mg.rwlock`. This path instead serializes only matching property tuples,
+    /// probes under shard read locks, then delegates the create branch to the
+    /// shard-aligned bulk insert helper.
+    pub fn bulkMergeNodeWithReservedIdMultiProp(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        reserved_id: u64,
+        label: []const u8,
+        merge_props: []const PropKV,
+        on_create_props: []const PropKV,
+    ) !u64 {
+        if (merge_props.len == 0) return error.InvalidMergePattern;
+
+        const mg = try self.getOrCreateGraph(graph_name);
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        const tuple_lock_idx = mergeTupleLockIndex(label, merge_props);
+        mg.merge_tuple_locks[tuple_lock_idx].lockUncancelable(io);
+        defer mg.merge_tuple_locks[tuple_lock_idx].unlock(io);
+
+        const existing_id = existing_blk: {
+            const _t_start = monoNanosNow();
+            mg.rwlock.lockSharedUncancelable(io);
+            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+            defer mg.rwlock.unlockShared(io);
+            const _hold_start = monoNanosNow();
+            defer {
+                const _hold_ns = monoNanosNow() -| _hold_start;
+                _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+                _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic);
+                const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+                if (_hold_ns > _cur_max) {
+                    mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+                }
+            }
+
+            break :existing_blk try findNodeMatchingMergeProps(self.allocator, mg, store, graph_name, label, merge_props);
+        };
+        if (existing_id) |existing| {
+            return existing;
+        }
+
+        var combined_buf: [64]PropKV = undefined;
+        const combined_len = merge_props.len + on_create_props.len;
+        const combined_props: []PropKV = if (combined_len <= combined_buf.len)
+            combined_buf[0..combined_len]
+        else
+            try self.allocator.alloc(PropKV, combined_len);
+        defer if (combined_len > combined_buf.len) self.allocator.free(combined_props);
+
+        @memcpy(combined_props[0..merge_props.len], merge_props);
+        if (on_create_props.len > 0) {
+            @memcpy(combined_props[merge_props.len..][0..on_create_props.len], on_create_props);
+        }
+
+        const labels_slice = [_][]const u8{label};
+        return try self.bulkInsertNodeWithReservedId(
+            graph_name,
+            reserved_id,
+            &labels_slice,
+            combined_props,
+        );
     }
 
     /// Key + value pair accepted by `bulkInsertNode`.  The caller owns both
@@ -2733,7 +2927,8 @@ pub const StorageAdapter = struct {
         const storage_value = try toStorageProperty(allocator, value);
         defer freeTemporaryStorageProperty(allocator, storage_value);
         const value_hash = try hashStorageProperty(allocator, storage_value);
-        const indexed = mg.exact_node_property_index.get(label_id, property_key, value_hash) orelse return try allocator.alloc(u64, 0);
+        const indexed = try mg.exact_node_property_index.copy(allocator, label_id, property_key, value_hash);
+        defer allocator.free(indexed);
 
         var result = std.ArrayList(u64).empty;
         errdefer result.deinit(allocator);
@@ -4384,6 +4579,178 @@ pub const GraphLockHandle = struct {
     mg: *ManagedGraph,
     hold_start_ns: u64,
 };
+
+fn mergeTupleLockIndex(label: []const u8, props: []const StorageAdapter.PropKV) usize {
+    var h = std.hash.Wyhash.hash(0, label);
+    var count_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &count_buf, @intCast(props.len), .little);
+    h = std.hash.Wyhash.hash(h, &count_buf);
+
+    // Order-independent combine so `{a: 1, b: 2}` and `{b: 2, a: 1}` land on
+    // the same striped tuple mutex.
+    for (props) |kv| {
+        var ph = std.hash.Wyhash.hash(0x9e37_79b9_7f4a_7c15, kv.key);
+        ph = hashPropertyValue(ph, kv.value);
+        h +%= ph *% 0x9e37_79b9_7f4a_7c15;
+    }
+
+    return @intCast(h % merge_tuple_lock_count);
+}
+
+fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {
+    var h = seed;
+    const tag: u8 = switch (value) {
+        .String => 1,
+        .Int => 2,
+        .Float => 3,
+        .Bool => 4,
+        .Null => 5,
+        .ExtValue => 6,
+        .Decimal => 7,
+    };
+    h = std.hash.Wyhash.hash(h, &[_]u8{tag});
+    switch (value) {
+        .String => |s| h = std.hash.Wyhash.hash(h, s),
+        .Int => |i| {
+            var v = i;
+            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&v));
+        },
+        .Float => |f| {
+            var bits: u64 = @bitCast(f);
+            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&bits));
+        },
+        .Bool => |b| h = std.hash.Wyhash.hash(h, if (b) &[_]u8{1} else &[_]u8{0}),
+        .Null => {},
+        .ExtValue => {},
+        .Decimal => |d| {
+            var coeff = d.coeff;
+            var scale = d.scale;
+            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&coeff));
+            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&scale));
+        },
+    }
+    return h;
+}
+
+fn propertyValuesEqual(a: graph_store.PropertyValue, b: graph_store.PropertyValue) bool {
+    return switch (a) {
+        .String => |s| b == .String and std.mem.eql(u8, s, b.String),
+        .Int => |i| b == .Int and i == b.Int,
+        .Float => |f| b == .Float and f == b.Float,
+        .Bool => |v| b == .Bool and v == b.Bool,
+        .Null => b == .Null,
+        .Decimal => |d| b == .Decimal and d.coeff == b.Decimal.coeff and d.scale == b.Decimal.scale,
+        .ExtValue => false,
+    };
+}
+
+fn lockAllShardReads(mg: *ManagedGraph) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    for (&mg.shard_locks) |*sl| sl.lockSharedUncancelable(io);
+}
+
+fn unlockAllShardReads(mg: *ManagedGraph) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var i: usize = sharded_store.SHARD_COUNT;
+    while (i > 0) {
+        i -= 1;
+        mg.shard_locks[i].unlockShared(io);
+    }
+}
+
+fn copySmallestMergePropCandidates(
+    allocator: Allocator,
+    mg: *ManagedGraph,
+    label: []const u8,
+    props: []const StorageAdapter.PropKV,
+) ![]u64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const label_id = blk: {
+        mg.string_indexes_mutex.lockUncancelable(io);
+        defer mg.string_indexes_mutex.unlock(io);
+        break :blk mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
+    };
+
+    var best: ?[]u64 = null;
+    errdefer if (best) |items| allocator.free(items);
+
+    for (props) |kv| {
+        const storage_value = try toStorageProperty(allocator, kv.value);
+        defer freeTemporaryStorageProperty(allocator, storage_value);
+        const value_hash = try hashStorageProperty(allocator, storage_value);
+        _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+        const candidates = try mg.exact_node_property_index.copy(allocator, label_id, kv.key, value_hash);
+
+        if (candidates.len == 0) {
+            if (best) |items| allocator.free(items);
+            return candidates;
+        }
+
+        if (best) |items| {
+            if (candidates.len < items.len) {
+                allocator.free(items);
+                best = candidates;
+            } else {
+                allocator.free(candidates);
+            }
+        } else {
+            best = candidates;
+        }
+    }
+
+    return best orelse try allocator.alloc(u64, 0);
+}
+
+fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, label: []const u8, props: []const StorageAdapter.PropKV) bool {
+    if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
+    var has_label = false;
+    for (node.labels) |actual| {
+        if (std.mem.eql(u8, actual, label)) {
+            has_label = true;
+            break;
+        }
+    }
+    if (!has_label) return false;
+
+    for (props) |kv| {
+        const actual = node.properties.get(kv.key) orelse return false;
+        if (!propertyValuesEqual(actual, kv.value)) return false;
+    }
+    return true;
+}
+
+fn findNodeMatchingMergeProps(
+    allocator: Allocator,
+    mg: *ManagedGraph,
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    label: []const u8,
+    props: []const StorageAdapter.PropKV,
+) !?u64 {
+    // CANARY: REQ=REQ-QUIC-HC-111; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeIndexedProbe; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
+    //
+    // Multi-property MERGE used to scan every node carrying `label` on each
+    // miss. Under fan-out this made unique tuple inserts O(label cardinality).
+    // Start from the smallest exact-property posting instead, then verify the
+    // full tuple under shard read locks to tolerate hash collisions.
+    const candidates = try copySmallestMergePropCandidates(allocator, mg, label, props);
+    defer allocator.free(candidates);
+    const id_map = blk: {
+        mg.string_indexes_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer mg.string_indexes_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        break :blk store.getIdMap(graph_name) orelse return null;
+    };
+
+    lockAllShardReads(mg);
+    defer unlockAllShardReads(mg);
+
+    for (candidates) |slot_id| {
+        const public_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
+        const node = store.nodes.getPtr(public_id) orelse continue;
+        if (nodeMatchesMergeProps(node, graph_name, label, props)) return public_id;
+    }
+    return null;
+}
 
 /// Result of `StorageAdapter.acquireGraphReadLock` — a locked `ManagedGraph`
 /// plus the monotonic-ns timestamp of the acquire so the matching

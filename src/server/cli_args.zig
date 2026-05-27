@@ -170,7 +170,7 @@ pub fn printHelp() void {
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
     std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
-    std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 1000)\n", .{});
+    std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 10000)\n", .{});
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});

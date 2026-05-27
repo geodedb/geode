@@ -150,6 +150,10 @@ pub const SimpleNodeMergeSpec = struct {
     /// The merge value expression (literal or bound parameter).  The
     /// dispatcher must `evalExpr` this at call time.
     merge_value: *const ast.Expr,
+    /// All property predicates from the MERGE node pattern. Single-key MERGE
+    /// keeps using `merge_key` / `merge_value`; multi-property MERGE routes
+    /// through the tuple-locked shard path.
+    merge_props: []const PropExpr,
     /// Flat list of `n.prop = literal_or_param` pairs from the SET clauses.
     /// For `ON CREATE SET` only: applied on create branch only.
     /// For bare `SET` (`apply_on_match = true`): same payload applies on
@@ -240,8 +244,10 @@ pub fn matchEdgeSpec(program: *const ast.Program) ?MatchCreateEdgeSpec {
 ///   * The MERGE graph pattern is a single chain with a single node pattern
 ///     (no relationship hops — multi-node MERGE is out of scope).
 ///   * The node pattern has exactly one label.
-///   * The node pattern has exactly one property filter (the merge key),
-///     whose value is a literal or bound parameter.
+///   * The node pattern has at least one property filter, each a literal
+///     or bound parameter. Single-property MERGE keeps the existing
+///     merge-property-index path; multi-property MERGE uses the
+///     tuple-locked shard path.
 ///   * No RETURN clause.
 ///   * No `ON MATCH SET` clause (fast path is strictly create-or-no-op).
 ///   * `ON CREATE SET` (if any) is a flat list of `n.prop = literal_or_param`
@@ -297,14 +303,17 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
     // Exactly one label (`MERGE (n:User {...})`), no labelless MERGE.
     if (np.labels.len != 1) return null;
 
-    // Exactly one property filter — the merge key.  The Task 12 edge
-    // pattern already handles multi-prop filters via the merge-prop index;
-    // here we only fast-path the single-key shape msft-graph uses for
-    // `{node_id: 'abc-123'}`.
+    // At least one property filter. The first remains the merge key for the
+    // existing single-property path; multi-property MERGE carries the full
+    // predicate list in `merge_props` and is applied by the tuple-locked shard
+    // path in the QUIC handler.
     const props = np.props orelse return null;
-    if (props.len != 1) return null;
+    if (props.len == 0 or props.len > max_merge_props) return null;
+    if (props.len > 1 and m.on_match.len != 0) return null;
+    for (props) |prop| {
+        if (!isScalarPropExpr(prop.value.*)) return null;
+    }
     const merge_prop = props[0];
-    if (!isScalarPropExpr(merge_prop.value.*)) return null;
 
     // MERGE variable name must be set when there's an ON CREATE SET trailer
     // — the SET target has to reference it.  For the no-ON-CREATE case we
@@ -333,6 +342,15 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
         .AllProperties => return null,
     };
 
+    const prop_buf = &t_merge_props_buf;
+    var p_i: usize = 0;
+    while (p_i < props.len) : (p_i += 1) {
+        prop_buf[p_i] = .{
+            .key = props[p_i].key,
+            .value = props[p_i].value,
+        };
+    }
+
     // Populate the thread-local prop list from the set clauses.  Take
     // `*const SetClause` so `&sc.Property.value` yields a stable pointer
     // into the parser arena (the owning ParseResult outlives the dispatcher
@@ -351,14 +369,21 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
         .label = np.labels[0],
         .merge_key = merge_prop.key,
         .merge_value = merge_prop.value,
+        .merge_props = prop_buf[0..props.len],
         .on_create_props = buf[0..n_set],
         .apply_on_match = m.set_is_bare and m.on_match.len > 0,
     };
 }
 
+/// Maximum number of inline MERGE node-pattern properties to fast-path.
+const max_merge_props: usize = 32;
+
 /// Maximum number of `ON CREATE SET n.x = ...` entries we will fast-path.
 /// msft-graph nodes_*.jsonl caps at ~12 props; 32 gives plenty of headroom.
 const max_merge_on_create_props: usize = 32;
+
+// CANARY: REQ=REQ-QUIC-HC-109; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeFastPath; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
+threadlocal var t_merge_props_buf: [max_merge_props]PropExpr = undefined;
 
 /// Thread-local scratch for the PropExpr list returned by
 /// `matchSimpleNodeMergeSpec`.  The detector writes here; the caller

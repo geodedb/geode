@@ -84,3 +84,68 @@ test "N identical MATCH queries produce N-1 hits" {
     try testing.expectEqual(@as(u64, iters - 1), stats.hits);
     try testing.expectEqual(@as(u64, 1), stats.misses);
 }
+
+test "shared_query_optimizer_plan_singleflight" {
+    const worker_count = 32;
+    const allocator = testing.allocator;
+    var opt = query_plan_cache.SharedQueryOptimizer.init(allocator, 64);
+    defer opt.deinit();
+
+    const q = "MATCH (n:Foo {id: $id}) RETURN n";
+    var parsed = try parseFixture(allocator, q);
+    defer parsed.deinit();
+
+    const WorkerCtx = struct {
+        optimizer: *query_plan_cache.SharedQueryOptimizer,
+        query: []const u8,
+        program: *const geode.ast.Program,
+        store_stats: query_plan_cache.StoreStats,
+        ready: *std.atomic.Value(u32),
+        start: *std.atomic.Value(bool),
+        successes: *std.atomic.Value(u32),
+        failures: *std.atomic.Value(u32),
+
+        fn run(ctx: *@This()) void {
+            _ = ctx.ready.fetchAdd(1, .release);
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+
+            var handle = ctx.optimizer.optimizeQuery(ctx.query, ctx.program, ctx.store_stats) catch {
+                _ = ctx.failures.fetchAdd(1, .monotonic);
+                return;
+            };
+            defer handle.release();
+            _ = ctx.successes.fetchAdd(1, .release);
+        }
+    };
+
+    var ready = std.atomic.Value(u32).init(0);
+    var start = std.atomic.Value(bool).init(false);
+    var successes = std.atomic.Value(u32).init(0);
+    var failures = std.atomic.Value(u32).init(0);
+    var ctx = WorkerCtx{
+        .optimizer = &opt,
+        .query = q,
+        .program = &parsed.program,
+        .store_stats = .{ .node_count = 1_000, .edge_count = 0 },
+        .ready = &ready,
+        .start = &start,
+        .successes = &successes,
+        .failures = &failures,
+    };
+
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, WorkerCtx.run, .{&ctx});
+    }
+    while (ready.load(.acquire) < worker_count) std.atomic.spinLoopHint();
+    start.store(true, .release);
+    for (&threads) |thread| thread.join();
+
+    try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
+    try testing.expectEqual(@as(u32, worker_count), successes.load(.acquire));
+
+    const stats = opt.getStats();
+    try testing.expectEqual(@as(u64, 1), stats.misses);
+    try testing.expectEqual(@as(u64, worker_count - 1), stats.hits);
+    try testing.expectEqual(@as(usize, 1), stats.cache_size);
+}

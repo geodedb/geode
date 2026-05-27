@@ -264,8 +264,14 @@ pub const SharedAstCache = struct {
     pub fn getOrParse(self: *SharedAstCache, query_text: []const u8, opts: geode.ParseOptions) !AstParseOutcome {
         const key = hashQuery(query_text, opts);
 
-        // Fast lookup under lock.
+        // CANARY: REQ=REQ-QUIC-HC-104; FEATURE="High-Concurrency Query Cache"; ASPECT=AstMissSingleFlight; STATUS=TESTED; TEST=query_ast_cache_shared_singleflight; OWNER=engine; UPDATED=2026-05-27
+        // A first-burst fan-out of identical queries used to parse outside this
+        // mutex, so every concurrent miss did the same full parse before one
+        // winner inserted the AST. Serialize misses through the shared cache:
+        // one caller populates the entry and waiters immediately hit it.
         self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+
         if (self.cache.getPtr(key)) |cached| {
             if (std.mem.eql(u8, cached.query_text, query_text)) {
                 self.hit_count += 1;
@@ -278,7 +284,6 @@ pub const SharedAstCache = struct {
                     .key = key,
                     .parse_result = cached.parse_result,
                 };
-                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
                 return .{ .Ok = handle };
             }
 
@@ -292,12 +297,8 @@ pub const SharedAstCache = struct {
                 }
             }
         }
-        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-
         self.miss_count += 1;
 
-        // Parse outside the lock to avoid blocking concurrent lookups.
-        //
         // Allocate a stable copy of the query text BEFORE parsing. The Geode lexer
         // uses zero-copy slices into its source buffer (lexeme = src[start..end]),
         // so all AST string references (identifiers, labels, aliases, etc.) point
@@ -328,28 +329,6 @@ pub const SharedAstCache = struct {
                 // Move parse result into heap allocation for stable pointer storage.
                 const pr_ptr = try self.allocator.create(geode.ParseResult);
                 pr_ptr.* = ok;
-
-                // Insert into cache under lock (double-check for races).
-                self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-                defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-
-                if (self.cache.getPtr(key)) |existing| {
-                    if (std.mem.eql(u8, existing.query_text, query_text)) {
-                        // Another thread inserted the same entry; discard ours.
-                        pr_ptr.deinit();
-                        self.allocator.destroy(pr_ptr);
-                        self.allocator.free(query_text_copy);
-                        existing.access_count += 1;
-                        existing.last_accessed = compat_timestamp();
-                        existing.ref_count += 1;
-                        self.lruPromoteUnlocked(key);
-                        return .{ .Ok = AstHandle{
-                            .cache = self,
-                            .key = key,
-                            .parse_result = existing.parse_result,
-                        } };
-                    }
-                }
 
                 if (self.cache.count() >= self.max_size) {
                     self.evictLeastUsedUnlocked();

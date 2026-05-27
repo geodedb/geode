@@ -242,6 +242,7 @@ const SessionStore = struct {
             state.authenticated_role = @intFromEnum(r);
         }
         state.authenticated_auth_version = auth_version;
+        state.authenticated_auth_validation_epoch = user_mgmt.authInvalidationEpoch();
         // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
         state.password_reset_required = pwd_reset_required;
         if (tenant_id) |tenant| {
@@ -395,6 +396,7 @@ fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_s
     }
     state.authenticated_role = null;
     state.authenticated_auth_version = 0;
+    state.authenticated_auth_validation_epoch = 0;
     state.password_reset_required = false;
 }
 
@@ -402,7 +404,7 @@ fn validateSessionAuth(allocator: std.mem.Allocator, state: *server_state.Server
     if (!user_mgmt.isAuthEnabled()) return .ok;
     const username = state.authenticated_user orelse return .missing;
     if (state.authenticated_auth_version == 0) return .ok;
-    if (try user_mgmt.isSessionAuthCurrent(username, state.authenticated_auth_version)) {
+    if (try user_mgmt.isSessionAuthCurrentCached(username, state.authenticated_auth_version, &state.authenticated_auth_validation_epoch)) {
         return .ok;
     }
     invalidateAuthenticatedSession(allocator, state);

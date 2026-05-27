@@ -111,8 +111,12 @@
             // `cross-macos-{x86_64,arm64}` targets). Sunset the patch
             // and bump to b73a804+ once the sibling-pin convergence
             // resolves the diamond.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.20#3a146e4025612bf619e8757fde2063e6209d58d8",
-            .hash = "quic-0.1.20-gBIqUR3vOgDu5nD2ruPr52BecSexNqlHhFVGvA-pRfdY",
+            // 2026-05-27: pin to the post-v0.1.21 upstream commit so the quic
+            // lib includes the high-concurrency route-cache, poll-budget,
+            // accepted-queue, diagnostic gating, Zig 0.16 tool fixes, and the
+            // aligned tls/thread_pool graph used by Geode.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#a7bd4152714ae1318c681b7529dcd39ef64cc722",
+            .hash = "quic-0.1.21-gBIqUZAkPAD1uL57se7y-IjWdW3yRLrY1s9ELfeWy3Hx",
         },
 
         // =======================================================================
@@ -183,8 +187,10 @@
             // triggered by newer quic/grpc_zig/mcp/etc. that pull a different
             // thread_pool version transitively; those deps remain pinned. If
             // bumping those deps in future, verify no overlapping module paths.
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#v0.2.4",
-            .hash = "thread_pool-0.2.4-11B1BsqSdgD2ZmPGiEwbjSR30K8xwBlWsiLt2NKWqpUl",
+            // 2026-05-27: pin to 39528a3 for the WaitGroup completion-broadcast
+            // lifetime fix used by Geode's QUIC bounded parallel facade.
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#39528a3e92212efab8ed5840bc20e619a419c0f5",
+            .hash = "thread_pool-0.2.4-11B1BnyUdgCUNlqgBwHNvE4plLwP1s1MAyCjODPafrpo",
         },
 
         // =======================================================================
@@ -207,8 +213,10 @@
         // Updated 2026-02-11: concurrent connections, HPACK Huffman, TLS errdefer
         // GAP-0443: Use git+https URL with full commit hash for supply chain auditability
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#v0.1.7",
-            .hash = "grpc_zig-0.1.7-7FnvpMzoBACCZPkjD_o2IvAL52HIQBKqBK0rYUf_coVo",
+            // Keep aligned with the lazy otel v0.1.5 dependency graph until
+            // the whole telemetry stack is repinned together.
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#v0.1.5",
+            .hash = "grpc_zig-0.1.5-7FnvpFXnBAAk9m2q8L2cl-TXYoPQjrFn5SGbwCAOvB3C",
         },
         .geode_client_zig = .{
             // 2026-05-01: bumped to d1af792 — picks up the matching
@@ -220,8 +228,10 @@
             // pin at 49f59f7 (NoHandshakeKeys retry fix). Without
             // this both quic versions appear in the build graph and
             // the Phase 4.5 drain wouldn't engage on client paths.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.9#bf29dbb75f95269e62c7546ea2cc4e8a51326d6e",
-            .hash = "geode_client_zig-0.2.9-8ysbV8ZaCQBRt_LyHSkDintzz1QOoJF8A8XJsbCJFZNj",
+            // 2026-05-27: bumped to f4a0954 so the client library shares
+            // Geode's quic/thread_pool high-concurrency dependency graph.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#f4a0954a6a545443d4eadeeb52244fe6d671144e",
+            .hash = "geode_client_zig-0.2.9-8ysbV0hZCQAwHlEPN5wCjQlHvTHYOo1IZLOE356Y29lb",
         },
 
         // =======================================================================

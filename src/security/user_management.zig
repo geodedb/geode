@@ -280,12 +280,43 @@ const AuthSnapshot = struct {
     auth_version: u64,
 };
 
+const AuthFlightKey = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+
+const AuthFlightResult = struct {
+    ok: bool = false,
+    result: AuthResult = .{
+        .role = .ReadOnly,
+        .password_reset_required = false,
+        .auth_version = 0,
+    },
+};
+
+const AuthFlight = struct {
+    cv: std.Io.Condition = std.Io.Condition.init,
+    refs: usize = 1,
+    done: bool = false,
+    result: AuthFlightResult = .{},
+};
+
+const AuthFlightStart = union(enum) {
+    owner: *AuthFlight,
+    waited: AuthResult,
+};
+
 /// Global user store - LRU cache backed by optional persistent resolver.
 var user_store_mutex = std.Io.Mutex.init;
 var user_store: ?UserCache = null;
 var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+// CANARY: REQ=REQ-QUIC-HC-007; FEATURE="SessionAuthEpoch"; ASPECT=HotPathValidation; STATUS=TESTED; TEST=isSessionAuthCurrentCached_skips_persistent_lookup_until_epoch_changes; OWNER=security; UPDATED=2026-05-25
+/// Monotonic process-local epoch for auth mutations that can invalidate live
+/// sessions.  QUIC sessions cache the epoch observed at HELLO so steady-state
+/// request validation avoids re-entering the persistent auth graph.
+var auth_invalidation_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
 var persistent_resolver: ?PersistentUserResolver = null;
 var persistent_writer: ?PersistentUserWriter = null;
+var auth_flight_mutex = std.Io.Mutex.init;
+var auth_flights: ?std.AutoHashMap(AuthFlightKey, *AuthFlight) = null;
+var auth_flight_lane: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
 const default_auth_cache_entries: usize = 256;
 
@@ -315,12 +346,14 @@ pub fn setPersistentUserResolver(resolver: ?PersistentUserResolver) void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     persistent_resolver = resolver;
+    bumpAuthInvalidationEpoch();
 }
 
 pub fn setPersistentUserWriter(w: ?PersistentUserWriter) void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     persistent_writer = w;
+    bumpAuthInvalidationEpoch();
 }
 
 pub fn setCacheCapacityForTesting(max_entries: usize) !void {
@@ -353,6 +386,31 @@ pub fn deinitUserStore() void {
     }
     persistent_resolver = null;
     persistent_writer = null;
+    auth_invalidation_epoch.store(1, .release);
+    auth_flight_lane.store(0, .release);
+
+    auth_flight_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    if (auth_flights) |*flights| {
+        var it = flights.iterator();
+        while (it.next()) |entry| {
+            std.heap.c_allocator.destroy(entry.value_ptr.*);
+        }
+        flights.deinit();
+        auth_flights = null;
+    }
+    auth_flight_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+}
+
+pub fn authInvalidationEpoch() u64 {
+    return auth_invalidation_epoch.load(.acquire);
+}
+
+pub fn notePersistentAuthMutation() void {
+    bumpAuthInvalidationEpoch();
+}
+
+fn bumpAuthInvalidationEpoch() void {
+    _ = auth_invalidation_epoch.fetchAdd(1, .acq_rel);
 }
 
 /// Hash password using the canonical Argon2id implementation with OWASP parameters.
@@ -371,6 +429,80 @@ pub fn verifyPassword(password: []const u8, stored_hash: []const u8) bool {
     // This avoids untracked page allocator usage in production runtime paths.
     const allocator = std.heap.c_allocator;
     return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch false;
+}
+
+// CANARY: REQ=REQ-QUIC-HC-068; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthSingleFlight; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=security; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-091; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthSingleFlightLaneCollapse; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=security; UPDATED=2026-05-27
+fn authFlightLane() u64 {
+    // Identical username/password/hash/auth-version checks should share one
+    // in-flight Argon2 verification. Sharding that key into multiple lanes
+    // recreates verification waves during 1000-connection HELLO fan-out.
+    return 0;
+}
+
+fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []const u8, auth_version: u64, lane: u64) AuthFlightKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(username);
+    hasher.update(&[_]u8{0});
+    hasher.update(password);
+    hasher.update(&[_]u8{0});
+    hasher.update(stored_hash);
+    const version_bytes = std.mem.toBytes(auth_version);
+    hasher.update(&version_bytes);
+    const lane_bytes = std.mem.toBytes(lane);
+    hasher.update(&lane_bytes);
+    var out: AuthFlightKey = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+fn beginAuthFlight(key: AuthFlightKey) !AuthFlightStart {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    auth_flight_mutex.lockUncancelable(io);
+    defer auth_flight_mutex.unlock(io);
+
+    if (auth_flights == null) {
+        auth_flights = std.AutoHashMap(AuthFlightKey, *AuthFlight).init(std.heap.c_allocator);
+    }
+
+    if (auth_flights.?.get(key)) |flight| {
+        flight.refs += 1;
+        while (!flight.done) {
+            flight.cv.waitUncancelable(io, &auth_flight_mutex);
+        }
+        const result = flight.result;
+        flight.refs -= 1;
+        if (flight.refs == 0) {
+            _ = auth_flights.?.remove(key);
+            std.heap.c_allocator.destroy(flight);
+        }
+        if (!result.ok) return error.Unauthenticated;
+        return .{ .waited = result.result };
+    }
+
+    const flight = try std.heap.c_allocator.create(AuthFlight);
+    errdefer std.heap.c_allocator.destroy(flight);
+    flight.* = .{};
+    try auth_flights.?.put(key, flight);
+    return .{ .owner = flight };
+}
+
+fn finishAuthFlight(key: AuthFlightKey, flight: *AuthFlight, result: AuthFlightResult) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    auth_flight_mutex.lockUncancelable(io);
+    flight.result = result;
+    flight.done = true;
+    flight.refs -= 1;
+    const destroy_now = flight.refs == 0;
+    if (destroy_now) {
+        _ = auth_flights.?.remove(key);
+    }
+    flight.cv.broadcast(io);
+    auth_flight_mutex.unlock(io);
+
+    if (destroy_now) {
+        std.heap.c_allocator.destroy(flight);
+    }
 }
 
 /// Create a new user
@@ -407,6 +539,7 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
     };
 
     const inserted = try store.putOrUpdate(user);
+    bumpAuthInvalidationEpoch();
     if (persistent_writer) |w| {
         if (w.create_fn) |f| {
             f(w.ctx, username, email, inserted.user.password_hash, role) catch |err| {
@@ -447,6 +580,7 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
     };
 
     const inserted2 = try store.putOrUpdate(user);
+    bumpAuthInvalidationEpoch();
     if (persistent_writer) |w| {
         if (w.create_fn) |f| {
             f(w.ctx, username, email, inserted2.user.password_hash, role) catch |err| {
@@ -477,22 +611,32 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     const user_data = maybe_user_data.?;
     defer std.heap.c_allocator.free(user_data.password_hash);
 
-    // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
-    if (!user_data.active) {
-        // Same timing-defense rationale: an inactive user should look the
-        // same as an active user with the wrong password.
-        _ = verifyPassword(password, user_data.password_hash);
-        return error.Unauthenticated;
-    }
-    if (!verifyPassword(password, user_data.password_hash)) {
-        return error.Unauthenticated;
-    }
+    const flight_key = authFlightKey(username, password, user_data.password_hash, user_data.auth_version, authFlightLane());
+    switch (try beginAuthFlight(flight_key)) {
+        .waited => |result| return result,
+        .owner => |flight| {
+            // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
+            if (!user_data.active) {
+                // Same timing-defense rationale: an inactive user should look the
+                // same as an active user with the wrong password.
+                _ = verifyPassword(password, user_data.password_hash);
+                finishAuthFlight(flight_key, flight, .{ .ok = false });
+                return error.Unauthenticated;
+            }
+            if (!verifyPassword(password, user_data.password_hash)) {
+                finishAuthFlight(flight_key, flight, .{ .ok = false });
+                return error.Unauthenticated;
+            }
 
-    return AuthResult{
-        .role = user_data.role,
-        .password_reset_required = user_data.password_reset_required,
-        .auth_version = user_data.auth_version,
-    };
+            const result = AuthResult{
+                .role = user_data.role,
+                .password_reset_required = user_data.password_reset_required,
+                .auth_version = user_data.auth_version,
+            };
+            finishAuthFlight(flight_key, flight, .{ .ok = true, .result = result });
+            return result;
+        },
+    }
 }
 
 // syncFromAuthStateFile removed — CLI and server both use graph store backend now.
@@ -529,6 +673,7 @@ pub fn deleteUser(username: []const u8) !void {
 
     if (user_store == null) return error.Unauthenticated;
     if (!user_store.?.remove(username)) return error.Unauthenticated;
+    bumpAuthInvalidationEpoch();
 
     if (persistent_writer) |w| {
         if (w.delete_fn) |f| {
@@ -578,6 +723,7 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
     user_ptr.user.password_hash = try hashPassword(store_allocator, new_password);
     user_ptr.user.password_reset_required = false;
     user_ptr.user.auth_version += 1;
+    bumpAuthInvalidationEpoch();
 
     if (persistent_writer) |w| {
         if (w.update_password_fn) |f| {
@@ -606,6 +752,7 @@ pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role
     if (user_ptr.user.role == role) return; // no-op, no version bump
     user_ptr.user.role = role;
     user_ptr.user.auth_version += 1;
+    bumpAuthInvalidationEpoch();
 
     if (persistent_writer) |w| {
         if (w.set_role_fn) |f| {
@@ -632,6 +779,7 @@ pub fn setUserActive(allocator: std.mem.Allocator, username: []const u8, active:
     if (user_ptr.user.active == active) return; // no-op
     user_ptr.user.active = active;
     user_ptr.user.auth_version += 1;
+    bumpAuthInvalidationEpoch();
 
     if (persistent_writer) |w| {
         if (w.set_active_fn) |f| {
@@ -646,7 +794,9 @@ pub fn invalidateCachedUser(username: []const u8) void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (user_store) |*store| {
-        _ = store.remove(username);
+        if (store.remove(username)) {
+            bumpAuthInvalidationEpoch();
+        }
     }
 }
 
@@ -748,6 +898,13 @@ fn resolvePersistentAuthVersion(username: []const u8) !?u64 {
     return null;
 }
 
+fn persistentAuthVersionResolverEnabled() bool {
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (persistent_resolver) |r| return r.auth_version_fn != null;
+    return false;
+}
+
 fn loadAllUsersFromResolver() !void {
     const resolver = blk: {
         user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -838,6 +995,46 @@ pub fn isSessionAuthCurrent(username: []const u8, session_auth_version: u64) !bo
     return current_version == session_auth_version;
 }
 
+fn cachedAuthVersion(username: []const u8) ?u64 {
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (user_store == null) return null;
+    const cached = user_store.?.entries.get(username) orelse return null;
+    return cached.user.auth_version;
+}
+
+pub fn isSessionAuthCurrentCached(username: []const u8, session_auth_version: u64, observed_epoch: *u64) !bool {
+    if (session_auth_version == 0) return true;
+
+    const current_epoch = authInvalidationEpoch();
+    if (observed_epoch.* == current_epoch) return true;
+
+    // Local user-management mutations update the in-memory auth_version before
+    // their persistent write-through completes, so check the cache first and
+    // fail closed for this user's stale sessions without contending on storage.
+    if (cachedAuthVersion(username)) |cached_version| {
+        if (cached_version != session_auth_version) return false;
+    }
+
+    if (try resolvePersistentAuthVersion(username)) |persistent_version| {
+        if (persistent_version != session_auth_version) return false;
+        observed_epoch.* = authInvalidationEpoch();
+        return true;
+    }
+
+    if (!try ensureUserCached(username)) return false;
+    const cached_version = cachedAuthVersion(username) orelse return false;
+    if (cached_version != session_auth_version) return false;
+
+    // If a persistent auth-version resolver exists but could not return a
+    // version, preserve the pre-existing cache fallback for this request while
+    // leaving observed_epoch stale so a later request retries the graph check.
+    if (!persistentAuthVersionResolverEnabled()) {
+        observed_epoch.* = authInvalidationEpoch();
+    }
+    return true;
+}
+
 fn getAuthSnapshot(username: []const u8) !?AuthSnapshot {
     if (!try refreshCachedUserIfStale(username)) return null;
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -880,6 +1077,7 @@ const TestResolverState = struct {
     users: []const TestUserDef,
     lookup_calls: usize = 0,
     list_calls: usize = 0,
+    auth_version_calls: usize = 0,
     has_users: bool = true,
 
     fn lookup(ctx: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?User {
@@ -940,6 +1138,7 @@ const TestResolverState = struct {
 
     fn authVersion(ctx: ?*anyopaque, username: []const u8) anyerror!?u64 {
         const self: *TestResolverState = @ptrCast(@alignCast(ctx orelse return null));
+        self.auth_version_calls += 1;
         for (self.users) |entry| {
             if (std.mem.eql(u8, entry.username, username)) {
                 return entry.auth_version;
@@ -1004,6 +1203,70 @@ test "isSessionAuthCurrent detects persistent auth version bump" {
 
     users[0].auth_version = 2;
     try testing.expect(!(try isSessionAuthCurrent("alice", auth.auth_version)));
+}
+
+test "isSessionAuthCurrentCached_skips_persistent_lookup_until_epoch_changes" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var users = [_]TestUserDef{
+        .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .ReadWrite, .auth_version = 1 },
+    };
+    var state = TestResolverState{
+        .users = users[0..],
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    const auth = try authenticate("alice", "Password1!");
+    var observed_epoch = authInvalidationEpoch();
+    const baseline_version_lookups = state.auth_version_calls;
+
+    try testing.expect(try isSessionAuthCurrentCached("alice", auth.auth_version, &observed_epoch));
+    try testing.expect(try isSessionAuthCurrentCached("alice", auth.auth_version, &observed_epoch));
+    try testing.expectEqual(baseline_version_lookups, state.auth_version_calls);
+
+    notePersistentAuthMutation();
+    try testing.expect(try isSessionAuthCurrentCached("alice", auth.auth_version, &observed_epoch));
+    try testing.expect(state.auth_version_calls > baseline_version_lookups);
+}
+
+test "isSessionAuthCurrentCached_rejects_local_auth_version_bump_without_graph_lookup" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var users = [_]TestUserDef{
+        .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .ReadWrite, .auth_version = 1 },
+    };
+    var state = TestResolverState{
+        .users = users[0..],
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    const auth = try authenticate("alice", "Password1!");
+    var observed_epoch = authInvalidationEpoch();
+    const baseline_version_lookups = state.auth_version_calls;
+
+    try assignRole(testing.allocator, "alice", .Admin);
+    try testing.expect(!(try isSessionAuthCurrentCached("alice", auth.auth_version, &observed_epoch)));
+    try testing.expectEqual(baseline_version_lookups, state.auth_version_calls);
 }
 
 test "authenticate refreshes cached role after persistent auth version bump" {

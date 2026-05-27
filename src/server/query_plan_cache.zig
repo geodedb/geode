@@ -485,8 +485,15 @@ pub const SharedQueryOptimizer = struct {
         const key = hashQueryText(query_text);
         const current_epoch = self.schema_epoch;
 
-        // Fast path: check cache under lock
+        // CANARY: REQ=REQ-QUIC-HC-105; FEATURE="High-Concurrency Query Cache"; ASPECT=PlanMissSingleFlight; STATUS=TESTED; TEST=shared_query_optimizer_plan_singleflight; OWNER=engine; UPDATED=2026-05-27
+        // Keep plan generation inside the shared optimizer mutex for cache
+        // misses. This deliberately trades different-query miss parallelism for
+        // same-query single-flight behavior, which is the high-concurrency QUIC
+        // hot path: hundreds of connections frequently release the same query
+        // at once after authentication.
         self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+
         if (self.plan_cache.getPtr(key)) |cached| {
             if (std.mem.eql(u8, cached.query_text, query_text) and
                 cached.schema_epoch >= current_epoch)
@@ -501,7 +508,6 @@ pub const SharedQueryOptimizer = struct {
                     .key = key,
                     .plan = &cached.plan,
                 };
-                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
                 return handle;
             }
 
@@ -515,32 +521,8 @@ pub const SharedQueryOptimizer = struct {
             }
         }
         self.miss_count += 1;
-        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        // Generate plan outside the lock to avoid blocking concurrent lookups
         const plan = try generateRealPlan(self.allocator, &self.cost_model, program, stats, current_epoch);
-
-        // Insert into cache under lock (double-check for races)
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        if (self.plan_cache.getPtr(key)) |existing| {
-            if (std.mem.eql(u8, existing.query_text, query_text) and
-                existing.schema_epoch >= current_epoch)
-            {
-                // Another thread inserted; discard ours, use theirs
-                self.allocator.free(plan.operators);
-                existing.access_count += 1;
-                existing.last_accessed = compat_timestamp();
-                existing.ref_count += 1;
-                self.lruPromoteUnlocked(key);
-                return SharedPlanHandle{
-                    .cache = self,
-                    .key = key,
-                    .plan = &existing.plan,
-                };
-            }
-        }
 
         if (self.plan_cache.count() >= self.max_size) {
             self.evictLeastUsedUnlocked();

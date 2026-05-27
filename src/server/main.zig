@@ -35,12 +35,43 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 
+fn monoNs() u64 {
+    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        if (rc != 0) return 0;
+    }
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
+}
+
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.
 fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
     const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
     defer allocator.free(name_z);
     const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
     return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+fn envUsize(allocator: std.mem.Allocator, name: []const u8, default_value: usize, min_value: usize, max_value: usize) usize {
+    const raw = getEnvVarOwned(allocator, name) catch return default_value;
+    defer allocator.free(raw);
+    if (raw.len == 0) return default_value;
+    const parsed = std.fmt.parseUnsigned(usize, raw, 10) catch return default_value;
+    return @min(@max(parsed, min_value), max_value);
+}
+
+fn envBool(allocator: std.mem.Allocator, name: []const u8, default_value: bool) bool {
+    const raw = getEnvVarOwned(allocator, name) catch return default_value;
+    defer allocator.free(raw);
+    if (raw.len == 0) return default_value;
+    if (std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes") or std.mem.eql(u8, raw, "on")) return true;
+    if (std.mem.eql(u8, raw, "0") or std.mem.eql(u8, raw, "false") or std.mem.eql(u8, raw, "no") or std.mem.eql(u8, raw, "off")) return false;
+    return default_value;
 }
 
 const builtin = @import("builtin");
@@ -95,6 +126,7 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 const quic_metrics = @import("quic_connection_metrics.zig");
 const leaked_conn_reaper = @import("leaked_conn_reaper.zig");
 const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
+const quic_response_metrics = @import("quic_response_metrics");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
@@ -111,6 +143,38 @@ const lsp_transport_mod = @import("../cli/lsp/transport.zig");
 // LSP AuthProvider→Verifier adapter (Task 28 follow-up).
 const lsp_auth_mod = @import("../cli/lsp/auth.zig");
 const authn_mod = geode.security.authn;
+
+// CANARY: REQ=REQ-QUIC-HC-009; FEATURE="High-Concurrency Allocator"; ASPECT=ServerAllocator; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+//
+// Debug builds keep DebugAllocator leak detection. Optimized server builds use
+// the SMP allocator so high-concurrency request parsing/protobuf work does not
+// serialize on debug-allocation bookkeeping.
+const ServerAllocator = if (builtin.mode == .Debug)
+    std.heap.DebugAllocator(.{})
+else
+    struct {
+        pub fn allocator(_: *@This()) std.mem.Allocator {
+            return std.heap.smp_allocator;
+        }
+    };
+
+// CANARY: REQ=REQ-QUIC-HC-018; FEATURE="QUIC High-Concurrency Worker Fanout"; ASPECT=StreamPoolSizing; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
+//
+// Stream handlers are long-lived per-client query loops. A fixed, non-tunable
+// 64-worker pool serialized 128+ client fan-out even after connection
+// admission became detached. Keep the startup-safe default unchanged and expose
+// env overrides for benchmark/production high-fanout tuning.
+const default_quic_stream_worker_count = 64;
+const default_quic_stream_queue_capacity = 4096;
+const default_quic_acceptor_worker_count = 64;
+const default_quic_acceptor_queue_capacity = 4096;
+const default_quic_connection_worker_count = 64;
+const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
+const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
+const default_quic_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
+const quic_connection_queue_capacity = 1024;
+const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 1024;
+const quic_connection_admission_stack_size = 1024 * 1024;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to
 // authenticate `initialize` bearer / session tokens.  `null` until the
@@ -233,7 +297,69 @@ const ConnectionContext = struct {
     // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
     stream_pool: *thread_pool.ThreadPool,
     acceptor_pool: *thread_pool.ThreadPool,
+    admission_gate: ?*ConnectionAdmissionGate = null,
 };
+
+// CANARY: REQ=REQ-QUIC-HC-012; FEATURE="DetachedConnectionAdmission"; ASPECT=HelloFanout; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+//
+// The external thread_pool dependency is intentionally capped at 64 workers.
+// That is acceptable for long-lived stream loops, but it becomes a HELLO
+// admission ceiling when hundreds of clients connect at once. These detached
+// admission threads are deliberately short-lived: handleQuicConnection returns
+// after HELLO and first-stream handoff, while query loops remain on stream_pool.
+const ConnectionAdmissionGate = struct {
+    active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    max: std.atomic.Value(u32) = std.atomic.Value(u32).init(default_quic_connection_admission_threads),
+
+    fn configure(self: *@This(), max_threads: u32) void {
+        self.max.store(@max(max_threads, 1), .release);
+    }
+
+    fn tryAcquire(self: *@This()) bool {
+        const max_threads = self.max.load(.acquire);
+        var observed = self.active.load(.acquire);
+        while (observed < max_threads) {
+            if (self.active.cmpxchgWeak(observed, observed + 1, .acq_rel, .acquire)) |next| {
+                observed = next;
+            } else {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn release(self: *@This()) void {
+        const prev = self.active.fetchSub(1, .acq_rel);
+        if (prev <= 1) {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            io.futexWake(u32, &self.active.raw, 1);
+        }
+    }
+
+    fn waitForZero(self: *@This(), timeout_ns: u64) bool {
+        const start_ns = monoNs();
+        var remaining_ns = timeout_ns;
+        while (self.active.load(.acquire) != 0) {
+            if (remaining_ns == 0) return false;
+            const observed = self.active.load(.acquire);
+            if (observed == 0) return true;
+            const timeout: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(remaining_ns)),
+                .clock = .awake,
+            } };
+            const io = std.Io.Threaded.global_single_threaded.io();
+            io.futexWaitTimeout(u32, &self.active.raw, observed, timeout) catch |err| switch (err) {
+                error.Canceled => {},
+            };
+            const elapsed_ns = monoNs() -| start_ns;
+            if (elapsed_ns >= timeout_ns) return self.active.load(.acquire) == 0;
+            remaining_ns = timeout_ns - elapsed_ns;
+        }
+        return true;
+    }
+};
+
+var g_connection_admission_gate = ConnectionAdmissionGate{};
 
 const PollLoopContext = struct {
     transport: *quic_transport.QuicTransport,
@@ -243,6 +369,10 @@ const PollLoopContext = struct {
 // GAP-0202: Callback wrapper for thread pool execution
 fn handleConnectionAsync(context: *anyopaque) void {
     const ctx: *ConnectionContext = @ptrCast(@alignCast(context));
+    defer {
+        if (ctx.admission_gate) |gate| gate.release();
+        ctx.allocator.destroy(ctx);
+    }
     quic_connection_handler.handleQuicConnection(
         ctx.allocator,
         ctx.transport,
@@ -264,8 +394,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
             Attr.string("error", @errorName(err)),
         });
     };
-    // Free the context after handling
-    ctx.allocator.destroy(ctx);
 }
 
 fn runGrpcServerTask(context: *anyopaque) void {
@@ -656,13 +784,13 @@ pub fn main() !void {
             .{ fd_raise.soft_before, fd_raise.soft_after, fd_raise.hard },
         );
     }
-    // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
-    var gpa_instance = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_instance.deinit();
+    var gpa_instance = ServerAllocator{};
+    defer {
+        if (builtin.mode == .Debug) _ = gpa_instance.deinit();
+    }
     // The server dispatches transport work on multiple threads. Wrap the
     // process allocator so request parsing/execution can safely allocate
     // concurrently without corrupting heap state.
-    // Zig 0.16: ThreadSafeAllocator removed; DebugAllocator is already thread-safe.
     const gpa = gpa_instance.allocator();
     // The global catalog singleton is created lazily on the first connection
     // via ensureCatalogInstance (execution.zig). Without this defer, its
@@ -1109,9 +1237,17 @@ pub fn main() !void {
             .key_path = key_path,
             .idle_timeout_ms = config.idle_timeout_ms,
         };
-        if (config.max_connections > 0) {
-            quic_init_cfg.max_connections = config.max_connections;
-        }
+        // CANARY: REQ=REQ-QUIC-HC-021; FEATURE="HighFanoutConnectionLimit"; ASPECT=ServerEnv; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        quic_init_cfg.max_connections = if (config.max_connections > 0)
+            config.max_connections
+        else
+            envUsize(
+                gpa,
+                "GEODE_QUIC_MAX_CONNECTIONS",
+                quic_init_cfg.max_connections,
+                1,
+                1_000_000,
+            );
         var transport = try quic_transport.QuicTransport.init(gpa, quic_init_cfg);
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
         // vendor teardown crashes; enable passive teardown when
@@ -1408,13 +1544,89 @@ pub fn main() !void {
             graph_store.deinitGlobalStore();
         }
 
+        // #540: Spawn a dedicated poll thread to continuously process incoming
+        // UDP datagrams. This decouples packet delivery from the accept loop,
+        // eliminating the c=8+ contention bottleneck where handler threads starve
+        // waiting for data that only arrives when the main thread calls poll().
+        //
+        // CANARY: REQ=REQ-QUIC-HC-004; FEATURE="QUIC High-Concurrency Shutdown"; ASPECT=PollLoopLifetime; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+        // Register this defer before the connection/stream pools below so Zig's
+        // LIFO teardown drains handlers while the poll thread is still alive.
+        // Handlers parked in PollSync.waitForPoll need the producer to keep
+        // delivering FIN/CONNECTION_CLOSE during SIGTERM shutdown.
+        var poll_shutdown = std.atomic.Value(bool).init(false);
+        // CANARY: REQ=REQ-QUIC-HC-053; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiPollWorkers; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        //
+        // Release builds use a small poll-worker set so high fan-out request
+        // bursts do not stall behind one endpoint poll loop. Debug keeps a
+        // single worker to make local traces deterministic.
+        const quic_poll_worker_count = envUsize(
+            gpa,
+            "GEODE_QUIC_POLL_WORKERS",
+            default_quic_poll_worker_count,
+            1,
+            64,
+        );
+        const poll_contexts = gpa.alloc(PollLoopContext, quic_poll_worker_count) catch |err| {
+            log.err("Failed to allocate poll loop contexts", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+        defer gpa.free(poll_contexts);
+        const poll_pool = thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = quic_poll_worker_count,
+            .queue_capacity = @max(quic_poll_worker_count * 2, 4),
+            .blocking_workers = 0,
+            // 2026-04-27: same shutdown-budget cap as stream_pool /
+            // acceptor_pool — see the comment at stream_pool's init for
+            // the full rationale (data-loss on harness `restart_server`
+            // when shutdown waits the upstream 30s default).
+            .deinit_timeout_ns = 2 * std.time.ns_per_s,
+        }) catch |err| {
+            log.err("Failed to initialize poll loop pool", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+        for (poll_contexts) |*poll_ctx| {
+            poll_ctx.* = .{
+                .transport = &transport,
+                .shutdown = &poll_shutdown,
+            };
+            if (!poll_pool.submitDefault(.{
+                .context = @ptrCast(poll_ctx),
+                .callback = runPollLoopTask,
+            })) {
+                log.err("Failed to submit poll loop task", &.{});
+                poll_shutdown.store(true, .release);
+                poll_pool.deinit();
+                return;
+            }
+        }
+        defer {
+            poll_shutdown.store(true, .release);
+            poll_pool.deinit();
+        }
+
         // CANARY: REQ=REQ-PERF-STREAM-POOL-001; FEATURE="SharedStreamPool"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-25
         // SP Tasks 2+3: Allocate shared stream + acceptor pools at server startup.
         // These live for the full server lifetime so connection-close is no longer
         // a pool-lifecycle event.  See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
+        const quic_stream_worker_count = envUsize(
+            gpa,
+            "GEODE_QUIC_STREAM_WORKERS",
+            default_quic_stream_worker_count,
+            2,
+            64,
+        );
+        const quic_stream_queue_capacity = envUsize(
+            gpa,
+            "GEODE_QUIC_STREAM_QUEUE_CAPACITY",
+            default_quic_stream_queue_capacity,
+            64,
+            65536,
+        );
         const stream_pool = try thread_pool.ThreadPool.init(gpa, .{
-            .num_threads = 64,
-            .queue_capacity = 256,
+            .num_threads = quic_stream_worker_count,
+            .queue_capacity = quic_stream_queue_capacity,
+            .blocking_workers = 0,
             // 2026-04-27: cap deinit at 2s instead of the upstream 30s
             // default.  These pools live for the full server lifetime
             // so on shutdown the queue should already be empty (active
@@ -1439,21 +1651,51 @@ pub fn main() !void {
         // running ones — they would never start, and the queued
         // connections' client-initiated streams would never get
         // accepted server-side.  64 covers realistic client fan-out
-        // without burning CPU since acceptors spend ~all their time in
-        // `nanosleep(100µs)` polling.
+        // without burning CPU since acceptors now park on poll-generation
+        // wakeups when no peer stream is pending.
+        //
+        const quic_acceptor_worker_count = envUsize(
+            gpa,
+            "GEODE_QUIC_ACCEPTOR_WORKERS",
+            default_quic_acceptor_worker_count,
+            2,
+            64,
+        );
+        const quic_acceptor_queue_capacity = envUsize(
+            gpa,
+            "GEODE_QUIC_ACCEPTOR_QUEUE_CAPACITY",
+            default_quic_acceptor_queue_capacity,
+            64,
+            65536,
+        );
         const acceptor_pool = try thread_pool.ThreadPool.init(gpa, .{
-            .num_threads = 64,
-            .queue_capacity = 256,
+            .num_threads = quic_acceptor_worker_count,
+            .queue_capacity = quic_acceptor_queue_capacity,
+            .blocking_workers = 0,
             .deinit_timeout_ns = 2 * std.time.ns_per_s,
         });
         defer acceptor_pool.deinit();
 
-        // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+        // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-05-25
         // GAP-0202: Initialize thread pool for async connection handling
-        // This allows accepting new connections while previous ones are being processed
+        // This allows accepting new connections while previous ones are being
+        // processed. QUIC connection handlers are long-lived socket loops, not
+        // short CPU tasks, so CPU-count auto sizing starves accepted
+        // connections under high fan-out. Keep the stable default explicit and
+        // allow controlled tuning via GEODE_QUIC_CONNECTION_WORKERS while the
+        // deeper event-driven ownership pass is developed.
         phase_start = compat_milliTimestamp();
+        const quic_connection_worker_count = envUsize(
+            gpa,
+            "GEODE_QUIC_CONNECTION_WORKERS",
+            default_quic_connection_worker_count,
+            2,
+            512,
+        );
         const pool = thread_pool.ThreadPool.init(gpa, .{
-            .num_threads = 0, // Auto-detect based on CPU count
+            .num_threads = quic_connection_worker_count,
+            .queue_capacity = quic_connection_queue_capacity,
+            .blocking_workers = 0,
             .stack_size = 2 * 1024 * 1024, // 2MB per thread (default 16MB causes ~19MB RSS growth per faulted stack)
         }) catch |err| {
             log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
@@ -1476,6 +1718,95 @@ pub fn main() !void {
             return;
         };
         defer pool.deinit();
+
+        const detached_connection_admission = envBool(
+            gpa,
+            "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION",
+            builtin.mode != .Debug,
+        );
+        const connection_admission_cap = envUsize(
+            gpa,
+            "GEODE_QUIC_CONNECTION_ADMISSION_THREADS",
+            default_quic_connection_admission_threads,
+            2,
+            4096,
+        );
+        g_connection_admission_gate.configure(@intCast(@min(
+            connection_admission_cap,
+            @as(usize, std.math.maxInt(u32)),
+        )));
+
+        // CANARY: REQ=REQ-QUIC-HC-020; FEATURE="ConfigurableStreamThrottle"; ASPECT=ServerEnv; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        //
+        // The detached first-stream owner path is bounded by the global stream
+        // throttle. Keep the default conservative, but allow controlled
+        // high-fanout runs to lift the cap without rebuilding. Also reserve
+        // the proto-reader registry up front so high-fanout connection storms
+        // do not allocate while holding the registry mutex.
+        const max_global_stream_threads = envUsize(
+            gpa,
+            "GEODE_QUIC_MAX_GLOBAL_STREAM_THREADS",
+            @as(usize, @intCast(quic_connection_handler.getMaxGlobalStreamThreads())),
+            1,
+            65536,
+        );
+        quic_connection_handler.setMaxGlobalStreamThreads(@intCast(@min(
+            max_global_stream_threads,
+            @as(usize, std.math.maxInt(u32)),
+        )));
+        // CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        //
+        // Cap detached first-stream owners independently from stream admission.
+        // Overflow first streams remain accepted and run on the shared stream
+        // pool, which avoids a 512+ thread storm starving the QUIC poller.
+        const max_detached_first_stream_threads = envUsize(
+            gpa,
+            "GEODE_QUIC_DETACHED_FIRST_STREAM_THREADS",
+            default_quic_detached_first_stream_threads,
+            1,
+            65536,
+        );
+        quic_connection_handler.setMaxDetachedFirstStreamOwners(@intCast(@min(
+            max_detached_first_stream_threads,
+            @as(usize, std.math.maxInt(u32)),
+        )));
+        quic_connection_handler.reserveProtoReaderRegistryCapacity(
+            gpa,
+            max_global_stream_threads,
+        ) catch |err| {
+            log.warn("failed to preallocate proto-reader registry for high fanout", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("capacity", @intCast(max_global_stream_threads)),
+            });
+        };
+
+        // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        //
+        // In single-stream high-fanout mode, persistent first-stream owners pin
+        // one worker or OS thread per live client. A bounded cooperative
+        // scheduler lets worker threads rotate across connections whenever a
+        // stream would block, which is the path needed for 512+ and eventually
+        // 10k+ concurrent requests.
+        var first_stream_scheduler = quic_connection_handler.FirstStreamScheduler{};
+        var first_stream_scheduler_enabled = false;
+        if (init_ctx.env_config.quic_cooperative_first_streams_enabled) {
+            const cooperative_worker_count = envUsize(
+                gpa,
+                "GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS",
+                default_quic_cooperative_first_stream_worker_count,
+                1,
+                512,
+            );
+            try first_stream_scheduler.init(gpa, cooperative_worker_count);
+            first_stream_scheduler_enabled = true;
+            quic_connection_handler.setFirstStreamScheduler(&first_stream_scheduler);
+        }
+        defer {
+            quic_connection_handler.setFirstStreamScheduler(null);
+            if (first_stream_scheduler_enabled) {
+                first_stream_scheduler.deinit();
+            }
+        }
 
         // CANARY: REQ=REQ-PERF-METRICS-001; FEATURE="RuntimeMetrics"; ASPECT=RegistryInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-25
         // Task 4: Initialise the process-global runtime_metrics registry and spawn
@@ -1562,6 +1893,81 @@ pub fn main() !void {
             quic_metrics_ctx,
         );
         try metrics_registry.registerGauge(
+            "quic_poll_transport_max_ns",
+            quic_metrics.pollTransportMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_process_max_ns",
+            quic_metrics.pollRecvProcessMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_header_max_ns",
+            quic_metrics.pollRecvShortHeaderMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_endpoint_map_max_ns",
+            quic_metrics.pollRecvShortEndpointMapMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_rx_serial_wait_max_ns",
+            quic_metrics.pollRecvShortRxSerialWaitMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_conn_lock_wait_max_ns",
+            quic_metrics.pollRecvShortConnLockWaitMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_decrypt_max_ns",
+            quic_metrics.pollRecvShortDecryptMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_frame_process_max_ns",
+            quic_metrics.pollRecvShortFrameProcessMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_short_ack_send_max_ns",
+            quic_metrics.pollRecvShortAckSendMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_initial_max_ns",
+            quic_metrics.pollRecvInitialMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_handshake_max_ns",
+            quic_metrics.pollRecvHandshakeMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_recv_fallback_max_ns",
+            quic_metrics.pollRecvFallbackMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_pending_hs_send_max_ns",
+            quic_metrics.pollPendingHsSendMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_timer_process_max_ns",
+            quic_metrics.pollTimerProcessMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_pto_dirty_max_ns",
+            quic_metrics.pollPtoDirtyMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
             "quic_poll_overrun_total",
             quic_metrics.pollOverrunTotal,
             quic_metrics_ctx,
@@ -1602,6 +2008,7 @@ pub fn main() !void {
             quic_metrics_ctx,
         );
         try proto_reader_metrics.registerAll(metrics_registry);
+        try quic_response_metrics.registerAll(metrics_registry);
 
         var metrics_should_stop = std.atomic.Value(u32).init(0);
         const MetricsCtx = struct {
@@ -1719,7 +2126,19 @@ pub fn main() !void {
             }
         }.run;
 
-        _ = pool.submitDefault(.{ .context = @ptrCast(metrics_ctx), .callback = metricsLoop });
+        // CANARY: REQ=REQ-QUIC-HC-010; FEATURE="High-Concurrency Connection Admission"; ASPECT=MetricsPoolIsolation; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+        // Keep the long-running metrics/stall watchdog off the connection
+        // handler pool. Otherwise it permanently consumes a worker before the
+        // first client connects and lowers the hard HELLO-admission ceiling.
+        const metrics_pool = thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+            .deinit_timeout_ns = 2 * std.time.ns_per_s,
+        }) catch |err| {
+            log.err("Failed to initialize metrics loop pool", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+        try metrics_pool.submitBlocking(.{ .context = @ptrCast(metrics_ctx), .callback = metricsLoop });
         defer {
             // PERF-D / #816: set the stop flag AND wake the parked metrics
             // loop. Without the futexWake, shutdown would still take up to
@@ -1727,42 +2146,13 @@ pub fn main() !void {
             metrics_should_stop.store(1, .release);
             const io = std.Io.Threaded.global_single_threaded.io();
             io.futexWake(u32, &metrics_should_stop.raw, 1);
+            metrics_pool.deinit();
         }
 
         std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ compat_milliTimestamp() - phase_start, pool.workers.len });
 
         // GAP-0269: Log total startup time for operator diagnostics (stderr, visible at all log levels)
         std.debug.print("[startup] server ready ({d}ms total)\n", .{compat_milliTimestamp() - startup_begin});
-
-        // #540: Spawn a dedicated poll thread to continuously process incoming
-        // UDP datagrams. This decouples packet delivery from the accept loop,
-        // eliminating the c=8+ contention bottleneck where handler threads starve
-        // waiting for data that only arrives when the main thread calls poll().
-        var poll_shutdown = std.atomic.Value(bool).init(false);
-        var poll_ctx = PollLoopContext{
-            .transport = &transport,
-            .shutdown = &poll_shutdown,
-        };
-        const poll_pool = thread_pool.ThreadPool.init(gpa, .{
-            .num_threads = 1,
-            .queue_capacity = 4,
-            // 2026-04-27: same shutdown-budget cap as stream_pool /
-            // acceptor_pool — see the comment at stream_pool's init for
-            // the full rationale (data-loss on harness `restart_server`
-            // when shutdown waits the upstream 30s default).
-            .deinit_timeout_ns = 2 * std.time.ns_per_s,
-        }) catch |err| {
-            log.err("Failed to initialize poll loop pool", &.{Attr.string("error", @errorName(err))});
-            return;
-        };
-        try poll_pool.submitBlocking(.{
-            .context = @ptrCast(&poll_ctx),
-            .callback = runPollLoopTask,
-        });
-        defer {
-            poll_shutdown.store(true, .release);
-            poll_pool.deinit();
-        }
 
         // #864 / qa-seed deadlock §6.5: spawn the leaked-connection
         // reaper.  Bail entries arrive from `handleQuicConnection`'s
@@ -1885,30 +2275,65 @@ pub fn main() !void {
                 .acceptor_pool = acceptor_pool,
             };
 
-            // Submit to thread pool for async handling
-            const work_item = thread_pool.WorkItem{
-                .context = @ptrCast(ctx),
-                .callback = handleConnectionAsync,
-            };
+            if (detached_connection_admission) {
+                if (!g_connection_admission_gate.tryAcquire()) {
+                    log.warn("Connection admission thread cap reached, rejecting connection", &.{
+                        Attr.int("active_admission", @intCast(g_connection_admission_gate.active.load(.acquire))),
+                        Attr.int("max_admission", @intCast(g_connection_admission_gate.max.load(.acquire))),
+                    });
+                    transport.destroyConnection(conn);
+                    gpa.destroy(ctx);
+                    continue;
+                }
+                ctx.admission_gate = &g_connection_admission_gate;
 
-            // GitLab #751: route connection admission through the *default*
-            // lane (15+ workers) rather than the 1-wide blocking lane. The
-            // blocking lane is reserved for genuinely blocking work (cert
-            // generation, audit writes); connection-handler dispatch is
-            // short and CPU-bound and must be parallel across connections.
-            if (!pool.submitDefault(work_item)) {
-                // #50: Reject instead of blocking main thread with sync handling.
-                // Inline handleConnectionAsync() would block the accept loop for
-                // the entire duration of the connection (seconds to minutes).
-                log.warn("Thread pool queue full, rejecting connection", &.{
-                    Attr.int("queue_size", @intCast(pool.pendingTasks())),
-                    Attr.int("active_workers", @intCast(pool.activeWorkers())),
-                });
-                transport.destroyConnection(conn);
-                gpa.destroy(ctx);
+                const admission_thread = std.Thread.spawn(
+                    .{ .stack_size = quic_connection_admission_stack_size },
+                    handleConnectionAsync,
+                    .{@as(*anyopaque, @ptrCast(ctx))},
+                ) catch |err| {
+                    log.warn("Failed to spawn connection admission thread, rejecting connection", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    ctx.admission_gate = null;
+                    g_connection_admission_gate.release();
+                    transport.destroyConnection(conn);
+                    gpa.destroy(ctx);
+                    continue;
+                };
+                admission_thread.detach();
             } else {
-                log.debug("Connection submitted to thread pool", &.{});
+                // Submit to thread pool for async handling
+                const work_item = thread_pool.WorkItem{
+                    .context = @ptrCast(ctx),
+                    .callback = handleConnectionAsync,
+                };
+
+                // GitLab #751: route connection admission through the *default*
+                // lane (15+ workers) rather than the 1-wide blocking lane. The
+                // blocking lane is reserved for genuinely blocking work (cert
+                // generation, audit writes); connection-handler dispatch is
+                // short and CPU-bound and must be parallel across connections.
+                if (!pool.submitDefault(work_item)) {
+                    // #50: Reject instead of blocking main thread with sync handling.
+                    // Inline handleConnectionAsync() would block the accept loop for
+                    // the entire duration of the connection (seconds to minutes).
+                    log.warn("Thread pool queue full, rejecting connection", &.{
+                        Attr.int("queue_size", @intCast(pool.pendingTasks())),
+                        Attr.int("active_workers", @intCast(pool.activeWorkers())),
+                    });
+                    transport.destroyConnection(conn);
+                    gpa.destroy(ctx);
+                } else {
+                    log.debug("Connection submitted to thread pool", &.{});
+                }
             }
+        }
+        transport.requestShutdown();
+        if (detached_connection_admission and !g_connection_admission_gate.waitForZero(10 * std.time.ns_per_s)) {
+            log.warn("Connection admission threads still active during shutdown", &.{
+                Attr.int("active_admission", @intCast(g_connection_admission_gate.active.load(.acquire))),
+            });
         }
         std.debug.print("[shutdown] signal received, flushing data and stopping...\n", .{});
         return;

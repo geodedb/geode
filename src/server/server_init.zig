@@ -47,6 +47,16 @@ pub const EnvironmentConfig = struct {
     inline_results_enabled: bool = true,
     inline_results_max_rows: usize = 1000,
     telemetry_paging: bool = false,
+    // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    // Keep stream multiplexing enabled for CLI batch compatibility. High-fanout
+    // single-stream deployments can disable the per-connection acceptor with
+    // GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0.
+    quic_stream_multiplexing_enabled: bool = true,
+    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    // In single-stream high-fanout deployments, service first streams with a
+    // bounded cooperative scheduler instead of one persistent worker per live
+    // connection.
+    quic_cooperative_first_streams_enabled: bool = false,
     // R2 (2026-04-22): per-request budget for acquiring the per-graph
     // exclusive write lock.
     //
@@ -58,6 +68,13 @@ pub const EnvironmentConfig = struct {
     // because the handler prefers this env-config value over the file-
     // scope default.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
     graph_write_lock_timeout_ms: u64 = 120_000,
+    // CANARY: REQ=REQ-QUIC-HC-114; FEATURE="High-Concurrency Setup"; ASPECT=ConfigurableHelloReadTimeout; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+    //
+    // Detached connection-admission handlers remain bounded, but high-fanout
+    // setup tests and production deployments can align the server-side HELLO
+    // read window with the client's retry budget via
+    // GEODE_QUIC_HELLO_READ_TIMEOUT_MS.
+    quic_hello_read_timeout_ms: u64 = 5_000,
 };
 
 /// Server initialization context containing all initialized resources
@@ -228,6 +245,22 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
     }
     if (getenvSlice("GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS")) |val| {
         config.graph_write_lock_timeout_ms = std.fmt.parseInt(u64, val, 10) catch config.graph_write_lock_timeout_ms;
+    }
+    if (getenvSlice("GEODE_QUIC_HELLO_READ_TIMEOUT_MS")) |val| {
+        config.quic_hello_read_timeout_ms = @max(
+            @as(u64, 1),
+            std.fmt.parseInt(u64, val, 10) catch config.quic_hello_read_timeout_ms,
+        );
+    }
+    if (getenvSlice("GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING")) |val| {
+        config.quic_stream_multiplexing_enabled = val.len == 0 or (val[0] != '0' and
+            !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off") and
+            !std.ascii.eqlIgnoreCase(val, "no"));
+    }
+    if (getenvSlice("GEODE_QUIC_COOPERATIVE_FIRST_STREAMS")) |val| {
+        config.quic_cooperative_first_streams_enabled = val.len == 0 or (val[0] != '0' and
+            !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off") and
+            !std.ascii.eqlIgnoreCase(val, "no"));
     }
 
     // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -655,13 +688,15 @@ fn hydrateSecurityManagerFromGraph(
 
 fn graphPersistUserCreate(opaque_agm: *anyopaque, hmac_key: *const [32]u8, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool) callconv(.auto) u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
-    return agm.createUser(hmac_key, username, email, password_hash, is_superuser) catch |err| {
+    const version = agm.createUser(hmac_key, username, email, password_hash, is_superuser) catch |err| {
         log.warn("Failed to persist user creation to auth graph", &.{
             Attr.string("error", @errorName(err)),
             Attr.string("username", username),
         });
         return 0;
     };
+    if (version != 0) user_mgmt.notePersistentAuthMutation();
+    return version;
 }
 
 fn graphPersistLoginState(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, failed_attempts: u16, lockout_until: i64) callconv(.auto) void {
@@ -676,18 +711,20 @@ fn graphPersistLoginState(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_
 
 fn graphPersistPassword(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) callconv(.auto) u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
-    return agm.updateUserPassword(hmac_key, user_id, new_password_hash) catch |err| {
+    const version = agm.updateUserPassword(hmac_key, user_id, new_password_hash) catch |err| {
         log.warn("Failed to persist password change to auth graph", &.{
             Attr.string("error", @errorName(err)),
             Attr.uint("user_id", user_id),
         });
         return 0;
     };
+    if (version != 0) user_mgmt.notePersistentAuthMutation();
+    return version;
 }
 
 fn graphPersistRoleMembership(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, role_id: u64, assign: bool) callconv(.auto) u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
-    return if (assign)
+    const version = if (assign)
         agm.assignUserRole(hmac_key, user_id, role_id) catch |err| {
             log.warn("Failed to persist role assignment to auth graph", &.{
                 Attr.string("error", @errorName(err)),
@@ -705,6 +742,8 @@ fn graphPersistRoleMembership(opaque_agm: *anyopaque, hmac_key: *const [32]u8, u
             });
             return 0;
         };
+    if (version != 0) user_mgmt.notePersistentAuthMutation();
+    return version;
 }
 
 // =============================================================================
@@ -734,12 +773,14 @@ fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     const uid = (try agm.findUserIdByName(username)) orelse return;
     try agm.removeUser(&agm.hmac_key, uid);
+    user_mgmt.notePersistentAuthMutation();
 }
 
 fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     const uid = (try agm.findUserIdByName(username)) orelse return;
     _ = try agm.updateUserPassword(&agm.hmac_key, uid, new_password_hash);
+    user_mgmt.notePersistentAuthMutation();
 }
 
 fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) anyerror!void {
@@ -767,6 +808,7 @@ fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) a
     _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
     if (try agm.findRoleIdByName(role.toString())) |rid| {
         _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
+        user_mgmt.notePersistentAuthMutation();
     }
 }
 
@@ -774,6 +816,7 @@ fn writerSetActive(ctx: ?*anyopaque, username: []const u8, active: bool) anyerro
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     const uid = (try agm.findUserIdByName(username)) orelse return;
     _ = try agm.setUserActive(&agm.hmac_key, uid, active);
+    user_mgmt.notePersistentAuthMutation();
 }
 
 // -- RolePersistCallbacks for auth_dispatch --
