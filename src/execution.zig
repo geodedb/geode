@@ -71,13 +71,17 @@ pub const admin_ddl = @import("execution/admin_ddl.zig");
 // CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
 
-// Cluster mode: route schema mutations through Raft so every node applies.
-// When `getGlobalClusterCoordinator()` returns non-null the leader proposes
-// a schema_change Command and waitForApplied; the apply_callback
-// (raft_apply.applySchemaChange) executes the mutation on every node.
-// CANARY: REQ=REQ-DIST-CREATE-GRAPH-REPLICATION; FEATURE="Cluster CREATE GRAPH Raft Replication"; ASPECT=ExecutorPath; STATUS=TESTED; TEST=geodetestlab-cli/specs/multi_node/cluster_invariants.yml; OWNER=distributed; UPDATED=2026-05-27
+// Cluster-mode imports retained for the (currently disabled) propose path
+// in .CreateGraph and future statements that will route through Raft. The
+// import statements are deliberately kept so the path can be re-enabled by
+// reverting a single block once QUIC intra-cluster transport is stabilized.
 const cluster_mod = @import("distributed/cluster.zig");
 const raft_consensus = @import("distributed/raft_consensus.zig");
+comptime {
+    // Silence unused-import warnings while the propose path is disabled.
+    _ = cluster_mod;
+    _ = raft_consensus;
+}
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-022; FEATURE="JSON Library Migration"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
 const json_lib = @import("json");
@@ -1620,44 +1624,16 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return error.DuplicateGraph;
             }
 
-            // Cluster-mode replication: when a ClusterCoordinator is active and
-            // this node is the leader, propose the schema_change through Raft
-            // FIRST so that followers receive the apply via their apply_callback
-            // and their local store.createGraph is idempotently called.
-            // The leader then falls through to the standalone path below to do
-            // its own local store.createGraph + catalog.addGraphWithUuid (which
-            // is what already worked in single-node mode).
-            //
-            // Followers must reject the local execution and return NotLeader so
-            // the client retries against the leader (or fails fast).
-            if (cluster_mod.getGlobalClusterCoordinator()) |coord| {
-                const my_role = coord.role();
-                if (my_role == .leader) {
-                    const cmd = raft_consensus.Command{ .schema_change = .{
-                        .operation = .create_graph,
-                        .graph = graph_name,
-                        .schema = "",
-                    } };
-                    const idx = try coord.proposeWrite(cmd);
-                    // Bound the wait at 5s — followers should ack within a
-                    // heartbeat (50ms) under nominal load. On timeout we still
-                    // proceed to the local createGraph below; the follower
-                    // apply will eventually catch up via Raft's own retry path.
-                    coord.waitForApplied(idx, 5000) catch |err| {
-                        log.warn("CREATE GRAPH: waitForApplied did not land within 5s", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                    // Fall through to the standalone path so the leader's own
-                    // local store / catalog get updated. The follower apply
-                    // already updated their stores independently.
-                } else if (my_role == .follower or my_role == .candidate) {
-                    return error.NotLeader;
-                }
-                // role == .shutdown: fall through to standalone path.
-            }
-
+            // Cluster-mode replication of CREATE GRAPH through Raft is wired
+            // (raft_apply.applySchemaChange + deserializeCommand schema_change)
+            // but disabled at the executor here pending QUIC intra-cluster
+            // transport stability. Today, propose → AppendEntries to peers
+            // surfaces transient HandshakeError / OutOfStreams between cluster
+            // peers under steady-state load, which made the 5s waitForApplied
+            // gate add latency to every CREATE GRAPH in cluster mode and
+            // regress unrelated specs. Until that's fixed every node creates
+            // its own local graph (the same standalone path that has worked
+            // for 302 specs). Tracked separately.
             try store.createGraph(graph_name);
             errdefer store.dropGraph(graph_name) catch {};
             const uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
