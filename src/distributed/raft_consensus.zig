@@ -1505,6 +1505,21 @@ pub fn deserializeCommand(data: []const u8) !Command {
     switch (tag) {
         CMD_TAG_NOOP => return .noop,
         CMD_TAG_WRITE => return .{ .write = payload },
+        CMD_TAG_SCHEMA_CHANGE => {
+            // Wire format mirrors serializeCommand: 1B op | 4B graph_len(BE) | graph | schema
+            if (payload.len < 1 + 4) return error.InvalidData;
+            const op_byte = payload[0];
+            const graph_len = std.mem.readInt(u32, payload[1..][0..4], .big);
+            const graph_start: usize = 5;
+            const graph_end: usize = graph_start + graph_len;
+            if (graph_end > payload.len) return error.InvalidData;
+            const schema_start: usize = graph_end;
+            return .{ .schema_change = .{
+                .operation = @enumFromInt(op_byte),
+                .graph = payload[graph_start..graph_end],
+                .schema = payload[schema_start..],
+            } };
+        },
         CMD_TAG_TXN_DECIDE => {
             if (payload.len < 9) return error.InvalidData;
             return .{ .txn_decide = .{
@@ -1513,8 +1528,10 @@ pub fn deserializeCommand(data: []const u8) !Command {
             } };
         },
         else => {
-            // For complex types, return as write with the full tagged data
-            // so the apply callback can re-deserialize if needed.
+            // For complex types we have not yet wired a deserializer for
+            // (graph_mutation/config_change/snapshot_pointer/txn_prepare),
+            // surface them as a generic write so the apply callback sees a
+            // recognisable variant rather than losing the payload entirely.
             return .{ .write = data };
         },
     }
@@ -1848,9 +1865,29 @@ pub const RaftNode = struct {
         return self.state;
     }
 
-    /// Returns the current Raft term as last observed by `drainReady`.
+    /// Returns the current Raft term, read live from the inner library under
+    /// the inner mutex. The wrapper's `self.current_term` mirror only advances
+    /// when `drainReady` runs and reads a hard_state; on a steady leader that
+    /// has no committed-entries to drain, the mirror can lag behind the actual
+    /// term observed after a re-election. Reading inner directly avoids the
+    /// stale-term mismatch that breaks cross-node term-agreement invariants.
     pub fn currentTerm(self: *RaftNode) u64 {
-        return self.current_term;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
+        return self.inner.current_term;
+    }
+
+    /// Returns the current leader id from the inner raft library's view, or
+    /// null if no leader has been observed in this term (election in flight,
+    /// just-started cluster, partition healing). Followers learn the leader's
+    /// id from AppendEntries; candidates know themselves; leaders know themselves.
+    /// admin_ddl.executeShowClusterStatus surfaces this through SHOW CLUSTER STATUS.
+    pub fn leaderId(self: *RaftNode) ?u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
+        return self.inner.leader_id;
     }
 
     pub fn startElection(self: *RaftNode) void {

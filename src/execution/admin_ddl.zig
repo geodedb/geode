@@ -241,12 +241,14 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     const my_id = coord.node_id;
 
     // Resolve the leader_id.  We only know it directly if THIS node is the
-    // leader; otherwise the inner raft library exposes the last observed
-    // leader through `coord.cluster_state.leader_node` (mirrored from
-    // append-entries).  When neither is true (e.g. during an election),
-    // leader_id is 0 — the harness treats this as "no leader yet".
+    // leader; otherwise the inner raft library tracks the leader id learned
+    // from AppendEntries (followers) or self-promotion (candidates that won).
+    // `coord.cluster_state.leader_node` is a separate mirror updated by
+    // membership messages; fall back to it before reporting 0. `0` means
+    // "no leader observed yet" (election in flight, fresh cluster, partition).
     const leader_id: u64 = blk: {
         if (my_role_state == .leader) break :blk my_id;
+        if (coord.raft.leaderId()) |id| break :blk id;
         if (coord.cluster_state.leader_node) |id| break :blk id;
         break :blk 0;
     };
