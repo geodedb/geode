@@ -149,3 +149,82 @@ test "shared_query_optimizer_plan_singleflight" {
     try testing.expectEqual(@as(u64, worker_count - 1), stats.hits);
     try testing.expectEqual(@as(usize, 1), stats.cache_size);
 }
+
+test "shared_query_optimizer_unique_misses_do_not_collapse" {
+    const worker_count = 32;
+    const allocator = testing.allocator;
+    var opt = query_plan_cache.SharedQueryOptimizer.init(allocator, 128);
+    defer opt.deinit();
+
+    const WorkerCtx = struct {
+        optimizer: *query_plan_cache.SharedQueryOptimizer,
+        query: []const u8,
+        program: *const geode.ast.Program,
+        store_stats: query_plan_cache.StoreStats,
+        ready: *std.atomic.Value(u32),
+        start: *std.atomic.Value(bool),
+        successes: *std.atomic.Value(u32),
+        failures: *std.atomic.Value(u32),
+
+        fn run(ctx: *@This()) void {
+            _ = ctx.ready.fetchAdd(1, .release);
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+
+            var handle = ctx.optimizer.optimizeQuery(ctx.query, ctx.program, ctx.store_stats) catch {
+                _ = ctx.failures.fetchAdd(1, .monotonic);
+                return;
+            };
+            defer handle.release();
+            _ = ctx.successes.fetchAdd(1, .release);
+        }
+    };
+
+    var queries: [worker_count]?[]u8 = .{null} ** worker_count;
+    defer for (queries) |query| {
+        if (query) |owned| allocator.free(owned);
+    };
+    var parsed: [worker_count]geode.ParseResult = undefined;
+    var parsed_count: usize = 0;
+    defer for (parsed[0..parsed_count]) |*pr| {
+        pr.deinit();
+    };
+    var contexts: [worker_count]WorkerCtx = undefined;
+    var ready = std.atomic.Value(u32).init(0);
+    var start = std.atomic.Value(bool).init(false);
+    var successes = std.atomic.Value(u32).init(0);
+    var failures = std.atomic.Value(u32).init(0);
+
+    for (&queries, 0..) |*query, i| {
+        query.* = try std.fmt.allocPrint(allocator, "MATCH (n:Foo {{id: {d}}}) RETURN n", .{i});
+        parsed[i] = try parseFixture(allocator, query.*.?);
+        parsed_count += 1;
+    }
+    for (&contexts, 0..) |*ctx, i| {
+        ctx.* = .{
+            .optimizer = &opt,
+            .query = queries[i].?,
+            .program = &parsed[i].program,
+            .store_stats = .{ .node_count = 1_000, .edge_count = 0 },
+            .ready = &ready,
+            .start = &start,
+            .successes = &successes,
+            .failures = &failures,
+        };
+    }
+
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads, 0..) |*thread, i| {
+        thread.* = try std.Thread.spawn(.{}, WorkerCtx.run, .{&contexts[i]});
+    }
+    while (ready.load(.acquire) < worker_count) std.atomic.spinLoopHint();
+    start.store(true, .release);
+    for (&threads) |thread| thread.join();
+
+    try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
+    try testing.expectEqual(@as(u32, worker_count), successes.load(.acquire));
+
+    const stats = opt.getStats();
+    try testing.expectEqual(@as(u64, worker_count), stats.misses);
+    try testing.expectEqual(@as(u64, 0), stats.hits);
+    try testing.expectEqual(@as(usize, worker_count), stats.cache_size);
+}

@@ -228,6 +228,8 @@ pub const SharedAstCache = struct {
     hit_count: u64 = 0,
     miss_count: u64 = 0,
     lock: std.Io.Mutex = std.Io.Mutex.init,
+    inflight_misses: std.AutoHashMap(u64, void),
+    miss_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     lru_head: ?u64 = null,
     lru_tail: ?u64 = null,
 
@@ -235,6 +237,7 @@ pub const SharedAstCache = struct {
         return .{
             .allocator = allocator,
             .cache = std.AutoHashMap(u64, SharedCachedAst).init(allocator),
+            .inflight_misses = std.AutoHashMap(u64, void).init(allocator),
             .max_size = max_size,
         };
     }
@@ -248,6 +251,7 @@ pub const SharedAstCache = struct {
             self.allocator.destroy(entry.value_ptr.parse_result);
             self.allocator.free(entry.value_ptr.query_text);
         }
+        self.inflight_misses.deinit();
         self.cache.deinit();
     }
 
@@ -265,39 +269,61 @@ pub const SharedAstCache = struct {
         const key = hashQuery(query_text, opts);
 
         // CANARY: REQ=REQ-QUIC-HC-104; FEATURE="High-Concurrency Query Cache"; ASPECT=AstMissSingleFlight; STATUS=TESTED; TEST=query_ast_cache_shared_singleflight; OWNER=engine; UPDATED=2026-05-27
-        // A first-burst fan-out of identical queries used to parse outside this
-        // mutex, so every concurrent miss did the same full parse before one
-        // winner inserted the AST. Serialize misses through the shared cache:
-        // one caller populates the entry and waiters immediately hit it.
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        // First-burst fan-out needs same-query singleflight, but holding the
+        // global cache mutex while parsing serializes unrelated mutation query
+        // shapes. Mark only this key as in-flight, parse outside the lock, then
+        // wake waiters so identical queries hit the cached AST.
+        while (true) {
+            self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            if (self.cache.getPtr(key)) |cached| {
+                if (std.mem.eql(u8, cached.query_text, query_text)) {
+                    self.hit_count += 1;
+                    cached.access_count += 1;
+                    cached.last_accessed = compat_timestamp();
+                    cached.ref_count += 1;
+                    self.lruPromoteUnlocked(key);
+                    const handle = AstHandle{
+                        .cache = self,
+                        .key = key,
+                        .parse_result = cached.parse_result,
+                    };
+                    self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                    return .{ .Ok = handle };
+                }
 
-        if (self.cache.getPtr(key)) |cached| {
-            if (std.mem.eql(u8, cached.query_text, query_text)) {
-                self.hit_count += 1;
-                cached.access_count += 1;
-                cached.last_accessed = compat_timestamp();
-                cached.ref_count += 1;
-                self.lruPromoteUnlocked(key);
-                const handle = AstHandle{
-                    .cache = self,
-                    .key = key,
-                    .parse_result = cached.parse_result,
-                };
-                return .{ .Ok = handle };
-            }
-
-            // Hash collision: evict existing entry (if not in use).
-            if (cached.ref_count == 0) {
-                self.lruRemoveNodeUnlocked(key);
-                if (self.cache.fetchRemove(key)) |kv| {
-                    kv.value.parse_result.deinit();
-                    self.allocator.destroy(kv.value.parse_result);
-                    self.allocator.free(kv.value.query_text);
+                // Hash collision: evict existing entry if safe. If it is still
+                // referenced, wait for a release and retry rather than overwriting
+                // a live cached AST under the same hash key.
+                if (cached.ref_count == 0) {
+                    self.lruRemoveNodeUnlocked(key);
+                    if (self.cache.fetchRemove(key)) |kv| {
+                        kv.value.parse_result.deinit();
+                        self.allocator.destroy(kv.value.parse_result);
+                        self.allocator.free(kv.value.query_text);
+                    }
+                } else {
+                    const observed_generation = self.miss_generation.load(.acquire);
+                    self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                    self.waitForMissGeneration(observed_generation);
+                    continue;
                 }
             }
+
+            if (self.inflight_misses.contains(key)) {
+                const observed_generation = self.miss_generation.load(.acquire);
+                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                self.waitForMissGeneration(observed_generation);
+                continue;
+            }
+
+            self.inflight_misses.put(key, {}) catch |err| {
+                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                return err;
+            };
+            self.miss_count += 1;
+            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+            break;
         }
-        self.miss_count += 1;
 
         // Allocate a stable copy of the query text BEFORE parsing. The Geode lexer
         // uses zero-copy slices into its source buffer (lexeme = src[start..end]),
@@ -309,12 +335,14 @@ pub const SharedAstCache = struct {
         const query_text_copy = try self.allocator.dupe(u8, query_text);
         const outcome = geode.parseGqlOutcome(query_text_copy, self.allocator, opts) catch |err| {
             self.allocator.free(query_text_copy);
+            self.finishInflightMiss(key);
             return err;
         };
         switch (outcome) {
             .Err => |er| {
                 // Parse error - not caching, free the copy.
                 self.allocator.free(query_text_copy);
+                self.finishInflightMiss(key);
                 return .{
                     .Err = .{
                         .msg = er.msg,
@@ -327,8 +355,17 @@ pub const SharedAstCache = struct {
             },
             .Ok => |ok| {
                 // Move parse result into heap allocation for stable pointer storage.
-                const pr_ptr = try self.allocator.create(geode.ParseResult);
+                const pr_ptr = self.allocator.create(geode.ParseResult) catch |err| {
+                    var mutable_ok = ok;
+                    mutable_ok.deinit();
+                    self.allocator.free(query_text_copy);
+                    self.finishInflightMiss(key);
+                    return err;
+                };
                 pr_ptr.* = ok;
+
+                self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
 
                 if (self.cache.count() >= self.max_size) {
                     self.evictLeastUsedUnlocked();
@@ -351,8 +388,16 @@ pub const SharedAstCache = struct {
                     self.allocator.free(cached_ast.query_text);
                 }
 
-                try self.cache.put(key, cached_ast);
+                self.cache.put(key, cached_ast) catch |err| {
+                    _ = self.inflight_misses.remove(key);
+                    _ = self.miss_generation.fetchAdd(1, .release);
+                    std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+                    return err;
+                };
                 self.lruInsertHeadUnlocked(key);
+                _ = self.inflight_misses.remove(key);
+                _ = self.miss_generation.fetchAdd(1, .release);
+                std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
                 return .{ .Ok = AstHandle{
                     .cache = self,
                     .key = key,
@@ -366,8 +411,33 @@ pub const SharedAstCache = struct {
         self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.cache.getPtr(key)) |entry| {
-            if (entry.ref_count > 0) entry.ref_count -= 1;
+            if (entry.ref_count > 0) {
+                entry.ref_count -= 1;
+                if (entry.ref_count == 0) {
+                    _ = self.miss_generation.fetchAdd(1, .release);
+                    std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+                }
+            }
         }
+    }
+
+    fn waitForMissGeneration(self: *SharedAstCache, observed_generation: u32) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const timeout: std.Io.Timeout = .{ .duration = .{
+            .raw = std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms),
+            .clock = .awake,
+        } };
+        io.futexWaitTimeout(u32, &self.miss_generation.raw, observed_generation, timeout) catch |err| switch (err) {
+            error.Canceled => {},
+        };
+    }
+
+    fn finishInflightMiss(self: *SharedAstCache, key: u64) void {
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        _ = self.inflight_misses.remove(key);
+        _ = self.miss_generation.fetchAdd(1, .release);
+        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
     }
 
     /// O(1) eviction: walk backward from tail, skip entries with ref_count > 0.

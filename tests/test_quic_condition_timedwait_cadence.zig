@@ -621,7 +621,7 @@ test "high concurrency harness reports retry tails" {
     try testing.expect(std.mem.indexOf(u8, harness, "const op_start_ns = monoNs();") != null);
 }
 
-test "query cache misses use single-flight locking under fanout" {
+test "query cache misses singleflight by key without serializing unrelated misses" {
     const allocator = testing.allocator;
 
     const maybe_ast_cache = try readFile(allocator, "src/server/query_ast_cache.zig");
@@ -647,44 +647,46 @@ test "query cache misses use single-flight locking under fanout" {
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "AstMissSingleFlight") != null);
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "STATUS=TESTED") != null);
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "TEST=query_ast_cache_shared_singleflight") != null);
-    try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "inflight_misses") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "parse outside the lock") != null);
     {
-        const lock_idx = std.mem.indexOf(u8, ast_get_or_parse, "self.lock.lockUncancelable") orelse return error.MissingAstLock;
-        const miss_idx = std.mem.indexOf(u8, ast_get_or_parse, "self.miss_count += 1") orelse return error.MissingAstMiss;
+        const inflight_idx = std.mem.indexOf(u8, ast_get_or_parse, "self.inflight_misses.put") orelse return error.MissingAstInflight;
+        const unlock_idx = std.mem.indexOfPos(u8, ast_get_or_parse, inflight_idx, "self.lock.unlock(std.Io.Threaded.global_single_threaded.io());") orelse return error.MissingAstUnlockBeforeParse;
         const parse_idx = std.mem.indexOf(u8, ast_get_or_parse, "geode.parseGqlOutcome") orelse return error.MissingAstParse;
-        const put_idx = std.mem.indexOf(u8, ast_get_or_parse, "try self.cache.put(key, cached_ast)") orelse return error.MissingAstPut;
-        try testing.expect(lock_idx < miss_idx);
-        try testing.expect(miss_idx < parse_idx);
+        const put_idx = std.mem.indexOf(u8, ast_get_or_parse, "self.cache.put(key, cached_ast)") orelse return error.MissingAstPut;
+        try testing.expect(inflight_idx < unlock_idx);
+        try testing.expect(unlock_idx < parse_idx);
         try testing.expect(parse_idx < put_idx);
     }
-    try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "Parse outside the lock to avoid blocking concurrent lookups") == null);
 
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "REQ=REQ-QUIC-HC-105") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "PlanMissSingleFlight") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "STATUS=TESTED") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "TEST=shared_query_optimizer_plan_singleflight") != null);
-    try testing.expect(std.mem.indexOf(u8, plan_optimize, "defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_optimize, "inflight_misses") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_optimize, "generate the real plan outside the lock") != null);
     {
-        const lock_idx = std.mem.indexOf(u8, plan_optimize, "self.lock.lockUncancelable") orelse return error.MissingPlanLock;
-        const miss_idx = std.mem.indexOf(u8, plan_optimize, "self.miss_count += 1") orelse return error.MissingPlanMiss;
+        const inflight_idx = std.mem.indexOf(u8, plan_optimize, "self.inflight_misses.put") orelse return error.MissingPlanInflight;
+        const unlock_idx = std.mem.indexOfPos(u8, plan_optimize, inflight_idx, "self.lock.unlock(std.Io.Threaded.global_single_threaded.io());") orelse return error.MissingPlanUnlockBeforeGenerate;
         const generate_idx = std.mem.indexOf(u8, plan_optimize, "generateRealPlan") orelse return error.MissingPlanGenerate;
-        const put_idx = std.mem.indexOf(u8, plan_optimize, "try self.plan_cache.put(key, cached_plan)") orelse return error.MissingPlanPut;
-        try testing.expect(lock_idx < miss_idx);
-        try testing.expect(miss_idx < generate_idx);
+        const put_idx = std.mem.indexOf(u8, plan_optimize, "self.plan_cache.put(key, cached_plan)") orelse return error.MissingPlanPut;
+        try testing.expect(inflight_idx < unlock_idx);
+        try testing.expect(unlock_idx < generate_idx);
         try testing.expect(generate_idx < put_idx);
     }
-    try testing.expect(std.mem.indexOf(u8, plan_optimize, "Generate plan outside the lock to avoid blocking concurrent lookups") == null);
 
     const maybe_parse_wrapper = try readFile(allocator, "tests/test_gap0810_parse_cache_wrapper.zig");
     const parse_wrapper = maybe_parse_wrapper orelse return error.FileNotFound;
     defer allocator.free(parse_wrapper);
     try testing.expect(std.mem.indexOf(u8, parse_wrapper, "test \"query_ast_cache_shared_singleflight\"") != null);
+    try testing.expect(std.mem.indexOf(u8, parse_wrapper, "test \"query_ast_cache_unique_misses_do_not_collapse\"") != null);
     try testing.expect(std.mem.indexOf(u8, parse_wrapper, "std.Thread.spawn") != null);
 
     const maybe_plan_hit = try readFile(allocator, "tests/test_plan_cache_hit.zig");
     const plan_hit = maybe_plan_hit orelse return error.FileNotFound;
     defer allocator.free(plan_hit);
     try testing.expect(std.mem.indexOf(u8, plan_hit, "test \"shared_query_optimizer_plan_singleflight\"") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_hit, "test \"shared_query_optimizer_unique_misses_do_not_collapse\"") != null);
     try testing.expect(std.mem.indexOf(u8, plan_hit, "std.Thread.spawn") != null);
 }
 

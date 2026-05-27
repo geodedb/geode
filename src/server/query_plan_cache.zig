@@ -449,6 +449,8 @@ pub const SharedQueryOptimizer = struct {
     hit_count: u64 = 0,
     miss_count: u64 = 0,
     lock: std.Io.Mutex = std.Io.Mutex.init,
+    inflight_misses: std.AutoHashMap(u64, void),
+    miss_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     schema_epoch: u64 = 0,
     lru_head: ?u64 = null,
     lru_tail: ?u64 = null,
@@ -458,6 +460,7 @@ pub const SharedQueryOptimizer = struct {
         return .{
             .allocator = allocator,
             .plan_cache = std.AutoHashMap(u64, SharedCachedPlan).init(allocator),
+            .inflight_misses = std.AutoHashMap(u64, void).init(allocator),
             .max_size = max_size,
             .cost_model = CostModel.init(),
         };
@@ -471,6 +474,7 @@ pub const SharedQueryOptimizer = struct {
             self.allocator.free(entry.value_ptr.query_text);
             self.allocator.free(entry.value_ptr.plan.operators);
         }
+        self.inflight_misses.deinit();
         self.plan_cache.deinit();
     }
 
@@ -483,68 +487,122 @@ pub const SharedQueryOptimizer = struct {
         stats: StoreStats,
     ) !SharedPlanHandle {
         const key = hashQueryText(query_text);
-        const current_epoch = self.schema_epoch;
+        var generation_epoch: u64 = 0;
+        var cost_model = CostModel.init();
 
         // CANARY: REQ=REQ-QUIC-HC-105; FEATURE="High-Concurrency Query Cache"; ASPECT=PlanMissSingleFlight; STATUS=TESTED; TEST=shared_query_optimizer_plan_singleflight; OWNER=engine; UPDATED=2026-05-27
-        // Keep plan generation inside the shared optimizer mutex for cache
-        // misses. This deliberately trades different-query miss parallelism for
-        // same-query single-flight behavior, which is the high-concurrency QUIC
-        // hot path: hundreds of connections frequently release the same query
-        // at once after authentication.
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        // Same-query fan-out should singleflight, but unrelated first-time
+        // query shapes must not wait behind one global optimizer mutex. Mark
+        // the missed key as in-flight, generate the real plan outside the lock,
+        // then publish it and wake same-key waiters.
+        while (true) {
+            self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            const current_epoch = self.schema_epoch;
 
-        if (self.plan_cache.getPtr(key)) |cached| {
-            if (std.mem.eql(u8, cached.query_text, query_text) and
-                cached.schema_epoch >= current_epoch)
-            {
-                self.hit_count += 1;
-                cached.access_count += 1;
-                cached.last_accessed = compat_timestamp();
-                cached.ref_count += 1;
-                self.lruPromoteUnlocked(key);
-                const handle = SharedPlanHandle{
-                    .cache = self,
-                    .key = key,
-                    .plan = &cached.plan,
-                };
-                return handle;
-            }
+            if (self.plan_cache.getPtr(key)) |cached| {
+                if (std.mem.eql(u8, cached.query_text, query_text) and
+                    cached.schema_epoch >= current_epoch)
+                {
+                    self.hit_count += 1;
+                    cached.access_count += 1;
+                    cached.last_accessed = compat_timestamp();
+                    cached.ref_count += 1;
+                    self.lruPromoteUnlocked(key);
+                    const handle = SharedPlanHandle{
+                        .cache = self,
+                        .key = key,
+                        .plan = &cached.plan,
+                    };
+                    self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                    return handle;
+                }
 
-            // Stale entry (schema epoch mismatch) or hash collision — evict if unreferenced
-            if (cached.ref_count == 0) {
-                self.lruRemoveNodeUnlocked(key);
-                if (self.plan_cache.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.value.query_text);
-                    self.allocator.free(kv.value.plan.operators);
+                // Stale entry (schema epoch mismatch) or hash collision.
+                if (cached.ref_count == 0) {
+                    self.lruRemoveNodeUnlocked(key);
+                    if (self.plan_cache.fetchRemove(key)) |kv| {
+                        self.allocator.free(kv.value.query_text);
+                        self.allocator.free(kv.value.plan.operators);
+                    }
+                } else {
+                    const observed_generation = self.miss_generation.load(.acquire);
+                    self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                    self.waitForMissGeneration(observed_generation);
+                    continue;
                 }
             }
-        }
-        self.miss_count += 1;
 
-        const plan = try generateRealPlan(self.allocator, &self.cost_model, program, stats, current_epoch);
+            if (self.inflight_misses.contains(key)) {
+                const observed_generation = self.miss_generation.load(.acquire);
+                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                self.waitForMissGeneration(observed_generation);
+                continue;
+            }
+
+            self.inflight_misses.put(key, {}) catch |err| {
+                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                return err;
+            };
+            self.miss_count += 1;
+            generation_epoch = current_epoch;
+            cost_model = self.cost_model;
+            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+            break;
+        }
+
+        const plan = generateRealPlan(self.allocator, &cost_model, program, stats, generation_epoch) catch |err| {
+            self.finishInflightMiss(key);
+            return err;
+        };
+        const query_text_copy = self.allocator.dupe(u8, query_text) catch |err| {
+            self.allocator.free(plan.operators);
+            self.finishInflightMiss(key);
+            return err;
+        };
+
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+
+        if (self.schema_epoch != generation_epoch) {
+            self.allocator.free(plan.operators);
+            self.allocator.free(query_text_copy);
+            _ = self.inflight_misses.remove(key);
+            _ = self.miss_generation.fetchAdd(1, .release);
+            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+            std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+            return self.optimizeQuery(query_text, program, stats);
+        }
 
         if (self.plan_cache.count() >= self.max_size) {
             self.evictLeastUsedUnlocked();
         }
 
         const cached_plan = SharedCachedPlan{
-            .query_text = try self.allocator.dupe(u8, query_text),
+            .query_text = query_text_copy,
             .plan = plan,
             .created_at = compat_timestamp(),
             .last_accessed = compat_timestamp(),
             .access_count = 1,
             .ref_count = 1,
-            .schema_epoch = current_epoch,
+            .schema_epoch = generation_epoch,
         };
         errdefer {
             self.allocator.free(cached_plan.query_text);
             self.allocator.free(cached_plan.plan.operators);
         }
 
-        try self.plan_cache.put(key, cached_plan);
+        self.plan_cache.put(key, cached_plan) catch |err| {
+            _ = self.inflight_misses.remove(key);
+            _ = self.miss_generation.fetchAdd(1, .release);
+            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+            std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+            return err;
+        };
         self.lruInsertHeadUnlocked(key);
-        const cached_ptr = self.plan_cache.getPtr(key) orelse return error.OutOfMemory;
+        _ = self.inflight_misses.remove(key);
+        _ = self.miss_generation.fetchAdd(1, .release);
+        const cached_ptr = self.plan_cache.getPtr(key).?;
+        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
         return SharedPlanHandle{
             .cache = self,
             .key = key,
@@ -557,8 +615,33 @@ pub const SharedQueryOptimizer = struct {
         self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.plan_cache.getPtr(key)) |entry| {
-            if (entry.ref_count > 0) entry.ref_count -= 1;
+            if (entry.ref_count > 0) {
+                entry.ref_count -= 1;
+                if (entry.ref_count == 0) {
+                    _ = self.miss_generation.fetchAdd(1, .release);
+                    std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+                }
+            }
         }
+    }
+
+    fn waitForMissGeneration(self: *SharedQueryOptimizer, observed_generation: u32) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const timeout: std.Io.Timeout = .{ .duration = .{
+            .raw = std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms),
+            .clock = .awake,
+        } };
+        io.futexWaitTimeout(u32, &self.miss_generation.raw, observed_generation, timeout) catch |err| switch (err) {
+            error.Canceled => {},
+        };
+    }
+
+    fn finishInflightMiss(self: *SharedQueryOptimizer, key: u64) void {
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        _ = self.inflight_misses.remove(key);
+        _ = self.miss_generation.fetchAdd(1, .release);
+        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
     }
 
     /// Invalidate all cached plans (e.g., after CREATE/DROP INDEX)
