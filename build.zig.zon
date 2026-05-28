@@ -132,8 +132,13 @@
             // STREAM responses do not strand high-concurrency clients.
             // 2026-05-28: adds gated short-header drop diagnostics used to
             // isolate missing first post-handshake requests under fan-out.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#d12803fae040424793ebbd5cdc717d6718352f6b",
-            .hash = "quic-0.1.21-gBIqUYqBPACByMRu7gl3FlEY325PN2T2i-CaE9Qd7M9b",
+            // 2026-05-28: keeps port-0 client UDP binds unique under fan-out and
+            // fixes sendmmsg peer storage so batched paced sends cannot target
+            // the wrong client socket.
+            // 2026-05-28: serializes per-connection TLS Context access so
+            // concurrent poll workers cannot race pollCrypto ownership drains.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#292fb1aa2e7a1da80768c6d11bbf3354a7410a79",
+            .hash = "quic-0.1.21-gBIqUV-3PABNnNpRZbhlhCJ_QPraT0JxrnGDjlQIDbgW",
         },
 
         // =======================================================================
@@ -239,8 +244,12 @@
             // quic adac2dc's app PTO rearm-on-send-failure fix.
             // 2026-05-28: bumped to 0886276 so client and server share
             // quic d12803f's gated short-header drop diagnostics.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#08862763f11aa51e1fdf7f4e3d2a4e75196e065e",
-            .hash = "geode_client_zig-0.2.9-8ysbV-ZgCQBdFEzntWzAXNiDyvMjIE-r7aDjpp9X6QSS",
+            // 2026-05-28: bumped to a3a5dde so client and server share
+            // quic d7d023c's UDP fan-out fixes.
+            // 2026-05-28: bumped to 65336fe so client and server share
+            // quic 292fb1a's TLS pollCrypto serialization.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#65336fec1f99b367cc5d323ca3107438c8064a47",
+            .hash = "geode_client_zig-0.2.9-8ysbVxViCQC3HlOOsFkLHmYFzS2BRiLRi5NiKsCl42O1",
         },
 
         // =======================================================================
