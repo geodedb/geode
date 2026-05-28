@@ -352,6 +352,9 @@ test "quic endpoint poll cycle has a receive fairness budget" {
     try testing.expect(std.mem.indexOf(u8, endpoint, "max_packets_per_poll_cycle") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "const max_packets_per_poll_cycle: usize = udp_transport_mod.UdpBatchCap;") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "stats.packets_processed >= max_packets_per_poll_cycle") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-123") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "max_short_header_packets_per_poll_cycle") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "short_header_packets_processed >= max_short_header_packets_per_poll_cycle") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-059") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "max_initial_packets_per_poll_cycle") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "const max_initial_packets_per_poll_cycle: usize = max_packets_per_poll_cycle") != null);
