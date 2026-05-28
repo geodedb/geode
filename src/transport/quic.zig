@@ -490,7 +490,10 @@ pub const QuicTransport = struct {
                         Attr.string("path", self.config.cert_path),
                     });
                 } else |gen_err| {
-                    tlog.fatal("TLS certificates not found and generation failed", &.{
+                    // Use .err (not .fatal) so the logger does not panic when
+                    // this fires inside a unit-test binary.  The caller still
+                    // receives CertificateError and the server refuses to start.
+                    tlog.err("TLS certificates not found and generation failed", &.{
                         Attr.string("cert_path", self.config.cert_path),
                         Attr.string("key_path", self.config.key_path),
                         Attr.string("error", @errorName(gen_err)),
@@ -931,12 +934,43 @@ pub const QuicTransport = struct {
     }
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
-        _ = self;
-        // Zig 0.16 compat: std.process.Child.run/init were removed. The
-        // openssl-based generation path needs to be rewritten against the new
-        // Child API; for now surface the error so the operator provides certs
-        // explicitly.
-        return QuicError.CertificateError;
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        // Ensure the parent directory for the certificate exists.
+        if (std.fs.path.dirname(self.config.cert_path)) |dir_path| {
+            if (dir_path.len > 0) {
+                std.Io.Dir.cwd().createDirPath(io, dir_path) catch |err| switch (err) {
+                    error.PathAlreadyExists => {},
+                    else => return QuicError.CertificateError,
+                };
+            }
+        }
+
+        // Build argv: openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
+        //   -nodes -keyout <key_path> -out <cert_path> -days 365 -subj "/CN=geode-autogen"
+        const argv = [_][]const u8{
+            "openssl",                      "req",    "-x509",
+            "-newkey",                      "ec",     "-pkeyopt",
+            "ec_paramgen_curve:prime256v1", "-nodes", "-keyout",
+            self.config.key_path,           "-out",   self.config.cert_path,
+            "-days",                        "365",    "-subj",
+            "/CN=geode-autogen",
+        };
+
+        var child = try std.process.spawn(io, .{
+            .argv = &argv,
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        });
+
+        const term = try std.process.Child.wait(&child, io);
+        switch (term) {
+            .exited => |code| {
+                if (code != 0) return QuicError.CertificateError;
+            },
+            else => return QuicError.CertificateError,
+        }
     }
 };
 

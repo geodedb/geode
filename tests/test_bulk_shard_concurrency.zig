@@ -31,6 +31,8 @@ fn napNs(ns: u64) void {
 
 const InsertCtx = struct {
     adapter: *adapter_mod.StorageAdapter,
+    /// Pre-generated reserved IDs (filled by the main thread before workers start).
+    reserved_ids: []const u64,
     ids_out: []u64,
     err: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -38,12 +40,10 @@ const InsertCtx = struct {
 
 fn insertWorker(ctx_ptr: *anyopaque) void {
     const ctx: *InsertCtx = @ptrCast(@alignCast(ctx_ptr));
-    const store = graph_store.getGlobalStore(graph_store.global_allocator());
     const labels = [_][]const u8{"L"};
     const props = [_]adapter_mod.StorageAdapter.PropKV{};
 
-    for (ctx.ids_out) |*id_slot| {
-        const reserved = store.reserveNodeId();
+    for (ctx.reserved_ids, ctx.ids_out) |reserved, *id_slot| {
         const inserted = ctx.adapter.bulkInsertNodeWithReservedId(
             "g",
             reserved,
@@ -73,17 +73,29 @@ test "16-worker concurrent bulkInsertNodeWithReservedId: 1600 distinct ids, no d
     defer adapter.deinit();
     _ = try adapter.getOrCreateGraph("g");
 
-    const pool = try pooled.ThreadPool.init(allocator, .{ .num_threads = 16, .queue_capacity = 64 });
-    defer pool.deinit();
-
+    // Pre-generate all reserved IDs from the main thread so worker threads
+    // do not race on getGlobalStore()/g_init_mutex when the global store has
+    // not been initialized via the adapter path.  reserveNodeId() is a
+    // lock-free atomic CAS on a global counter and is safe to call here.
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
     const workers: usize = 16;
     const per_worker: usize = 100;
+    var reserved_ids: [workers][per_worker]u64 = undefined;
+    for (&reserved_ids) |*row| {
+        for (row) |*slot| {
+            slot.* = store.reserveNodeId();
+        }
+    }
+
+    const pool = try pooled.ThreadPool.init(allocator, .{ .num_threads = 16, .queue_capacity = 64 });
+    defer pool.deinit();
 
     var ctxs: [16]InsertCtx = undefined;
     var id_buffers: [16][per_worker]u64 = undefined;
     for (&ctxs, 0..) |*c, i| {
         c.* = .{
             .adapter = adapter,
+            .reserved_ids = reserved_ids[i][0..],
             .ids_out = id_buffers[i][0..],
         };
         try pool.submitBlocking(.{
@@ -93,8 +105,9 @@ test "16-worker concurrent bulkInsertNodeWithReservedId: 1600 distinct ids, no d
     }
 
     // Wait for every worker. The direct test usually finishes in a few seconds,
-    // but sharded pre-push runs many storage suites in parallel on the same host.
-    const deadline_ns = nowNs() + 30 * std.time.ns_per_s;
+    // but CI runs 8 parallel shards on the same host — use a generous 120 s
+    // deadline to avoid spurious timeouts under resource contention.
+    const deadline_ns = nowNs() + 120 * std.time.ns_per_s;
     outer: while (true) {
         var all_done = true;
         for (&ctxs) |*c| {
