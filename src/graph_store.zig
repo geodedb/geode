@@ -514,6 +514,12 @@ pub const GraphStore = struct {
     // (`mg.rwlock`) — inserting a new key rehashes the map, which must remain
     // exclusive.
     label_index: std.StringHashMap(LabelPosting),
+    // CANARY: REQ=REQ-QUIC-HC-120; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelCountRefcounts; STATUS=TESTED; TEST=test_graph_store_label_count_refcounts; OWNER=storage; UPDATED=2026-05-28
+    //
+    // Exact (graph, label) cardinalities maintained beside `label_index`.
+    // Count-only reads can load this refcount under a short mutex instead of
+    // contending on the hot posting-list mutex used by concurrent inserts.
+    label_counts_by_graph: std.StringHashMap(usize),
     // CANARY: REQ=REQ-PERF-GRAPH-SCOPED-NODES-001; FEATURE="GraphScopedNodeIndex"; ASPECT=NodesByGraph; STATUS=TESTED; TEST=tests/test_perf_b_graph_scoped_iteration.zig; OWNER=perf; UPDATED=2026-05-15
     // PERF-B (issue #811): Per-graph node-id index so MATCH (n) and equivalent
     // full-store iterators can scope to a single graph in O(nodes_in_graph)
@@ -584,6 +590,7 @@ pub const GraphStore = struct {
     // posting-list insert. This mutex guards the outer map and is held while
     // a posting's leaf mutex is held, so rehash cannot move a locked posting.
     label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    label_count_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-825 (issue #825): per-store rwlock that serialises the
     // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
     // `removeNodeLabel`, and their `NoSave` variants) against the
@@ -643,6 +650,7 @@ pub const GraphStore = struct {
             .graphs = std.StringHashMap(void).init(allocator),
             // Issue #391, #392: Initialize performance optimization indexes
             .label_index = std.StringHashMap(LabelPosting).init(allocator),
+            .label_counts_by_graph = std.StringHashMap(usize).init(allocator),
             // PERF-B (issue #811): per-graph node-id index for O(nodes_in_graph) scans.
             .nodes_by_graph = std.StringHashMap(std.AutoHashMap(u64, void)).init(allocator),
             // PERF-C (issue #814): tenant-keyed multiset for O(1) LSP introspection.
@@ -710,6 +718,12 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.label_index.deinit();
+
+        var label_count_iter = self.label_counts_by_graph.iterator();
+        while (label_count_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.label_counts_by_graph.deinit();
 
         // PERF-B (issue #811): Clean up per-graph node-id index.
         var nbg_iter = self.nodes_by_graph.iterator();
@@ -837,6 +851,13 @@ pub const GraphStore = struct {
         }
         self.label_index.deinit();
         self.label_index = std.StringHashMap(LabelPosting).init(self.allocator);
+
+        var label_count_iter = self.label_counts_by_graph.iterator();
+        while (label_count_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.label_counts_by_graph.deinit();
+        self.label_counts_by_graph = std.StringHashMap(usize).init(self.allocator);
 
         // PERF-B (issue #811): Reset per-graph node-id index.
         {
@@ -1994,12 +2015,90 @@ pub const GraphStore = struct {
         return result.value_ptr;
     }
 
+    fn formatGraphLabelKey(
+        scratch: []u8,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        label: []const u8,
+    ) !struct { key: []const u8, owned: ?[]u8 } {
+        const key = std.fmt.bufPrint(scratch, "{s}:{s}", .{ graph_name, label }) catch |err| switch (err) {
+            error.NoSpaceLeft => {
+                const owned = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ graph_name, label });
+                return .{ .key = owned, .owned = owned };
+            },
+        };
+        return .{ .key = key, .owned = null };
+    }
+
+    fn ensureGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) !void {
+        var key_buf: [512]u8 = undefined;
+        var formatted = try formatGraphLabelKey(&key_buf, self.allocator, graph_name, label);
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_mutex.lockUncancelable(io);
+        defer self.label_count_mutex.unlock(io);
+
+        if (self.label_counts_by_graph.contains(formatted.key)) return;
+
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+        errdefer self.allocator.free(owned_key);
+        try self.label_counts_by_graph.put(owned_key, 0);
+    }
+
+    fn bumpGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
+        var key_buf: [512]u8 = undefined;
+        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_mutex.lockUncancelable(io);
+        defer self.label_count_mutex.unlock(io);
+        const count = self.label_counts_by_graph.getPtr(formatted.key) orelse return;
+        count.* += 1;
+    }
+
+    fn decGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
+        var key_buf: [512]u8 = undefined;
+        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_mutex.lockUncancelable(io);
+        defer self.label_count_mutex.unlock(io);
+
+        const entry = self.label_counts_by_graph.getEntry(formatted.key) orelse return;
+        if (entry.value_ptr.* > 1) {
+            entry.value_ptr.* -= 1;
+            return;
+        }
+        const owned_key = entry.key_ptr.*;
+        _ = self.label_counts_by_graph.remove(formatted.key);
+        self.allocator.free(owned_key);
+    }
+
+    fn countGraphLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) usize {
+        var key_buf: [512]u8 = undefined;
+        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return 0;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const mutable_self: *GraphStore = @constCast(self);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mutable_self.label_count_mutex.lockUncancelable(io);
+        defer mutable_self.label_count_mutex.unlock(io);
+        return mutable_self.label_counts_by_graph.get(formatted.key) orelse 0;
+    }
+
     fn ensureLabelPostingCapacity(self: *GraphStore, graph_name: []const u8, label: []const u8, additional: usize) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
         defer self.label_index_mutex.unlock(io);
 
         const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+        try self.ensureGraphLabelCount(graph_name, label);
         posting.lock();
         defer posting.unlock();
         try posting.list.ensureUnusedCapacity(self.allocator, additional);
@@ -2020,12 +2119,17 @@ pub const GraphStore = struct {
         posting.lock();
         defer posting.unlock();
         const items = posting.list.items;
+        var inserted = false;
         if (items.len == 0 or items[items.len - 1] < node_id) {
             try posting.list.append(self.allocator, node_id);
+            inserted = true;
         } else {
             // Defensive fallback for non-monotonic ids.
+            const before_len = posting.list.items.len;
             try sortedInsertLocked(&posting.list, self.allocator, node_id);
+            inserted = posting.list.items.len > before_len;
         }
+        if (inserted) self.bumpGraphLabelCount(graph_name, label);
     }
 
     fn createNodeWithIdInternal(
@@ -2375,9 +2479,12 @@ pub const GraphStore = struct {
         defer self.label_index_mutex.unlock(io);
 
         const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+        try self.ensureGraphLabelCount(graph_name, label);
         posting.lock();
         defer posting.unlock();
+        const before_len = posting.list.items.len;
         try sortedInsertLocked(&posting.list, self.allocator, node_id);
+        if (posting.list.items.len > before_len) self.bumpGraphLabelCount(graph_name, label);
     }
 
     /// Binary-search insert into a sorted ArrayList(u64), maintaining
@@ -2438,10 +2545,13 @@ pub const GraphStore = struct {
                         hi = mid;
                     }
                 }
+                var removed = false;
                 if (lo < items.len and items[lo] == node_id) {
                     _ = posting.list.orderedRemove(lo);
+                    removed = true;
                 }
                 should_remove_key = posting.list.items.len == 0;
+                if (removed) self.decGraphLabelCount(graph_name, label);
             }
 
             // Remove the map entry after releasing the posting's mutex: the
@@ -2779,6 +2889,13 @@ pub const GraphStore = struct {
         }
         self.label_index.deinit();
         self.label_index = std.StringHashMap(LabelPosting).init(self.allocator);
+
+        var label_count_iter = self.label_counts_by_graph.iterator();
+        while (label_count_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.label_counts_by_graph.deinit();
+        self.label_counts_by_graph = std.StringHashMap(usize).init(self.allocator);
 
         // PERF-B (issue #811): Reset per-graph node-id index for rebuild.
         {
@@ -3458,22 +3575,28 @@ pub const GraphStore = struct {
         // whole-graph rwlock with readers. Count must therefore take the same
         // outer/leaf label-index locks as writers instead of aliasing the live
         // ArrayList through getNodesByLabel().
-        var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return 0;
+        if (tenant == null) {
+            // CANARY: REQ=REQ-QUIC-HC-120; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelCountRefcountRead; STATUS=TESTED; TEST=test_graph_store_label_count_refcounts; OWNER=storage; UPDATED=2026-05-28
+            //
+            // The common QUIC count path only needs exact cardinality, not the
+            // posting list. Read the maintained graph+label refcount so count
+            // requests do not queue behind same-label insert sorting.
+            return self.countGraphLabel(graph_name, label);
+        }
+
         const mutable_self: *GraphStore = @constCast(self);
+        var key_buf: [512]u8 = undefined;
+        const formatted = formatGraphLabelKey(&key_buf, mutable_self.allocator, graph_name, label) catch return 0;
+        defer if (formatted.owned) |owned| mutable_self.allocator.free(owned);
+
         const io = std.Io.Threaded.global_single_threaded.io();
         mutable_self.label_index_mutex.lockUncancelable(io);
         defer mutable_self.label_index_mutex.unlock(io);
 
-        const posting = mutable_self.label_index.getPtr(key) orelse return 0;
+        const posting = mutable_self.label_index.getPtr(formatted.key) orelse return 0;
         posting.lock();
         defer posting.unlock();
 
-        if (tenant == null) {
-            // O(1) — `removeFromLabelIndex` keeps the posting list in sync on
-            // delete, so `.len` is the exact live count.
-            return posting.list.items.len;
-        }
         const tid = tenant.?;
         var count: usize = 0;
         for (posting.list.items) |node_id| {
@@ -8410,6 +8533,40 @@ test "GAP-0525: sorted posting-list ordering is ascending" {
     for (1..list.?.len) |i| {
         try testing.expect(list.?[i] > list.?[i - 1]);
     }
+}
+
+test "REQ-QUIC-HC-120: label count refcounts track graph-scoped creates and deletes" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    const alpha = [_][]const u8{"Counted"};
+    const beta = [_][]const u8{"Other"};
+
+    const id1 = try store.createNodeWithGraph(&alpha, "default");
+    _ = try store.createNodeWithGraph(&alpha, "default");
+    _ = try store.createNodeWithGraph(&alpha, "analytics");
+    _ = try store.createNodeWithGraph(&beta, "default");
+
+    try testing.expectEqual(@as(usize, 2), store.countNodesByLabel("default", "Counted", null));
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("analytics", "Counted", null));
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("default", "Other", null));
+
+    store.deleteNodeNoSave(id1);
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("default", "Counted", null));
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("analytics", "Counted", null));
+
+    try store.rebuildIndexes();
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("default", "Counted", null));
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("analytics", "Counted", null));
+
+    const long_label = try testing.allocator.alloc(u8, 600);
+    defer testing.allocator.free(long_label);
+    @memset(long_label, 'L');
+    const long_labels = [_][]const u8{long_label};
+    const long_id = try store.createNodeWithGraph(&long_labels, "analytics-long-label");
+    try testing.expectEqual(@as(usize, 1), store.countNodesByLabel("analytics-long-label", long_label, null));
+    store.deleteNodeNoSave(long_id);
+    try testing.expectEqual(@as(usize, 0), store.countNodesByLabel("analytics-long-label", long_label, null));
 }
 
 test "GAP-0519: getNodesByLabels heap fallback for >8 labels" {

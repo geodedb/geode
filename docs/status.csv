@@ -3986,6 +3986,8 @@ REQ-QUIC-HC-114,High-Concurrency Setup,ConfigurableHelloReadTimeout,IMPL,,,trans
 REQ-QUIC-HC-118,High-Concurrency Test Harness,BoundedDriverThreadStacks,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
 REQ-QUIC-HC-119,High-Concurrency Test Client,SubMillisecondReadPolling,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig
 REQ-QUIC-HC-119,QUIC High-Concurrency Reads,BatchedCountFastPathResponse,TESTED,,,transport,2026-05-27,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-120,High-Concurrency Label Counts,LabelCountRefcountRead,TESTED,,,storage,2026-05-28,src/graph_store.zig
+REQ-QUIC-HC-120,High-Concurrency Label Counts,LabelCountRefcounts,TESTED,,,storage,2026-05-28,src/graph_store.zig
 REQ-QUIC-HC-120,High-Concurrency Test Client,PostReadAckFlush,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig

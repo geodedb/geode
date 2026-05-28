@@ -1918,7 +1918,10 @@ test "quic count fast path reuses active read store without nested ReadView" {
     defer allocator.free(graph_store_content);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "pub fn getActiveQueryReadStore()") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "REQ=REQ-QUIC-HC-032") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "REQ=REQ-QUIC-HC-120") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "label_index_mutex") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "label_counts_by_graph") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "return self.countGraphLabel(graph_name, label);") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "posting.lock()") != null);
 }
 
