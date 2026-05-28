@@ -1649,7 +1649,8 @@ pub fn main() !void {
         // CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
         // Per-connection TLS crypto polling is serialized in the QUIC library;
         // more than 16 endpoint poll workers contends on that serialization
-        // point and regresses 2048-client mixed read/write request fan-out.
+        // point and regresses high-fanout setup and mixed read/write request
+        // fan-out.
         const quic_poll_worker_count = envUsize(
             gpa,
             "GEODE_QUIC_POLL_WORKERS",

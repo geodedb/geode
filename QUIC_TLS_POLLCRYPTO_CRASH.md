@@ -4,11 +4,52 @@
 **Build:** geode `main` @ `935f197f` (`v0.6.4-63-g935f197f`), Zig 0.16.0, ReleaseSafe
 **Deps:** `tls-0.1.7-mtEaLPZ…`, `quic-0.1.21-gBIqUYqB…` (the 2026-05-28 vendor pin), `thread_pool-0.2.4`
 **Severity:** High — unrecoverable panic (exit 139 / SIGSEGV) takes down the whole server process.
-**Status:** reproducible (3/3 on the write-ramp workload below; 0/1 on an isolated single-level run).
+**Status:** fixed upstream and pinned downstream on 2026-05-28.
 
 This is a **different** failure from the #864 pollLoop-saturation deadlock. #864 is fixed on
 this build (see "What is NOT affected"). This crash is a concurrency/memory-safety bug in the
 TLS handshake-output path.
+
+## 0. Resolution status
+
+The TLS `pollCrypto` crash is closed by the upstream QUIC dependency and the matching Geode
+dependency pins:
+
+| Repo | Commit | Purpose |
+|------|--------|---------|
+| `devnw/zig/quic` | `292fb1aa2e7a1da80768c6d11bbf3354a7410a79` | Serializes deferred per-connection TLS handshake retries so concurrent endpoint poll workers cannot drain the same TLS `pollCrypto` buffer. |
+| `devnw/zig/quic` | `553975f8da04e079888e78f12dc43a68e2fb4d07` | Adds a server-side receive-drain budget for request bursts after the crash fix, preventing high-fanout STREAM frames from being stranded behind PTO. |
+| `devnw/codepros/geode/geode-client-zig` | `0fb1eaee496a7983f3d200272990c92586fc20e8` | Pins the client package to the same QUIC fix set. |
+| `devnw/codepros/geode/geode` | this dependency update | Pins direct `quic` and `geode_client_zig` dependencies to the same upstream QUIC revision. |
+
+Regression coverage now includes the Geode vendored-source guard
+`test-quic-condition-cadence`, which checks the upstream `REQ-QUIC-HC-137` TLS serialization
+and `REQ-QUIC-HC-142` server receive-drain shape, plus the high-concurrency QUIC E2E mixed
+read/write harness.
+
+Latest verified Geode high-concurrency run:
+
+```sh
+GEODE_HC_WORKERS=2048 \
+GEODE_HC_OPS_PER_WORKER=2 \
+GEODE_HC_MUTATION_STRIDE=4 \
+GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
+GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_REQUEST_STAGGER_US=1000 \
+GEODE_HC_EXEC_TIMEOUT_SECS=6 \
+GEODE_HC_EXEC_RETRIES=0 \
+GEODE_HC_POLL_WORKERS=16 \
+timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
+```
+
+Result: 2048 clients connected and completed 4096 operations, including 1024 mutations, at
+1972.24 QPS with zero setup retries, zero execution retries, zero reconnects, and no
+`pollCrypto` crash.
+
+Known remaining throughput limit: a synchronized 4096-client / 4096-operation run now reaches
+`ready=4096` without the TLS crash, but most operations time out after they are started. That
+is a separate post-handshake scheduling/backpressure limit and is documented in
+`docs/audit/quic-high-concurrency-2026-05-28.md`.
 
 ---
 
@@ -143,28 +184,27 @@ QUIC vendor library calls`): that mutex guards the **client/query** vendor calls
 lock, trusting the lib's internal locking — which does not cover per-connection TLS buffer
 ownership transfer.
 
-## 5. Suggested fixes (in preference order)
+## 5. Implemented fixes
 
 1. **Serialize per-connection TLS context access inside the QUIC endpoint.** The real invariant
-   is "one connection's `tls_context` is mutated by at most one thread at a time." Add a
-   per-connection mutex (or an atomic "poll in progress" guard) in `endpoint.pollWithStats`
-   around the per-connection handshake drive (the `sendHandshakePackets`/`pollCrypto` block at
-   `endpoint.zig:~1860`), so two workers cannot drive the same connection's handshake
-   concurrently. This is the correct fix and mirrors the A6f per-connection-mutex pattern,
-   extended to the server poll path.
+   is "one connection's `tls_context` is mutated by at most one thread at a time." Upstream QUIC
+   commit `292fb1aa2e7a1da80768c6d11bbf3354a7410a79` applies that invariant to the pending
+   handshake retry path by taking the endpoint receive serialization mutex and setting the
+   active connection before driving `sendHandshakePackets`. Two poll workers can no longer
+   concurrently drain one connection's TLS `pollCrypto` output.
 
-2. **Make `pollCrypto` ownership-transfer atomic w.r.t. appends.** If the TLS `Context` is meant
-   to be single-writer, assert it (debug-only thread-id check) to catch the violation at its
-   source rather than as a downstream memcpy panic. If it is meant to be concurrent, the
-   `outbound` ArrayList itself needs a mutex covering both the producing append and the
-   `toOwnedSlice` drain.
+2. **Increase server receive fairness under request bursts.** Upstream QUIC commit
+   `553975f8da04e079888e78f12dc43a68e2fb4d07` keeps the client one-batch receive budget, but lets
+   servers drain four UDP batches per endpoint poll cycle. This avoids synchronized STREAM
+   request bursts being left for PTO after thousands of clients become ready together.
 
-3. **Do not rely on `toOwnedSlice` under possible concurrency.** Even with a fix, prefer a
-   snapshot under lock: take the mutex, read `items.len`, `alignedAlloc`, `@memcpy`, reset —
-   all inside the critical section — so the length cannot change mid-copy.
+3. **Pin every downstream consumer to the same QUIC revision.** Geode now pins its direct QUIC
+   dependency and `geode_client_zig` to the same upstream commit so client and server code do not
+   pull different QUIC module instances into the build.
 
-Fix (1) is the root-cause fix; (2)/(3) are defense-in-depth. A debug `std.debug.assert` of a
-per-context owner thread id would have surfaced this immediately and is cheap to add.
+The original defense-in-depth guidance still applies for future TLS work: ownership transfer
+from TLS outbound buffers must stay inside a single-writer critical section, and debug-only owner
+assertions would catch any future regression earlier than a downstream `@memcpy` panic.
 
 ## 6. What is NOT affected (scope)
 

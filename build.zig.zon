@@ -137,8 +137,10 @@
             // the wrong client socket.
             // 2026-05-28: serializes per-connection TLS Context access so
             // concurrent poll workers cannot race pollCrypto ownership drains.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#292fb1aa2e7a1da80768c6d11bbf3354a7410a79",
-            .hash = "quic-0.1.21-gBIqUV-3PABNnNpRZbhlhCJ_QPraT0JxrnGDjlQIDbgW",
+            // 2026-05-28: increases server-side receive drain budget so
+            // synchronized request bursts do not strand STREAM retransmits in PTO.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#553975f8da04e079888e78f12dc43a68e2fb4d07",
+            .hash = "quic-0.1.21-gBIqUbK-PADihR_ErQkFf24QYzF5z56A8Kc-v2blbsnc",
         },
 
         // =======================================================================
@@ -248,8 +250,10 @@
             // quic d7d023c's UDP fan-out fixes.
             // 2026-05-28: bumped to 65336fe so client and server share
             // quic 292fb1a's TLS pollCrypto serialization.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#65336fec1f99b367cc5d323ca3107438c8064a47",
-            .hash = "geode_client_zig-0.2.9-8ysbVxViCQC3HlOOsFkLHmYFzS2BRiLRi5NiKsCl42O1",
+            // 2026-05-28: bumped to 0fb1eae so client and server share
+            // quic 553975f's server receive burst drain.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#0fb1eaee496a7983f3d200272990c92586fc20e8",
+            .hash = "geode_client_zig-0.2.9-8ysbVxViCQCP78K7o_yQH5e6qcQXI0KgcA1te3ck39N2",
         },
 
         // =======================================================================
