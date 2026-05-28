@@ -105,8 +105,6 @@ pub const PollSync = struct {
     io_cv: std.Io.Condition = std.Io.Condition.init,
     /// Wakes the poll thread blocked in enterPoll (waiting for I/O to drain).
     drain_cv: std.Io.Condition = std.Io.Condition.init,
-    /// Wakes handler threads waiting for new data after a poll cycle.
-    poll_cv: std.Io.Condition = std.Io.Condition.init,
     poll_requested: bool = false,
     active_io_count: u32 = 0,
     poll_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -116,7 +114,9 @@ pub const PollSync = struct {
     // a thundering herd under 100s of connections. A bounded futex wake lets
     // active streams make progress without burning the poll thread's CPU slice
     // on readers whose connection did not receive data in that cycle.
-    const poll_wake_batch_size: u32 = 64;
+    // Do not pair this with a Condition.broadcast(); poll_generation is the
+    // stream-reader wait path, and broadcasting reintroduces the wake storm.
+    const poll_wake_batch_size: u32 = 256;
 
     /// Called by handler threads before I/O. Blocks until safe to proceed.
     pub fn enterIo(self: *PollSync) void {
@@ -184,14 +184,13 @@ pub const PollSync = struct {
         }
     }
 
-    /// Advance the poll generation and wake all stream readers parked in
-    /// `waitForPoll`.  This is called after every endpoint poll cycle that may
+    /// Advance the poll generation and wake a bounded batch of stream readers
+    /// parked in `waitForPoll`.  This is called after every endpoint poll cycle that may
     /// have delivered packets into connection stream buffers.
     pub fn notifyPoll(self: *PollSync) void {
         _ = self.poll_generation.fetchAdd(1, .release);
         const io = std.Io.Threaded.global_single_threaded.io();
         io.futexWake(u32, &self.poll_generation.raw, poll_wake_batch_size);
-        self.poll_cv.broadcast(io);
     }
 };
 
@@ -611,7 +610,7 @@ pub const QuicTransport = struct {
                 @intCast(timeout_ms);
             // QUIC library v0.1.10: poll() is internally thread-safe with
             // fine-grained per-phase locking. No external PollSync needed
-            // for the poll call itself. We still signal poll_cv so handlers
+            // for the poll call itself. We still advance poll_generation so handlers
             // waiting for data delivery wake up promptly after packet-bearing
             // cycles. Empty polls do not advance the generation; otherwise a
             // quiet socket wakes every blocked handler every 500us.
@@ -719,7 +718,7 @@ pub const QuicTransport = struct {
             // arrives within the timeout.
             const conn = api.waitForAccepted(ep, 50) orelse return QuicError.WouldBlock;
 
-            // Return immediately — handler waits for streams via poll_cv
+            // Return immediately — handler waits for streams via PollSync.
             const wrapper = try self.allocator.create(QuicConnection);
             wrapper.* = QuicConnection{
                 .allocator = self.allocator,

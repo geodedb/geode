@@ -115,8 +115,8 @@
             // lib includes the high-concurrency route-cache, poll-budget,
             // accepted-queue, diagnostic gating, Zig 0.16 tool fixes, and the
             // aligned tls/thread_pool graph used by Geode.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#26fce0db280fafa2813689794e6ef460fa8c15aa",
-            .hash = "quic-0.1.21-gBIqUdcpPAAbR3Ybo-aTBBUYSnaoNA4ZOOZaA0P8b4RQ",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#ecf4d71792a78158df984870646309dd95dedd9c",
+            .hash = "quic-0.1.21-gBIqUXkpPACrbrUAgzgUvzqApmTmMcBoxZ2UJ60Piob-",
         },
 
         // =======================================================================

@@ -41,7 +41,7 @@ test "PollSync.waitForPoll wakes promptly when notifyPoll advances generation" {
     try testing.expect(elapsed < 100 * std.time.ns_per_ms);
 }
 
-test "PollSync.notifyPoll wakes all parked stream readers" {
+test "PollSync.notifyPoll wakes a bounded batch of parked stream readers" {
     const waiter_count = 16;
     var sync = quic.PollSync{};
     var ready = std.atomic.Value(u32).init(0);

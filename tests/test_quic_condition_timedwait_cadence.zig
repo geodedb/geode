@@ -1359,8 +1359,10 @@ test "server stream WouldBlock wait is event driven with high fanout backoff" {
     try testing.expect(std.mem.indexOf(u8, transport_content, "err == error.FlowControlBlocked or err == error.WouldBlock") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "ps.waitForPoll(server_writer_wait_for_poll_ns)") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "REQ=REQ-QUIC-HC-036") != null);
-    try testing.expect(std.mem.indexOf(u8, transport_content, "poll_wake_batch_size: u32 = 64") != null);
+    try testing.expect(std.mem.indexOf(u8, transport_content, "poll_wake_batch_size: u32 = 256") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "futexWake(u32, &self.poll_generation.raw, poll_wake_batch_size)") != null);
+    try testing.expect(std.mem.indexOf(u8, transport_content, "poll_cv") == null);
+    try testing.expect(std.mem.indexOf(u8, transport_content, "self.poll_cv.broadcast") == null);
 
     const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
     const handler_content = maybe_handler orelse return error.FileNotFound;
