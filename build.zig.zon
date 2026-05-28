@@ -323,7 +323,8 @@
         },
 
         .timeseries_storage = .{
-            .path = "../../../../../../devnw/zig/timeseries-storage",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git#088e3ef0670aa113aa39b0a090d5a924d8133e10",
+            .hash = "timeseries_storage-0.2.0-5wzBJKLGEQBf6Qfg8lRoDmTEiGd0qqFC0kmXCtNNMNkr",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
