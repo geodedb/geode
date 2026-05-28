@@ -3957,7 +3957,7 @@ REQ-QUIC-HC-060,QUIC High-Concurrency Requests,PartialSubmitWaitGroup,IMPL,,,tra
 REQ-QUIC-HC-067,QUIC High-Concurrency Requests,FirstStreamSchedulerFIFO,IMPL,,,transport,2026-05-26,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-068,QUIC High-Concurrency Requests,AuthSingleFlight,IMPL,,,security,2026-05-26,src/security/user_management.zig
 REQ-QUIC-HC-071,QUIC High-Concurrency Requests,HarnessFirstStreamThreadCap,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
-REQ-QUIC-HC-072,QUIC High-Concurrency Setup,TimeoutEdgeReadySettle,IMPL,,,transport,2026-05-27,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-072,QUIC High-Concurrency Setup,TimeoutEdgeReadySettle,IMPL,,,transport,2026-05-28,tests/e2e_quic_high_concurrency.zig
 REQ-QUIC-HC-073,QUIC High-Concurrency Requests,SchedulerNonBlockingCleanup,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-075,QUIC High-Concurrency Requests,ServerWriteWouldBlockRetry,IMPL,,,transport,2026-05-27,src/transport/quic.zig
 REQ-QUIC-HC-077,QUIC High-Concurrency Requests,BatchedExecuteResponseWrite,IMPL,,,transport,2026-05-27,src/server/quic_connection_handler.zig

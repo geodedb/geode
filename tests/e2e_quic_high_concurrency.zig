@@ -686,7 +686,7 @@ pub fn main() !void {
     }
     setup_elapsed_ns = monoNs() -| setup_start_ns;
 
-    // CANARY: REQ=REQ-QUIC-HC-072; FEATURE="QUIC High-Concurrency Setup"; ASPECT=TimeoutEdgeReadySettle; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-072; FEATURE="QUIC High-Concurrency Setup"; ASPECT=TimeoutEdgeReadySettle; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
     // At 512+ workers every client can authenticate before a few worker
     // threads get scheduled again to increment `ready`. Once hello_ok reaches
     // worker_count, the workers already own authenticated clients, so the start
@@ -707,7 +707,9 @@ pub fn main() !void {
     }
     hello_after_setup = counters.hello_ok.load(.acquire);
     ready_after_setup = counters.ready.load(.acquire);
-    const setup_timeout_failed = setup_timed_out and hello_after_setup < worker_count and ready_after_setup < worker_count;
+    const setup_authenticated = hello_after_setup >= worker_count;
+    const setup_ready = ready_after_setup >= worker_count;
+    const setup_timeout_failed = setup_timed_out and !setup_authenticated and !setup_ready;
     if (counters.setup_failed.load(.acquire) != 0 or setup_timeout_failed) {
         abort_setup.store(true, .release);
         start.store(true, .release);
@@ -716,12 +718,14 @@ pub fn main() !void {
         for (threads) |*thread| thread.join();
         const setup_failures = counters.setup_failed.load(.acquire) + @as(u32, @intFromBool(setup_timeout_failed));
         std.debug.print(
-            "high-concurrency QUIC E2E setup failures={d} ready={d}/{d} ready_after_setup={d} setup_failed_raw={d} timeout_failed={} setup_ms={d}\n",
+            "high-concurrency QUIC E2E setup failures={d} ready={d}/{d} ready_after_setup={d} hello_after_setup={d} authenticated={} setup_failed_raw={d} timeout_failed={} setup_ms={d}\n",
             .{
                 setup_failures,
                 counters.ready.load(.acquire),
                 worker_count,
                 ready_after_setup,
+                hello_after_setup,
+                setup_authenticated,
                 counters.setup_failed.load(.acquire),
                 setup_timeout_failed,
                 setup_elapsed_ns / std.time.ns_per_ms,

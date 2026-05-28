@@ -1314,6 +1314,9 @@ test "quic high concurrency e2e has bounded setup wait" {
     try testing.expect(std.mem.indexOf(u8, content, "var hello_after_setup = counters.hello_ok.load(.acquire);") != null);
     try testing.expect(std.mem.indexOf(u8, content, "hello_after_setup = counters.hello_ok.load(.acquire);") != null);
     try testing.expect(std.mem.indexOf(u8, content, "ready_after_setup = counters.ready.load(.acquire)") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "const setup_authenticated = hello_after_setup >= worker_count;") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "const setup_timeout_failed = setup_timed_out and !setup_authenticated and !setup_ready;") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "hello_after_setup={d} authenticated={}") != null);
     try testing.expect(countOccurrences(content, "hello_after_setup = counters.hello_ok.load(.acquire);") >= 2);
     try testing.expect(countOccurrences(content, "ready_after_setup = counters.ready.load(.acquire);") >= 2);
 }
