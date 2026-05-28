@@ -149,7 +149,12 @@ const index_manager = geode.index_manager;
 var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.GlobalStreamThrottle.init(
     stream_registry.default_max_global_stream_threads,
 );
-const first_stream_owner_stack_size = 1024 * 1024;
+// CANARY: REQ=REQ-QUIC-HC-129; FEATURE="DetachedFirstStream"; ASPECT=ParserSafeOwnerStack; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+//
+// Detached first-stream owners run the full request loop, including GQL parse
+// and execution. 1 MiB is enough for lightweight protocol handling but can
+// overflow in the parser on ordinary client queries such as `RETURN 1 AS x`.
+const first_stream_owner_stack_size = 2 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
 // CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27

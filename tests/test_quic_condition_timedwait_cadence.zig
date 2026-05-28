@@ -2140,6 +2140,8 @@ test "quic high fanout e2e runs in single stream stress mode" {
     try testing.expect(std.mem.indexOf(u8, handler_content, "g_first_stream_detach_gate.tryAcquire()") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "setMaxDetachedFirstStreamOwners") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256") != null);
+    try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-129") != null);
+    try testing.expect(std.mem.indexOf(u8, handler_content, "const first_stream_owner_stack_size = 2 * 1024 * 1024") != null);
 
     const maybe_e2e = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");
     const e2e_content = maybe_e2e orelse return error.FileNotFound;
