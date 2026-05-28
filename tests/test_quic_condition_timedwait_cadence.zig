@@ -132,7 +132,7 @@ fn findPinnedPackageHash(allocator: std.mem.Allocator, dep_name: []const u8) !?[
         const dep_needle = try std.fmt.allocPrint(allocator, ".{s} = .{{", .{dep_name});
         defer allocator.free(dep_needle);
         if (std.mem.indexOf(u8, zon, dep_needle)) |dep_start| {
-            const dep = zon[dep_start..@min(zon.len, dep_start + 4096)];
+            const dep = zon[dep_start..@min(zon.len, dep_start + 16384)];
             if (std.mem.indexOf(u8, dep, ".hash = \"")) |hash_key| {
                 const hash_start = hash_key + ".hash = \"".len;
                 if (std.mem.indexOfScalar(u8, dep[hash_start..], '"')) |hash_len| {
@@ -357,6 +357,10 @@ test "quic endpoint poll cycle has a receive fairness budget" {
     try testing.expect(std.mem.indexOf(u8, endpoint, "const max_packets_this_poll = maxPacketsPerPollCycleForRole(self.role);") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "stats.packets_processed >= max_packets_this_poll") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-123") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "server_short_header_receive_batches") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "const server_short_header_receive_batches: usize = server_poll_receive_batches;") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "server_max_short_header_packets_per_poll_cycle") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, ".Server => server_max_short_header_packets_per_poll_cycle") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "maxShortHeaderPacketsPerPollCycleForRole") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "short_header_packets_processed >= max_short_header_packets_this_poll") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-059") != null);
@@ -1779,6 +1783,55 @@ test "quic ack packets are tracked only after successful sends" {
     try testing.expect(std.mem.indexOf(u8, module_b2, "if (sent != pkt.len)") != null);
     try testing.expect(std.mem.indexOf(u8, module_b2, "ack_ctx.conn.onShortHeaderPacketSent(pkt.len, ack_eliciting)") != null);
     try testing.expect(countOccurrences(module_b2, "sendAppPacketAndTrack(ack_ctx, pkt") >= 5);
+}
+
+test "quic server app packet receive path avoids contended standalone control work" {
+    // Request STREAM packets should wake application handlers quickly. The
+    // upstream QUIC receive path must keep request ACKs and initial receive
+    // flow-control feedback immediate while avoiding contended ACK-frame mutex
+    // waits that can block endpoint poll workers.
+    const allocator = testing.allocator;
+
+    const quic_dir = try findVendoredQuicDir(allocator) orelse return error.SkipZigTest;
+    defer allocator.free(quic_dir);
+
+    const frame_handler_path = try std.fmt.allocPrint(allocator, "{s}/src/quic/endpoint/frame_handler.zig", .{quic_dir});
+    defer allocator.free(frame_handler_path);
+    const module_c_path = try std.fmt.allocPrint(allocator, "{s}/src/quic/endpoint/incoming/module_c.zig", .{quic_dir});
+    defer allocator.free(module_c_path);
+    const methods_a_path = try std.fmt.allocPrint(allocator, "{s}/src/quic/connection/methods_a.zig", .{quic_dir});
+    defer allocator.free(methods_a_path);
+    const methods_b_path = try std.fmt.allocPrint(allocator, "{s}/src/quic/connection/methods_b.zig", .{quic_dir});
+    defer allocator.free(methods_b_path);
+
+    const maybe_frame_handler = try readFile(allocator, frame_handler_path);
+    const frame_handler = maybe_frame_handler orelse return error.FileNotFound;
+    defer allocator.free(frame_handler);
+    const maybe_module_c = try readFile(allocator, module_c_path);
+    const module_c = maybe_module_c orelse return error.FileNotFound;
+    defer allocator.free(module_c);
+    const maybe_methods_a = try readFile(allocator, methods_a_path);
+    const methods_a = maybe_methods_a orelse return error.FileNotFound;
+    defer allocator.free(methods_a);
+    const maybe_methods_b = try readFile(allocator, methods_b_path);
+    const methods_b = maybe_methods_b orelse return error.FileNotFound;
+    defer allocator.free(methods_b);
+
+    try testing.expect(std.mem.indexOf(u8, frame_handler, "REQ=REQ-QUIC-HC-143") != null);
+    try testing.expect(std.mem.indexOf(u8, frame_handler, "ctx.conn.mu.tryLock()") != null);
+    try testing.expect(std.mem.indexOf(u8, frame_handler, "if (!ctx.conn.mu.tryLock()) return .{};") != null);
+    try testing.expect(std.mem.indexOf(u8, frame_handler, "saw_stream: bool = false") != null);
+    try testing.expect(std.mem.indexOf(u8, frame_handler, ".saw_stream = true") != null);
+    try testing.expect(std.mem.indexOf(u8, module_c, "defer_server_stream_ack") == null);
+    try testing.expect(std.mem.indexOf(u8, module_c, "REQ=REQ-QUIC-HC-144") == null);
+    try testing.expect(std.mem.indexOf(u8, module_c, "if ((frame_result.saw_ack_eliciting or conn.ecn_app_ack_pending) and conn.app_tx_keys != null)") != null);
+    try testing.expect(std.mem.indexOf(u8, methods_a, "REQ=REQ-QUIC-HC-145") == null);
+    const immediate_fc_idx = std.mem.indexOf(u8, methods_a, "s.last_sent_max_stream_data == 0") orelse return error.MissingImmediateFlowControlBlock;
+    const immediate_fc_block = methods_a[immediate_fc_idx..@min(methods_a.len, immediate_fc_idx + 1000)];
+    try testing.expect(std.mem.indexOf(u8, immediate_fc_block, "self.markStreamFlowControlDirty(stream_id);") != null);
+    try testing.expect(std.mem.indexOf(u8, immediate_fc_block, "self.advertiseInitialFlowControl();") != null);
+    try testing.expect(std.mem.indexOf(u8, methods_b, "REQ=REQ-QUIC-HC-145") == null);
+    try testing.expect(std.mem.indexOf(u8, methods_b, "self.appendDirtyMaxStreamDataFrames(frame_stream.writer(), 64)") == null);
 }
 
 test "quic app pto retransmit state advances only after full sends" {
