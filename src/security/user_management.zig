@@ -303,6 +303,25 @@ const AuthFlightStart = union(enum) {
     waited: AuthResult,
 };
 
+const RefreshFlightKey = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+
+const RefreshFlightResult = union(enum) {
+    ok: bool,
+    err: anyerror,
+};
+
+const RefreshFlight = struct {
+    cv: std.Io.Condition = std.Io.Condition.init,
+    refs: usize = 1,
+    done: bool = false,
+    result: RefreshFlightResult = .{ .ok = false },
+};
+
+const RefreshFlightStart = union(enum) {
+    owner: *RefreshFlight,
+    waited: bool,
+};
+
 /// Global user store - LRU cache backed by optional persistent resolver.
 var user_store_mutex = std.Io.Mutex.init;
 var user_store: ?UserCache = null;
@@ -317,6 +336,8 @@ var persistent_writer: ?PersistentUserWriter = null;
 var auth_flight_mutex = std.Io.Mutex.init;
 var auth_flights: ?std.AutoHashMap(AuthFlightKey, *AuthFlight) = null;
 var auth_flight_lane: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var refresh_flight_mutex = std.Io.Mutex.init;
+var refresh_flights: ?std.AutoHashMap(RefreshFlightKey, *RefreshFlight) = null;
 
 const default_auth_cache_entries: usize = 256;
 
@@ -399,6 +420,17 @@ pub fn deinitUserStore() void {
         auth_flights = null;
     }
     auth_flight_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    refresh_flight_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    if (refresh_flights) |*flights| {
+        var it = flights.iterator();
+        while (it.next()) |entry| {
+            std.heap.c_allocator.destroy(entry.value_ptr.*);
+        }
+        flights.deinit();
+        refresh_flights = null;
+    }
+    refresh_flight_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
 pub fn authInvalidationEpoch() u64 {
@@ -499,6 +531,68 @@ fn finishAuthFlight(key: AuthFlightKey, flight: *AuthFlight, result: AuthFlightR
     }
     flight.cv.broadcast(io);
     auth_flight_mutex.unlock(io);
+
+    if (destroy_now) {
+        std.heap.c_allocator.destroy(flight);
+    }
+}
+
+// CANARY: REQ=REQ-QUIC-HC-130; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthRefreshSingleFlight; STATUS=IMPL; TEST=authenticate_concurrent_cached_user_singleflights_persistent_refresh; OWNER=security; UPDATED=2026-05-28
+fn refreshFlightKey(username: []const u8) RefreshFlightKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("auth-refresh");
+    hasher.update(&[_]u8{0});
+    hasher.update(username);
+    var out: RefreshFlightKey = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+fn beginRefreshFlight(key: RefreshFlightKey) !RefreshFlightStart {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    refresh_flight_mutex.lockUncancelable(io);
+    defer refresh_flight_mutex.unlock(io);
+
+    if (refresh_flights == null) {
+        refresh_flights = std.AutoHashMap(RefreshFlightKey, *RefreshFlight).init(std.heap.c_allocator);
+    }
+
+    if (refresh_flights.?.get(key)) |flight| {
+        flight.refs += 1;
+        while (!flight.done) {
+            flight.cv.waitUncancelable(io, &refresh_flight_mutex);
+        }
+        const result = flight.result;
+        flight.refs -= 1;
+        if (flight.refs == 0) {
+            _ = refresh_flights.?.remove(key);
+            std.heap.c_allocator.destroy(flight);
+        }
+        return switch (result) {
+            .ok => |ok| .{ .waited = ok },
+            .err => |err| err,
+        };
+    }
+
+    const flight = try std.heap.c_allocator.create(RefreshFlight);
+    errdefer std.heap.c_allocator.destroy(flight);
+    flight.* = .{};
+    try refresh_flights.?.put(key, flight);
+    return .{ .owner = flight };
+}
+
+fn finishRefreshFlight(key: RefreshFlightKey, flight: *RefreshFlight, result: RefreshFlightResult) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    refresh_flight_mutex.lockUncancelable(io);
+    flight.result = result;
+    flight.done = true;
+    flight.refs -= 1;
+    const destroy_now = flight.refs == 0;
+    if (destroy_now) {
+        _ = refresh_flights.?.remove(key);
+    }
+    flight.cv.broadcast(io);
+    refresh_flight_mutex.unlock(io);
 
     if (destroy_now) {
         std.heap.c_allocator.destroy(flight);
@@ -956,7 +1050,7 @@ fn ensureUserCached(username: []const u8) !bool {
     return true;
 }
 
-fn refreshCachedUserIfStale(username: []const u8) !bool {
+fn refreshCachedUserIfStaleOwner(username: []const u8) !bool {
     if (!try ensureUserCached(username)) return false;
 
     const persistent_version = try resolvePersistentAuthVersion(username);
@@ -975,6 +1069,21 @@ fn refreshCachedUserIfStale(username: []const u8) !bool {
 
     invalidateCachedUser(username);
     return ensureUserCached(username);
+}
+
+fn refreshCachedUserIfStale(username: []const u8) !bool {
+    const key = refreshFlightKey(username);
+    switch (try beginRefreshFlight(key)) {
+        .waited => |ok| return ok,
+        .owner => |flight| {
+            const result = refreshCachedUserIfStaleOwner(username) catch |err| {
+                finishRefreshFlight(key, flight, .{ .err = err });
+                return err;
+            };
+            finishRefreshFlight(key, flight, .{ .ok = result });
+            return result;
+        },
+    }
 }
 
 pub fn currentAuthVersion(username: []const u8) !?u64 {
@@ -1073,6 +1182,15 @@ const TestUserDef = struct {
     auth_version: u64 = 1,
 };
 
+fn testSleepNs(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const TestResolverState = struct {
     users: []const TestUserDef,
     lookup_calls: usize = 0,
@@ -1148,6 +1266,51 @@ const TestResolverState = struct {
     }
 };
 
+const ConcurrentRefreshResolverState = struct {
+    users: []const TestUserDef,
+    lookup_calls: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    auth_version_calls: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    delay_ns: u64 = 0,
+
+    fn lookup(ctx: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?User {
+        const self: *ConcurrentRefreshResolverState = @ptrCast(@alignCast(ctx orelse return null));
+        _ = self.lookup_calls.fetchAdd(1, .acq_rel);
+        for (self.users) |entry| {
+            if (std.mem.eql(u8, entry.username, username)) {
+                return .{
+                    .username = try allocator.dupe(u8, entry.username),
+                    .password_hash = try hashPassword(allocator, entry.password),
+                    .email = try allocator.dupe(u8, entry.email),
+                    .role = entry.role,
+                    .created_at = 0,
+                    .last_login = null,
+                    .active = entry.active,
+                    .password_reset_required = entry.password_reset_required,
+                    .auth_version = entry.auth_version,
+                };
+            }
+        }
+        return null;
+    }
+
+    fn hasUsers(ctx: ?*anyopaque) anyerror!bool {
+        const self: *ConcurrentRefreshResolverState = @ptrCast(@alignCast(ctx orelse return false));
+        return self.users.len > 0;
+    }
+
+    fn authVersion(ctx: ?*anyopaque, username: []const u8) anyerror!?u64 {
+        const self: *ConcurrentRefreshResolverState = @ptrCast(@alignCast(ctx orelse return null));
+        _ = self.auth_version_calls.fetchAdd(1, .acq_rel);
+        if (self.delay_ns != 0) testSleepNs(self.delay_ns);
+        for (self.users) |entry| {
+            if (std.mem.eql(u8, entry.username, username)) {
+                return entry.auth_version;
+            }
+        }
+        return null;
+    }
+};
+
 test "authenticate uses persistent resolver and caches result" {
     deinitUserStore();
     defer deinitUserStore();
@@ -1175,6 +1338,70 @@ test "authenticate uses persistent resolver and caches result" {
     const second = try authenticate("alice", "Password1!");
     try testing.expectEqual(Role.Admin, second.role);
     try testing.expectEqual(@as(usize, 1), state.lookup_calls);
+}
+
+test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var users = [_]TestUserDef{
+        .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .Admin, .auth_version = 1 },
+    };
+    var state = ConcurrentRefreshResolverState{
+        .users = users[0..],
+        .delay_ns = 25 * std.time.ns_per_ms,
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = ConcurrentRefreshResolverState.lookup,
+        .has_users_fn = ConcurrentRefreshResolverState.hasUsers,
+        .auth_version_fn = ConcurrentRefreshResolverState.authVersion,
+    });
+
+    const warm = try authenticate("alice", "Password1!");
+    try testing.expectEqual(Role.Admin, warm.role);
+    const baseline_version_lookups = state.auth_version_calls.load(.acquire);
+
+    const Worker = struct {
+        start: *std.atomic.Value(bool),
+        ok: *std.atomic.Value(u32),
+        failed: *std.atomic.Value(u32),
+
+        fn run(ctx: *@This()) void {
+            while (!ctx.start.load(.acquire)) {
+                std.Thread.yield() catch {};
+            }
+            const auth = authenticate("alice", "Password1!") catch {
+                _ = ctx.failed.fetchAdd(1, .acq_rel);
+                return;
+            };
+            if (auth.role == .Admin) {
+                _ = ctx.ok.fetchAdd(1, .acq_rel);
+            } else {
+                _ = ctx.failed.fetchAdd(1, .acq_rel);
+            }
+        }
+    };
+
+    const worker_count = 8;
+    var start = std.atomic.Value(bool).init(false);
+    var ok = std.atomic.Value(u32).init(0);
+    var failed = std.atomic.Value(u32).init(0);
+    var contexts: [worker_count]Worker = undefined;
+    var threads: [worker_count]std.Thread = undefined;
+    for (&contexts, 0..) |*ctx, i| {
+        ctx.* = .{ .start = &start, .ok = &ok, .failed = &failed };
+        threads[i] = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+    }
+    start.store(true, .release);
+    for (&threads) |*thread| thread.join();
+
+    try testing.expectEqual(@as(u32, worker_count), ok.load(.acquire));
+    try testing.expectEqual(@as(u32, 0), failed.load(.acquire));
+    try testing.expectEqual(baseline_version_lookups + 1, state.auth_version_calls.load(.acquire));
 }
 
 test "isSessionAuthCurrent detects persistent auth version bump" {

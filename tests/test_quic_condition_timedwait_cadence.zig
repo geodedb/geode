@@ -840,11 +840,16 @@ test "password auth coalesces concurrent identical verifies" {
 
     try testing.expect(std.mem.indexOf(u8, auth, "REQ=REQ-QUIC-HC-068") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "REQ=REQ-QUIC-HC-091") != null);
+    try testing.expect(std.mem.indexOf(u8, auth, "REQ=REQ-QUIC-HC-130") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "AuthFlight") != null);
+    try testing.expect(std.mem.indexOf(u8, auth, "RefreshFlight") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "authFlightLane") != null);
+    try testing.expect(std.mem.indexOf(u8, auth, "beginRefreshFlight") != null);
+    try testing.expect(std.mem.indexOf(u8, auth, "finishRefreshFlight") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "beginAuthFlight") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "finishAuthFlight") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "verifyPassword(password, user_data.password_hash)") != null);
+    try testing.expect(std.mem.indexOf(u8, auth, "authenticate_concurrent_cached_user_singleflights_persistent_refresh") != null);
     try testing.expect(std.mem.indexOf(u8, auth, "return auth_flight_lane.fetchAdd(1, .acq_rel) % lanes") == null);
     try testing.expect(std.mem.indexOf(u8, auth, "return 0;") != null);
 }
