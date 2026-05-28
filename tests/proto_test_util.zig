@@ -710,6 +710,62 @@ pub const QuicProtoClient = struct {
         try self.client.poll(0);
     }
 
+    pub fn dumpTransportDiagnostics(self: *QuicProtoClient, worker_id: u32, op: usize) void {
+        const conn = self.client.connection orelse {
+            std.debug.print(
+                "high-concurrency QUIC client diag worker={d} op={d} connection=null\n",
+                .{ worker_id, op },
+            );
+            return;
+        };
+        const endpoint = self.client.endpoint;
+        const cc = conn.rec.getCongestionState();
+        var first_retx_pn: u64 = 0;
+        var first_retx_stream: u64 = 0;
+        var first_retx_off: u64 = 0;
+        var first_retx_len: usize = 0;
+        var first_retx_attempts: u16 = 0;
+        if (conn.app_stream_retx_init) {
+            var it = conn.app_stream_retx.iterator();
+            while (it.next()) |entry| {
+                if (first_retx_len == 0 or entry.key_ptr.* < first_retx_pn) {
+                    first_retx_pn = entry.key_ptr.*;
+                    first_retx_stream = entry.value_ptr.stream_id;
+                    first_retx_off = entry.value_ptr.offset;
+                    first_retx_len = entry.value_ptr.data.len;
+                    first_retx_attempts = entry.value_ptr.retransmit_count;
+                }
+            }
+        }
+        std.debug.print(
+            "high-concurrency QUIC client diag worker={d} op={d} local_port={d} stream={d} pn_app_tx={d} stream_send_off={d} conn_send_off={d} retx={d} first_retx_pn={d} first_retx_stream={d} first_retx_off={d} first_retx_len={d} first_retx_attempts={d} pto_active={} pto_count={d} pto_dirty={} endpoint_dirty={d} timers={d} bif={d} cwnd={d} rx_gen={d} tx_credit_gen={d}\n",
+            .{
+                worker_id,
+                op,
+                self.client.debugLocalPort(),
+                self.stream.stream_id,
+                conn.pn_app_tx,
+                conn.stream_send_off,
+                conn.conn_send_off,
+                if (conn.app_stream_retx_init) conn.app_stream_retx.count() else 0,
+                first_retx_pn,
+                first_retx_stream,
+                first_retx_off,
+                first_retx_len,
+                first_retx_attempts,
+                conn.pto_app_active,
+                conn.pto_app_count,
+                conn.pto_dirty.load(.acquire),
+                if (endpoint) |ep| ep.pto_dirty_count.load(.acquire) else 0,
+                if (endpoint) |ep| ep.timers.items.len else 0,
+                cc.bytes_in_flight,
+                cc.cwnd,
+                conn.rx_data_generation.load(.acquire),
+                conn.tx_credit_generation.load(.acquire),
+            },
+        );
+    }
+
     // CANARY: REQ=REQ-QUIC-HC-005; FEATURE="QUIC High-Concurrency Client Wait"; ASPECT=ProtoReadDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
     fn waitForReadProgress(self: *QuicProtoClient, deadline_ns: u64) !void {
         if (compat_monoNs() >= deadline_ns) return error.Timeout;

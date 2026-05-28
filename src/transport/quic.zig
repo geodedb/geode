@@ -1235,6 +1235,20 @@ pub const QuicStream = struct {
         return self.connection.rx_data_generation.load(.acquire);
     }
 
+    pub fn debugRxAvailable(self: *QuicStream) usize {
+        self.connection.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.connection.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        const rx = self.connection.streams_rx.getPtr(self.stream_id) orelse return 0;
+        return rx.available();
+    }
+
+    pub fn debugRxRecvOffset(self: *QuicStream) u64 {
+        self.connection.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.connection.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        const rx = self.connection.streams_rx.getPtr(self.stream_id) orelse return 0;
+        return rx.recv_off;
+    }
+
     pub fn setReadReadyNotifier(self: *QuicStream, ctx: *anyopaque, f: QuicReadReadyFn) void {
         self.connection.setRxReadyNotifier(ctx, f);
     }
@@ -1587,6 +1601,22 @@ pub const QuicClient = struct {
                 @intCast(timeout_ms);
             try api.poll(ep, timeout_i32);
         }
+    }
+
+    pub fn debugLocalPort(self: *QuicClient) u16 {
+        const ep = self.endpoint orelse return 0;
+        const addr = ep.transport.getLocalAddr() catch return 0;
+        return switch (addr.storage.family) {
+            std.posix.AF.INET => blk: {
+                const sin: *const std.posix.sockaddr.in = @ptrCast(@alignCast(&addr.storage));
+                break :blk std.mem.bigToNative(u16, sin.port);
+            },
+            std.posix.AF.INET6 => blk: {
+                const sin6: *const std.posix.sockaddr.in6 = @ptrCast(@alignCast(&addr.storage));
+                break :blk std.mem.bigToNative(u16, sin6.port);
+            },
+            else => 0,
+        };
     }
 };
 

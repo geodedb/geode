@@ -2371,6 +2371,7 @@ const FirstStreamOwnerContext = struct {
     cooperative_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     cooperative_force_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     cooperative_generation_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
 fn registerFirstStreamReader(ctx: *FirstStreamOwnerContext) void {
@@ -2388,6 +2389,31 @@ fn registerFirstStreamReader(ctx: *FirstStreamOwnerContext) void {
 fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     const gpa = ctx.allocator;
     var destroy_conn = true;
+
+    if (posixGetenv("GEODE_QUIC_FIRST_STREAM_DIAGNOSTICS")) |enabled| {
+        if (enabled.len == 0 or enabled[0] != '0') {
+            const post_hello = ctx.post_hello_packets.load(.acquire);
+            if (post_hello == 0) {
+                std.debug.print(
+                    "first-stream diag cleanup peer={s} stream={d} post_hello={d} read_gen={d} seen_gen={d} rx_available={d} rx_recv_off={d} done={} running={} queued={} reschedule={} force={}\n",
+                    .{
+                        ctx.peer_ip,
+                        ctx.stream.stream_id,
+                        post_hello,
+                        ctx.stream.readGeneration(),
+                        ctx.cooperative_generation_seen.load(.acquire),
+                        ctx.stream.debugRxAvailable(),
+                        ctx.stream.debugRxRecvOffset(),
+                        ctx.cooperative_done.load(.acquire),
+                        ctx.cooperative_running.load(.acquire),
+                        ctx.cooperative_queued.load(.acquire),
+                        ctx.cooperative_needs_reschedule.load(.acquire),
+                        ctx.cooperative_force_ready.load(.acquire),
+                    },
+                );
+            }
+        }
+    }
 
     if (ctx.reader_registered) {
         g_proto_reader_registry.unregister(@ptrCast(&ctx.reader));
@@ -2588,7 +2614,7 @@ pub const FirstStreamScheduler = struct {
         while (!self.shutdown.load(.acquire)) {
             if (self.takeReady()) |ctx| {
                 if (ctx.cooperative_done.load(.acquire)) continue;
-                if (ctx.cooperative_running.cmpxchgWeak(false, true, .acq_rel, .acquire)) |_| {
+                if (ctx.cooperative_running.cmpxchgStrong(false, true, .acq_rel, .acquire)) |_| {
                     ctx.cooperative_needs_reschedule.store(true, .release);
                     continue;
                 }
@@ -2750,7 +2776,7 @@ pub const FirstStreamScheduler = struct {
 
     fn enqueueReady(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) !void {
         if (ctx.cooperative_done.load(.acquire)) return;
-        if (ctx.cooperative_queued.cmpxchgWeak(false, true, .acq_rel, .acquire)) |_| {
+        if (ctx.cooperative_queued.cmpxchgStrong(false, true, .acq_rel, .acquire)) |_| {
             return;
         }
 
@@ -2843,6 +2869,7 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
         if (packet_opt == null) return true;
         var packet = packet_opt.?;
         defer packet.deinit(gpa);
+        _ = ctx.post_hello_packets.fetchAdd(1, .acq_rel);
 
         if (!processFirstStreamPacket(
             gpa,

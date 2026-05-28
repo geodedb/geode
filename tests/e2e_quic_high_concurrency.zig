@@ -205,6 +205,7 @@ const WorkerCtx = struct {
     release_generation: *std.atomic.Value(u32),
     expected_ops: u32,
     verify_after_workload: bool,
+    client_diagnostics: bool,
 };
 
 fn recordFailure(counters: *Counters, comptime fmt: []const u8, args: anytype) void {
@@ -358,6 +359,7 @@ fn workerRun(ctx: *WorkerCtx) void {
             if (res_opt != null) break;
         }
         var res = res_opt orelse {
+            if (ctx.client_diagnostics) client.dumpTransportDiagnostics(ctx.worker_id, op);
             recordFailure(ctx.counters, "worker={d} op={d} mutation={} execute err={}", .{ ctx.worker_id, op, is_mutation, last_err });
             continue;
         };
@@ -504,6 +506,7 @@ pub fn main() !void {
         envU32("GEODE_HC_MAX_CONNECTIONS", default_max_connections),
     );
     const capture_server_logs = envBool("GEODE_HC_CAPTURE_SERVER_LOGS", false);
+    const client_diagnostics = envBool("GEODE_HC_CLIENT_DIAGNOSTICS", false);
     const cooperative_first_streams = envBool("GEODE_HC_COOPERATIVE_FIRST_STREAMS", true);
     const read_query = envSlice("GEODE_HC_READ_QUERY", "MATCH (n:HCParallel) RETURN count(n) AS c");
 
@@ -695,6 +698,7 @@ pub fn main() !void {
             .release_generation = &release_generation,
             .expected_ops = expected_ops,
             .verify_after_workload = i == 0,
+            .client_diagnostics = client_diagnostics,
         };
         threads[i] = try std.Thread.spawn(.{ .stack_size = high_concurrency_worker_stack_size }, workerRun, .{ctx});
     }
