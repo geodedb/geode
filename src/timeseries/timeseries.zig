@@ -62,8 +62,16 @@ pub const Store = struct {
         });
         errdefer pool_ptr.deinit();
 
+        const data_dir_owned = try std.fmt.allocPrint(allocator, "{s}/timeseries", .{config.data_dir.?});
+        // ts_storage.engine.Engine.init may copy/own data_dir on success, but
+        // on failure (e.g. error.FileNotFound) the owned slice would leak. The
+        // errdefer below frees it on any failure path before Engine.init's
+        // ownership transfer; we clear it manually on the success path.
+        var data_dir_owned_for_errdefer: ?[]u8 = data_dir_owned;
+        errdefer if (data_dir_owned_for_errdefer) |slc| allocator.free(slc);
+
         const engine_config = ts_storage.engine.Config{
-            .data_dir = try std.fmt.allocPrint(allocator, "{s}/timeseries", .{config.data_dir.?}),
+            .data_dir = data_dir_owned,
             .max_memtable_points = config.chunk_config.max_points_per_chunk,
         };
 
@@ -71,6 +79,8 @@ pub const Store = struct {
         errdefer allocator.destroy(engine_ptr);
 
         engine_ptr.* = try ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr);
+        // Engine.init succeeded; assume it took ownership of data_dir_owned.
+        data_dir_owned_for_errdefer = null;
 
         return Store{
             .allocator = allocator,
@@ -653,11 +663,10 @@ test "ts: valueAt — empty series returns null" {
     defer st.deinit();
 
     const key = SeriesKey{ .device_id = 5, .metric = "empty" };
-    // Insert zero points — getOrCreateSeries creates the series
-    try st.insertMany(key, &.{});
-
-    const hk = st.hashKey(key);
-    const series = st.series_cache.get(hk).?;
+    // Create the series with zero points. insertMany short-circuits on
+    // empty slices, so go straight through getOrCreateSeries to ensure
+    // an empty-points series object exists in the cache.
+    const series = try st.getOrCreateSeries(key);
     const result = series.valueAt(1000);
     try std.testing.expect(result == null);
 }
@@ -751,7 +760,16 @@ test "ts: persist-restart-query via StoreConfig" {
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/geode_ts_persist_{d}", .{pid}) catch unreachable;
-    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+    const tio = std.Io.Threaded.global_single_threaded.io();
+    // Ensure a clean directory exists for this PID's persistence test —
+    // ts_storage.engine.Engine.init requires both the parent data_dir AND
+    // its internal /timeseries subdir to exist before construction.
+    std.Io.Dir.cwd().deleteTree(tio, test_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(tio, test_dir);
+    var ts_subdir_buf: [192]u8 = undefined;
+    const ts_subdir = std.fmt.bufPrint(&ts_subdir_buf, "{s}/timeseries", .{test_dir}) catch unreachable;
+    try std.Io.Dir.cwd().createDirPath(tio, ts_subdir);
+    defer std.Io.Dir.cwd().deleteTree(tio, test_dir) catch {};
 
     const key = SeriesKey{ .device_id = 7, .metric = "voltage" };
 
