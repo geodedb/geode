@@ -31,6 +31,7 @@ const execution = geode.execution;
 const graph_store = geode.graph_store;
 const adapter_mod = geode.graph_storage_adapter;
 const group_commit = geode.group_commit;
+const runtime_metrics = geode.runtime_metrics;
 
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -112,6 +113,16 @@ fn submitInsertNode(
     return coord.submit(&op);
 }
 
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var start: usize = 0;
+    while (std.mem.indexOf(u8, haystack[start..], needle)) |rel| {
+        count += 1;
+        start += rel + needle.len;
+    }
+    return count;
+}
+
 // ----------------------------------------------------------------------
 // Smoke: single submit, one node lands.
 // ----------------------------------------------------------------------
@@ -141,6 +152,34 @@ test "group commit: smoke — single submit creates one node" {
     group_commit.shutdownAllCoordinators();
 
     try testing.expectEqual(before + 1, store.nodes.count());
+}
+
+test "group commit: runtime metrics register once per coordinator" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    defer group_commit.shutdownAllCoordinators();
+
+    const registry = try runtime_metrics.Registry.init(testing.allocator);
+    defer registry.deinit();
+    runtime_metrics.setGlobalRegistry(registry);
+    defer runtime_metrics.setGlobalRegistry(null);
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    _ = try adapter.getOrCreateGraph("default");
+
+    const first = try group_commit.getOrStartCoordinator(testing.allocator, adapter, "default");
+    const second = try group_commit.getOrStartCoordinator(testing.allocator, adapter, "default");
+    try testing.expect(first == second);
+    first.registerWithRuntimeMetrics();
+    second.registerWithRuntimeMetrics();
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try registry.snapshotInto(testing.allocator, &buf);
+
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_batches_total="));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_ops_total="));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_errors_total="));
 }
 
 test "REQ-QUIC-HC-016: group commit reserves shard-aligned engine slots" {

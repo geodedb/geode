@@ -121,8 +121,11 @@
             // 2026-05-28: also keeps the trusted-localhost cwnd bypass used by
             // high-fanout loopback integration tests while preserving the
             // normal congestion gate for remote peers.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#d3382eb95277243e8fc18c7edbe5b9d14a4a90c9",
-            .hash = "quic-0.1.21-gBIqUTc_PADw6YWwF-LoqJRB7gxumt_G2IhFeQJ_gw0j",
+            // 2026-05-28: serializes QUIC's legacy sent-packet maps so
+            // concurrent poll workers cannot race PTO accounting on one
+            // connection.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#ef8d14315b23d3ce374cbd6690af3d5a144d7670",
+            .hash = "quic-0.1.21-gBIqUadHPABudlGfMXHJMcMGkPj3CvlWVfjf63jEqUoi",
         },
 
         // =======================================================================
@@ -218,8 +221,10 @@
             // the tx-credit wake fix from quic f8a39e8.
             // 2026-05-28: bumped to 9e185b4 so the client and server share
             // quic d3382eb's trusted-localhost cwnd bypass.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#9e185b4698a997c04e6bf7b9a0e8370dd606b1bc",
-            .hash = "geode_client_zig-0.2.9-8ysbV-ZbCQC9nMi4_4WsVMC5AJZeaS1Ytcg0JRTj5zrN",
+            // 2026-05-28: bumped to b502799 so the client and server share
+            // quic ef8d143's sent-packet legacy map mutex.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#b5027993ed2d17f1adaee02240d90d62ebf27caf",
+            .hash = "geode_client_zig-0.2.9-8ysbV2FgCQAedB_sOtWJoJ64W4E0myoR3qivKkk8ReFf",
         },
 
         // =======================================================================

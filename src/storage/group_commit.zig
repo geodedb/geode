@@ -189,6 +189,8 @@ pub const ShardedCoordinator = struct {
     apply_ops_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Cumulative count of ops whose ApplyResult.err was set.
     apply_errors_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Runtime-metrics registration is per-coordinator, not per submitter.
+    metrics_registered: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub const max_batch: usize = 256;
 
@@ -210,6 +212,7 @@ pub const ShardedCoordinator = struct {
             .shards = undefined,
             .should_stop = std.atomic.Value(u32).init(0),
             .pool = undefined,
+            .metrics_registered = std.atomic.Value(u32).init(0),
         };
 
         for (&self.shards) |*s| {
@@ -333,6 +336,12 @@ pub const ShardedCoordinator = struct {
     pub fn registerWithRuntimeMetrics(self: *ShardedCoordinator) void {
         const runtime_metrics = @import("../server/runtime_metrics.zig");
         const reg = runtime_metrics.globalRegistry() orelse return;
+        // CANARY: REQ=REQ-QUIC-HC-133; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorMetricsHotPath; STATUS=TESTED; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-28
+        //
+        // getOrStartCoordinator() sits on the mutation fast path. Re-registering
+        // these counters for an existing coordinator appended duplicate registry
+        // entries and allocated under the runtime-metrics mutex on every MERGE.
+        if (self.metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
         reg.register("coord_apply_batches_total", &self.apply_batches_total) catch {};
         reg.register("coord_apply_ops_total", &self.apply_ops_total) catch {};
         reg.register("coord_apply_errors_total", &self.apply_errors_total) catch {};
