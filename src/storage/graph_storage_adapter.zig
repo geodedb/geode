@@ -4644,17 +4644,41 @@ fn propertyValuesEqual(a: graph_store.PropertyValue, b: graph_store.PropertyValu
     };
 }
 
-fn lockAllShardReads(mg: *ManagedGraph) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    for (&mg.shard_locks) |*sl| sl.lockSharedUncancelable(io);
+const candidate_shard_mask_int = if (sharded_store.SHARD_COUNT <= 64) u64 else @compileError("candidate shard mask assumes <=64 shards");
+
+fn candidateShardMask(candidates: []const u64) candidate_shard_mask_int {
+    var mask: candidate_shard_mask_int = 0;
+    for (candidates) |slot_id| {
+        const shard_idx = gs.shard_count.shardOfNode(slot_id);
+        mask |= @as(candidate_shard_mask_int, 1) << @intCast(shard_idx);
+    }
+    return mask;
 }
 
-fn unlockAllShardReads(mg: *ManagedGraph) void {
+pub fn candidateShardMaskForTest(candidates: []const u64) candidate_shard_mask_int {
+    if (!builtin.is_test) @compileError("test-only helper");
+    return candidateShardMask(candidates);
+}
+
+fn lockCandidateShardReads(mg: *ManagedGraph, candidates: []const u64) candidate_shard_mask_int {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const mask = candidateShardMask(candidates);
+    for (&mg.shard_locks, 0..) |*sl, idx| {
+        if ((mask & (@as(candidate_shard_mask_int, 1) << @intCast(idx))) != 0) {
+            sl.lockSharedUncancelable(io);
+        }
+    }
+    return mask;
+}
+
+fn unlockCandidateShardReads(mg: *ManagedGraph, mask: candidate_shard_mask_int) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var i: usize = sharded_store.SHARD_COUNT;
     while (i > 0) {
         i -= 1;
-        mg.shard_locks[i].unlockShared(io);
+        if ((mask & (@as(candidate_shard_mask_int, 1) << @intCast(i))) != 0) {
+            mg.shard_locks[i].unlockShared(io);
+        }
     }
 }
 
@@ -4735,14 +4759,24 @@ fn findNodeMatchingMergeProps(
     // full tuple under shard read locks to tolerate hash collisions.
     const candidates = try copySmallestMergePropCandidates(allocator, mg, label, props);
     defer allocator.free(candidates);
+    if (candidates.len == 0) return null;
+
     const id_map = blk: {
         mg.string_indexes_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer mg.string_indexes_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         break :blk store.getIdMap(graph_name) orelse return null;
     };
 
-    lockAllShardReads(mg);
-    defer unlockAllShardReads(mg);
+    // CANARY: REQ=REQ-QUIC-HC-121; FEATURE="High-Concurrency Mutations"; ASPECT=CandidateShardReadLocks; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
+    //
+    // Multi-property MERGE probes begin from the smallest exact-property
+    // posting. Unique-tuple ingest usually has zero or a handful of candidates,
+    // so taking all shard read locks before every insert creates unnecessary
+    // reader/writer contention against the shard workers. Lock only the shards
+    // that can contain candidate slot ids; the no-candidate miss path returns
+    // without touching shard locks at all.
+    const candidate_mask = lockCandidateShardReads(mg, candidates);
+    defer unlockCandidateShardReads(mg, candidate_mask);
 
     for (candidates) |slot_id| {
         const public_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));

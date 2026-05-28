@@ -1447,8 +1447,11 @@ test "multi-property merge mutations avoid whole graph writer lock" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "findNodeMatchingMergeProps") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "bulkInsertNodeWithReservedId") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-111") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-121") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "copySmallestMergePropCandidates") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exact_node_property_index.copy") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "lockCandidateShardReads") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "if (candidates.len == 0) return null;") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "id_map.nodeUuid(slot_id)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "store.getNodesByLabel(graph_name, label)") == null);
 

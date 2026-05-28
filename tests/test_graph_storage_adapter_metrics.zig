@@ -87,3 +87,17 @@ test "ManagedGraph: rwlock_shared_hold_ns_total accumulates from manual SHARED h
     // Single hold, so total and max_observed must match.
     try std.testing.expectEqual(total, max_obs);
 }
+
+test "REQ-QUIC-HC-121: candidate shard mask is empty-aware and monotonic" {
+    const empty = adapter_mod.candidateShardMaskForTest(&.{});
+    try std.testing.expectEqual(@as(u64, 0), empty);
+
+    const one = adapter_mod.candidateShardMaskForTest(&.{42});
+    try std.testing.expect(one != 0);
+
+    const repeated = adapter_mod.candidateShardMaskForTest(&.{ 42, 42, 42 });
+    try std.testing.expectEqual(one, repeated);
+
+    const expanded = adapter_mod.candidateShardMaskForTest(&.{ 42, 43, 44, 45 });
+    try std.testing.expect((expanded & one) == one);
+}
