@@ -124,8 +124,10 @@
             // 2026-05-28: serializes QUIC's legacy sent-packet maps so
             // concurrent poll workers cannot race PTO accounting on one
             // connection.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#ef8d14315b23d3ce374cbd6690af3d5a144d7670",
-            .hash = "quic-0.1.21-gBIqUadHPABudlGfMXHJMcMGkPj3CvlWVfjf63jEqUoi",
+            // 2026-05-28: serializes PTO dirty recompute on conn.mu so endpoint
+            // timer arming cannot race high-parallel STREAM response writes.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#0d0acfb1053f53b1a9c1b2f25268f3dd2bd3321b",
+            .hash = "quic-0.1.21-gBIqUTpQPABlhInsJT6n11SbYV4ofM1kyrjdVHNCFwhh",
         },
 
         // =======================================================================
@@ -223,8 +225,10 @@
             // quic d3382eb's trusted-localhost cwnd bypass.
             // 2026-05-28: bumped to b502799 so the client and server share
             // quic ef8d143's sent-packet legacy map mutex.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#b5027993ed2d17f1adaee02240d90d62ebf27caf",
-            .hash = "geode_client_zig-0.2.9-8ysbV2FgCQAedB_sOtWJoJ64W4E0myoR3qivKkk8ReFf",
+            // 2026-05-28: bumped to f1f10db so the client and server share
+            // quic 0d0acfb's PTO dirty recompute serialization.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#f1f10db6f83aa17aee7af72f0ed83747e962dd74",
+            .hash = "geode_client_zig-0.2.9-8ysbV-ZgCQBh967Gsw0mchFK_iPfjVzrBocvsen11j7v",
         },
 
         // =======================================================================
