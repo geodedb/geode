@@ -126,8 +126,12 @@
             // connection.
             // 2026-05-28: serializes PTO dirty recompute on conn.mu so endpoint
             // timer arming cannot race high-parallel STREAM response writes.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#0d0acfb1053f53b1a9c1b2f25268f3dd2bd3321b",
-            .hash = "quic-0.1.21-gBIqUTpQPABlhInsJT6n11SbYV4ofM1kyrjdVHNCFwhh",
+            // 2026-05-28: retransmits retained app STREAM data when recovery
+            // compacts time-threshold lost packets before app retx queries.
+            // 2026-05-28: rearms app PTO after send failures so retained
+            // STREAM responses do not strand high-concurrency clients.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#adac2dcb350769d8cd7c2fe69d32732e800318ff",
+            .hash = "quic-0.1.21-gBIqUfRwPACpUaJfFK9E23vp0rB06Camj4e21LtYTW2M",
         },
 
         // =======================================================================
@@ -227,8 +231,12 @@
             // quic ef8d143's sent-packet legacy map mutex.
             // 2026-05-28: bumped to f1f10db so the client and server share
             // quic 0d0acfb's PTO dirty recompute serialization.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#f1f10db6f83aa17aee7af72f0ed83747e962dd74",
-            .hash = "geode_client_zig-0.2.9-8ysbV-ZgCQBh967Gsw0mchFK_iPfjVzrBocvsen11j7v",
+            // 2026-05-28: bumped to c733b2b so the client and server share
+            // quic 203bb27's time-threshold app STREAM retransmit fix.
+            // 2026-05-28: bumped to f781d1e so client and server share
+            // quic adac2dc's app PTO rearm-on-send-failure fix.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#f781d1e38d668780409f35452702cf0c7bdfeb46",
+            .hash = "geode_client_zig-0.2.9-8ysbV-ZgCQDbfOeeXZ292J_v4yUlqHbENUIOCICVqsBk",
         },
 
         // =======================================================================
