@@ -3441,9 +3441,26 @@ pub const StorageAdapter = struct {
         };
         defer allocator.free(graph_dir);
 
-        // Pass the graph directory as the timeseries data_dir.
-        // The timeseries library internally appends "/timeseries" to create
-        // its subdirectory — do NOT pre-create a timeseries/ subdir here.
+        // The new ts_storage engine refuses to mkdir its data_dir; we have to
+        // ensure both the graph_dir AND the /timeseries subdir exist before
+        // calling initWithConfig. Without this, every initTimeseriesForGraph
+        // call surfaces error.FileNotFound and tests in shard 3 fail with
+        // "per-graph timeseries store is created and accessible".
+        const tio = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().createDirPath(tio, graph_dir) catch |err| {
+            log.warn("failed to mkdir graph_dir for timeseries: {}", .{err});
+            return null;
+        };
+        const ts_subdir = std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir}) catch |err| {
+            log.warn("failed to format ts subdir path: {}", .{err});
+            return null;
+        };
+        defer allocator.free(ts_subdir);
+        std.Io.Dir.cwd().createDirPath(tio, ts_subdir) catch |err| {
+            log.warn("failed to mkdir ts subdir for timeseries: {}", .{err});
+            return null;
+        };
+
         const store = allocator.create(ts_mod.Store) catch |err| {
             log.warn("failed to allocate per-graph timeseries store: {}", .{err});
             return null;

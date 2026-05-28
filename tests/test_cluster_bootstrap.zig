@@ -27,11 +27,27 @@ test "maybeStart returns null when GEODE_CLUSTER_TOKEN is absent" {
     try std.testing.expect(result == null);
 }
 
-test "maybeStart errors when token set but node_id missing" {
+test "maybeStart token-only mode: token set, no node_id, no peers -> null" {
+    // GEODE_CLUSTER_TOKEN alone (without GEODE_NODE_ID and without peers) is
+    // a valid client-authentication-only configuration. The token gates
+    // client connections via validateClusterToken but no cluster bootstrap
+    // is attempted. specs/2pc_cluster_token_required.yml relies on this.
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
     try env.put("GEODE_CLUSTER_TOKEN", "abc");
+    const result = try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null);
+    try std.testing.expectEqual(@as(?cluster_bootstrap.Bootstrap, null), result);
+}
+
+test "maybeStart errors when peers set but node_id missing" {
+    // If GEODE_PEERS is set, a cluster bootstrap IS intended; node_id
+    // becomes required and its absence is a configuration error.
+    const a = std.testing.allocator;
+    var env = std.process.Environ.Map.init(a);
+    defer env.deinit();
+    try env.put("GEODE_CLUSTER_TOKEN", "abc");
+    try env.put("GEODE_PEERS", "127.0.0.1:5001");
     const result = cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null);
     try std.testing.expectError(error.MissingNodeId, result);
 }
