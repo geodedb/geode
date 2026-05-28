@@ -621,7 +621,28 @@ test "high concurrency harness reports retry tails" {
     try testing.expect(std.mem.indexOf(u8, harness, "execute_attempts") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "execute_retries") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "execute_reconnects") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "avg_first_op_ms") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "avg_followup_op_ms") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "first_op_latency_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "followup_op_latency_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "REQ=REQ-QUIC-HC-124") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "const default_connection_worker_count = 64") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_HC_CONNECTION_WORKERS") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_QUIC_CONNECTION_WORKERS={d}") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "const op_start_ns = monoNs();") != null);
+}
+
+test "parallel union arms serialize query allocator traffic" {
+    const allocator = testing.allocator;
+    const maybe_set_ops = try readFile(allocator, "src/execution/set_operations.zig");
+    const set_ops = maybe_set_ops orelse return error.FileNotFound;
+    defer allocator.free(set_ops);
+
+    try testing.expect(std.mem.indexOf(u8, set_ops, "REQ=REQ-QUIC-HC-125") != null);
+    try testing.expect(std.mem.indexOf(u8, set_ops, "const LockedAllocator = struct") != null);
+    try testing.expect(std.mem.indexOf(u8, set_ops, "mutex: std.Io.Mutex = std.Io.Mutex.init") != null);
+    try testing.expect(std.mem.indexOf(u8, set_ops, "const arm_allocator = locked_allocator.allocator();") != null);
+    try testing.expect(std.mem.indexOf(u8, set_ops, ".allocator = arm_allocator") != null);
 }
 
 test "query cache misses singleflight by key without serializing unrelated misses" {
@@ -2023,7 +2044,7 @@ test "quic high fanout connection limits and setup retries are tunable" {
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_concurrency_worker_stack_size = 1024 * 1024") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, ".{ .stack_size = high_concurrency_worker_stack_size }") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-101") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e_content, "const default_hello_timeout_ms = 5000") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "const default_hello_timeout_ms = 1000") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "envU32(\"GEODE_HC_HELLO_TIMEOUT_MS\", default_hello_timeout_ms)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_CONNECT_STAGGER_US\"") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_MAX_CONNECTIONS\"") != null);
@@ -2250,7 +2271,7 @@ test "quic hello admission has bounded lifetime" {
     const init_content = maybe_init orelse return error.FileNotFound;
     defer allocator.free(init_content);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-114") != null);
-    try testing.expect(std.mem.indexOf(u8, init_content, "quic_hello_read_timeout_ms: u64 = 5_000") != null);
+    try testing.expect(std.mem.indexOf(u8, init_content, "quic_hello_read_timeout_ms: u64 = 1_000") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "\"GEODE_QUIC_HELLO_READ_TIMEOUT_MS\"") != null);
 
     const maybe_e2e = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");

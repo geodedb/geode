@@ -68,13 +68,15 @@ pub const EnvironmentConfig = struct {
     // because the handler prefers this env-config value over the file-
     // scope default.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
     graph_write_lock_timeout_ms: u64 = 120_000,
-    // CANARY: REQ=REQ-QUIC-HC-114; FEATURE="High-Concurrency Setup"; ASPECT=ConfigurableHelloReadTimeout; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-114; FEATURE="High-Concurrency Setup"; ASPECT=ConfigurableHelloReadTimeout; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
     //
     // Detached connection-admission handlers remain bounded, but high-fanout
-    // setup tests and production deployments can align the server-side HELLO
-    // read window with the client's retry budget via
-    // GEODE_QUIC_HELLO_READ_TIMEOUT_MS.
-    quic_hello_read_timeout_ms: u64 = 5_000,
+    // setup tests and production deployments need failed/stalled HELLO reads to
+    // release their admission handler quickly enough for retry waves to keep
+    // overall setup latency bounded. Override via
+    // GEODE_QUIC_HELLO_READ_TIMEOUT_MS when slower clients require a wider
+    // post-handshake application-auth window.
+    quic_hello_read_timeout_ms: u64 = 1_000,
 };
 
 /// Server initialization context containing all initialized resources

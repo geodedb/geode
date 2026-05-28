@@ -9,7 +9,7 @@ const default_mutation_stride = 3;
 const default_connect_attempts = if (builtin.mode == .Debug) 5 else 16;
 const default_connect_backoff_ms = 50;
 const default_handshake_timeout_secs = if (builtin.mode == .Debug) 5 else 15;
-const default_hello_timeout_ms = 5000;
+const default_hello_timeout_ms = 1000;
 const default_setup_timeout_secs = if (builtin.mode == .Debug) 30 else 45;
 const default_execute_timeout_secs = if (builtin.mode == .Debug) 5 else 10;
 const default_execute_retries = if (builtin.mode == .Debug) 0 else 1;
@@ -17,6 +17,7 @@ const default_request_stagger_us = if (builtin.mode == .Debug) 0 else 100;
 const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
 const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
+const default_connection_worker_count = 64;
 // CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 //
 // The E2E harness intentionally opens hundreds to thousands of clients in one
@@ -142,6 +143,10 @@ const Counters = struct {
     execute_reconnects: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     read_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     mutation_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    first_op_ok: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    followup_op_ok: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    first_op_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    followup_op_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     max_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     verify_done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     verify_failed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -331,6 +336,13 @@ fn workerRun(ctx: *WorkerCtx) void {
             continue;
         };
         _ = ctx.counters.ok.fetchAdd(1, .acq_rel);
+        if (op == 0) {
+            _ = ctx.counters.first_op_ok.fetchAdd(1, .acq_rel);
+            _ = ctx.counters.first_op_latency_ns.fetchAdd(op_latency_ns, .acq_rel);
+        } else {
+            _ = ctx.counters.followup_op_ok.fetchAdd(1, .acq_rel);
+            _ = ctx.counters.followup_op_latency_ns.fetchAdd(op_latency_ns, .acq_rel);
+        }
         if (is_mutation) {
             _ = ctx.counters.mutation_ok.fetchAdd(1, .acq_rel);
             _ = ctx.counters.mutation_latency_ns.fetchAdd(op_latency_ns, .acq_rel);
@@ -490,6 +502,22 @@ pub fn main() !void {
         .{cooperative_first_stream_worker_count},
     );
     defer allocator.free(cooperative_first_stream_workers_env);
+    // CANARY: REQ=REQ-QUIC-HC-124; FEATURE="High-Concurrency Test Harness"; ASPECT=ConnectionWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+    //
+    // The child server gets an explicit environment, so parent-level
+    // GEODE_QUIC_CONNECTION_WORKERS does not pass through. Surface a harness
+    // knob that lets 512+ setup runs distinguish QUIC handshake pressure from
+    // connection-handler queueing behind the server's stable default.
+    const connection_workers = @min(
+        @max(envU32("GEODE_HC_CONNECTION_WORKERS", default_connection_worker_count), @as(u32, 2)),
+        @as(u32, 512),
+    );
+    const connection_workers_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_QUIC_CONNECTION_WORKERS={d}",
+        .{connection_workers},
+    );
+    defer allocator.free(connection_workers_env);
     const server_hello_timeout_env = try std.fmt.allocPrint(
         allocator,
         "GEODE_QUIC_HELLO_READ_TIMEOUT_MS={d}",
@@ -524,6 +552,7 @@ pub fn main() !void {
             max_global_stream_env,
             poll_workers_env,
             cooperative_first_stream_workers_env,
+            connection_workers_env,
             server_hello_timeout_env,
             "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
             "GEODE_TEST_INHERIT_SERVER_STDERR=1",
@@ -537,6 +566,7 @@ pub fn main() !void {
             max_global_stream_env,
             poll_workers_env,
             cooperative_first_stream_workers_env,
+            connection_workers_env,
             server_hello_timeout_env,
             "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
         };
@@ -735,15 +765,19 @@ pub fn main() !void {
     const qps_x100: u64 = if (workload_elapsed_ns == 0) 0 else (@as(u64, observed_ops) * std.time.ns_per_s * 100) / workload_elapsed_ns;
     const observed_reads = counters.read_ok.load(.acquire);
     const observed_mutations_ok = counters.mutation_ok.load(.acquire);
+    const observed_first_ops = counters.first_op_ok.load(.acquire);
+    const observed_followup_ops = counters.followup_op_ok.load(.acquire);
     const read_avg_ms_x100: u64 = if (observed_reads == 0) 0 else counters.read_latency_ns.load(.acquire) / @as(u64, observed_reads) / (std.time.ns_per_ms / 100);
     const mutation_avg_ms_x100: u64 = if (observed_mutations_ok == 0) 0 else counters.mutation_latency_ns.load(.acquire) / @as(u64, observed_mutations_ok) / (std.time.ns_per_ms / 100);
+    const first_op_avg_ms_x100: u64 = if (observed_first_ops == 0) 0 else counters.first_op_latency_ns.load(.acquire) / @as(u64, observed_first_ops) / (std.time.ns_per_ms / 100);
+    const followup_op_avg_ms_x100: u64 = if (observed_followup_ops == 0) 0 else counters.followup_op_latency_ns.load(.acquire) / @as(u64, observed_followup_ops) / (std.time.ns_per_ms / 100);
     const max_ms_x100 = counters.max_latency_ns.load(.acquire) / (std.time.ns_per_ms / 100);
     // CANARY: REQ=REQ-QUIC-HC-103; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RetryTailRegressionCounters; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
     // Include user-visible operation latency, setup retry churn, and execute
     // retry churn in the summary so high-fanout runs can distinguish transport
     // loss tails from slow successful server-side query processing.
     std.debug.print(
-        "high-concurrency QUIC E2E workload workers={d} ops_per_worker={d} mutation_stride={d} ops={d} reads={d} mutations={d} setup_ms={d} elapsed_ms={d} qps={d}.{d:0>2} avg_read_ms={d}.{d:0>2} avg_mut_ms={d}.{d:0>2} max_ms={d}.{d:0>2} setup_attempts={d} setup_retries={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
+        "high-concurrency QUIC E2E workload workers={d} ops_per_worker={d} mutation_stride={d} ops={d} reads={d} mutations={d} setup_ms={d} elapsed_ms={d} qps={d}.{d:0>2} avg_read_ms={d}.{d:0>2} avg_mut_ms={d}.{d:0>2} avg_first_op_ms={d}.{d:0>2} avg_followup_op_ms={d}.{d:0>2} max_ms={d}.{d:0>2} setup_attempts={d} setup_retries={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
         .{
             worker_count,
             ops_per_worker,
@@ -759,6 +793,10 @@ pub fn main() !void {
             read_avg_ms_x100 % 100,
             mutation_avg_ms_x100 / 100,
             mutation_avg_ms_x100 % 100,
+            first_op_avg_ms_x100 / 100,
+            first_op_avg_ms_x100 % 100,
+            followup_op_avg_ms_x100 / 100,
+            followup_op_avg_ms_x100 % 100,
             max_ms_x100 / 100,
             max_ms_x100 % 100,
             counters.setup_attempts.load(.acquire),

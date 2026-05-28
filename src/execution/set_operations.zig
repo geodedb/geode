@@ -762,6 +762,61 @@ const ArmJob = struct {
     }
 };
 
+// CANARY: REQ=REQ-QUIC-HC-125; FEATURE="ParallelUnionArms"; ASPECT=ThreadSafeArmAllocator; STATUS=TESTED; TEST=test_gap0814_union_parallelism; OWNER=execution; UPDATED=2026-05-28
+//
+// Parallel UNION arms inherit the caller's query allocator. Tests and embedded
+// callers often use an ArenaAllocator for per-query lifetime management, and
+// arena mutation is not safe when multiple arm threads allocate rows at once.
+// Serialize allocator traffic while leaving storage scans and expression work
+// concurrent.
+const LockedAllocator = struct {
+    parent: std.mem.Allocator,
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+
+    fn init(parent: std.mem.Allocator) LockedAllocator {
+        return .{ .parent = parent };
+    }
+
+    fn allocator(self: *LockedAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn allocFn(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.parent.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resizeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.parent.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remapFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.parent.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn freeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.parent.rawFree(memory, alignment, ret_addr);
+    }
+
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = allocFn,
+        .resize = resizeFn,
+        .remap = remapFn,
+        .free = freeFn,
+    };
+};
+
 /// GAP-0814 Task 5.1: fork-join all union arms, then merge.
 /// Returns `null` if parallelism was elected not to be used (e.g. thread
 /// spawn failure), signalling the caller to take the serial path. Any
@@ -780,12 +835,14 @@ fn tryParallelUnion(
 
     var jobs = try allocator.alloc(ArmJob, arm_count);
     defer allocator.free(jobs);
+    var locked_allocator = LockedAllocator.init(allocator);
+    const arm_allocator = locked_allocator.allocator();
 
     // Arm 0: the first query. Arms 1..N: each tail's query (preserves
     // original left-to-right order so UNION DISTINCT merge is stable).
-    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = allocator };
+    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = arm_allocator };
     for (union_query.tails, 0..) |tail, i| {
-        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = allocator };
+        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = arm_allocator };
     }
 
     // Spawn a thread for every arm except the last, which we run on the

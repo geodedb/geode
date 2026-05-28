@@ -92,8 +92,9 @@ test "16-worker concurrent bulkInsertNodeWithReservedId: 1600 distinct ids, no d
         });
     }
 
-    // Wait for every worker (9 sec cap).
-    const deadline_ns = nowNs() + 9 * std.time.ns_per_s;
+    // Wait for every worker. The direct test usually finishes in a few seconds,
+    // but sharded pre-push runs many storage suites in parallel on the same host.
+    const deadline_ns = nowNs() + 30 * std.time.ns_per_s;
     outer: while (true) {
         var all_done = true;
         for (&ctxs) |*c| {
