@@ -98,8 +98,25 @@ pub fn maybeStart(
     // Standalone mode: no cluster token, nothing to do.
     const cluster_token = env.get("GEODE_CLUSTER_TOKEN") orelse return null;
 
-    // node_id is mandatory once the token is present.
-    const node_id_str = env.get("GEODE_NODE_ID") orelse return Error.MissingNodeId;
+    // GEODE_CLUSTER_TOKEN alone (with no GEODE_NODE_ID and no peers) is a
+    // valid client-authentication-only configuration: the token gates
+    // client connections via validateClusterToken but no cluster bootstrap
+    // is attempted. Specs like 2pc_cluster_token_required.yml rely on
+    // this single-node, token-only behaviour. Only require GEODE_NODE_ID
+    // when an actual cluster bootstrap is being requested (signalled by
+    // either GEODE_NODE_ID OR a non-empty GEODE_PEERS / --peers CLI flag).
+    const have_peers_env = blk: {
+        const p = env.get("GEODE_PEERS") orelse break :blk false;
+        break :blk p.len > 0;
+    };
+    const have_peers_cli = cli_peers.len > 0;
+    const node_id_str_opt = env.get("GEODE_NODE_ID");
+    if (node_id_str_opt == null and !have_peers_env and !have_peers_cli) {
+        // Token-only mode: caller will install the cluster_token into the
+        // client-auth handler later. No cluster_coord bootstrap.
+        return null;
+    }
+    const node_id_str = node_id_str_opt orelse return Error.MissingNodeId;
     const node_id = std.fmt.parseInt(u64, node_id_str, 10) catch return Error.InvalidNodeId;
 
     const cluster_name = env.get("GEODE_CLUSTER_NAME") orelse DEFAULT_CLUSTER_NAME;
