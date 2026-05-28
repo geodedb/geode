@@ -1093,6 +1093,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }) });
     cluster_bootstrap_tests.root_module.addImport("cluster_bootstrap", cluster_bootstrap_mod);
+    // tests reach into graph_store.deinitGlobalStore() to reset shared global
+    // state between tests that drive a real ClusterCoordinator (see header
+    // comment in tests/test_cluster_bootstrap.zig).
+    cluster_bootstrap_tests.root_module.addImport("geode", root_mod);
     cluster_bootstrap_tests.root_module.link_libc = true;
     // all_tests.zig pulls test_cluster_bootstrap.zig through refAllDecls, so
     // custom_tests also needs the named module to satisfy comptime imports.

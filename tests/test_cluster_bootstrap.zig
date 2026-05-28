@@ -18,6 +18,21 @@
 
 const std = @import("std");
 const cluster_bootstrap = @import("cluster_bootstrap");
+const graph_store = @import("geode").graph_store;
+
+// ClusterCoordinator.init internally calls graph_store.getGlobalStore(allocator)
+// which lazily-initializes a process-global GraphStore using THAT allocator.
+// In a unit-test binary, every test uses std.testing.allocator -- BUT each
+// test wraps it in its own DebugAllocator instance (verifying canaries).
+// Without resetting the global store between tests, the second test's
+// allocator detects an "Invalid free" when ClusterCoordinator.deinit chains
+// back into structures originally allocated by the first test's allocator.
+//
+// Reset the global store at the start of every test that drives a real
+// ClusterCoordinator so each test owns its store from end to end.
+fn resetGlobalGraphStore() void {
+    graph_store.deinitGlobalStore();
+}
 
 test "maybeStart returns null when GEODE_CLUSTER_TOKEN is absent" {
     const a = std.testing.allocator;
@@ -63,6 +78,8 @@ test "maybeStart errors when node_id is not a number" {
 }
 
 test "maybeStart starts a coordinator when env is complete (single node, no peers)" {
+    resetGlobalGraphStore();
+    defer resetGlobalGraphStore();
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
@@ -77,6 +94,8 @@ test "maybeStart starts a coordinator when env is complete (single node, no peer
 }
 
 test "maybeStart parses 2-peer cluster from GEODE_PEERS" {
+    resetGlobalGraphStore();
+    defer resetGlobalGraphStore();
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
@@ -94,6 +113,8 @@ test "maybeStart parses 2-peer cluster from GEODE_PEERS" {
 }
 
 test "maybeStart: CLI peers override GEODE_PEERS env" {
+    resetGlobalGraphStore();
+    defer resetGlobalGraphStore();
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
