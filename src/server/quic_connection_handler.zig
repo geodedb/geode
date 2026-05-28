@@ -4637,30 +4637,36 @@ fn handleClientMessage(
                         try appendFlagToResult(gpa, &exec_result, flag);
                     }
 
+                    // CANARY: REQ=REQ-QUIC-HC-119; FEATURE="QUIC High-Concurrency Reads"; ASPECT=BatchedCountFastPathResponse; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+                    //
+                    // The count fast path is the common read half of the
+                    // mixed read/mutation fan-out harness. Keep its wire
+                    // response on the same single-write schema+page path as
+                    // regular small row results so high fan-out count reads
+                    // do not double stream write pressure.
                     {
-                        var schema_arena = std.heap.ArenaAllocator.init(gpa);
-                        defer schema_arena.deinit();
-                        const sa = schema_arena.allocator();
-                        const status = try proto_util.buildStatus(sa, "00000", exec_result.flags.items);
-                        const schema_def = try proto_util.buildSchemaDefinition(sa, &exec_result);
+                        var response_arena = std.heap.ArenaAllocator.init(gpa);
+                        defer response_arena.deinit();
+                        const ra = response_arena.allocator();
+                        const status = try proto_util.buildStatus(ra, "00000", exec_result.flags.items);
+                        const schema_def = try proto_util.buildSchemaDefinition(ra, &exec_result);
                         const schema_resp = schema.ExecutionResponse{
                             .status = status,
                             .payload = .{ .schema = schema_def },
                         };
-                        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
-                    }
 
-                    {
-                        var page_arena = std.heap.ArenaAllocator.init(gpa);
-                        defer page_arena.deinit();
-                        const pa = page_arena.allocator();
-                        const page = try proto_util.buildDataPage(pa, &exec_result, 0, 1, false, &.{});
-                        const page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
+                        const page = try proto_util.buildDataPage(ra, &exec_result, 0, 1, false, &.{});
+                        const page_status = try proto_util.buildStatus(ra, "00000", exec_result.flags.items);
                         const page_resp = schema.ExecutionResponse{
                             .status = page_status,
                             .payload = .{ .page = page },
                         };
-                        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+
+                        const batched = [_]schema.QuicServerMessage{
+                            .{ .execute = schema_resp },
+                            .{ .execute = page_resp },
+                        };
+                        try sendQuicMessagesBatched(ra, stream, &batched);
                     }
 
                     auditQueryExecution(state, query_text, is_mutation);

@@ -1873,6 +1873,27 @@ test "quic count-only reads bypass query snapshot clone" {
     try testing.expect(std.mem.indexOf(u8, content, "graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read)") != null);
 }
 
+test "quic count fast path batches schema and page responses" {
+    // Count-only reads are the hot read side of the mixed high-concurrency
+    // workload. They should not regress to two separate stream writes after
+    // the read lock has already been released.
+    const allocator = testing.allocator;
+    const maybe_content = try readFile(allocator, "src/server/quic_connection_handler.zig");
+    const content = maybe_content orelse return error.FileNotFound;
+    defer allocator.free(content);
+
+    try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-119") != null);
+
+    const fast_path_start = std.mem.indexOf(u8, content, "execution.countNodesFastPath") orelse return error.MissingCountFastPath;
+    const fast_path_rest = content[fast_path_start..];
+    const audit_idx = std.mem.indexOf(u8, fast_path_rest, "auditQueryExecution(state, query_text, is_mutation)") orelse return error.MissingCountFastPathAudit;
+    const fast_path_body = fast_path_rest[0..audit_idx];
+
+    try testing.expect(std.mem.indexOf(u8, fast_path_body, "const batched = [_]schema.QuicServerMessage") != null);
+    try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendQuicMessagesBatched(ra, stream, &batched)") != null);
+    try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendQuicMessage(") == null);
+}
+
 test "quic count fast path reuses active read store without nested ReadView" {
     // Mixed read/write QUIC load installs an active read store under the
     // handler's graph read lock. The count fast path must use that store
