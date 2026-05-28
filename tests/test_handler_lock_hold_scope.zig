@@ -171,6 +171,8 @@ const WriteCtx = struct {
     graph_name: []const u8,
     go: *std.atomic.Value(u32),
     hold_ns: u64,
+    lock_acquired_ns: *u64,
+    lock_released_ns: *u64,
 };
 
 const ReadCtx = struct {
@@ -184,10 +186,12 @@ const ReadCtx = struct {
 
 fn writerHoldsLock(ctx: *WriteCtx) void {
     const h = graph_store.acquireGraphWriteLock(ctx.graph_name);
+    ctx.lock_acquired_ns.* = monoNanos();
     // Signal that the writer has the lock so the reader thread can proceed
     // toward snapshotUnderReadLock (which will block on this writer).
     ctx.go.store(1, .release);
     sleepNs(ctx.hold_ns);
+    ctx.lock_released_ns.* = monoNanos();
     graph_store.releaseGraphLock(h);
 }
 
@@ -234,10 +238,14 @@ test "snapshotUnderReadLock bounds lock hold to snapshot capture, not execute" {
     }
 
     var go = std.atomic.Value(u32).init(0);
+    var writer_acquired_ns: u64 = 0;
+    var writer_released_ns: u64 = 0;
     var write_ctx = WriteCtx{
         .graph_name = graph_name,
         .go = &go,
         .hold_ns = 30 * std.time.ns_per_ms,
+        .lock_acquired_ns = &writer_acquired_ns,
+        .lock_released_ns = &writer_released_ns,
     };
 
     var snapshot_hold_ns: u64 = 0;
@@ -258,11 +266,13 @@ test "snapshotUnderReadLock bounds lock hold to snapshot capture, not execute" {
     t_reader.join();
 
     // Budget: snapshotUnderReadLock's duration includes waiting for the
-    // writer (up to 30 ms) plus the snapshot clone (< 10 ms).  A correct
-    // implementation returns *before* the simulated execute window (another
-    // 30 ms) runs.  So the budget is writer_hold + snapshot_clone ≈ 40 ms.
+    // writer plus the snapshot clone (< 10 ms).  Measure the writer's actual
+    // lock duration instead of assuming nanosleep returns exactly on time; the
+    // pre-push shard runner can add scheduler jitter while still preserving the
+    // contract that execute must not be covered by the lock hold.
     const hold_ms = @as(f64, @floatFromInt(snapshot_hold_ns)) / 1_000_000.0;
-    const writer_hold_ms = @as(f64, @floatFromInt(write_ctx.hold_ns)) / 1_000_000.0;
+    const writer_hold_ns = writer_released_ns - writer_acquired_ns;
+    const writer_hold_ms = @as(f64, @floatFromInt(writer_hold_ns)) / 1_000_000.0;
     const exec_ms = @as(f64, @floatFromInt(read_ctx.sim_execute_ns)) / 1_000_000.0;
     const budget_ms: f64 = writer_hold_ms + 10.0;
     if (hold_ms > budget_ms) {
