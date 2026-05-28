@@ -1677,20 +1677,25 @@ pub fn main() !void {
         defer acceptor_pool.deinit();
 
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-05-25
+        // CANARY: REQ=REQ-QUIC-HC-132; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConnectionPoolCapCompatibility; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
         // GAP-0202: Initialize thread pool for async connection handling
         // This allows accepting new connections while previous ones are being
         // processed. QUIC connection handlers are long-lived socket loops, not
         // short CPU tasks, so CPU-count auto sizing starves accepted
         // connections under high fan-out. Keep the stable default explicit and
-        // allow controlled tuning via GEODE_QUIC_CONNECTION_WORKERS while the
-        // deeper event-driven ownership pass is developed.
+        // allow controlled tuning via GEODE_QUIC_CONNECTION_WORKERS within the
+        // upstream thread-pool's 64-worker bitmap limit. Higher fan-out is
+        // handled by GEODE_QUIC_DETACHED_CONNECTION_ADMISSION below; allowing a
+        // >64 pooled value makes thread_pool.init fail with TooManyWorkers and
+        // falls back to synchronous HELLO admission, which collapses 512+
+        // connection setup.
         phase_start = compat_milliTimestamp();
         const quic_connection_worker_count = envUsize(
             gpa,
             "GEODE_QUIC_CONNECTION_WORKERS",
             default_quic_connection_worker_count,
             2,
-            512,
+            64,
         );
         const pool = thread_pool.ThreadPool.init(gpa, .{
             .num_threads = quic_connection_worker_count,

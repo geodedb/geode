@@ -626,9 +626,14 @@ test "high concurrency harness reports retry tails" {
     try testing.expect(std.mem.indexOf(u8, harness, "first_op_latency_ns") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "followup_op_latency_ns") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "REQ=REQ-QUIC-HC-124") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "REQ=REQ-QUIC-HC-132") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "const default_connection_worker_count = 64") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "const high_fanout_connection_worker_cap = 64") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "GEODE_HC_CONNECTION_WORKERS") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "GEODE_QUIC_CONNECTION_WORKERS={d}") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_HC_CONNECTION_ADMISSION_THREADS") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_QUIC_CONNECTION_ADMISSION_THREADS={d}") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "const op_start_ns = monoNs();") != null);
 }
 
@@ -1245,8 +1250,10 @@ test "quic connection handlers are not cpu-count auto sized" {
     defer allocator.free(content);
 
     try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-PERF-ASYNC-CONN-002") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-132") != null);
     try testing.expect(std.mem.indexOf(u8, content, "default_quic_connection_worker_count = 64") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_QUIC_CONNECTION_WORKERS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "falls back to synchronous HELLO admission") != null);
     try testing.expect(std.mem.indexOf(u8, content, "quic_connection_queue_capacity = 1024") != null);
     try testing.expect(std.mem.indexOf(u8, content, ".num_threads = quic_connection_worker_count") != null);
     try testing.expect(std.mem.indexOf(u8, content, ".queue_capacity = quic_connection_queue_capacity") != null);
@@ -1345,7 +1352,8 @@ test "quic high concurrency e2e can shape request burst" {
     try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-042") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_HC_REQUEST_STAGGER_US\"") != null);
     try testing.expect(std.mem.indexOf(u8, content, "const default_request_stagger_us = if (builtin.mode == .Debug) 0 else 100") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "envU32(\"GEODE_HC_REQUEST_STAGGER_US\", default_request_stagger_us)") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "default_request_stagger_us_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "envU32(\"GEODE_HC_REQUEST_STAGGER_US\", default_request_stagger_us_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, content, "ctx.request_stagger_us") != null);
     try testing.expect(std.mem.indexOf(u8, content, "ctx.worker_id") != null);
 }
@@ -2078,14 +2086,17 @@ test "quic high fanout connection limits and setup retries are tunable" {
     try testing.expect(std.mem.indexOf(u8, e2e_content, "default_connect_attempts_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "default_hello_timeout_ms_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "default_setup_timeout_secs_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "default_request_stagger_us_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "highFanoutConnectionWorkerDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-128") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "highFanoutCooperativeFirstStreamWorkerDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_fanout_worker_threshold = 64") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e_content, "high_fanout_connection_worker_cap") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e_content, "high_fanout_cooperative_first_stream_worker_cap") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_fanout_connection_worker_cap = 64") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "default_connection_admission_threads_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 512") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "envU32(\"GEODE_HC_HELLO_TIMEOUT_MS\", default_hello_timeout_ms_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_CONNECT_STAGGER_US\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "envU32(\"GEODE_HC_REQUEST_STAGGER_US\", default_request_stagger_us_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_MAX_CONNECTIONS\"") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-085") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const default_max_connections = std.math.mul(u32, worker_count, 4)") != null);

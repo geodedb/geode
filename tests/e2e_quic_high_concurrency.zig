@@ -19,8 +19,8 @@ const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
 const high_fanout_worker_threshold = 64;
-const high_fanout_connection_worker_cap = if (builtin.mode == .Debug) 64 else 512;
-const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 256;
+const high_fanout_connection_worker_cap = 64;
+const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 512;
 // CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 //
 // The E2E harness intentionally opens hundreds to thousands of clients in one
@@ -458,7 +458,9 @@ pub fn main() !void {
     const default_setup_timeout_secs_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_setup_timeout_secs), 90) else default_setup_timeout_secs;
     const default_poll_workers_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_poll_worker_count), 16) else default_poll_worker_count;
     const default_connection_workers_for_run = if (high_fanout_setup) highFanoutConnectionWorkerDefault(worker_count) else default_connection_worker_count;
+    const default_connection_admission_threads_for_run = if (high_fanout_setup) @min(@max(worker_count, @as(u32, 1024)), @as(u32, 4096)) else @as(u32, 1024);
     const default_cooperative_first_stream_workers_for_run = if (high_fanout_setup) highFanoutCooperativeFirstStreamWorkerDefault(worker_count) else default_cooperative_first_stream_worker_count;
+    const default_request_stagger_us_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_request_stagger_us), 1000) else default_request_stagger_us;
     const ops_per_worker = @max(@as(u32, 1), envU32("GEODE_HC_OPS_PER_WORKER", default_ops_per_worker));
     const mutation_stride = envU32("GEODE_HC_MUTATION_STRIDE", default_mutation_stride);
     const connect_attempts = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_ATTEMPTS", default_connect_attempts_for_run));
@@ -487,7 +489,7 @@ pub fn main() !void {
     // connections by default. Setting GEODE_HC_REQUEST_STAGGER_US=0 keeps the
     // same-time microburst mode available when explicitly testing kernel queue
     // and packet recovery behavior.
-    const request_stagger_us = envU32("GEODE_HC_REQUEST_STAGGER_US", default_request_stagger_us);
+    const request_stagger_us = envU32("GEODE_HC_REQUEST_STAGGER_US", default_request_stagger_us_for_run);
     const execute_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_EXEC_TIMEOUT_SECS", default_execute_timeout_secs));
     const execute_retries = envU32("GEODE_HC_EXEC_RETRIES", default_execute_retries);
     // CANARY: REQ=REQ-QUIC-HC-085; FEATURE="QUIC High-Concurrency Requests"; ASPECT=HarnessConnectionHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
@@ -559,14 +561,16 @@ pub fn main() !void {
     );
     defer allocator.free(cooperative_first_stream_workers_env);
     // CANARY: REQ=REQ-QUIC-HC-124; FEATURE="High-Concurrency Test Harness"; ASPECT=ConnectionWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-132; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConnectionPoolCapCompatibility; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
     //
     // The child server gets an explicit environment, so parent-level
     // GEODE_QUIC_CONNECTION_WORKERS does not pass through. Surface a harness
-    // knob that lets 512+ setup runs distinguish QUIC handshake pressure from
-    // connection-handler queueing behind the server's stable default.
+    // knob for the bounded pooled fallback, but keep it within the upstream
+    // thread-pool's 64-worker limit. High-fanout HELLO admission is controlled
+    // by GEODE_HC_CONNECTION_ADMISSION_THREADS below.
     const connection_workers = @min(
         @max(envU32("GEODE_HC_CONNECTION_WORKERS", default_connection_workers_for_run), @as(u32, 2)),
-        @as(u32, 512),
+        @as(u32, 64),
     );
     const connection_workers_env = try std.fmt.allocPrint(
         allocator,
@@ -574,6 +578,16 @@ pub fn main() !void {
         .{connection_workers},
     );
     defer allocator.free(connection_workers_env);
+    const connection_admission_threads = @min(
+        @max(envU32("GEODE_HC_CONNECTION_ADMISSION_THREADS", default_connection_admission_threads_for_run), @as(u32, 2)),
+        @as(u32, 4096),
+    );
+    const connection_admission_threads_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_QUIC_CONNECTION_ADMISSION_THREADS={d}",
+        .{connection_admission_threads},
+    );
+    defer allocator.free(connection_admission_threads_env);
     const server_hello_timeout_env = try std.fmt.allocPrint(
         allocator,
         "GEODE_QUIC_HELLO_READ_TIMEOUT_MS={d}",
@@ -609,6 +623,8 @@ pub fn main() !void {
             poll_workers_env,
             cooperative_first_stream_workers_env,
             connection_workers_env,
+            connection_admission_threads_env,
+            "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
             "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
             "GEODE_TEST_INHERIT_SERVER_STDERR=1",
@@ -623,6 +639,8 @@ pub fn main() !void {
             poll_workers_env,
             cooperative_first_stream_workers_env,
             connection_workers_env,
+            connection_admission_threads_env,
+            "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
             "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
         };
