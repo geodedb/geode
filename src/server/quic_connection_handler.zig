@@ -157,13 +157,14 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
 const first_stream_owner_stack_size = 2 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
-// CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
-// A persistent query stream is hot for several consecutive messages: EXECUTE,
-// PULL, and follow-up requests often arrive before the scheduler rotates back.
-// Keep the slice bounded for fairness, but make it large enough that steady
-// workloads do not pay a global ready-queue round trip every fourth message.
-const first_stream_scheduler_messages_per_tick: u32 = 8;
+// The scheduler runs persistent first streams through a shared worker pool.
+// Letting one owner process multiple ready messages in a turn lets early
+// clients drain sequential EXECUTE/PULL bursts while tail clients remain
+// queued. One-message FIFO turns keep 1024-client mixed read/write fan-out
+// from timing out without raising the worker pool into thread-storm territory.
+const first_stream_scheduler_messages_per_tick: u32 = 1;
 
 // CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
 //
@@ -2548,7 +2549,12 @@ pub const FirstStreamScheduler = struct {
                 var j: usize = 0;
                 while (j < i) : (j += 1) self.workers[j].join();
             }
-            worker.* = try std.Thread.spawn(.{}, workerMain, .{self});
+            // CANARY: REQ=REQ-QUIC-HC-139; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeWorkerStackCap; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+            //
+            // High-fanout runs can intentionally raise the scheduler pool into
+            // the thousands, so keep stack reservation explicit instead of
+            // inheriting platform defaults.
+            worker.* = try std.Thread.spawn(.{ .stack_size = first_stream_owner_stack_size }, workerMain, .{self});
         }
     }
 

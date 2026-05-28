@@ -20,6 +20,12 @@ const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug
 const default_connection_worker_count = 64;
 const high_fanout_worker_threshold = 64;
 const high_fanout_connection_worker_cap = 64;
+// CANARY: REQ=REQ-QUIC-HC-138; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+//
+// Keep the cooperative owner pool bounded; raising it to match 1024 clients
+// stalls HELLO setup in same-process fan-out tests. Tail latency is protected
+// by the scheduler's one-message FIFO turn rather than one server thread per
+// active client.
 const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 512;
 // CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 //

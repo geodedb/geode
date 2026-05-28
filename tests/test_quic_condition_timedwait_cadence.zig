@@ -796,16 +796,16 @@ test "cooperative first stream scheduler sweeps missed rx wakeups" {
 }
 
 test "cooperative first stream scheduler uses bounded batch budget" {
-    // Persistent one-stream query clients should not re-enter the scheduler
-    // ready queue every few protocol messages, but the worker slice must remain
-    // bounded so large fan-out cannot starve tail streams.
+    // Persistent one-stream query clients should rotate through the scheduler
+    // ready queue after each protocol message so large fan-out cannot starve
+    // tail streams behind hot early clients.
     const allocator = testing.allocator;
     const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
     const handler = maybe_handler orelse return error.FileNotFound;
     defer allocator.free(handler);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-108") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_messages_per_tick: u32 = 8") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_messages_per_tick: u32 = 1") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "while (processed < first_stream_scheduler_messages_per_tick)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "const max_messages_per_tick: u32 = 4") == null);
 }
@@ -2093,6 +2093,7 @@ test "quic high fanout connection limits and setup retries are tunable" {
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_fanout_worker_threshold = 64") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_fanout_connection_worker_cap = 64") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "default_connection_admission_threads_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-138") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 512") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "envU32(\"GEODE_HC_HELLO_TIMEOUT_MS\", default_hello_timeout_ms_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_CONNECT_STAGGER_US\"") != null);
@@ -2171,6 +2172,8 @@ test "quic high fanout e2e runs in single stream stress mode" {
     try testing.expect(std.mem.indexOf(u8, handler_content, "const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-129") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "const first_stream_owner_stack_size = 2 * 1024 * 1024") != null);
+    try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-139") != null);
+    try testing.expect(std.mem.indexOf(u8, handler_content, ".{ .stack_size = first_stream_owner_stack_size }, workerMain") != null);
 
     const maybe_e2e = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");
     const e2e_content = maybe_e2e orelse return error.FileNotFound;
