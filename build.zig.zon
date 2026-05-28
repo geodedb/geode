@@ -118,8 +118,11 @@
             // 2026-05-28: picks up tx-credit wakes for Initial/Handshake ACKs
             // and explicit tx_credit_generation init for allocator-created
             // connections, avoiding HELLO fan-out write stalls.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#f8a39e8cfef5eed1f3ecf2fa34f35b769aa38eb5",
-            .hash = "quic-0.1.21-gBIqUUgzPAB0Mfjz2zgctLSiebmRlVuJtAqSavwf8MwQ",
+            // 2026-05-28: also keeps the trusted-localhost cwnd bypass used by
+            // high-fanout loopback integration tests while preserving the
+            // normal congestion gate for remote peers.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#d3382eb95277243e8fc18c7edbe5b9d14a4a90c9",
+            .hash = "quic-0.1.21-gBIqUTc_PADw6YWwF-LoqJRB7gxumt_G2IhFeQJ_gw0j",
         },
 
         // =======================================================================
@@ -213,8 +216,10 @@
             // Geode's converged quic/thread_pool high-concurrency graph.
             // 2026-05-28: bumped to 0ce6bdb so the client and server share
             // the tx-credit wake fix from quic f8a39e8.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#0ce6bdb1c20395b1808f45a112b590b17111cf2b",
-            .hash = "geode_client_zig-0.2.9-8ysbVxlbCQCE9XGA6vCrtF-cBcZAsOitT21xMDTzbthE",
+            // 2026-05-28: bumped to 9e185b4 so the client and server share
+            // quic d3382eb's trusted-localhost cwnd bypass.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#9e185b4698a997c04e6bf7b9a0e8370dd606b1bc",
+            .hash = "geode_client_zig-0.2.9-8ysbV-ZbCQC9nMi4_4WsVMC5AJZeaS1Ytcg0JRTj5zrN",
         },
 
         // =======================================================================

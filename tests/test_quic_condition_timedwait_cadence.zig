@@ -1344,7 +1344,8 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_POLL_WORKERS={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_POLL_WORKERS") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e, "envU32(\"GEODE_HC_POLL_WORKERS\", default_poll_worker_count)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "default_poll_workers_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "envU32(\"GEODE_HC_POLL_WORKERS\", default_poll_workers_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256") != null);
@@ -2054,7 +2055,12 @@ test "quic high fanout connection limits and setup retries are tunable" {
     try testing.expect(std.mem.indexOf(u8, e2e_content, ".{ .stack_size = high_concurrency_worker_stack_size }") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-101") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "const default_hello_timeout_ms = 1000") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e_content, "envU32(\"GEODE_HC_HELLO_TIMEOUT_MS\", default_hello_timeout_ms)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-126") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "default_connect_attempts_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "default_hello_timeout_ms_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "default_setup_timeout_secs_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "highFanoutConnectionWorkerDefault(worker_count)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "envU32(\"GEODE_HC_HELLO_TIMEOUT_MS\", default_hello_timeout_ms_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_CONNECT_STAGGER_US\"") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_MAX_CONNECTIONS\"") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-085") != null);

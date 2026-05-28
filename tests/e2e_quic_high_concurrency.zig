@@ -18,6 +18,7 @@ const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 els
 const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
+const high_fanout_worker_threshold = 128;
 // CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 //
 // The E2E harness intentionally opens hundreds to thousands of clients in one
@@ -124,6 +125,11 @@ fn envSlice(name: [*:0]const u8, default_value: []const u8) []const u8 {
     const value = std.mem.span(raw);
     if (value.len == 0) return default_value;
     return value;
+}
+
+fn highFanoutConnectionWorkerDefault(worker_count: u32) u32 {
+    const doubled = std.math.mul(u32, worker_count, 2) catch std.math.maxInt(u32);
+    return @min(@max(doubled, default_connection_worker_count), 512);
 }
 
 const Counters = struct {
@@ -411,9 +417,22 @@ fn workerRun(ctx: *WorkerCtx) void {
 pub fn main() !void {
     const allocator = std.heap.smp_allocator;
     const worker_count = @max(@as(u32, 1), envU32("GEODE_HC_WORKERS", default_worker_count));
+    // CANARY: REQ=REQ-QUIC-HC-126; FEATURE="High-Concurrency Test Harness"; ASPECT=FanoutScaledServerDefaults; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+    //
+    // Debug mode keeps the default 32-worker smoke run cheap and
+    // deterministic, but an explicit 128+ worker fan-out needs the same server
+    // poller and connection-handler headroom that production/release runs use.
+    // Scale only the harness-provided child-server defaults here; every knob
+    // remains overridable through GEODE_HC_*.
+    const high_fanout_setup = worker_count >= high_fanout_worker_threshold;
+    const default_connect_attempts_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_connect_attempts), 16) else default_connect_attempts;
+    const default_hello_timeout_ms_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_hello_timeout_ms), 15_000) else default_hello_timeout_ms;
+    const default_setup_timeout_secs_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_setup_timeout_secs), 90) else default_setup_timeout_secs;
+    const default_poll_workers_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_poll_worker_count), 16) else default_poll_worker_count;
+    const default_connection_workers_for_run = if (high_fanout_setup) highFanoutConnectionWorkerDefault(worker_count) else default_connection_worker_count;
     const ops_per_worker = @max(@as(u32, 1), envU32("GEODE_HC_OPS_PER_WORKER", default_ops_per_worker));
     const mutation_stride = envU32("GEODE_HC_MUTATION_STRIDE", default_mutation_stride);
-    const connect_attempts = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_ATTEMPTS", default_connect_attempts));
+    const connect_attempts = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_ATTEMPTS", default_connect_attempts_for_run));
     const connect_backoff_ms = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_BACKOFF_MS", default_connect_backoff_ms));
     const handshake_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_HANDSHAKE_TIMEOUT_SECS", default_handshake_timeout_secs));
     // CANARY: REQ=REQ-QUIC-HC-101; FEATURE="QUIC High-Concurrency Setup"; ASPECT=BoundedHelloRetryWindow; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
@@ -422,8 +441,8 @@ pub fn main() !void {
     // into a 30s setup plateau before connectAndHelloWithRetry can open a fresh
     // connection. Keep the retry window short enough to recover quickly while
     // still above normal sub-second HELLO latency at 512+ clients.
-    const hello_timeout_ms = @max(@as(u32, 1), envU32("GEODE_HC_HELLO_TIMEOUT_MS", default_hello_timeout_ms));
-    const setup_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_SETUP_TIMEOUT_SECS", default_setup_timeout_secs));
+    const hello_timeout_ms = @max(@as(u32, 1), envU32("GEODE_HC_HELLO_TIMEOUT_MS", default_hello_timeout_ms_for_run));
+    const setup_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_SETUP_TIMEOUT_SECS", default_setup_timeout_secs_for_run));
     const setup_grace_secs = envU32("GEODE_HC_SETUP_GRACE_SECS", 30);
     const connect_stagger_us = envU32("GEODE_HC_CONNECT_STAGGER_US", 0);
     // CANARY: REQ=REQ-QUIC-HC-042; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RequestBurstShaping; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
@@ -485,7 +504,7 @@ pub fn main() !void {
         .{max_connections},
     );
     defer allocator.free(max_global_stream_env);
-    const poll_workers = @min(@max(envU32("GEODE_HC_POLL_WORKERS", default_poll_worker_count), @as(u32, 1)), @as(u32, 64));
+    const poll_workers = @min(@max(envU32("GEODE_HC_POLL_WORKERS", default_poll_workers_for_run), @as(u32, 1)), @as(u32, 64));
     const poll_workers_env = try std.fmt.allocPrint(
         allocator,
         "GEODE_QUIC_POLL_WORKERS={d}",
@@ -509,7 +528,7 @@ pub fn main() !void {
     // knob that lets 512+ setup runs distinguish QUIC handshake pressure from
     // connection-handler queueing behind the server's stable default.
     const connection_workers = @min(
-        @max(envU32("GEODE_HC_CONNECTION_WORKERS", default_connection_worker_count), @as(u32, 2)),
+        @max(envU32("GEODE_HC_CONNECTION_WORKERS", default_connection_workers_for_run), @as(u32, 2)),
         @as(u32, 512),
     );
     const connection_workers_env = try std.fmt.allocPrint(
