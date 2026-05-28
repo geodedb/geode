@@ -2099,9 +2099,8 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
     if (!adapter.graphExists(graph_name)) return 0;
 
     if (pattern.labels.len > 0) {
-        const nodes = try adapter.getNodesByLabel(graph_name, pattern.labels[0], allocator);
-        defer allocator.free(nodes);
-        return @intCast(nodes.len);
+        _ = allocator;
+        return try adapter.countNodesByLabel(graph_name, pattern.labels[0]);
     }
 
     return adapter.nodeCount(graph_name) catch 0;

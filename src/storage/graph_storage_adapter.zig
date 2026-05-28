@@ -2904,14 +2904,47 @@ pub const StorageAdapter = struct {
         return try ctx.mg.storage().scanLabelIter(ctx.label_id, allocator);
     }
 
+    // CANARY: REQ=REQ-QUIC-HC-137; FEATURE="High-Concurrency Label Scans"; ASPECT=ShardLockedLabelCount; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=storage; UPDATED=2026-05-28
+    pub fn countNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !u64 {
+        const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return 0;
+        const mg = ctx.mg;
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        var total: u64 = 0;
+        for (mg.engine.shards, 0..) |shard, shard_idx| {
+            mg.shard_locks[shard_idx].lockSharedUncancelable(io);
+            total += shard.label_index.count(ctx.label_id);
+            mg.shard_locks[shard_idx].unlockShared(io);
+        }
+        return total;
+    }
+
     pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
         _ = g_label_scan_lookup_count.fetchAdd(1, .monotonic);
         const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return try allocator.alloc(u64, 0);
-        const mg = ctx.mg;
-        var iter = try mg.storage().scanLabelIter(ctx.label_id, allocator);
-        defer iter.deinit();
         var result = std.ArrayList(u64).empty;
         errdefer result.deinit(allocator);
+
+        for (ctx.mg.engine.shards, 0..) |_, shard_idx| {
+            try appendLiveNodesForLabelShard(ctx.mg, shard_idx, ctx.label_id, allocator, &result);
+        }
+
+        return try result.toOwnedSlice(allocator);
+    }
+
+    fn appendLiveNodesForLabelShard(
+        mg: *ManagedGraph,
+        shard_idx: usize,
+        label_id: gs.LabelId,
+        allocator: Allocator,
+        result: *std.ArrayList(u64),
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mg.shard_locks[shard_idx].lockSharedUncancelable(io);
+        defer mg.shard_locks[shard_idx].unlockShared(io);
+
+        const shard = mg.engine.shards[shard_idx];
+        var iter = try shard.scanLabelIter(label_id);
 
         // Filter out deleted/empty nodes whose slot IDs are still present
         // in the label index.  We read raw page bytes via the buffer pool
@@ -2922,32 +2955,28 @@ pub const StorageAdapter = struct {
         const NodeRec = node_mod.NodeRec;
         const hdr_size = gs.node.PAGE_HEADER_SIZE;
 
-        // The FanOutNodeIterator across all shards may return nids from
-        // different shards interleaved.  Route buffer-pool pin/unpin
-        // operations to the shard that owns each nid.  Track the cached page
-        // per shard to avoid redundant pin round-trips within one shard's run.
-        var cached_shard_idx: ?usize = null;
+        // Scan one shard at a time under that shard's read lock. This fences
+        // concurrent shard writers while preserving parallel reads, and avoids
+        // the previous fan-out path that could interleave raw buffer-pool pins
+        // from multiple shard cursors during parallel UNION planning.
+        const nstore = &shard.node_store;
+        const bp = nstore.buffer_pool;
+        const npp = nstore.nodes_per_page;
         var cached_page_id: ?u64 = null;
         var cached_frame: *gs.page_frame.PageFrame = undefined;
-        defer if (cached_shard_idx != null and cached_page_id != null) {
-            const bp = mg.engine.shards[cached_shard_idx.?].node_store.buffer_pool;
-            bp.unpin(bp.frameIndex(cached_frame), false);
-        };
+        var cached_frame_idx: u32 = 0;
+        defer if (cached_page_id != null) bp.unpin(cached_frame_idx, false);
 
         while (try iter.next()) |nid| {
-            const shard_idx = gs.shard_count.shardOfNode(nid);
-            const nstore = &mg.engine.shards[shard_idx].node_store;
-            const bp = nstore.buffer_pool;
-            const npp = nstore.nodes_per_page;
             const page_id = nid / npp;
 
             // Page not allocated → node cannot be live (stale index entry)
             if (!nstore.free_space.isAllocated(page_id)) continue;
 
-            // Unpin cached frame when moving to a different shard or page.
+            // Unpin cached frame when moving to a different page.
             //
-            // CRITICAL: clear the cached_shard_idx / cached_page_id tracking
-            // BETWEEN the old unpin and the new pin. If `bp.pin` errors,
+            // CRITICAL: clear the cached_page_id tracking BETWEEN the old
+            // unpin and the new pin. If `bp.pin` errors,
             // `cached_frame` still points at the just-unpinned old frame,
             // and the function-exit `defer` would otherwise call `unpin`
             // again on it (`bp.unpin(bp.frameIndex(cached_frame), false)`).
@@ -2955,15 +2984,14 @@ pub const StorageAdapter = struct {
             // that double-unpin surfaces as a SIGABRT — observed under the
             // 16-way concurrent UNION DISTINCT load in
             // test_gap0814_union_parallelism.
-            if (cached_shard_idx == null or cached_shard_idx.? != shard_idx or cached_page_id.? != page_id) {
-                if (cached_shard_idx != null and cached_page_id != null) {
-                    const old_bp = mg.engine.shards[cached_shard_idx.?].node_store.buffer_pool;
-                    old_bp.unpin(old_bp.frameIndex(cached_frame), false);
-                    cached_shard_idx = null;
+            if (cached_page_id == null or cached_page_id.? != page_id) {
+                if (cached_page_id != null) {
+                    const old_frame_idx = cached_frame_idx;
                     cached_page_id = null;
+                    bp.unpin(old_frame_idx, false);
                 }
                 cached_frame = try bp.pin(.nodes, page_id);
-                cached_shard_idx = shard_idx;
+                cached_frame_idx = bp.frameIndex(cached_frame);
                 cached_page_id = page_id;
             }
 
@@ -2976,8 +3004,6 @@ pub const StorageAdapter = struct {
             if (node_mod.isEmpty(&rec)) continue;
             try result.append(allocator, nid);
         }
-
-        return try result.toOwnedSlice(allocator);
     }
 
     /// Return node candidates for an exact `(label, property = value)` probe.
