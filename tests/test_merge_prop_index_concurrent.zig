@@ -1,19 +1,18 @@
 // Bug fix 2026-04-27: regression test for the merge_prop_index race.
 //
-// `GraphStore.merge_prop_index` is a `StringHashMap(u64)` shared across
-// all shard worker threads.  Before the fix, `addToMergePropertyIndex`
-// /  `removeFromMergePropertyIndex` / `lookupMergeCandidate` accessed
-// it without a lock, so concurrent submitters racing through
-// `setNodeProperty` from N threads would trip the HashMap's
-// `pointer_stability` assertion ("reached unreachable code") on
-// concurrent rehash.
+// `GraphStore.merge_prop_index` stores one StringHashMap per shard. Before
+// the original race fix, `addToMergePropertyIndex` /
+// `removeFromMergePropertyIndex` / `lookupMergeCandidate` accessed the
+// process-wide map without a lock, so concurrent submitters racing through
+// `setNodeProperty` from N threads would trip the HashMap's `pointer_stability`
+// assertion ("reached unreachable code") on concurrent rehash.
 //
 // The original symptom showed up about 1 in 5–15 runs of
 // `test-group-commit-coordinator` (the lower the number of submitters
 // the rarer it is).  This test is tighter: 16 threads × 200 unique
 // inserts each = 3,200 distinct keys, all hitting the
 // `addToMergePropertyIndex` `else` (allocate + put) branch — i.e. every
-// op forces an insert into the HashMap, maximising rehash chance.
+// op forces an insert into the index, maximising rehash chance.
 //
 // Pre-fix: panics with "reached unreachable code" inside
 //   `std.HashMap.getOrPutContextAdapted` → `pointer_stability.lock`

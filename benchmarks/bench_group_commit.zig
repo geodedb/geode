@@ -116,7 +116,7 @@ fn noCoordWorker(ctx: *NoCoordCtx) void {
 // ----------------------------------------------------------------------
 
 const CoordCtx = struct {
-    coord: *group_commit.GroupCommitCoordinator,
+    coord: *group_commit.ShardedCoordinator,
     n: usize,
     tid: usize,
     samples: []u64,
@@ -233,8 +233,6 @@ fn tearDown(allocator: std.mem.Allocator, data_dir: []u8) void {
 }
 
 pub fn main() !void {
-    var debug_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer debug_arena.deinit();
     const allocator = std.heap.smp_allocator;
 
     const thread_count: usize = 16;
@@ -336,8 +334,8 @@ pub fn main() !void {
         for (contexts) |c| error_total += c.errors.load(.acquire);
         if (error_total != 0) std.debug.print("[bench_group_commit] scenario=16way_with_coord errors={d}\n", .{error_total});
 
-        const batches = coord.batches.load(.acquire);
-        const ops_applied = coord.ops_applied.load(.acquire);
+        const batches = coord.apply_batches_total.load(.acquire);
+        const ops_applied = coord.apply_ops_total.load(.acquire);
         _ = ops_applied;
 
         printReport(.{

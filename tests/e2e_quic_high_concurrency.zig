@@ -18,7 +18,9 @@ const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 els
 const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
-const high_fanout_worker_threshold = 128;
+const high_fanout_worker_threshold = 64;
+const high_fanout_connection_worker_cap = if (builtin.mode == .Debug) 64 else 512;
+const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 256;
 // CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 //
 // The E2E harness intentionally opens hundreds to thousands of clients in one
@@ -129,7 +131,17 @@ fn envSlice(name: [*:0]const u8, default_value: []const u8) []const u8 {
 
 fn highFanoutConnectionWorkerDefault(worker_count: u32) u32 {
     const doubled = std.math.mul(u32, worker_count, 2) catch std.math.maxInt(u32);
-    return @min(@max(doubled, default_connection_worker_count), 512);
+    return @min(@max(doubled, default_connection_worker_count), high_fanout_connection_worker_cap);
+}
+
+// CANARY: REQ=REQ-QUIC-HC-128; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+//
+// Cooperative first-stream workers execute the persistent request loops. At
+// high fanout, leaving this at the debug default of 16 turns storage/transport
+// work into an artificial scheduler bottleneck, but matching the full client
+// count at 128+ can overrun the debug scheduler and starve the server process.
+fn highFanoutCooperativeFirstStreamWorkerDefault(worker_count: u32) u32 {
+    return @min(@max(worker_count, default_cooperative_first_stream_worker_count), high_fanout_cooperative_first_stream_worker_cap);
 }
 
 const Counters = struct {
@@ -430,6 +442,7 @@ pub fn main() !void {
     const default_setup_timeout_secs_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_setup_timeout_secs), 90) else default_setup_timeout_secs;
     const default_poll_workers_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_poll_worker_count), 16) else default_poll_worker_count;
     const default_connection_workers_for_run = if (high_fanout_setup) highFanoutConnectionWorkerDefault(worker_count) else default_connection_worker_count;
+    const default_cooperative_first_stream_workers_for_run = if (high_fanout_setup) highFanoutCooperativeFirstStreamWorkerDefault(worker_count) else default_cooperative_first_stream_worker_count;
     const ops_per_worker = @max(@as(u32, 1), envU32("GEODE_HC_OPS_PER_WORKER", default_ops_per_worker));
     const mutation_stride = envU32("GEODE_HC_MUTATION_STRIDE", default_mutation_stride);
     const connect_attempts = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_ATTEMPTS", default_connect_attempts_for_run));
@@ -513,7 +526,7 @@ pub fn main() !void {
     defer allocator.free(poll_workers_env);
     const cooperative_first_stream_worker_count = envU32(
         "GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS",
-        default_cooperative_first_stream_worker_count,
+        default_cooperative_first_stream_workers_for_run,
     );
     const cooperative_first_stream_workers_env = try std.fmt.allocPrint(
         allocator,

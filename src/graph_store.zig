@@ -487,6 +487,107 @@ pub const LabelPosting = struct {
     }
 };
 
+const merge_property_index_shard_count: usize = 256;
+
+const MergePropertyIndexShard = struct {
+    map: std.StringHashMap(u64),
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+
+    fn init(allocator: std.mem.Allocator) MergePropertyIndexShard {
+        return .{ .map = std.StringHashMap(u64).init(allocator) };
+    }
+
+    fn deinit(self: *MergePropertyIndexShard, allocator: std.mem.Allocator) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        self.map.deinit();
+    }
+};
+
+// CANARY: REQ=REQ-QUIC-HC-127; FEATURE="High-Concurrency Mutations"; ASPECT=ShardedMergePropertyIndex; STATUS=IMPL; TEST=test-merge-prop-index-concurrent; OWNER=storage; UPDATED=2026-05-28
+/// Striped `(graph, label, property_key, property_value) -> node_id` index.
+///
+/// The pre-sharded implementation protected one process-wide `StringHashMap`
+/// with one mutex. Bulk MERGE writes update this index once per property, so
+/// the group-commit shard workers still serialized in GraphStore after the
+/// storage adapter had routed the physical write to independent shards.
+/// Striping keeps the exact same key/value contract while making unrelated
+/// property values contend only when they hash to the same shard.
+pub const MergePropertyIndex = struct {
+    allocator: std.mem.Allocator,
+    shards: [merge_property_index_shard_count]MergePropertyIndexShard,
+
+    pub fn init(allocator: std.mem.Allocator) MergePropertyIndex {
+        var self: MergePropertyIndex = .{
+            .allocator = allocator,
+            .shards = undefined,
+        };
+        for (&self.shards) |*shard| {
+            shard.* = MergePropertyIndexShard.init(allocator);
+        }
+        return self;
+    }
+
+    pub fn deinit(self: *MergePropertyIndex) void {
+        for (&self.shards) |*shard| shard.deinit(self.allocator);
+    }
+
+    pub fn reset(self: *MergePropertyIndex) void {
+        self.deinit();
+        self.* = MergePropertyIndex.init(self.allocator);
+    }
+
+    pub fn count(self: *MergePropertyIndex) u32 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var total: u32 = 0;
+        for (&self.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            total +%= shard.map.count();
+            shard.mutex.unlock(io);
+        }
+        return total;
+    }
+
+    fn shardForKey(key: []const u8) usize {
+        return @intCast(std.hash.Wyhash.hash(0, key) % merge_property_index_shard_count);
+    }
+
+    fn putOrUpdate(self: *MergePropertyIndex, key: []const u8, node_id: u64) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+
+        if (shard.map.getPtr(key)) |existing| {
+            existing.* = node_id;
+            return;
+        }
+
+        const key_copy = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_copy);
+        try shard.map.put(key_copy, node_id);
+    }
+
+    fn remove(self: *MergePropertyIndex, key: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+
+        if (shard.map.fetchRemove(key)) |kv| {
+            self.allocator.free(kv.key);
+        }
+    }
+
+    fn get(self: *MergePropertyIndex, key: []const u8) ?u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+        return shard.map.get(key);
+    }
+};
+
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
@@ -549,20 +650,7 @@ pub const GraphStore = struct {
     // MERGE property index: enables O(1) candidate lookup by (graph, label, property_key, property_value).
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
-    merge_prop_index: std.StringHashMap(u64),
-    // Bug fix 2026-04-27: serialize all `merge_prop_index` access.  The
-    // group-commit shard workers (`group_commit.applyShardBatch`) call
-    // `bulkInsertNodeWithReservedId` from N threads concurrently — each
-    // worker eventually reaches `setNodeProperty` →
-    // `addToMergePropertyIndex` and races on `merge_prop_index.put`.
-    // The HashMap's pointer_stability assertion catches concurrent
-    // mutations and panics with "reached unreachable code".  This mutex
-    // is acquired by `addToMergePropertyIndex`,
-    // `removeFromMergePropertyIndex`,
-    // `removeAllMergePropertyIndexEntries`, and `lookupMergeCandidate`
-    // — every access is leaf-level so there is no nesting / lock-order
-    // risk.  Tier 1 per CLAUDE.md (alongside store_mutex).
-    merge_prop_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    merge_prop_index: MergePropertyIndex,
     // PERF-C (issue #814) race fix (2026-05-18): serialize every access to
     // the three tenant-keyed refcount maps (`node_labels_by_tenant`,
     // `edge_types_by_tenant`, `label_properties_by_tenant`).  The bump/dec
@@ -579,7 +667,7 @@ pub const GraphStore = struct {
     // removeNodeLabel writers reach `bumpLabelCount` /
     // `decLabelCount` while inside the labels_rwlock critical section)
     // — so the strict ordering is `labels_rwlock` → `perf_c_refcount_mutex`.
-    // Tier 1 per CLAUDE.md (alongside merge_prop_index_mutex).
+    // Tier 1 per CLAUDE.md (alongside merge_prop_index shard mutexes).
     perf_c_refcount_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
     //
@@ -657,7 +745,7 @@ pub const GraphStore = struct {
             .node_labels_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(allocator),
             .edge_types_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(allocator),
             .label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(allocator),
-            .merge_prop_index = std.StringHashMap(u64).init(allocator),
+            .merge_prop_index = MergePropertyIndex.init(allocator),
             // PERF-P0-001: Edge-type index for O(1) edge-type lookups
             .edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
             .outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(allocator),
@@ -738,11 +826,6 @@ pub const GraphStore = struct {
         deinitTenantStringMultiset(&self.edge_types_by_tenant, self.allocator);
         deinitTenantStringMultiset(&self.label_properties_by_tenant, self.allocator);
 
-        // Clean up merge property index
-        var mpi_iter = self.merge_prop_index.iterator();
-        while (mpi_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
         self.merge_prop_index.deinit();
 
         // PERF-P0-001: Clean up edge-type index
@@ -878,13 +961,7 @@ pub const GraphStore = struct {
         self.edge_types_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
         self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
-        // Reset merge property index
-        var mpi_iter = self.merge_prop_index.iterator();
-        while (mpi_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.merge_prop_index.deinit();
-        self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
+        self.merge_prop_index.reset();
 
         // PERF-P0-001: Reset edge-type index
         var eti_iter = self.edge_type_index.iterator();
@@ -2611,53 +2688,30 @@ pub const GraphStore = struct {
 
     /// Insert an entry into the merge property index for each label on the node.
     fn addToMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64) !void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.merge_prop_index_mutex.lockUncancelable(io);
-        defer self.merge_prop_index_mutex.unlock(io);
-
         var buf: [1024]u8 = undefined;
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
-            if (self.merge_prop_index.getPtr(probe)) |existing| {
-                // Overwrite with latest node_id (same label+key+value → same logical entity)
-                existing.* = node_id;
-            } else {
-                const key_copy = try self.allocator.dupe(u8, probe);
-                errdefer self.allocator.free(key_copy);
-                try self.merge_prop_index.put(key_copy, node_id);
-            }
+            try self.merge_prop_index.putOrUpdate(probe, node_id);
         }
     }
 
     /// Remove entries from the merge property index for each label on the node.
     fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.merge_prop_index_mutex.lockUncancelable(io);
-        defer self.merge_prop_index_mutex.unlock(io);
-
         var buf: [1024]u8 = undefined;
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
-            if (self.merge_prop_index.fetchRemove(probe)) |kv| {
-                self.allocator.free(kv.key);
-            }
+            self.merge_prop_index.remove(probe);
         }
     }
 
     /// Remove ALL merge property index entries for a node (used during node deletion).
     fn removeAllMergePropertyIndexEntries(self: *GraphStore, node: *const Node) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.merge_prop_index_mutex.lockUncancelable(io);
-        defer self.merge_prop_index_mutex.unlock(io);
-
         var buf: [1024]u8 = undefined;
         var prop_iter = node.properties.iterator();
         while (prop_iter.next()) |prop_entry| {
             for (node.labels) |label| {
                 const probe = buildMergeIndexKey(&buf, node.graph_name, label, prop_entry.key_ptr.*, prop_entry.value_ptr.*) orelse continue;
-                if (self.merge_prop_index.fetchRemove(probe)) |kv| {
-                    self.allocator.free(kv.key);
-                }
+                self.merge_prop_index.remove(probe);
             }
         }
     }
@@ -2679,22 +2733,16 @@ pub const GraphStore = struct {
     /// `.not_found` when the index is authoritative and no match exists,
     /// or `.not_indexable` when the key could not be built (caller must scan).
     ///
-    /// Bug fix 2026-04-27: takes `*GraphStore` (not `*const`) so we can
-    /// hold `merge_prop_index_mutex` during the read.  Concurrent
-    /// `merge_prop_index.put` from another shard worker would otherwise
-    /// race the `.get` here (HashMap pointer_stability assertion fires
-    /// on concurrent rehash).  All callers already pass `*GraphStore`.
+    /// Bug fix 2026-04-27: takes `*GraphStore` (not `*const`) so index reads
+    /// can lock the owning shard. Concurrent `put` from another shard worker
+    /// would otherwise race the `.get` here (HashMap pointer_stability
+    /// assertion fires on concurrent rehash). All callers already pass
+    /// `*GraphStore`.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
 
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.merge_prop_index_mutex.lockUncancelable(io);
-        const node_id = self.merge_prop_index.get(probe) orelse {
-            self.merge_prop_index_mutex.unlock(io);
-            return .not_found;
-        };
-        self.merge_prop_index_mutex.unlock(io);
+        const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
         // Verify node still exists (index could be stale after a failed delete)
         if (self.nodes.get(node_id)) |node| {
             if (std.mem.eql(u8, node.graph_name, graph_name)) {
@@ -2916,13 +2964,7 @@ pub const GraphStore = struct {
         self.edge_types_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
         self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
-        // Reset merge property index
-        var mpi_iter = self.merge_prop_index.iterator();
-        while (mpi_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.merge_prop_index.deinit();
-        self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
+        self.merge_prop_index.reset();
 
         // PERF-P0-001: Reset edge-type index
         var eti_iter = self.edge_type_index.iterator();
