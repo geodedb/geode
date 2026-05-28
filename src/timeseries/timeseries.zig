@@ -460,7 +460,7 @@ test "ts: valueAt and lastValue" {
 
     // Test valueAt (exact match)
     const hk = st.hashKey(key);
-    const series = st.by_key.get(hk).?;
+    const series = st.series_cache.get(hk).?;
     const exact = series.valueAt(2000).?;
     try std.testing.expect(exact.ts == 2000 and exact.value == 200);
 
@@ -590,7 +590,7 @@ test "ts: valueAt — before first timestamp returns null" {
     });
 
     const hk = st.hashKey(key);
-    const series = st.by_key.get(hk).?;
+    const series = st.series_cache.get(hk).?;
 
     // Timestamp before all points — binary search finds nothing before
     const result = series.valueAt(1000);
@@ -610,7 +610,7 @@ test "ts: valueAt — after last timestamp returns last-before point" {
     });
 
     const hk = st.hashKey(key);
-    const series = st.by_key.get(hk).?;
+    const series = st.series_cache.get(hk).?;
 
     // Timestamp after all points — returns last point (closest before)
     const result = series.valueAt(9999).?;
@@ -631,7 +631,7 @@ test "ts: valueAt — exact match returns exact point" {
     });
 
     const hk = st.hashKey(key);
-    const series = st.by_key.get(hk).?;
+    const series = st.series_cache.get(hk).?;
 
     // Exact match on first, middle, and last
     const first = series.valueAt(1000).?;
@@ -657,7 +657,7 @@ test "ts: valueAt — empty series returns null" {
     try st.insertMany(key, &.{});
 
     const hk = st.hashKey(key);
-    const series = st.by_key.get(hk).?;
+    const series = st.series_cache.get(hk).?;
     const result = series.valueAt(1000);
     try std.testing.expect(result == null);
 }
@@ -751,7 +751,7 @@ test "ts: persist-restart-query via StoreConfig" {
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/geode_ts_persist_{d}", .{pid}) catch unreachable;
-    defer std.Io.Dir.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     const key = SeriesKey{ .device_id = 7, .metric = "voltage" };
 
