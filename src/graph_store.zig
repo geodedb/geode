@@ -2195,17 +2195,7 @@ pub const GraphStore = struct {
         const posting = try self.ensureLabelPostingListLocked(graph_name, label);
         posting.lock();
         defer posting.unlock();
-        const items = posting.list.items;
-        var inserted = false;
-        if (items.len == 0 or items[items.len - 1] < node_id) {
-            try posting.list.append(self.allocator, node_id);
-            inserted = true;
-        } else {
-            // Defensive fallback for non-monotonic ids.
-            const before_len = posting.list.items.len;
-            try sortedInsertLocked(&posting.list, self.allocator, node_id);
-            inserted = posting.list.items.len > before_len;
-        }
+        const inserted = try insertIntoPostingLocked(posting, self.allocator, node_id);
         if (inserted) self.bumpGraphLabelCount(graph_name, label);
     }
 
@@ -2550,6 +2540,7 @@ pub const GraphStore = struct {
     // outer `label_index` StringHashMap is still protected by the per-graph
     // rwlock held by the caller — this function only protects the inner
     // `ArrayList(u64)` via `LabelPosting.mutex`.
+    // CANARY: REQ=REQ-QUIC-HC-135; FEATURE="HighConcurrencyMutations"; ASPECT=AppendOrderedLabelPosting; STATUS=TESTED; TEST=tests/perf/test_label_posting_concurrent_insert.zig; OWNER=storage; UPDATED=2026-05-28
     pub fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
@@ -2559,9 +2550,8 @@ pub const GraphStore = struct {
         try self.ensureGraphLabelCount(graph_name, label);
         posting.lock();
         defer posting.unlock();
-        const before_len = posting.list.items.len;
-        try sortedInsertLocked(&posting.list, self.allocator, node_id);
-        if (posting.list.items.len > before_len) self.bumpGraphLabelCount(graph_name, label);
+        const inserted = try insertIntoPostingLocked(posting, self.allocator, node_id);
+        if (inserted) self.bumpGraphLabelCount(graph_name, label);
     }
 
     /// Binary-search insert into a sorted ArrayList(u64), maintaining
@@ -2595,6 +2585,18 @@ pub const GraphStore = struct {
     /// the call-site contract for readers of the label-index mutation
     /// helpers (`addToLabelIndex`, `appendToLabelIndex`).
     const sortedInsertLocked = sortedInsert;
+
+    fn insertIntoPostingLocked(posting: *LabelPosting, allocator: std.mem.Allocator, node_id: u64) !bool {
+        const items = posting.list.items;
+        if (items.len == 0 or items[items.len - 1] < node_id) {
+            try posting.list.append(allocator, node_id);
+            return true;
+        }
+
+        const before_len = posting.list.items.len;
+        try sortedInsertLocked(&posting.list, allocator, node_id);
+        return posting.list.items.len > before_len;
+    }
 
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
         const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;

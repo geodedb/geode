@@ -67,3 +67,22 @@ test "concurrent addToLabelIndex on same label preserves all entries" {
         prev = id;
     }
 }
+
+test "append-ordered addToLabelIndex preserves sorted fallback and dedupe" {
+    var store = try geode.graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    try store.addToLabelIndex("default", "User", 100);
+    try store.addToLabelIndex("default", "User", 101);
+    try store.addToLabelIndex("default", "User", 102);
+    try store.addToLabelIndex("default", "User", 101);
+    try store.addToLabelIndex("default", "User", 99);
+
+    const posting = store.getNodesByLabel("default", "User") orelse
+        return error.NoPosting;
+    try testing.expectEqual(@as(usize, 4), posting.len);
+    try testing.expectEqual(@as(u64, 99), posting[0]);
+    try testing.expectEqual(@as(u64, 100), posting[1]);
+    try testing.expectEqual(@as(u64, 101), posting[2]);
+    try testing.expectEqual(@as(u64, 102), posting[3]);
+}
