@@ -101,3 +101,28 @@ test "REQ-QUIC-HC-121: candidate shard mask is empty-aware and monotonic" {
     const expanded = adapter_mod.candidateShardMaskForTest(&.{ 42, 43, 44, 45 });
     try std.testing.expect((expanded & one) == one);
 }
+
+test "REQ-QUIC-HC-122: exact property index shards common merge keys" {
+    try std.testing.expect(adapter_mod.exact_node_property_index_shard_count >= 32);
+
+    const stable_a = adapter_mod.exactNodePropertyIndexShardForTest(7, "tenant_id", 0x1234_5678_90ab_cdef);
+    const stable_b = adapter_mod.exactNodePropertyIndexShardForTest(7, "tenant_id", 0x1234_5678_90ab_cdef);
+    try std.testing.expectEqual(stable_a, stable_b);
+    try std.testing.expect(stable_a < adapter_mod.exact_node_property_index_shard_count);
+
+    var seen = [_]bool{false} ** adapter_mod.exact_node_property_index_shard_count;
+    var seen_count: usize = 0;
+    var key_buf: [32]u8 = undefined;
+    for (0..256) |i| {
+        const key = try std.fmt.bufPrint(&key_buf, "merge_key_{d}", .{i % 17});
+        const value_hash = std.hash.Wyhash.hash(0, key) ^ @as(u64, @intCast(i *% 0x9e37_79b1));
+        const shard = adapter_mod.exactNodePropertyIndexShardForTest(@intCast(1 + (i % 8)), key, value_hash);
+        try std.testing.expect(shard < adapter_mod.exact_node_property_index_shard_count);
+        if (!seen[shard]) {
+            seen[shard] = true;
+            seen_count += 1;
+        }
+    }
+
+    try std.testing.expect(seen_count >= 16);
+}

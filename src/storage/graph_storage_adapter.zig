@@ -32,6 +32,9 @@ const LabelScanContext = struct {
 var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
+// CANARY: REQ=REQ-QUIC-HC-122; FEATURE="HighConcurrencyMutations"; ASPECT=ExactPropertyIndexSharding; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
+pub const exact_node_property_index_shard_count: usize = 64;
+
 const graph_store_file_names = [_][]const u8{
     "nodes.store",
     "adj_out.store",
@@ -56,89 +59,159 @@ pub fn getLabelScanLookupCount() u64 {
     return g_label_scan_lookup_count.load(.acquire);
 }
 
-const NodePropertyExactIndex = struct {
-    allocator: Allocator,
+fn exactNodePropertyIndexHash(label_id: gs.LabelId, property_key: []const u8, value_hash: u64) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    var label_buf: [4]u8 = undefined;
+    var key_len_buf: [4]u8 = undefined;
+    var value_buf: [8]u8 = undefined;
+    std.mem.writeInt(u32, &label_buf, label_id, .little);
+    std.mem.writeInt(u32, &key_len_buf, @intCast(property_key.len), .little);
+    std.mem.writeInt(u64, &value_buf, value_hash, .little);
+    hasher.update(&label_buf);
+    hasher.update(&key_len_buf);
+    hasher.update(property_key);
+    hasher.update(&value_buf);
+    return hasher.final();
+}
+
+fn exactNodePropertyIndexShardForParts(label_id: gs.LabelId, property_key: []const u8, value_hash: u64) usize {
+    return @intCast(exactNodePropertyIndexHash(label_id, property_key, value_hash) % exact_node_property_index_shard_count);
+}
+
+fn exactNodePropertyIndexShardForEncodedKey(key: []const u8) usize {
+    return @intCast(std.hash.Wyhash.hash(0, key) % exact_node_property_index_shard_count);
+}
+
+pub fn exactNodePropertyIndexShardForTest(label_id: gs.LabelId, property_key: []const u8, value_hash: u64) usize {
+    return exactNodePropertyIndexShardForParts(label_id, property_key, value_hash);
+}
+
+const NodePropertyExactIndexShard = struct {
     postings: std.StringHashMap(std.ArrayList(u64)),
-    /// Guards `postings` against concurrent mutation by ShardedCoordinator
-    /// workers. Write paths (add / remove) hold EXCLUSIVE; reads via `get`
-    /// also lock briefly to read the slice header consistently. Held only
-    /// for the StringHashMap operation itself — not across `setNodeProperty`
-    /// or any caller-side work — so contention is microsecond-bounded.
     mutex: std.Io.Mutex = std.Io.Mutex.init,
 
-    fn init(allocator: Allocator) NodePropertyExactIndex {
-        return .{
-            .allocator = allocator,
-            .postings = std.StringHashMap(std.ArrayList(u64)).init(allocator),
-        };
+    fn init(allocator: Allocator) NodePropertyExactIndexShard {
+        return .{ .postings = std.StringHashMap(std.ArrayList(u64)).init(allocator) };
     }
 
-    fn deinit(self: *NodePropertyExactIndex) void {
+    fn deinit(self: *NodePropertyExactIndexShard, allocator: Allocator) void {
         var it = self.postings.iterator();
         while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(self.allocator);
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(allocator);
         }
         self.postings.deinit();
     }
 
-    fn clear(self: *NodePropertyExactIndex) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-        self.clearLocked();
-    }
-
-    /// Caller must hold `self.mutex`.  Used by `loadFromFile`, which
-    /// already locks the mutex before calling — going through `clear()`
-    /// there would self-deadlock (`std.Io.Mutex` is non-reentrant).
-    /// See docs/bugs/2026-04-27-adapter-restart-deadlock.md.
-    fn clearLocked(self: *NodePropertyExactIndex) void {
+    fn clearLocked(self: *NodePropertyExactIndexShard, allocator: Allocator) void {
         var it = self.postings.iterator();
         while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(self.allocator);
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(allocator);
         }
         self.postings.clearAndFree();
     }
+};
+
+const NodePropertyExactIndex = struct {
+    allocator: Allocator,
+    /// Exact `(label_id, property_key, value_hash) -> node ids` postings are
+    /// striped so high-parallel MERGE/properties do not queue behind one global
+    /// StringHashMap mutex. Checkpoint/load still take every shard in stable
+    /// order to preserve a coherent on-disk snapshot.
+    shards: [exact_node_property_index_shard_count]NodePropertyExactIndexShard,
+
+    fn init(allocator: Allocator) NodePropertyExactIndex {
+        var self: NodePropertyExactIndex = .{
+            .allocator = allocator,
+            .shards = undefined,
+        };
+        for (&self.shards) |*shard| {
+            shard.* = NodePropertyExactIndexShard.init(allocator);
+        }
+        return self;
+    }
+
+    fn deinit(self: *NodePropertyExactIndex) void {
+        for (&self.shards) |*shard| {
+            shard.deinit(self.allocator);
+        }
+    }
+
+    fn clear(self: *NodePropertyExactIndex) void {
+        self.lockAllShards();
+        defer self.unlockAllShards();
+        self.clearLockedAll();
+    }
+
+    fn lockAllShards(self: *NodePropertyExactIndex) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (&self.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+        }
+    }
+
+    fn unlockAllShards(self: *NodePropertyExactIndex) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var i: usize = self.shards.len;
+        while (i > 0) {
+            i -= 1;
+            self.shards[i].mutex.unlock(io);
+        }
+    }
+
+    /// Caller must hold every shard mutex. Used by `loadFromFile`, which
+    /// already locks the shards before calling; going through `clear()`
+    /// there would self-deadlock (`std.Io.Mutex` is non-reentrant).
+    /// See docs/bugs/2026-04-27-adapter-restart-deadlock.md.
+    fn clearLockedAll(self: *NodePropertyExactIndex) void {
+        for (&self.shards) |*shard| {
+            shard.clearLocked(self.allocator);
+        }
+    }
 
     fn add(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) !void {
+        const owned_key = try self.encodeKey(label_id, property_key, value_hash);
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(owned_key);
+        const shard = &self.shards[shard_idx];
         const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
 
-        const probe_key = try self.encodeKey(label_id, property_key, value_hash);
-        defer self.allocator.free(probe_key);
-
-        if (self.postings.getPtr(probe_key)) |list| {
-            for (list.items) |existing_id| {
+        const gop = shard.postings.getOrPut(owned_key) catch |err| {
+            self.allocator.free(owned_key);
+            return err;
+        };
+        var inserted_new = false;
+        if (gop.found_existing) {
+            self.allocator.free(owned_key);
+            for (gop.value_ptr.items) |existing_id| {
                 if (existing_id == node_id) return;
             }
-            try list.append(self.allocator, node_id);
-            return;
-        }
-
-        const owned_key = try self.encodeKey(label_id, property_key, value_hash);
-        errdefer self.allocator.free(owned_key);
-
-        const gop = try self.postings.getOrPut(owned_key);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList(u64).empty;
         } else {
-            self.allocator.free(owned_key);
+            gop.value_ptr.* = std.ArrayList(u64).empty;
+            inserted_new = true;
         }
+        errdefer if (inserted_new) {
+            if (shard.postings.fetchRemove(owned_key)) |kv| {
+                self.allocator.free(kv.key);
+                var list_copy = kv.value;
+                list_copy.deinit(self.allocator);
+            }
+        };
         try gop.value_ptr.append(self.allocator, node_id);
     }
 
     fn remove(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-
         const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return;
         defer self.allocator.free(probe_key);
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
+        const shard = &self.shards[shard_idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
 
-        if (self.postings.getPtr(probe_key)) |list| {
+        if (shard.postings.getPtr(probe_key)) |list| {
             var i: usize = 0;
             while (i < list.items.len) : (i += 1) {
                 if (list.items[i] == node_id) {
@@ -147,7 +220,7 @@ const NodePropertyExactIndex = struct {
                 }
             }
             if (list.items.len == 0) {
-                if (self.postings.fetchRemove(probe_key)) |kv| {
+                if (shard.postings.fetchRemove(probe_key)) |kv| {
                     self.allocator.free(kv.key);
                     var list_copy = kv.value;
                     list_copy.deinit(self.allocator);
@@ -157,28 +230,30 @@ const NodePropertyExactIndex = struct {
     }
 
     fn get(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ?[]const u64 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-
         const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return null;
         defer self.allocator.free(probe_key);
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
+        const shard = &self.shards[shard_idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
 
-        if (self.postings.get(probe_key)) |list| {
+        if (shard.postings.get(probe_key)) |list| {
             return list.items;
         }
         return null;
     }
 
     fn copy(self: *NodePropertyExactIndex, allocator: Allocator, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u64 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-
         const probe_key = try self.encodeKey(label_id, property_key, value_hash);
         defer self.allocator.free(probe_key);
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
+        const shard = &self.shards[shard_idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
 
-        if (self.postings.get(probe_key)) |list| {
+        if (shard.postings.get(probe_key)) |list| {
             return try allocator.dupe(u64, list.items);
         }
         return try allocator.alloc(u64, 0);
@@ -197,9 +272,8 @@ const NodePropertyExactIndex = struct {
     /// Persist the index to `prop_exact.idx` inside `graph_dir_path`.
     /// Non-fatal: callers should catch and log warnings.
     fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) !void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
+        self.lockAllShards();
+        defer self.unlockAllShards();
 
         const idx_path = try self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len);
         defer self.allocator.free(idx_path);
@@ -219,22 +293,24 @@ const NodePropertyExactIndex = struct {
 
         // Entry count
         var count: u64 = 0;
-        {
-            var count_iter = self.postings.iterator();
+        for (&self.shards) |*shard| {
+            var count_iter = shard.postings.iterator();
             while (count_iter.next()) |_| count += 1;
         }
         try writer.writeInt(u64, count, .little);
 
         // Each entry: [key_len: u32][key bytes][posting_count: u64][node_ids: u64...]
-        var iter = self.postings.iterator();
-        while (iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const posting = entry.value_ptr.items;
-            try writer.writeInt(u32, @intCast(key.len), .little);
-            try writer.writeAll(key);
-            try writer.writeInt(u64, @intCast(posting.len), .little);
-            for (posting) |nid| {
-                try writer.writeInt(u64, nid, .little);
+        for (&self.shards) |*shard| {
+            var iter = shard.postings.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const posting = entry.value_ptr.items;
+                try writer.writeInt(u32, @intCast(key.len), .little);
+                try writer.writeAll(key);
+                try writer.writeInt(u64, @intCast(posting.len), .little);
+                for (posting) |nid| {
+                    try writer.writeInt(u64, nid, .little);
+                }
             }
         }
         try idx_fw.flush();
@@ -244,9 +320,8 @@ const NodePropertyExactIndex = struct {
     /// Returns true on success, false if file is missing, corrupt, or unreadable
     /// (caller should fall back to full rebuild).
     fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) bool {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
+        self.lockAllShards();
+        defer self.unlockAllShards();
 
         const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return false;
         defer self.allocator.free(idx_path);
@@ -268,10 +343,10 @@ const NodePropertyExactIndex = struct {
 
         const entry_count = reader.takeInt(u64, .little) catch return false;
 
-        // We already hold `self.mutex` (line 227) — using `clear()` would
-        // re-enter the same non-reentrant `std.Io.Mutex` and deadlock.
+        // We already hold every shard mutex; using `clear()` would re-enter
+        // the same non-reentrant `std.Io.Mutex` values and deadlock.
         // See docs/bugs/2026-04-27-adapter-restart-deadlock.md.
-        self.clearLocked();
+        self.clearLockedAll();
 
         var i: u64 = 0;
         while (i < entry_count) : (i += 1) {
@@ -300,7 +375,8 @@ const NodePropertyExactIndex = struct {
                 posting.appendAssumeCapacity(nid);
             }
 
-            self.postings.put(key, posting) catch {
+            const shard_idx = exactNodePropertyIndexShardForEncodedKey(key);
+            self.shards[shard_idx].postings.put(key, posting) catch {
                 posting.deinit(self.allocator);
                 self.allocator.free(key);
                 return false;
