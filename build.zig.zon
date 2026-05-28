@@ -139,11 +139,12 @@
             // concurrent poll workers cannot race pollCrypto ownership drains.
             // 2026-05-28: increases server-side receive drain budget so
             // synchronized request bursts do not strand STREAM retransmits in PTO.
-            // 2026-05-28: keeps server short-header drain aligned with the
-            // server receive-burst budget and sheds contended server ACK-frame
-            // work while preserving immediate app-stream flow-control feedback.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#6934965a1f9603aa96cf9b36c97a26a7493d5cab",
-            .hash = "quic-0.1.21-gBIqUeTHPABuDWMsPo4PcFgSabB_uttRL0hudZf-dDXO",
+            // 2026-05-28: sheds contended server ACK-frame work while preserving
+            // immediate app-stream flow-control feedback.
+            // 2026-05-28: restores the proven wider server short-header drain
+            // after rejecting one-batch, two-batch, and packet-shedding variants.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#fc7efc2d98a435a82598c2a34f697bde1c7532e2",
+            .hash = "quic-0.1.21-gBIqUefHPABsz6Q34xvxSzYfE-3_3OLHarBTmhFRiI3g",
         },
 
         // =======================================================================
@@ -257,8 +258,14 @@
             // quic 553975f's server receive burst drain.
             // 2026-05-28: bumped to b963a95 so client and server share
             // quic 6934965's final server-drain contention controls.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#b963a956ec9b736e0fb777312dc0d4e29ec3e63b",
-            .hash = "geode_client_zig-0.2.9-8ysbVxViCQDm1MJy74dWdhSEPcCT0PlyevoMRiQ3NB6G",
+            // 2026-05-28: bumped to ed542ca so client and server share
+            // quic 4eebb8e's bounded server short-header app cadence.
+            // 2026-05-28: bumped to 9c5b4c7 so client and server share
+            // quic b8d331d's server short-header contention shedding.
+            // 2026-05-28: bumped to 959a43a so client and server share
+            // quic fc7efc2's restored server short-header drain.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#959a43a7f6981a87131561bb6cb99605272c8ce8",
+            .hash = "geode_client_zig-0.2.9-8ysbV69iCQAuR0fpo0_YS0-1K_u6XxSKcW6NxcexTs6G",
         },
 
         // =======================================================================
