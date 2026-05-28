@@ -1572,9 +1572,18 @@ test "quic server writers wait on per-connection tx credit" {
     const maybe_methods = try readFile(allocator, methods_path);
     const methods_content = maybe_methods orelse return error.FileNotFound;
     defer allocator.free(methods_content);
-    try testing.expect(std.mem.indexOf(u8, methods_content, "space == .Application and res.bytes_acked > 0") != null);
+    try testing.expect(std.mem.indexOf(u8, methods_content, "if (res.bytes_acked > 0)") != null);
+    try testing.expect(std.mem.indexOf(u8, methods_content, "space == .Application and res.bytes_acked > 0") == null);
     try testing.expect(std.mem.indexOf(u8, methods_content, "self.tx_credit_generation.fetchAdd(1, .release)") != null);
     try testing.expect(std.mem.indexOf(u8, methods_content, "futexWake(u32, &self.tx_credit_generation.raw") != null);
+
+    const tx_credit_test_path = try std.fmt.allocPrint(allocator, "{s}/tests/test_tx_credit_generation.zig", .{quic_dir});
+    defer allocator.free(tx_credit_test_path);
+    const maybe_tx_credit_test = try readFile(allocator, tx_credit_test_path);
+    const tx_credit_test_content = maybe_tx_credit_test orelse return error.FileNotFound;
+    defer allocator.free(tx_credit_test_content);
+    try testing.expect(std.mem.indexOf(u8, tx_credit_test_content, "tx_credit_generation_initializes_from_allocator_fill_bytes") != null);
+    try testing.expect(std.mem.indexOf(u8, tx_credit_test_content, "tx_credit_generation_advances_for_handshake_space_ack_credit") != null);
 
     const maybe_transport = try readFile(allocator, "src/transport/quic.zig");
     const transport_content = maybe_transport orelse return error.FileNotFound;
