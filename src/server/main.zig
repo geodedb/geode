@@ -1645,12 +1645,17 @@ pub fn main() !void {
         // Release builds use a small poll-worker set so high fan-out request
         // bursts do not stall behind one endpoint poll loop. Debug keeps a
         // single worker to make local traces deterministic.
+        //
+        // CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+        // Per-connection TLS crypto polling is serialized in the QUIC library;
+        // more than 16 endpoint poll workers contends on that serialization
+        // point and regresses 2048-client mixed read/write request fan-out.
         const quic_poll_worker_count = envUsize(
             gpa,
             "GEODE_QUIC_POLL_WORKERS",
             default_quic_poll_worker_count,
             1,
-            64,
+            16,
         );
         const poll_contexts = gpa.alloc(PollLoopContext, quic_poll_worker_count) catch |err| {
             log.err("Failed to allocate poll loop contexts", &.{Attr.string("error", @errorName(err))});

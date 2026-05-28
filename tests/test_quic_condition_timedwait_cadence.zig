@@ -798,7 +798,9 @@ test "cooperative first stream scheduler sweeps missed rx wakeups" {
 test "cooperative first stream scheduler uses bounded batch budget" {
     // Persistent one-stream query clients should rotate through the scheduler
     // ready queue after each protocol message so large fan-out cannot starve
-    // tail streams behind hot early clients.
+    // tail streams behind hot early clients. Empty streams must then park on
+    // the read-ready notifier instead of taking a second immediate turn just
+    // to discover WouldBlock.
     const allocator = testing.allocator;
     const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
     const handler = maybe_handler orelse return error.FileNotFound;
@@ -808,6 +810,10 @@ test "cooperative first stream scheduler uses bounded batch budget" {
     try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_messages_per_tick: u32 = 1") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "while (processed < first_stream_scheduler_messages_per_tick)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "const max_messages_per_tick: u32 = 4") == null);
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-140") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn hasBufferedUnread") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "if (ctx.reader.hasBufferedUnread())") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);") != null);
 }
 
 test "store-free scalar reads bypass graph snapshot locks" {
@@ -1370,17 +1376,22 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_POLL_WORKERS={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_POLL_WORKERS") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-141") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 16") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "default_poll_workers_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "envU32(\"GEODE_HC_POLL_WORKERS\", default_poll_workers_for_run)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_poll_worker_cap") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "highFanoutCooperativeFirstStreamWorkerDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "default_cooperative_first_stream_workers_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "REQ=REQ-QUIC-HC-053") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "REQ=REQ-QUIC-HC-141") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_POLL_WORKERS\"") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_poll_worker_count") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "const default_quic_poll_worker_count = if (builtin.mode == .Debug) 1 else 16") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "more than 16 endpoint poll workers") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, ".blocking_workers = 0") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "poll_pool.submitDefault") != null);
 }
@@ -2174,6 +2185,8 @@ test "quic high fanout e2e runs in single stream stress mode" {
     try testing.expect(std.mem.indexOf(u8, handler_content, "const first_stream_owner_stack_size = 2 * 1024 * 1024") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-139") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, ".{ .stack_size = first_stream_owner_stack_size }, workerMain") != null);
+    try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-140") != null);
+    try testing.expect(std.mem.indexOf(u8, handler_content, "hasBufferedUnread") != null);
 
     const maybe_e2e = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");
     const e2e_content = maybe_e2e orelse return error.FileNotFound;

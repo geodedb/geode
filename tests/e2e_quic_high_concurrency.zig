@@ -20,6 +20,12 @@ const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug
 const default_connection_worker_count = 64;
 const high_fanout_worker_threshold = 64;
 const high_fanout_connection_worker_cap = 64;
+// CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+//
+// The QUIC endpoint now serializes per-connection TLS crypto polling. More
+// than 16 poll workers on one endpoint loses high-fanout mixed read/write runs
+// to endpoint mutex contention instead of increasing packet throughput.
+const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 16;
 // CANARY: REQ=REQ-QUIC-HC-138; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
 // Keep the cooperative owner pool bounded; raising it to match 1024 clients
@@ -552,7 +558,10 @@ pub fn main() !void {
         .{max_connections},
     );
     defer allocator.free(max_global_stream_env);
-    const poll_workers = @min(@max(envU32("GEODE_HC_POLL_WORKERS", default_poll_workers_for_run), @as(u32, 1)), @as(u32, 64));
+    const poll_workers = @min(
+        @max(envU32("GEODE_HC_POLL_WORKERS", default_poll_workers_for_run), @as(u32, 1)),
+        high_fanout_poll_worker_cap,
+    );
     const poll_workers_env = try std.fmt.allocPrint(
         allocator,
         "GEODE_QUIC_POLL_WORKERS={d}",

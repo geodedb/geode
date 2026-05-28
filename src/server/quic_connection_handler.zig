@@ -162,8 +162,9 @@ const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
 // The scheduler runs persistent first streams through a shared worker pool.
 // Letting one owner process multiple ready messages in a turn lets early
 // clients drain sequential EXECUTE/PULL bursts while tail clients remain
-// queued. One-message FIFO turns keep 1024-client mixed read/write fan-out
-// from timing out without raising the worker pool into thread-storm territory.
+// queued. One-message FIFO turns plus buffered-only requeueing keep high
+// fan-out from timing out without raising the worker pool into thread-storm
+// territory.
 const first_stream_scheduler_messages_per_tick: u32 = 1;
 
 // CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
@@ -1190,6 +1191,17 @@ const BufferedProtoReader = struct {
         proto_reader_metrics.recordActivity();
         self.recordActivity();
         return msg;
+    }
+
+    // CANARY: REQ=REQ-QUIC-HC-140; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBufferedRequeue; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+    //
+    // Cooperative owners process a bounded number of messages per scheduler
+    // turn. If a read pulled multiple framed client messages into the proto
+    // buffer, the owner must stay runnable even without a fresh QUIC RX
+    // generation. Empty buffers should park until the notifier fires instead
+    // of taking an immediate extra scheduler turn just to observe WouldBlock.
+    fn hasBufferedUnread(self: *const BufferedProtoReader) bool {
+        return self.start_index < self.buffer.items.len;
     }
 
     // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
@@ -2892,7 +2904,11 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
         )) return true;
     }
 
-    ctx.cooperative_force_ready.store(true, .release);
+    if (ctx.reader.hasBufferedUnread()) {
+        ctx.cooperative_force_ready.store(true, .release);
+    } else {
+        ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
+    }
     return false;
 }
 
