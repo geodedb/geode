@@ -1303,8 +1303,17 @@ test "quic high concurrency e2e has bounded setup wait" {
     try testing.expect(std.mem.indexOf(u8, content, "default_setup_timeout_secs") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_HC_SETUP_TIMEOUT_SECS\"") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_HC_SETUP_GRACE_SECS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_HC_SETUP_HARD_TIMEOUT_SECS\"") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_HC_HELLO_TIMEOUT_MS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-131") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "setup_hard_timeout_secs") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "high-concurrency QUIC E2E setup progress") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "last_setup_report_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "abort_setup: ?*std.atomic.Value(bool)") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "if (abort.load(.acquire)) return error.Aborted;") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "if (ctx.abort_setup.load(.acquire)) return;") != null);
     try testing.expect(std.mem.indexOf(u8, content, "setup_elapsed_ns >= @as(u64, setup_timeout_secs) * std.time.ns_per_s") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "setup_elapsed_ns >= @as(u64, setup_hard_timeout_secs) * std.time.ns_per_s") != null);
     try testing.expect(std.mem.indexOf(u8, content, "last_progress_ns") != null);
     try testing.expect(std.mem.indexOf(u8, content, "now_ns -| last_progress_ns >= @as(u64, setup_grace_secs) * std.time.ns_per_s") != null);
     try testing.expect(std.mem.indexOf(u8, content, "start_generation") != null);
@@ -1322,6 +1331,7 @@ test "quic high concurrency e2e has bounded setup wait" {
     try testing.expect(std.mem.indexOf(u8, content, "const setup_authenticated = hello_after_setup >= worker_count;") != null);
     try testing.expect(std.mem.indexOf(u8, content, "const setup_timeout_failed = setup_timed_out and !setup_authenticated and !setup_ready;") != null);
     try testing.expect(std.mem.indexOf(u8, content, "hello_after_setup={d} authenticated={}") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "elapsed_ms={d} execute_attempts={d}") != null);
     try testing.expect(countOccurrences(content, "hello_after_setup = counters.hello_ok.load(.acquire);") >= 2);
     try testing.expect(countOccurrences(content, "ready_after_setup = counters.ready.load(.acquire);") >= 2);
 }

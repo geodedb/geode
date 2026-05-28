@@ -73,10 +73,14 @@ fn connectAndHelloWithRetry(
     handshake_timeout_secs: u32,
     hello_timeout_ms: u32,
     counters: ?*Counters,
+    abort_setup: ?*std.atomic.Value(bool),
 ) !util.QuicProtoClient {
     var attempt: u32 = 0;
     var last_err: anyerror = error.HandshakeError;
     while (attempt < attempts) : (attempt += 1) {
+        if (abort_setup) |abort| {
+            if (abort.load(.acquire)) return error.Aborted;
+        }
         if (counters) |setup_counters| {
             _ = setup_counters.setup_attempts.fetchAdd(1, .acq_rel);
         }
@@ -88,6 +92,9 @@ fn connectAndHelloWithRetry(
                 if (attempt + 1 < attempts) _ = setup_counters.setup_retries.fetchAdd(1, .acq_rel);
             }
             sleepNs(delay_ms * @as(u64, std.time.ns_per_ms));
+            if (abort_setup) |abort| {
+                if (abort.load(.acquire)) return error.Aborted;
+            }
             continue;
         };
         errdefer client.deinit();
@@ -102,6 +109,9 @@ fn connectAndHelloWithRetry(
                 if (attempt + 1 < attempts) _ = setup_counters.setup_retries.fetchAdd(1, .acq_rel);
             }
             sleepNs(delay_ms * @as(u64, std.time.ns_per_ms));
+            if (abort_setup) |abort| {
+                if (abort.load(.acquire)) return error.Aborted;
+            }
             continue;
         };
         defer hello_result.deinit(allocator);
@@ -112,6 +122,9 @@ fn connectAndHelloWithRetry(
                 if (attempt + 1 < attempts) _ = setup_counters.setup_retries.fetchAdd(1, .acq_rel);
             }
             sleepNs(delay_ms * @as(u64, std.time.ns_per_ms));
+            if (abort_setup) |abort| {
+                if (abort.load(.acquire)) return error.Aborted;
+            }
             continue;
         }
         if (counters) |setup_counters| {
@@ -267,7 +280,9 @@ fn workerRun(ctx: *WorkerCtx) void {
         ctx.handshake_timeout_secs,
         ctx.hello_timeout_ms,
         ctx.counters,
+        ctx.abort_setup,
     ) catch |err| {
+        if (ctx.abort_setup.load(.acquire)) return;
         recordSetupFailure(ctx.counters, "worker={d} connect/hello err={}", .{ ctx.worker_id, err });
         return;
     };
@@ -329,6 +344,7 @@ fn workerRun(ctx: *WorkerCtx) void {
                     ctx.connect_backoff_ms,
                     ctx.handshake_timeout_secs,
                     ctx.hello_timeout_ms,
+                    null,
                     null,
                 ) catch |connect_err| {
                     last_err = connect_err;
@@ -457,6 +473,14 @@ pub fn main() !void {
     const hello_timeout_ms = @max(@as(u32, 1), envU32("GEODE_HC_HELLO_TIMEOUT_MS", default_hello_timeout_ms_for_run));
     const setup_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_SETUP_TIMEOUT_SECS", default_setup_timeout_secs_for_run));
     const setup_grace_secs = envU32("GEODE_HC_SETUP_GRACE_SECS", 30);
+    // CANARY: REQ=REQ-QUIC-HC-131; FEATURE="QUIC High-Concurrency Setup"; ASPECT=HardSetupTimeoutDiagnostics; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+    //
+    // The soft setup timeout remains progress-sensitive so legitimate 512+
+    // connection tails are not aborted while HELLOs are still completing.
+    // Keep a separate hard cap so retry churn cannot run silently until the
+    // outer shell timeout kills the harness before it prints counters.
+    const default_setup_hard_timeout_secs = setup_timeout_secs + setup_grace_secs;
+    const setup_hard_timeout_secs = @max(setup_timeout_secs, envU32("GEODE_HC_SETUP_HARD_TIMEOUT_SECS", default_setup_hard_timeout_secs));
     const connect_stagger_us = envU32("GEODE_HC_CONNECT_STAGGER_US", 0);
     // CANARY: REQ=REQ-QUIC-HC-042; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RequestBurstShaping; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
     // Release builds shape a target offered load across already-open parallel
@@ -663,12 +687,29 @@ pub fn main() !void {
     var last_connected: u32 = 0;
     var last_hello_ok: u32 = 0;
     var last_ready: u32 = 0;
+    var last_setup_report_ns = setup_start_ns;
     while (counters.ready.load(.acquire) < worker_count and counters.setup_failed.load(.acquire) == 0) {
         const now_ns = monoNs();
         setup_elapsed_ns = now_ns -| setup_start_ns;
         const connected_now = counters.connected.load(.acquire);
         const hello_now = counters.hello_ok.load(.acquire);
         const ready_now = counters.ready.load(.acquire);
+        if (now_ns -| last_setup_report_ns >= 15 * std.time.ns_per_s) {
+            last_setup_report_ns = now_ns;
+            std.debug.print(
+                "high-concurrency QUIC E2E setup progress elapsed_ms={d} connected={d} hello_ok={d} ready={d}/{d} setup_failed={d} setup_attempts={d} setup_retries={d}\n",
+                .{
+                    setup_elapsed_ns / std.time.ns_per_ms,
+                    connected_now,
+                    hello_now,
+                    ready_now,
+                    worker_count,
+                    counters.setup_failed.load(.acquire),
+                    counters.setup_attempts.load(.acquire),
+                    counters.setup_retries.load(.acquire),
+                },
+            );
+        }
         if (connected_now != last_connected or hello_now != last_hello_ok or ready_now != last_ready) {
             last_connected = connected_now;
             last_hello_ok = hello_now;
@@ -676,6 +717,10 @@ pub fn main() !void {
             last_progress_ns = now_ns;
         }
         if (hello_now >= worker_count) break;
+        if (setup_elapsed_ns >= @as(u64, setup_hard_timeout_secs) * std.time.ns_per_s and ready_now < worker_count) {
+            setup_timed_out = true;
+            break;
+        }
         if (setup_elapsed_ns >= @as(u64, setup_timeout_secs) * std.time.ns_per_s and ready_now < worker_count) {
             setup_timed_out = true;
             if (now_ns -| last_progress_ns >= @as(u64, setup_grace_secs) * std.time.ns_per_s) {
@@ -711,11 +756,6 @@ pub fn main() !void {
     const setup_ready = ready_after_setup >= worker_count;
     const setup_timeout_failed = setup_timed_out and !setup_authenticated and !setup_ready;
     if (counters.setup_failed.load(.acquire) != 0 or setup_timeout_failed) {
-        abort_setup.store(true, .release);
-        start.store(true, .release);
-        _ = start_generation.fetchAdd(1, .acq_rel);
-        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &start_generation.raw, std.math.maxInt(u32));
-        for (threads) |*thread| thread.join();
         const setup_failures = counters.setup_failed.load(.acquire) + @as(u32, @intFromBool(setup_timeout_failed));
         std.debug.print(
             "high-concurrency QUIC E2E setup failures={d} ready={d}/{d} ready_after_setup={d} hello_after_setup={d} authenticated={} setup_failed_raw={d} timeout_failed={} setup_ms={d}\n",
@@ -750,6 +790,11 @@ pub fn main() !void {
                 counters.execute_reconnects.load(.acquire),
             },
         );
+        abort_setup.store(true, .release);
+        start.store(true, .release);
+        _ = start_generation.fetchAdd(1, .acq_rel);
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &start_generation.raw, std.math.maxInt(u32));
+        for (threads) |*thread| thread.join();
         return error.SetupFailures;
     }
 
@@ -766,8 +811,6 @@ pub fn main() !void {
 
     const failures = counters.failed.load(.acquire);
     if (failures != 0) {
-        releaseAllClients(&release_clients, &release_generation);
-        for (threads) |*thread| thread.join();
         std.debug.print("high-concurrency QUIC E2E worker failures={d}\n", .{failures});
         std.debug.print(
             "high-concurrency QUIC E2E phases connected={d} hello_ok={d} ready={d} ops_started={d} ok={d}\n",
@@ -789,13 +832,27 @@ pub fn main() !void {
                 counters.execute_reconnects.load(.acquire),
             },
         );
+        releaseAllClients(&release_clients, &release_generation);
+        for (threads) |*thread| thread.join();
         return error.WorkerFailures;
     }
     const observed_ops = counters.ok.load(.acquire);
     if (observed_ops != expected_ops) {
+        std.debug.print(
+            "high-concurrency QUIC E2E ok={d} expected={d} failed={d} ops_started={d} elapsed_ms={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
+            .{
+                observed_ops,
+                expected_ops,
+                counters.failed.load(.acquire),
+                counters.ops_started.load(.acquire),
+                workload_elapsed_ns / std.time.ns_per_ms,
+                counters.execute_attempts.load(.acquire),
+                counters.execute_retries.load(.acquire),
+                counters.execute_reconnects.load(.acquire),
+            },
+        );
         releaseAllClients(&release_clients, &release_generation);
         for (threads) |*thread| thread.join();
-        std.debug.print("high-concurrency QUIC E2E ok={d} expected={d}\n", .{ observed_ops, expected_ops });
         return error.MissingSuccessfulOperations;
     }
     const qps_x100: u64 = if (workload_elapsed_ns == 0) 0 else (@as(u64, observed_ops) * std.time.ns_per_s * 100) / workload_elapsed_ns;
