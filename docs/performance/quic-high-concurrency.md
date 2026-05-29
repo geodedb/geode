@@ -8,7 +8,7 @@ and tuning controls. It is the operator-facing companion to
 
 The current no-retry high-concurrency regression gate is 4096 parallel clients,
 one operation per client, mixed reads and mutations at a 3:1 read/write ratio,
-and a 1000 us request stagger:
+and a 1000 us request stagger. This remains the latency-friendly gate:
 
 ```sh
 GEODE_HC_WORKERS=4096 \
@@ -23,18 +23,39 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The accepted 2026-05-29 run completed all 4096 operations with zero setup
-retries, zero execute retries, zero reconnects, and 990.41 QPS.
+The accepted 2026-05-29 post-RLS run completed all 4096 operations with zero
+setup retries, zero execute retries, zero reconnects, and 971.94 QPS.
 
-## Diagnostic Ceiling
+## Stress Ceiling
 
-The 4096-worker mixed workload with `GEODE_HC_REQUEST_STAGGER_US=250` is a
-diagnostic ceiling probe, not a passing gate. It is intentionally aggressive and
-currently exposes first-response timeout tail after the accepted 1000 us gate is
-stable.
+The 4096-worker mixed workload with `GEODE_HC_REQUEST_STAGGER_US=250` is now a
+passing stress ceiling after `REQ-QUIC-HC-158`, which keeps authenticated reads
+on fast paths when the startup RLS engines have no policies installed:
 
-Use the 250 us probe to localize the next bottleneck. Do not use it as release
-criteria until it clears without increasing the 10s execute timeout.
+```sh
+GEODE_HC_WORKERS=4096 \
+GEODE_HC_OPS_PER_WORKER=1 \
+GEODE_HC_MUTATION_STRIDE=4 \
+GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
+GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_REQUEST_STAGGER_US=250 \
+GEODE_HC_EXEC_TIMEOUT_SECS=10 \
+GEODE_HC_EXEC_RETRIES=0 \
+GEODE_HC_POLL_WORKERS=16 \
+timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
+```
+
+The accepted stress run completed all 4096 operations with zero setup retries,
+zero execute retries, zero reconnects, zero first-response timeouts, and
+561.28 QPS. It still has multi-second first-response tail, so keep the 1000 us
+gate for latency-sensitive regression checks and use 250 us to diagnose the
+next throughput ceiling.
+
+With server metrics enabled, the stress run showed
+`mg_rwlock_shared_hold_snapshot_ns_total=0`, `quic_stream_write_errors_total=0`,
+and `quic_stream_write_timeouts_total=0`; the remaining tail is concentrated in
+cooperative first-stream scheduling, mutation deferrals, and QUIC short-header
+packet processing.
 
 ## Core Knobs
 
@@ -43,7 +64,7 @@ criteria until it clears without increasing the 10s execute timeout.
   polling.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
   Leave unset in normal operation. The default cap is `4`; wider windows
-  regressed mixed read/write fanout.
+  still regressed mixed read/write fanout after the RLS fast-path fix.
 - `GEODE_HC_POST_WRITE_POLL`: high-concurrency harness client flush behavior.
   Defaults to true below 1024 workers and false at 1024+ workers. Set `1` only
   for legacy immediate post-write poll comparisons.
@@ -87,6 +108,12 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 
 - `quic_stream_write_elapsed_ns_total`
 - `quic_stream_write_elapsed_max_ns`
+- `quic_first_stream_ready_queue_wait_ns_total`
+- `quic_first_stream_ready_queue_wait_max_ns`
+- `quic_first_stream_packet_process_ns_total`
+- `quic_first_stream_packet_process_max_ns`
+- `quic_first_stream_mutation_deferrals_total`
+- `mg_rwlock_shared_hold_snapshot_ns_total`
 - `quic_poll_cycle_max_ns`
 - `quic_poll_transport_max_ns`
 - `quic_poll_recv_short_frame_process_max_ns`
@@ -94,8 +121,12 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 - `quic_poll_overrun_total`
 
 The response write metrics split server-side `stream.writeAll` latency from
-query execution and receive/admission stalls. Poll metrics identify endpoint
-poll saturation and short-header processing stalls.
+query execution and receive/admission stalls. First-stream metrics split
+scheduler queueing, application packet processing, and mutation-admission
+requeue churn. Poll metrics identify endpoint poll saturation and short-header
+processing stalls. `mg_rwlock_shared_hold_snapshot_ns_total` should stay at
+zero for the default high-concurrency count workload unless RLS policies or a
+broader query shape force snapshot execution.
 
 ## Dependency State
 

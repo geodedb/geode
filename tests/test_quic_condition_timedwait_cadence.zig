@@ -1894,6 +1894,26 @@ test "quic response metrics expose stream write latency counters" {
     try testing.expect(std.mem.indexOf(u8, metrics, "pub fn recordStreamWriteSuccess(bytes: usize, elapsed_ns: u64)") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_stream_write_elapsed_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_stream_write_elapsed_max_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "REQ=REQ-QUIC-HC-157") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "FirstStreamSchedulerLatency") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_ready_queue_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_ready_queue_wait_max_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_packet_process_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_packet_process_max_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_mutation_deferrals_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_ready_queue_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_packet_process_ns_total") != null);
+
+    const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
+    const handler = maybe_handler orelse return error.FileNotFound;
+    defer allocator.free(handler);
+    try testing.expect(std.mem.indexOf(u8, handler, "cooperative_enqueued_ns: std.atomic.Value(u64)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamReadyEnqueued") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamReadyDequeued") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamPacketStart") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamPacketComplete") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamMutationDeferral") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const packet_process_start_ns = monoNsFromHandler();") != null);
 }
 
 test "quic ack packets are tracked only after successful sends" {
@@ -2207,6 +2227,30 @@ test "quic count fast path reuses active read store without nested ReadView" {
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "label_counts_by_graph") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "return self.countGraphLabel(graph_name, label);") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "posting.lock()") != null);
+}
+
+test "empty RLS engines do not disable high-concurrency read fast paths" {
+    // Server startup registers empty RLS engines so policy procedures can
+    // populate them later. Empty engines are default-allow and must not route
+    // every authenticated read through the snapshot clone path.
+    const allocator = testing.allocator;
+
+    const maybe_match_ops = try readFile(allocator, "src/execution/match_operations.zig");
+    const match_ops = maybe_match_ops orelse return error.FileNotFound;
+    defer allocator.free(match_ops);
+
+    try testing.expect(std.mem.indexOf(u8, match_ops, "REQ-QUIC-HC-158") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "fn activeRlsPoliciesConfigured() bool") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "filter_engine.policyCount() != 0") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "expr_engine.hasPolicies()") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "return activeRlsPoliciesConfigured();") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "if (!countFastPathRlsAllowed()) return null;") != null);
+
+    const maybe_rls_core = try readFile(allocator, "src/security/rls_core.zig");
+    const rls_core = maybe_rls_core orelse return error.FileNotFound;
+    defer allocator.free(rls_core);
+
+    try testing.expect(std.mem.indexOf(u8, rls_core, "pub fn hasPolicies(self: *Self) bool") != null);
 }
 
 test "optimized server builds use high-concurrency allocator" {

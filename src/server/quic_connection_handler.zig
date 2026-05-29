@@ -2423,6 +2423,7 @@ const FirstStreamOwnerContext = struct {
     cooperative_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     cooperative_force_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     cooperative_generation_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    cooperative_enqueued_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     pending_packet: ?schema.ClientPacket = null,
     post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
@@ -2805,6 +2806,10 @@ pub const FirstStreamScheduler = struct {
             self.ready_head = 0;
         }
         ctx.cooperative_queued.store(false, .release);
+        const enqueued_ns = ctx.cooperative_enqueued_ns.swap(0, .acq_rel);
+        if (enqueued_ns != 0) {
+            quic_response_metrics.recordFirstStreamReadyDequeued(monoNsFromHandler() -| enqueued_ns);
+        }
         return ctx;
     }
 
@@ -2895,6 +2900,8 @@ pub const FirstStreamScheduler = struct {
         if (ctx.cooperative_queued.cmpxchgStrong(false, true, .acq_rel, .acquire)) |_| {
             return;
         }
+        ctx.cooperative_enqueued_ns.store(monoNsFromHandler(), .release);
+        quic_response_metrics.recordFirstStreamReadyEnqueued();
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
@@ -3080,6 +3087,7 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
         if (packetNeedsCooperativeMutationAdmission(&packet)) {
             if (ctx.cooperative_scheduler) |scheduler| {
                 if (!scheduler.tryAcquireMutationPermit()) {
+                    quic_response_metrics.recordFirstStreamMutationDeferral();
                     ctx.pending_packet = packet;
                     ctx.cooperative_force_ready.store(true, .release);
                     return false;
@@ -3092,7 +3100,14 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
             packet.deinit(gpa);
         }
 
-        if (!processFirstStreamPacket(
+        // CANARY: REQ=REQ-QUIC-HC-157; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=FirstStreamSchedulerLatency; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+        //
+        // Record one server-side application-processing sample per delivered
+        // first-stream packet. Combined with response write metrics, this
+        // separates scheduler queue tail from execution/write tail.
+        quic_response_metrics.recordFirstStreamPacketStart();
+        const packet_process_start_ns = monoNsFromHandler();
+        const packet_processed = processFirstStreamPacket(
             gpa,
             ctx.transport,
             ctx.stream,
@@ -3104,7 +3119,9 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
             ctx.conn_state.memcurve_profile,
             ctx.peer_ip,
             &packet,
-        )) return true;
+        );
+        quic_response_metrics.recordFirstStreamPacketComplete(monoNsFromHandler() -| packet_process_start_ns);
+        if (!packet_processed) return true;
     }
 
     if (ctx.reader.hasBufferedUnread()) {

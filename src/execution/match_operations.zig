@@ -190,18 +190,30 @@ fn passesRLSExprFilter(
     ) catch false;
 }
 
-// CANARY: REQ=REQ-PERF-RLS-DISPATCH-001; FEATURE="RLSAwareDispatch"; ASPECT=PointReadReclassify; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-26
-/// Returns true if any RLS engine (label-deny or expression) is currently
-/// configured AND the active session has an authenticated user. Used by
-/// the transport dispatcher to keep RLS-evaluating reads on the snapshot
-/// path (which releases the SHARED rwlock before per-node row construction)
-/// rather than the point-read path (which holds SHARED across execute).
+fn activeRlsPoliciesConfigured() bool {
+    if (rls_types.getGlobalRLSFilterEngine()) |filter_engine| {
+        if (filter_engine.policyCount() != 0) return true;
+    }
+
+    if (rls_types.getGlobalExprRLSEngine()) |expr_engine_ptr| {
+        const expr_engine: *rls.RLSEngine = @ptrCast(@alignCast(expr_engine_ptr));
+        if (expr_engine.hasPolicies()) return true;
+    }
+
+    return false;
+}
+
+// CANARY: REQ=REQ-PERF-RLS-DISPATCH-001; FEATURE="RLSAwareDispatch"; ASPECT=PointReadReclassify; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-05-29
+// CANARY: REQ=REQ-QUIC-HC-158; FEATURE="QUIC High-Concurrency Reads"; ASPECT=EmptyRlsEngineFastPath; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-05-29
+/// Returns true if an RLS engine has installed policies AND the active
+/// session has an authenticated user. The server initializes empty RLS
+/// engines at startup so policy procedures can populate them later; empty
+/// engines are default-allow and must not force hot authenticated reads onto
+/// the snapshot path.
 pub fn wouldEvaluateRLS() bool {
     const ctx = execution.getActiveContext() orelse return false;
     if (ctx.user == null) return false;
-    const has_label_engine = rls_types.getGlobalRLSFilterEngine() != null;
-    const has_expr_engine = rls_types.getGlobalExprRLSEngine() != null;
-    return has_label_engine or has_expr_engine;
+    return activeRlsPoliciesConfigured();
 }
 
 /// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
@@ -393,13 +405,13 @@ fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
 }
 
 fn countFastPathRlsAllowed() bool {
-    // RLS check: if an RLS engine is registered AND a user is authenticated,
+    // RLS check: if an RLS engine has policies AND a user is authenticated,
     // per-row policies could change the answer. Bail to the regular path so
-    // `passesRLSFilter` runs for every node.
+    // `passesRLSFilter` runs for every node. Empty engines are registered at
+    // server startup and preserve the default-allow contract.
     if (execution.getActiveContext()) |ctx| {
         if (ctx.user != null) {
-            if (rls_types.getGlobalRLSFilterEngine() != null) return false;
-            if (rls_types.getGlobalExprRLSEngine() != null) return false;
+            if (activeRlsPoliciesConfigured()) return false;
         }
     }
     return true;
@@ -783,12 +795,7 @@ pub fn propertyAggregateFastPath(
         null;
 
     // --- RLS bypass for correctness ---
-    if (execution.getActiveContext()) |ctx| {
-        if (ctx.user != null) {
-            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
-            if (rls_types.getGlobalExprRLSEngine() != null) return null;
-        }
-    }
+    if (!countFastPathRlsAllowed()) return null;
 
     // --- Iterate the label posting list ---
     // Mirror `countNodesFastPath`: prefer the handler-installed
@@ -1073,12 +1080,7 @@ pub fn topKOrderedFastPath(
     const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
 
     // --- RLS bypass for correctness ---
-    if (execution.getActiveContext()) |ctx| {
-        if (ctx.user != null) {
-            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
-            if (rls_types.getGlobalExprRLSEngine() != null) return null;
-        }
-    }
+    if (!countFastPathRlsAllowed()) return null;
 
     // --- Iterate the label posting list + bounded heap ---
     const writable_store = graph_store.getGlobalStore(allocator);

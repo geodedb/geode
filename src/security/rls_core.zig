@@ -344,6 +344,16 @@ pub const RLSEngine = struct {
         try self.policy_cache.invalidate(key);
     }
 
+    /// Return true once any expression RLS policy has been installed.
+    ///
+    /// The server publishes the expression engine at startup so request
+    /// handlers can add policies later through `geode.rls.*` procedures. An
+    /// initialized-but-empty engine is therefore not evidence that a query
+    /// needs row-level filtering.
+    pub fn hasPolicies(self: *Self) bool {
+        return self.policies.count() != 0;
+    }
+
     pub fn updatePolicy(self: *Self, policy_id: u64, updates: Policy) !void {
         var it = self.policies.iterator();
         while (it.next()) |entry| {

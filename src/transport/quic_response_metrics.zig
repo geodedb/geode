@@ -25,6 +25,20 @@ pub var stream_write_bytes_written_total = std.atomic.Value(u64).init(0);
 // critical section used by QUIC response writes.
 pub var stream_write_elapsed_ns_total = std.atomic.Value(u64).init(0);
 pub var stream_write_elapsed_max_ns = std.atomic.Value(u64).init(0);
+// CANARY: REQ=REQ-QUIC-HC-157; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=FirstStreamSchedulerLatency; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+//
+// The 4096/250 us ceiling tail now reaches the server before timing out, so
+// response-write metrics alone are not enough. These counters split cooperative
+// first-stream ready queue delay from packet processing time.
+pub var first_stream_ready_enqueued_total = std.atomic.Value(u64).init(0);
+pub var first_stream_ready_dequeued_total = std.atomic.Value(u64).init(0);
+pub var first_stream_ready_queue_wait_ns_total = std.atomic.Value(u64).init(0);
+pub var first_stream_ready_queue_wait_max_ns = std.atomic.Value(u64).init(0);
+pub var first_stream_packets_started_total = std.atomic.Value(u64).init(0);
+pub var first_stream_packets_completed_total = std.atomic.Value(u64).init(0);
+pub var first_stream_packet_process_ns_total = std.atomic.Value(u64).init(0);
+pub var first_stream_packet_process_max_ns = std.atomic.Value(u64).init(0);
+pub var first_stream_mutation_deferrals_total = std.atomic.Value(u64).init(0);
 
 fn recordMax(atom: *std.atomic.Value(u64), value: u64) void {
     var observed = atom.load(.acquire);
@@ -59,6 +73,30 @@ pub fn recordStreamWriteZeroReturn() void {
     _ = stream_write_zero_returns_total.fetchAdd(1, .monotonic);
 }
 
+pub fn recordFirstStreamReadyEnqueued() void {
+    _ = first_stream_ready_enqueued_total.fetchAdd(1, .monotonic);
+}
+
+pub fn recordFirstStreamReadyDequeued(wait_ns: u64) void {
+    _ = first_stream_ready_dequeued_total.fetchAdd(1, .monotonic);
+    _ = first_stream_ready_queue_wait_ns_total.fetchAdd(wait_ns, .monotonic);
+    recordMax(&first_stream_ready_queue_wait_max_ns, wait_ns);
+}
+
+pub fn recordFirstStreamPacketStart() void {
+    _ = first_stream_packets_started_total.fetchAdd(1, .monotonic);
+}
+
+pub fn recordFirstStreamPacketComplete(elapsed_ns: u64) void {
+    _ = first_stream_packets_completed_total.fetchAdd(1, .monotonic);
+    _ = first_stream_packet_process_ns_total.fetchAdd(elapsed_ns, .monotonic);
+    recordMax(&first_stream_packet_process_max_ns, elapsed_ns);
+}
+
+pub fn recordFirstStreamMutationDeferral() void {
+    _ = first_stream_mutation_deferrals_total.fetchAdd(1, .monotonic);
+}
+
 pub fn registerAll(registry: anytype) !void {
     try registry.register("quic_response_messages_started_total", &response_messages_started_total);
     try registry.register("quic_response_messages_completed_total", &response_messages_completed_total);
@@ -77,4 +115,13 @@ pub fn registerAll(registry: anytype) !void {
     try registry.register("quic_stream_write_bytes_written_total", &stream_write_bytes_written_total);
     try registry.register("quic_stream_write_elapsed_ns_total", &stream_write_elapsed_ns_total);
     try registry.register("quic_stream_write_elapsed_max_ns", &stream_write_elapsed_max_ns);
+    try registry.register("quic_first_stream_ready_enqueued_total", &first_stream_ready_enqueued_total);
+    try registry.register("quic_first_stream_ready_dequeued_total", &first_stream_ready_dequeued_total);
+    try registry.register("quic_first_stream_ready_queue_wait_ns_total", &first_stream_ready_queue_wait_ns_total);
+    try registry.register("quic_first_stream_ready_queue_wait_max_ns", &first_stream_ready_queue_wait_max_ns);
+    try registry.register("quic_first_stream_packets_started_total", &first_stream_packets_started_total);
+    try registry.register("quic_first_stream_packets_completed_total", &first_stream_packets_completed_total);
+    try registry.register("quic_first_stream_packet_process_ns_total", &first_stream_packet_process_ns_total);
+    try registry.register("quic_first_stream_packet_process_max_ns", &first_stream_packet_process_max_ns);
+    try registry.register("quic_first_stream_mutation_deferrals_total", &first_stream_mutation_deferrals_total);
 }

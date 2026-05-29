@@ -3804,7 +3804,7 @@ REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,Regression,TESTED,,,engine,2026-04-18
 REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,ScratchAllocator,TESTED,,,engine,2026-04-18,src/server/query_arena.zig
 REQ-PERF-QUERY-OPT-001,Performance,QueryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PERF-QUIC-READLINE-001,BufferedProtoReader,TransportHotPath,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
-REQ-PERF-RLS-DISPATCH-001,RLSAwareDispatch,PointReadReclassify,IMPL,,,performance,2026-04-26,src/execution/match_operations.zig
+REQ-PERF-RLS-DISPATCH-001,RLSAwareDispatch,PointReadReclassify,TESTED,,,performance,2026-05-29,src/execution/match_operations.zig
 REQ-PERF-RLS-ROW-BUILD-001,RLSRowBuildHotPath,PreSizeAndReuse,TESTED,,,performance,2026-04-26,tests/test_rls_row_build_hot_path.zig
 REQ-PERF-RWLOCK-FAIRNESS-001,MgRwLockFairness,ExclusiveAcquireUnderLoad,TESTED,,,perf,2026-04-25,tests/test_rwlock_fairness_under_load.zig
 REQ-PERF-RWLOCK-HOLD-TIME-001,MgRwLockSharedHoldTimeAtomics,AtomicReadWrite,TESTED,,,perf,2026-04-25,tests/test_graph_storage_adapter_metrics.zig
@@ -4051,6 +4051,9 @@ REQ-QUIC-HC-153,QUIC High-Concurrency Requests,ResponseWriteLatency,IMPL,,,trans
 REQ-QUIC-HC-154,QUIC High-Concurrency Diagnostics,ClientExecutePhaseTiming,IMPL,,,transport,2026-05-29,tests/proto_test_util.zig
 REQ-QUIC-HC-155,QUIC High-Concurrency Diagnostics,ExecutePhaseAggregation,IMPL,,,transport,2026-05-29,tests/e2e_quic_high_concurrency.zig
 REQ-QUIC-HC-156,High-Concurrency Test Client,DeferredPostWriteFlush,IMPL,,,transport,2026-05-29,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-157,QUIC High-Concurrency Diagnostics,FirstStreamSchedulerLatency,IMPL,,,transport,2026-05-29,src/server/quic_connection_handler.zig
+REQ-QUIC-HC-157,QUIC High-Concurrency Diagnostics,FirstStreamSchedulerLatency,IMPL,,,transport,2026-05-29,src/transport/quic_response_metrics.zig
+REQ-QUIC-HC-158,QUIC High-Concurrency Reads,EmptyRlsEngineFastPath,TESTED,,,performance,2026-05-29,src/execution/match_operations.zig
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

@@ -75,9 +75,11 @@ fn compat_sleep(ns: u64) void {
 }
 
 const testing = std.testing;
+const geode = @import("geode");
 const rls = @import("rls");
 const rls_types = @import("rls_types");
 
+const execution = geode.execution;
 const RLSEngine = rls.RLSEngine;
 const Value = rls.Value;
 const Policy = rls.RLSEngine.Policy;
@@ -227,4 +229,63 @@ test "GAP-0510: no registered policy means access is granted (default allow)" {
     // If a refactor inverts this default, the match loop would start
     // denying everything at once and this test catches it.
     try testing.expect(allowed);
+}
+
+test "QUIC-HC-158: empty RLS engines do not force authenticated read snapshots" {
+    const allocator = testing.allocator;
+
+    try testing.expect(rls_types.getGlobalRLSFilterEngine() == null);
+    try testing.expect(rls_types.getGlobalExprRLSEngine() == null);
+
+    execution.cleanupCatalogInstance();
+    defer execution.cleanupCatalogInstance();
+    const catalog = try execution.ensureCatalogInstance(allocator);
+
+    var ctx = execution.ExecutionContext{
+        .catalog = catalog,
+        .user = "alice",
+    };
+    const prev_ctx = execution.pushActiveContext(&ctx);
+    defer execution.popActiveContext(prev_ctx);
+
+    try testing.expect(!execution.wouldEvaluateRLS());
+
+    var label_engine = rls_types.RLSFilterEngine.init(allocator);
+    defer label_engine.deinit();
+    rls_types.setGlobalRLSFilterEngine(&label_engine);
+    defer rls_types.setGlobalRLSFilterEngine(null);
+
+    var expr_engine = try RLSEngine.init(allocator);
+    defer expr_engine.deinit();
+    rls_types.setGlobalExprRLSEngine(@ptrCast(&expr_engine));
+    defer rls_types.setGlobalExprRLSEngine(null);
+
+    try testing.expect(!execution.wouldEvaluateRLS());
+
+    try label_engine.addDenyPolicy("default", "Secret", "");
+    try testing.expect(execution.wouldEvaluateRLS());
+    label_engine.removeDenyPolicy("default", "Secret", "");
+    try testing.expect(!execution.wouldEvaluateRLS());
+
+    const policy = Policy{
+        .id = 158,
+        .name = "hc_expr_policy",
+        .description = "marker policy for read dispatch RLS classification",
+        .graph = "default",
+        .table = "HCParallel",
+        .operation = .select,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = null,
+        .check_expr = null,
+        .enabled = true,
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+    try expr_engine.createPolicy(policy);
+    try testing.expect(execution.wouldEvaluateRLS());
 }

@@ -43,15 +43,15 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-Result: 4096 clients connected and completed 4096 operations, including 1024 mutations, at
-995.00 QPS with zero setup retries, zero execution retries, zero reconnects, and no
-`pollCrypto` crash. A 3072-client mixed gate also passed at 988.01 QPS with zero retries.
+Result after the 2026-05-29 empty-RLS-engine fast-path follow-up: 4096 clients connected and
+completed 4096 operations, including 1024 mutations, at 971.94 QPS with zero setup retries, zero
+execution retries, zero reconnects, and no `pollCrypto` crash. A 4096-client mixed stress ceiling
+with `GEODE_HC_REQUEST_STAGGER_US=250` also completes with zero first-response timeouts after
+`REQ-QUIC-HC-158`.
 
-Known remaining throughput limit: a more aggressive 4096-client mixed ceiling probe with
-`GEODE_HC_REQUEST_STAGGER_US=250` reaches `connected=4096`, `hello_ok=4096`, and
-`ready=4096` without the TLS crash, but still has 10s execute timeout tails. The current
-instrumented split was `ok=1705/4096`, `read_failed=1814`, `mutation_failed=577`; that is a
-separate post-handshake transport/scheduler ceiling and is documented in
+Known remaining throughput limit: the 250 us stress ceiling is now stable, but still has a
+multi-second first-response tail (`avg_first_response_wait_ms=5088.21` in the latest clean run).
+That is a separate post-handshake transport/scheduler ceiling and is documented in
 `docs/audit/quic-high-concurrency-2026-05-29.md`.
 
 ---

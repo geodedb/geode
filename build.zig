@@ -3998,11 +3998,14 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0510 regression: RLS expression engine wiring + compiled policy enforcement
     const rls_expr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_expr_engine_wiring.zig"), .target = target, .optimize = optimize });
+    rls_expr_test_mod.addImport("geode", root_mod);
     rls_expr_test_mod.addImport("rls", rls_mod);
     rls_expr_test_mod.addImport("rls_types", rls_types_mod);
     const rls_expr_tests = b.addTest(.{ .root_module = rls_expr_test_mod });
     const run_rls_expr_tests = b.addRunArtifact(rls_expr_tests);
     shardDep(test_step, &run_rls_expr_tests.step, 1, test_shard_loads, test_shard_index);
+    const rls_expr_step = b.step("test-rls-expr-engine-wiring", "Run RLS expression engine wiring regression tests");
+    rls_expr_step.dependOn(&run_rls_expr_tests.step);
 
     // GAP-0723 / SEC-RLS-01 regression: RLS bytecode VM stack bounds + opcode validation.
     const rls_vm_bounds_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_vm_bounds.zig"), .target = target, .optimize = optimize });
