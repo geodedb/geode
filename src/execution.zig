@@ -1071,19 +1071,43 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     var exec_outcome: om.Outcome = .success;
     errdefer exec_outcome = .error_;
 
-    // The `geode.query.execute` trace span was rolled back here pending a
-    // coordinated otel pin bump to 0c34ce9b+ — the upstream
-    // BatchSpanProcessor concurrent-producer race (panic at
-    // otel/src/sdk/export.zig:330) otherwise crashes drainLocked under
-    // load. The op-name switch that fed the `db.operation.name` attribute
-    // went with it; recordQueryExecution still publishes the latency
-    // histogram + outcome counter for non-trace monitoring. See the note
-    // at src/storage/graph_storage_adapter.zig:2237 and the regression
-    // guard at tests/test_bsp_race_regression.zig.
+    // geode.query.execute span — re-enabled on the current otel pin
+    // (455ad2b8). The concurrent-producer race (otel 0c34ce9) is fixed
+    // upstream; the span-reuse UAF is closed at the geode boundary by
+    // GeodeSpan's exactly-once end() + g_span_mu-guarded creation
+    // (proven crash-free + exactly-once under 8 threads in
+    // tests/test_otel_span_concurrency.zig). Thread-confined: created and
+    // ended on this request's worker thread. Only bounded attributes are
+    // attached (op_name, namespace, is_mutation, row_count, error.type) —
+    // never raw query text or parameter values.
+    const op_name: []const u8 = switch (stmt) {
+        .Query => "MATCH",
+        .Create => "CREATE",
+        .Insert, .InsertValue => "INSERT",
+        .Delete => "DELETE",
+        .Merge => "MERGE",
+        .Call => "CALL",
+        .Union => "UNION",
+        .Intersect => "INTERSECT",
+        .Except => "EXCEPT",
+        // @tagName is bounded: one of the fixed, finite Statement tag
+        // names, so attribute cardinality stays low.
+        else => @tagName(stmt),
+    };
+    const is_mutation: bool = switch (stmt) {
+        .Create, .Insert, .InsertValue, .Delete, .Merge, .CreateIndex, .DropIndex, .CreateConstraint, .DropConstraint, .CreateSchema, .DropSchema, .CreateGraph, .DropGraph, .CreateGraphType, .DropGraphType, .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke, .CreatePolicy, .DropPolicy, .AlterPolicy => true,
+        else => false,
+    };
+    const ns: []const u8 = if (context.session_state) |ss| (ss.graph orelse "") else "";
+    var qspan = om.startQuerySpan(op_name, ns, is_mutation);
+    // Declared BEFORE the outcome defer so it runs LAST (Zig defers are
+    // LIFO): the span is ended only after setError/setOk has been applied.
+    defer qspan.end();
 
     defer {
         const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
-        om.recordQueryExecution("STATEMENT", "STATEMENT", qt, dur_s, exec_outcome, null);
+        om.recordQueryExecution(op_name, op_name, qt, dur_s, exec_outcome, null);
+        if (exec_outcome == .error_) qspan.setError(error.QueryFailed) else qspan.setOk();
     }
     switch (stmt) {
         .Query => |q| {
