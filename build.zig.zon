@@ -149,7 +149,11 @@
             // 2026-05-29: restores the proven four-batch server drain after
             // short-header wall-clock yield experiments regressed Geode's
             // accepted 4096 single-op gate.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#108d06d9bc3852a897699d83a677a61677f3f0a2",
+            // 2026-05-29: pins the upstream-main revert of the slow-batch
+            // short-header cadence experiment after it regressed Geode's
+            // accepted 4096 single-op gate. Content is equivalent to the
+            // proven 108d06d four-batch receive behavior.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#eeeb2161ccd94c60f7c6b645bcfd16e20202593a",
             .hash = "quic-0.1.21-gBIqUeHmPADddO39D62L-gMpkIq0hQYX0-BpsXL20uX3",
         },
 
@@ -279,8 +283,11 @@
             // c2874fb/76b45ec's receive-cadence yield experiments; client and
             // server now share quic 108d06d's revert to the proven four-batch
             // drain.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#2f1bfe03fdf51476346ff8aca1c3e7c235a98931",
-            .hash = "geode_client_zig-0.2.9-8ysbV1lkCQDopkdKFn4uXDj7sOjnFwAF7W57fEC-7GDZ",
+            // 2026-05-29: bumped to 533cde8 so client and server share quic
+            // eeeb216's upstream-main revert of the slow-batch cadence
+            // experiment.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#533cde8f9b587e0a0b9065bb2f346f224479f02e",
+            .hash = "geode_client_zig-0.2.9-8ysbV49lCQD-RoDTjzvorOhP9ey-3l885WvRCn9lI8rX",
         },
 
         // =======================================================================

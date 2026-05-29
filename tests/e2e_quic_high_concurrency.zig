@@ -692,6 +692,14 @@ pub fn main() !void {
     const capture_server_logs = envBool("GEODE_HC_CAPTURE_SERVER_LOGS", false);
     const client_diagnostics = envBool("GEODE_HC_CLIENT_DIAGNOSTICS", false);
     const cooperative_first_streams = envBool("GEODE_HC_COOPERATIVE_FIRST_STREAMS", true);
+    // CANARY: REQ=REQ-QUIC-HC-161; FEATURE="High-Concurrency Diagnostics"; ASPECT=ShortHeaderTimingHarness; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // Upstream QUIC already exposes detailed short-header receive subphase
+    // timing behind GEODE_QUIC_SHORT_HEADER_TIMING. Surface that flag through
+    // the E2E harness so ceiling probes can split endpoint-map, RX-serial,
+    // decrypt, frame-processing, and ACK-send cost without adding Geode-side
+    // per-packet instrumentation.
+    const short_header_timing = envBool("GEODE_HC_SHORT_HEADER_TIMING", false);
     // CANARY: REQ=REQ-QUIC-HC-156; FEATURE="High-Concurrency Test Client"; ASPECT=DeferredPostWriteFlush; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
     //
     // At 1024+ same-process clients, immediate post-write poll calls can
@@ -795,6 +803,10 @@ pub fn main() !void {
         "GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=1"
     else
         "GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0";
+    const short_header_timing_env: []const u8 = if (short_header_timing)
+        "GEODE_QUIC_SHORT_HEADER_TIMING=1"
+    else
+        "GEODE_QUIC_SHORT_HEADER_TIMING=0";
     const args = &[_][]const u8{
         "./zig-out/bin/geode",
         "serve",
@@ -815,6 +827,7 @@ pub fn main() !void {
             "GEODE_QUIC_PASSIVE_TEARDOWN=1",
             "GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0",
             cooperative_first_streams_env,
+            short_header_timing_env,
             detached_first_stream_env,
             max_global_stream_env,
             poll_workers_env,
@@ -831,6 +844,7 @@ pub fn main() !void {
             "GEODE_QUIC_PASSIVE_TEARDOWN=1",
             "GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0",
             cooperative_first_streams_env,
+            short_header_timing_env,
             detached_first_stream_env,
             max_global_stream_env,
             poll_workers_env,

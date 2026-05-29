@@ -22,9 +22,13 @@ dependency pins:
 | `devnw/zig/quic` | `fc7efc2d98a435a82598c2a34f697bde1c7532e2` | Final pushed v0.1.21 pin for Geode: preserves TLS serialization and the proven server receive/short-header drain after rejecting narrower drain variants. |
 | `devnw/zig/quic` | `9a35274086e8cfb9cab5b78fa7471506aec03d3e` | Reverts the rejected one-batch server short-header app receive experiment, keeping the proven `a68d36e` behavior on upstream `main`. |
 | `devnw/zig/quic` | `108d06d9bc3852a897699d83a677a61677f3f0a2` | Reverts the rejected `c2874fb`/`76b45ec` wall-clock short-header receive-yield experiments after they regressed Geode's accepted 4096 single-op gate. |
+| `devnw/zig/quic` | `6224b28fc1654ccd20d1b5dc951e6502cb984aa7` | Rejected slow-batch server short-header cadence experiment; it regressed Geode's accepted 4096 single-op gate and is kept here only as an audit waypoint. |
+| `devnw/zig/quic` | `eeeb2161ccd94c60f7c6b645bcfd16e20202593a` | Reverts the rejected `6224b28` slow-batch cadence experiment on upstream `main`, preserving the proven four-batch receive behavior. |
 | `devnw/codepros/geode/geode-client-zig` | `959a43a7f6981a87131561bb6cb99605272c8ce8` | Pins the client package to the same QUIC fix set. |
 | `devnw/codepros/geode/geode-client-zig` | `5a6b65a012e02db2a7acb6d0f37f2251f171edf0` | Pins the client package to QUIC `9a35274` so downstream consumers do not observe the rejected intermediate QUIC commit. |
 | `devnw/codepros/geode/geode-client-zig` | `2f1bfe03fdf51476346ff8aca1c3e7c235a98931` | Pins the client package to QUIC `108d06d` so client and server both consume the accepted four-batch receive behavior. |
+| `devnw/codepros/geode/geode-client-zig` | `b7eef87da566cf051ae5cd9e30b1d51507c59b9e` | Rejected client pin to QUIC `6224b28`; retained as an audit waypoint only. |
+| `devnw/codepros/geode/geode-client-zig` | `533cde8f9b587e0a0b9065bb2f346f224479f02e` | Pins the client package to QUIC `eeeb216` so client and server share the upstream-main revert. |
 | `devnw/codepros/geode/geode` | this dependency update | Pins direct `quic` and `geode_client_zig` dependencies to the same upstream QUIC revision. |
 
 Regression coverage now includes the Geode vendored-source guard
@@ -49,14 +53,14 @@ timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --
 
 Latest result after the 2026-05-29 empty-RLS-engine, mutation-permit,
 shard-parallel admission, and final dependency-pin follow-ups: 4096 clients
-connected and completed 4096 operations, including 1024 mutations, at 895.00 QPS
+connected and completed 4096 operations, including 1024 mutations, at 664.88 QPS
 with zero setup retries, zero execution retries, zero reconnects, zero
 first-response timeouts, and no `pollCrypto` crash. The sustained mixed gate is
 now 2048 workers x 8 operations
-(`16384/16384` complete, zero first-response timeouts).
+(`16384/16384` complete, zero first-response timeouts, 1081.10 QPS).
 
 Known remaining throughput limit: sustained 4096 workers x 8 operations still
-fails within the 10s execute timeout (`ok=21719/32768` at 250 us request
+fails within the 10s execute timeout (`ok=20475/32768` at 250 us request
 stagger, `ok=25800/32768` at 1000 us in the latest final runs). That is a
 separate post-handshake transport/scheduler ceiling and is documented in
 `docs/audit/quic-high-concurrency-2026-05-29.md`.
@@ -225,8 +229,15 @@ ownership transfer.
    pinned the revert. Follow-up QUIC commits `c2874fb` and `76b45ec` tried a short-header
    wall-clock yield; the first regressed setup retries, and the repaired full-batch variant
    regressed Geode's accepted 4096 single-op gate to `ok=1043/4096` with `3053`
-   first-response timeouts. QUIC `108d06d`, `geode-client-zig` `2f1bfe0`, and Geode now pin
-   that revert.
+   first-response timeouts. QUIC `108d06d`, `geode-client-zig` `2f1bfe0`, and Geode pinned
+   that revert before the later upstream-main revert pin.
+
+6. **Reject the slow-batch cadence experiment and pin the upstream-main revert.** Upstream QUIC
+   commit `6224b28fc1654ccd20d1b5dc951e6502cb984aa7` kept the full four-batch server
+   short-header receive budget, but yielded after at least one complete batch had consumed 500 ms.
+   The accepted 4096 single-op Geode gate rejected that change with `ok=1026/4096` and `3070`
+   first-response timeouts. QUIC `eeeb2161ccd94c60f7c6b645bcfd16e20202593a`,
+   `geode-client-zig` `533cde8`, and Geode now pin the upstream-main revert.
 
 The original defense-in-depth guidance still applies for future TLS work: ownership transfer
 from TLS outbound buffers must stay inside a single-writer critical section, and debug-only owner

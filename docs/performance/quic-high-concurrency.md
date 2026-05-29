@@ -23,9 +23,9 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest 2026-05-29 final dependency-pin run completed all 4096 operations with zero
+The latest 2026-05-29 upstream-main revert run completed all 4096 operations with zero
 setup retries, zero execute retries, zero reconnects, zero first-response
-timeouts, and 895.00 QPS.
+timeouts, and 664.88 QPS.
 
 ## Sustained Gate
 
@@ -47,7 +47,7 @@ timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --s
 
 The accepted sustained run completed all 16384 operations with zero setup
 retries, zero execute retries, zero reconnects, zero first-response timeouts,
-and 1007.96 QPS. This gate exercises 4096 mutations and 12288 reads over 2048
+and 1081.10 QPS. This gate exercises 4096 mutations and 12288 reads over 2048
 live QUIC connections.
 
 ## Stress Ceiling
@@ -68,11 +68,11 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest 250 us run completed 21719/32768 operations with zero setup retries,
-zero execute retries, zero reconnects, and 11049 first-response timeouts. A
+The latest 250 us run completed 20475/32768 operations with zero setup retries,
+zero execute retries, zero reconnects, and 12293 first-response timeouts. A
 latency-friendly 1000 us run completed 25800/32768 operations with 6968
-first-response timeouts. Keep both as active ceiling probes; do not raise the
-10s execute timeout to make them pass.
+first-response timeouts in the prior dependency-pin cycle. Keep both as active
+ceiling probes; do not raise the 10s execute timeout to make them pass.
 
 With server metrics enabled, permit-gated mutation overflow and shard-parallel
 mutation admission reduced scheduler churn enough to promote the sustained gate
@@ -98,6 +98,11 @@ receive processing.
 - `GEODE_HC_REQUEST_STAGGER_US`: offered-load shaping across already connected
   clients. The single-op accepted gate uses `250`; sustained ceiling probes
   should record both `250` and `1000`.
+- `GEODE_HC_SHORT_HEADER_TIMING`: high-concurrency harness diagnostic switch.
+  When set to `1`, the child server receives
+  `GEODE_QUIC_SHORT_HEADER_TIMING=1` and emits upstream QUIC short-header
+  receive subphase metrics. Leave unset for normal performance gates because
+  the extra timing reads add measurement overhead.
 
 ## Reading Timing Output
 
@@ -141,6 +146,10 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 - `mg_rwlock_shared_hold_snapshot_ns_total`
 - `quic_poll_cycle_max_ns`
 - `quic_poll_transport_max_ns`
+- `quic_poll_recv_short_endpoint_map_max_ns`
+- `quic_poll_recv_short_rx_serial_wait_max_ns`
+- `quic_poll_recv_short_conn_lock_wait_max_ns`
+- `quic_poll_recv_short_decrypt_max_ns`
 - `quic_poll_recv_short_frame_process_max_ns`
 - `quic_poll_recv_short_ack_send_max_ns`
 - `quic_poll_overrun_total`
@@ -157,14 +166,18 @@ broader query shape force snapshot execution.
 
 As of this cycle, Geode pins:
 
-- QUIC: `108d06d9bc3852a897699d83a677a61677f3f0a2`
-- `geode-client-zig`: `2f1bfe03fdf51476346ff8aca1c3e7c235a98931`
+- QUIC: `eeeb2161ccd94c60f7c6b645bcfd16e20202593a`
+- `geode-client-zig`: `533cde8f9b587e0a0b9065bb2f346f224479f02e`
 
 QUIC `108d06d` reverts the rejected `c2874fb`/`76b45ec` short-header
 wall-clock yield experiments and preserves the proven `a68d36e`/`9a35274`
 four-batch server receive behavior. Those cadence experiments are documented as
 rejected because they regressed the accepted 4096 single-op gate to 3053/4096
-first-response timeouts.
+first-response timeouts. QUIC `6224b28` then tested a conservative slow-batch
+yield after one full batch and 500 ms, but it also regressed the accepted 4096
+single-operation gate. QUIC `eeeb216` is the upstream-main revert of that
+experiment, so downstream consumers track upstream `main` while preserving the
+proven four-batch receive behavior.
 
 Dependency changes must be made in the upstream worktrees under
 `~/src/devnw/zig/*` before Geode is repinned.

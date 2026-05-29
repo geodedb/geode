@@ -1505,6 +1505,10 @@ test "quic high concurrency e2e configures endpoint poll workers" {
 
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_POLL_WORKERS={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_POLL_WORKERS") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-161") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_SHORT_HEADER_TIMING") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_SHORT_HEADER_TIMING=1") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_SHORT_HEADER_TIMING=0") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-141") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 16") != null);
