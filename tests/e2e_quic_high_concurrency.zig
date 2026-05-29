@@ -196,6 +196,9 @@ const Counters = struct {
     response_messages: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     first_response_timeouts: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     execute_write_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    execute_prepare_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    execute_stream_write_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    execute_post_write_poll_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     first_response_wait_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     first_response_read_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     response_read_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -229,6 +232,7 @@ const WorkerCtx = struct {
     request_stagger_us: u32,
     execute_timeout_secs: u32,
     execute_retries: u32,
+    post_write_poll: bool,
     counters: *Counters,
     start: *std.atomic.Value(bool),
     start_generation: *std.atomic.Value(u32),
@@ -292,6 +296,9 @@ fn recordExecTiming(ctx: *WorkerCtx, timing: *const util.QuicProtoClient.ExecTim
 
     _ = ctx.counters.exec_timing_samples.fetchAdd(1, .acq_rel);
     _ = ctx.counters.execute_write_ns.fetchAdd(timing.execute_write_ns, .acq_rel);
+    _ = ctx.counters.execute_prepare_ns.fetchAdd(timing.execute_prepare_ns, .acq_rel);
+    _ = ctx.counters.execute_stream_write_ns.fetchAdd(timing.execute_stream_write_ns, .acq_rel);
+    _ = ctx.counters.execute_post_write_poll_ns.fetchAdd(timing.execute_post_write_poll_ns, .acq_rel);
     _ = ctx.counters.first_response_wait_ns.fetchAdd(timing.first_response_wait_ns, .acq_rel);
     _ = ctx.counters.first_response_read_ns.fetchAdd(timing.first_response_read_ns, .acq_rel);
     _ = ctx.counters.response_read_ns.fetchAdd(timing.response_read_ns, .acq_rel);
@@ -324,6 +331,9 @@ fn printTimingSummary(counters: *Counters) void {
     const response_messages = counters.response_messages.load(.acquire);
     const avg_first_execute_lag_ms_x100 = nsAvgMsX100(counters.first_execute_lag_ns.load(.acquire), first_execute_samples);
     const avg_execute_write_ms_x100 = nsAvgMsX100(counters.execute_write_ns.load(.acquire), timing_samples);
+    const avg_execute_prepare_ms_x100 = nsAvgMsX100(counters.execute_prepare_ns.load(.acquire), timing_samples);
+    const avg_execute_stream_write_ms_x100 = nsAvgMsX100(counters.execute_stream_write_ns.load(.acquire), timing_samples);
+    const avg_execute_post_write_poll_ms_x100 = nsAvgMsX100(counters.execute_post_write_poll_ns.load(.acquire), timing_samples);
     const avg_first_response_wait_ms_x100 = nsAvgMsX100(counters.first_response_wait_ns.load(.acquire), timing_samples);
     const avg_first_response_read_ms_x100 = nsAvgMsX100(counters.first_response_read_ns.load(.acquire), timing_samples);
     const avg_response_read_ms_x100 = nsAvgMsX100(counters.response_read_ns.load(.acquire), timing_samples);
@@ -331,7 +341,7 @@ fn printTimingSummary(counters: *Counters) void {
     const max_first_execute_lag_ms_x100 = counters.max_first_execute_lag_ns.load(.acquire) / (std.time.ns_per_ms / 100);
     const max_first_response_wait_ms_x100 = counters.max_first_response_wait_ns.load(.acquire) / (std.time.ns_per_ms / 100);
     std.debug.print(
-        "high-concurrency QUIC E2E timing samples={d} response_messages={d} first_response_timeouts={d} avg_ready_to_first_execute_ms={d}.{d:0>2} max_ready_to_first_execute_ms={d}.{d:0>2} avg_execute_write_ms={d}.{d:0>2} avg_first_response_wait_ms={d}.{d:0>2} max_first_response_wait_ms={d}.{d:0>2} avg_first_response_read_ms={d}.{d:0>2} avg_response_read_ms={d}.{d:0>2} avg_response_message_read_ms={d}.{d:0>2}\n",
+        "high-concurrency QUIC E2E timing samples={d} response_messages={d} first_response_timeouts={d} avg_ready_to_first_execute_ms={d}.{d:0>2} max_ready_to_first_execute_ms={d}.{d:0>2} avg_execute_write_ms={d}.{d:0>2} avg_execute_prepare_ms={d}.{d:0>2} avg_execute_stream_write_ms={d}.{d:0>2} avg_execute_post_write_poll_ms={d}.{d:0>2} avg_first_response_wait_ms={d}.{d:0>2} max_first_response_wait_ms={d}.{d:0>2} avg_first_response_read_ms={d}.{d:0>2} avg_response_read_ms={d}.{d:0>2} avg_response_message_read_ms={d}.{d:0>2}\n",
         .{
             timing_samples,
             response_messages,
@@ -342,6 +352,12 @@ fn printTimingSummary(counters: *Counters) void {
             max_first_execute_lag_ms_x100 % 100,
             avg_execute_write_ms_x100 / 100,
             avg_execute_write_ms_x100 % 100,
+            avg_execute_prepare_ms_x100 / 100,
+            avg_execute_prepare_ms_x100 % 100,
+            avg_execute_stream_write_ms_x100 / 100,
+            avg_execute_stream_write_ms_x100 % 100,
+            avg_execute_post_write_poll_ms_x100 / 100,
+            avg_execute_post_write_poll_ms_x100 % 100,
             avg_first_response_wait_ms_x100 / 100,
             avg_first_response_wait_ms_x100 % 100,
             max_first_response_wait_ms_x100 / 100,
@@ -447,6 +463,7 @@ fn workerRun(ctx: *WorkerCtx) void {
         recordSetupFailure(ctx.counters, "worker={d} connect/hello err={}", .{ ctx.worker_id, err });
         return;
     };
+    client.post_write_poll = ctx.post_write_poll;
     defer client.deinit();
 
     _ = ctx.counters.ready.fetchAdd(1, .acq_rel);
@@ -518,6 +535,7 @@ fn workerRun(ctx: *WorkerCtx) void {
                 };
                 client.deinit();
                 client = retry_client;
+                client.post_write_poll = ctx.post_write_poll;
                 _ = ctx.counters.execute_reconnects.fetchAdd(1, .acq_rel);
                 continue;
             };
@@ -674,6 +692,13 @@ pub fn main() !void {
     const capture_server_logs = envBool("GEODE_HC_CAPTURE_SERVER_LOGS", false);
     const client_diagnostics = envBool("GEODE_HC_CLIENT_DIAGNOSTICS", false);
     const cooperative_first_streams = envBool("GEODE_HC_COOPERATIVE_FIRST_STREAMS", true);
+    // CANARY: REQ=REQ-QUIC-HC-156; FEATURE="High-Concurrency Test Client"; ASPECT=DeferredPostWriteFlush; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // At 1024+ same-process clients, immediate post-write poll calls can
+    // dominate request start cost before the server is the limiting factor.
+    // Leave low-fanout behavior unchanged, but let high-fanout workers defer
+    // the flush to the first response-read WouldBlock poll.
+    const post_write_poll = envBool("GEODE_HC_POST_WRITE_POLL", worker_count < 1024);
     const read_query = envSlice("GEODE_HC_READ_QUERY", "MATCH (n:HCParallel) RETURN count(n) AS c");
 
     const port = try util.getRandomPort();
@@ -860,6 +885,7 @@ pub fn main() !void {
             .request_stagger_us = request_stagger_us,
             .execute_timeout_secs = execute_timeout_secs,
             .execute_retries = execute_retries,
+            .post_write_poll = post_write_poll,
             .counters = &counters,
             .start = &start,
             .start_generation = &start_generation,

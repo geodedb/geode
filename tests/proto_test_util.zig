@@ -650,6 +650,7 @@ pub const QuicProtoClient = struct {
     stream: *quic.QuicClientStream,
     session_id: []const u8 = "",
     read_wait_misses: u32 = 0,
+    post_write_poll: bool = true,
 
     // CANARY: REQ=REQ-QUIC-HC-154; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ClientExecutePhaseTiming; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
     //
@@ -660,12 +661,22 @@ pub const QuicProtoClient = struct {
     pub const ExecTiming = struct {
         execute_write_start_ns: u64 = 0,
         execute_write_ns: u64 = 0,
+        execute_prepare_ns: u64 = 0,
+        execute_stream_write_ns: u64 = 0,
+        execute_post_write_poll_ns: u64 = 0,
         first_response_wait_ns: u64 = 0,
         first_response_read_ns: u64 = 0,
         response_read_ns: u64 = 0,
         response_messages: u32 = 0,
         timed_out_before_first_response: bool = false,
         total_ns: u64 = 0,
+    };
+
+    const MessageWriteTiming = struct {
+        total_ns: u64 = 0,
+        prepare_ns: u64 = 0,
+        stream_write_ns: u64 = 0,
+        post_write_poll_ns: u64 = 0,
     };
 
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !QuicProtoClient {
@@ -702,6 +713,21 @@ pub const QuicProtoClient = struct {
     }
 
     fn writeMessage(self: *QuicProtoClient, msg: schema.QuicClientMessage) !void {
+        try self.writeMessageTimed(msg, null);
+    }
+
+    fn writeMessageTimed(
+        self: *QuicProtoClient,
+        msg: schema.QuicClientMessage,
+        timing: ?*MessageWriteTiming,
+    ) !void {
+        const start_ns = compat_monoNs();
+        var measured = MessageWriteTiming{};
+        defer {
+            measured.total_ns = compat_monoNs() -| start_ns;
+            if (timing) |out| out.* = measured;
+        }
+
         var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 4096);
         defer aw.deinit();
 
@@ -718,14 +744,21 @@ pub const QuicProtoClient = struct {
         defer self.allocator.free(framed);
         std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
         @memcpy(framed[4..], body);
+        const prepared_ns = compat_monoNs();
+        measured.prepare_ns = prepared_ns -| start_ns;
         try self.stream.writeAll(framed);
+        const stream_written_ns = compat_monoNs();
+        measured.stream_write_ns = stream_written_ns -| prepared_ns;
         // CANARY: REQ=REQ-QUIC-HC-041; FEATURE="QUIC High-Concurrency Client"; ASPECT=PostWriteFlush; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
         // writeStream queues frames on the client endpoint. In high-fanout
         // tests, waiting until the first response read WouldBlock to poll the
         // endpoint can leave hundreds of EXECUTE frames unflushed for one
         // scheduler turn. Poll once after every framed write so request data
         // is visible to the server before the caller waits for a response.
-        try self.client.poll(0);
+        if (self.post_write_poll) {
+            try self.client.poll(0);
+            measured.post_write_poll_ns = compat_monoNs() -| stream_written_ns;
+        }
     }
 
     pub fn dumpTransportDiagnostics(self: *QuicProtoClient, worker_id: u32, op: usize) void {
@@ -1187,13 +1220,17 @@ pub const QuicProtoClient = struct {
                 _ = alloc;
                 const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
                 const write_start_ns = compat_monoNs();
-                try adapter_self.client.writeMessage(msg);
+                var write_timing = MessageWriteTiming{};
+                try adapter_self.client.writeMessageTimed(msg, &write_timing);
                 const write_end_ns = compat_monoNs();
                 if (adapter_self.timing) |stats| {
                     switch (msg) {
                         .execute => {
                             stats.execute_write_start_ns = write_start_ns;
                             stats.execute_write_ns +|= write_end_ns -| write_start_ns;
+                            stats.execute_prepare_ns +|= write_timing.prepare_ns;
+                            stats.execute_stream_write_ns +|= write_timing.stream_write_ns;
+                            stats.execute_post_write_poll_ns +|= write_timing.post_write_poll_ns;
                             adapter_self.execute_write_done_ns = write_end_ns;
                         },
                         else => {},
