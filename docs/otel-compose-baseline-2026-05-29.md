@@ -58,11 +58,20 @@ geode_transport_request_duration_bucket{...,le="0.0005"} 3
 ...
 ```
 
-### Traces: NONE
+### Traces: NONE (Phase A) → `geode.query.execute` spans land (Phase B)
 
-`traces.jsonl` empty; `span-indicator lines: 0`. **Confirmed empirically: geode emits no spans of
-its own.** The `TracerProvider` is wired (and now has a working transport), but there are no
-`startSpan` call sites in geode. This is the Phase B gap.
+**Phase A baseline:** `traces.jsonl` empty; `span-indicator lines: 0` — geode emitted no spans.
+
+**Phase B update (2026-05-29):** geode now emits a `geode.query.execute` SERVER span per statement
+(scope `com.geodedb.geode`), via a thread-safe `GeodeSpan` facade (exactly-once `end()` + a facade
+mutex around the non-thread-safe id-generator). `REQUIRE_SPANS=1 scripts/otel-compose-verify.sh`
+PASSES (`span-indicator lines: 9`). A geode-side periodic flush loop drains the BatchSpanProcessor
+on the BSP schedule cadence (the no-pool BSP has no timer of its own). Concurrent-load smoke: 240
+concurrent queries → geode `running exitcode=0`, no SIGABRT/panic/UAF, spans keep flowing — the
+prior concurrent-span crash is resolved at the geode boundary. Bounded attributes only
+(`db.operation.name`, `db.namespace`, `geode.query.is_mutation`, `geode.result.row_count`,
+`error.type`). Child spans (parse/plan/storage/wal) + cross-process propagation are Phase B
+Increment 2 / later.
 
 ## Known gaps surfaced (feed later phases)
 
