@@ -37,7 +37,7 @@ GEODE_HC_WORKERS=2048 \
 GEODE_HC_OPS_PER_WORKER=8 \
 GEODE_HC_MUTATION_STRIDE=4 \
 GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
-GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_CONNECT_STAGGER_US=500 \
 GEODE_HC_REQUEST_STAGGER_US=250 \
 GEODE_HC_EXEC_TIMEOUT_SECS=10 \
 GEODE_HC_EXEC_RETRIES=0 \
@@ -47,8 +47,11 @@ timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --s
 
 The latest accepted sustained run completed all 16384 operations with zero
 setup retries, zero execute retries, zero reconnects, zero first-response
-timeouts, and 821.63 QPS after the 500 us / cap 128 default update. This gate exercises 4096 mutations and 12288 reads
-over 2048 live QUIC connections.
+timeouts, and 848.39 QPS after backlog-aware cooperative pacing. This gate
+exercises 4096 mutations and 12288 reads over 2048 live QUIC connections. The
+same run reported p50=2154.31 ms, p95=4723.65 ms, p99=6123.36 ms, and
+p99.9=7424.62 ms, so completion is clean but latency is still above the
+enterprise objective.
 
 ## Stress Ceiling
 
@@ -69,14 +72,18 @@ GEODE_HC_METRICS_SCRAPE=1 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest metrics-enabled 250 us attribution run completed 26634/32768
-operations with zero setup retries, zero execute retries, zero reconnects, and
-6134 first-response timeouts after the runtime scrape and read/mutation
-execution split. It ran at 570.08 QPS with p50=3968 ms, p95=9114 ms, and
-p99=9977 ms. The scrape showed reads were no longer the dominant executor
-cost: read execution accounted for about 1.3 seconds across 22419 samples,
-while mutation execution accounted for about 15727 seconds across 7448 samples.
-Server response writes were clean (`quic_stream_write_success_total=33963`,
+The latest 250 us sustained run after backlog-aware cooperative pacing
+completed 23067/32768 operations with zero setup retries, zero execute retries,
+zero reconnects, and 9701 first-response timeouts. It ran at 432.28 QPS with
+p50=4991.34 ms, p95=9498.71 ms, p99=9898.76 ms, and p99.9=9991.77 ms.
+
+The latest metrics-enabled attribution run completed 26634/32768 operations
+with zero setup retries, zero execute retries, zero reconnects, and 6134
+first-response timeouts after the runtime scrape and read/mutation execution
+split. The scrape showed reads were no longer the dominant executor cost: read
+execution accounted for about 1.3 seconds across 22419 samples, while mutation
+execution accounted for about 15727 seconds across 7448 samples. Server
+response writes were clean (`quic_stream_write_success_total=33963`,
 `quic_stream_write_errors_total=0`, `quic_stream_write_timeouts_total=0`), so
 the remaining 4096 x 8 tail is mutation execution/storage pressure plus
 multi-second QUIC poll cycles and first-stream scheduling delay.
@@ -188,6 +195,11 @@ the next QUIC receive/scheduler pass:
   `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default is
   500 us: 2048x8 mixed probes completed cleanly at 500 us, while 100 us
   produced tail timeouts and 2000 us regressed completion.
+- `REQ-QUIC-HC-176`: cooperative first-stream pacing now tracks ready-queue
+  depth and skips the high-fanout post-turn sleep only when queued ready work
+  exceeds the scheduler worker count. The accepted variant passed the 1024x8
+  and 2048x8 mixed sustained gates; more aggressive quarter-pool and guarded
+  variants were rejected after reruns produced first-response timeouts.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
@@ -197,7 +209,9 @@ admission for mutations. This is still a failing stress ceiling; the passing
 sustained gate remains 2048x8 mixed. The tuple-lock striping cycle adds
 instrumentation and collision reduction but has not promoted the 4096x8 gate;
 the first re-run was invalidated by a concurrent root-owned `goreleaser`
-cross-build saturating the host.
+cross-build saturating the host. The backlog-aware pacing cycle promotes the
+2048x8 sustained result from 821.63 QPS to 848.39 QPS with zero first-response
+timeouts, but it does not promote the 4096x8 stress ceiling.
 
 ## Restart And Durability Checks
 

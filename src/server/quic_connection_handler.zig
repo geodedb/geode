@@ -2601,6 +2601,7 @@ pub const FirstStreamScheduler = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     ready_cv: std.Io.Condition = std.Io.Condition.init,
     ready_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    ready_depth: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     context_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -2630,6 +2631,7 @@ pub const FirstStreamScheduler = struct {
             .mutex = std.Io.Mutex.init,
             .ready_cv = std.Io.Condition.init,
             .ready_generation = std.atomic.Value(u32).init(0),
+            .ready_depth = std.atomic.Value(u32).init(0),
             .shutdown = std.atomic.Value(bool).init(false),
             .context_count = std.atomic.Value(u32).init(0),
             .mutation_inflight = std.atomic.Value(u32).init(0),
@@ -2677,6 +2679,7 @@ pub const FirstStreamScheduler = struct {
         var ready = self.ready_queue;
         self.ready_queue = .empty;
         self.ready_head = 0;
+        self.ready_depth.store(0, .release);
         self.mutex.unlock(io);
 
         ready.deinit(self.allocator);
@@ -2779,12 +2782,21 @@ pub const FirstStreamScheduler = struct {
 
     fn pauseAfterTurn(self: *FirstStreamScheduler) void {
         // CANARY: REQ=REQ-QUIC-HC-147; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativePollerFairness; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+        // CANARY: REQ=REQ-QUIC-HC-176; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BacklogAwareCooperativePacing; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
         //
         // Cooperative first-stream workers can process cheap count responses
         // faster than the QUIC poll workers can flush request/response packets
         // during 4k+ same-process fan-out. Keep low fan-out hot, but yield once
         // the pool is large and add the same bounded backoff used by the legacy
         // persistent stream loop when thousands of first streams are live.
+        //
+        // When the ready queue itself is backed up, the post-turn sleep becomes
+        // scheduler head-of-line delay rather than poller relief. Skip the
+        // backoff only while a meaningful backlog exists; the existing yield and
+        // sleep remain active once workers catch up.
+        const ready_depth = self.ready_depth.load(.acquire);
+        if (ready_depth > self.readyBacklogPauseSkipThreshold()) return;
+
         const active_contexts = self.context_count.load(.acquire);
         if (active_contexts > 512) {
             const excess: u64 = @intCast(active_contexts - 512);
@@ -2792,6 +2804,17 @@ pub const FirstStreamScheduler = struct {
             compat_sleepNs(delay_ns);
         } else if (self.workers.len > 64) {
             std.Thread.yield() catch {};
+        }
+    }
+
+    fn readyBacklogPauseSkipThreshold(self: *FirstStreamScheduler) u32 {
+        return @intCast(@min(@max(@as(usize, 1), self.workers.len), std.math.maxInt(u32)));
+    }
+
+    fn decrementReadyDepth(self: *FirstStreamScheduler) void {
+        var observed = self.ready_depth.load(.acquire);
+        while (observed > 0) {
+            observed = self.ready_depth.cmpxchgWeak(observed, observed - 1, .acq_rel, .acquire) orelse return;
         }
     }
 
@@ -2875,6 +2898,7 @@ pub const FirstStreamScheduler = struct {
         if (self.ready_head >= self.ready_queue.items.len) {
             self.ready_queue.clearRetainingCapacity();
             self.ready_head = 0;
+            self.ready_depth.store(0, .release);
             return null;
         }
 
@@ -2898,6 +2922,7 @@ pub const FirstStreamScheduler = struct {
             self.ready_head = 0;
         }
         ctx.cooperative_queued.store(false, .release);
+        self.decrementReadyDepth();
         const enqueued_ns = ctx.cooperative_enqueued_ns.swap(0, .acq_rel);
         if (enqueued_ns != 0) {
             quic_response_metrics.recordFirstStreamReadyDequeued(monoNsFromHandler() -| enqueued_ns);
@@ -3011,6 +3036,7 @@ pub const FirstStreamScheduler = struct {
             self.mutex.unlock(io);
         }
         try self.ready_queue.append(self.allocator, ctx);
+        _ = self.ready_depth.fetchAdd(1, .acq_rel);
         _ = self.ready_generation.fetchAdd(1, .release);
         self.ready_cv.signal(io);
         io.futexWake(u32, &self.ready_generation.raw, 1);
@@ -3028,6 +3054,7 @@ pub const FirstStreamScheduler = struct {
         while (ready_idx < self.ready_queue.items.len) {
             if (self.ready_queue.items[ready_idx] == ctx) {
                 _ = self.ready_queue.swapRemove(ready_idx);
+                self.decrementReadyDepth();
                 if (self.ready_head > self.ready_queue.items.len) {
                     self.ready_head = self.ready_queue.items.len;
                 }

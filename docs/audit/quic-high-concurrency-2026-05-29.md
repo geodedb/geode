@@ -1,7 +1,7 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, and restart/recovery regression coverage. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest runtime-scraped attribution run shows clean response writes, cheap read execution, dominant mutation execution/storage tail, and multi-second QUIC poll/scheduler cycles.
+**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, backlog-aware cooperative pacing, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, and restart/recovery regression coverage. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest attribution runs show clean response writes, cheap read execution, dominant mutation execution/storage tail, and multi-second QUIC poll/scheduler cycles.
 **Dependency state:** Geode now pins QUIC `06f4aadcf045a0d6295c7e85398b94c7096accb9` and `geode-client-zig` `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd`. QUIC `06f4aad` preserves the proven `eeeb216` four-batch server receive behavior and adds `REQ-QUIC-HC-168`, routing generic/coalesced long-header dispatch through the same per-connection TLS serializer as the optimized burst receive path.
 
 ## Summary
@@ -41,6 +41,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 31. `REQ-QUIC-HC-173` splits first-stream query execution metrics into read and mutation counters. The latest 4096x8 attribution run showed read execution at about 1.3 seconds total across 22419 samples, while mutation execution consumed about 15727 seconds total across 7448 samples.
 32. `REQ-QUIC-HC-174` exposes group-commit shard coalescing through `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default is now 500 us after 2048x8 mixed probes showed 100 us still produced first-response timeouts and 2000 us regressed tail completion.
 33. `REQ-QUIC-HC-175` adds opt-in coordinator phase metrics for submit wait, enqueue wait, queue wait, queue depth, coalescing, batch total, begin-txn, apply loop, commit, and wake time. The timers are disabled by default because the 2048x8 diagnostic showed detailed per-mutation timing can perturb the sustained gate.
+34. `REQ-QUIC-HC-176` makes cooperative first-stream post-turn pacing backlog-aware. The scheduler now tracks ready-queue depth with an atomic counter and skips the 1 ms high-fanout sleep only when queued ready work exceeds the worker pool. This preserves poller fairness once the scheduler catches up while reducing ready-queue head-of-line delay during 1024/2048 sustained fanout.
 
 ## Changed Files
 
@@ -50,6 +51,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Uses the effective runtime cap when deriving `FirstStreamScheduler.shard_parallel_mutation_limit`.
   - Parks mutation-overflow packets behind the mutation permit release path instead of immediately spinning them through the ready queue.
   - Lowers cooperative first-stream post-turn sleep to a 1 ms cap so sustained follow-up operations do not accumulate avoidable scheduler tail.
+  - Tracks cooperative ready-queue depth and skips the post-turn backoff only while the ready backlog is larger than the scheduler worker pool.
   - Skips the shared optimizer for mutating programs, reusing the same mutation classification later for lock selection.
 - `src/storage/graph_storage_adapter.zig`
   - Adds exact-property posting-length probing and copies only the smallest available candidate posting for multi-property `MERGE`.
@@ -98,6 +100,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Source-audits the smallest-posting MERGE preselect, atomic label refcounts, shared AST/plan cache hit paths, stable shared-plan storage, and read-only optimizer admission.
   - Source-audits the objective gate knobs, percentile emission, graph-isolation verification, restart recovery, RSS gate wiring, adapter-shutdown checkpoint, and group-commit label dictionary persistence guard.
   - Source-audits the runtime metrics scrape callback, accept-loop wake, read/mutation execution split, group-commit coalescing knob, and new harness passthroughs.
+  - Source-audits backlog-aware cooperative first-stream pacing and ready-depth accounting.
 - `tests/test_metrics_server_lifecycle.zig`
   - Adds a `/metrics` lifecycle regression proving runtime high-concurrency counters are appended and server shutdown returns after a scrape.
 - `tests/test_gap0810_parse_cache_wrapper.zig`
@@ -148,6 +151,9 @@ All commands below were run on 2026-05-29.
 | 1024 workers x 8 ops mixed E2E with 500 us coalescing and cap 128 | PASS, 8192/8192 operations, zero first-response timeouts, 3724.24 QPS. This is a small 1024 regression but keeps the lower fan-out gate clean. |
 | 2048 workers x 8 ops mixed sustained E2E with default 500 us coalescing and cap 128 | PASS, 16384/16384 operations, zero retries, zero reconnects, zero first-response timeouts, 821.63 QPS with metrics scrape disabled. |
 | 2048 workers x 8 ops mixed sustained E2E with 500 us coalescing and cap 128 plus runtime scrape | PASS, 16384/16384 operations, zero retries, zero reconnects, zero first-response timeouts, 1011.66 QPS. Runtime scrape showed mutation execution still dominates, but ready-queue wait and completion improved over the 100 us / cap 512 run. |
+| 1024 workers x 8 ops mixed E2E after backlog-aware cooperative pacing | PASS, 8192/8192 operations, zero retries, zero reconnects, zero first-response timeouts, 3867.52 QPS, p50=216.17 ms, p95=476.37 ms, p99=651.68 ms, p99.9=861.51 ms. |
+| 2048 workers x 8 ops mixed E2E after backlog-aware cooperative pacing | PASS, 16384/16384 operations, zero retries, zero reconnects, zero first-response timeouts, 848.39 QPS, p50=2154.31 ms, p95=4723.65 ms, p99=6123.36 ms, p99.9=7424.62 ms. |
+| 4096 workers x 8 ops mixed E2E after backlog-aware cooperative pacing | FAIL, 23067/32768 operations, zero setup/execute retries, zero reconnects, 9701 first-response timeouts, 432.28 QPS, p50=4991.34 ms, p95=9498.71 ms, p99=9898.76 ms, p99.9=9991.77 ms. |
 | 4096 mixed single-op E2E at 250 us | PASS, 4096/4096 operations, zero retries, zero reconnects, zero first-response timeouts, 664.88 QPS after the final QUIC `eeeb216` and client `533cde8` repin. |
 | 4096 workers x 8 ops read-only sustained E2E at 250 us | FAIL, 22917/32768 operations, zero setup/execute retries, 9851 first-response timeouts after shared AST/plan cache hit-path changes. This improved from 21302/32768 and 11466 first-response timeouts before the shared-cache work. |
 | 4096 workers x 8 ops mixed sustained E2E at 250 us | FAIL, 23723/32768 operations, zero setup/execute retries, 9045 first-response timeouts after mutation optimizer admission was disabled. This is the remaining low-stagger ceiling. |
@@ -159,6 +165,15 @@ All commands below were run on 2026-05-29.
 | 1024 mixed 250 us timing smoke | PASS, 1024/1024 operations at 3822.30 QPS after deferred high-fanout post-write flush, validating the split timing summary path. |
 | 8 workers x 2 ops mixed restart smoke | PASS, 16/16 operations, 8 mutations, zero retries, zero reconnects, zero first-response timeouts, `graph_isolation=ok`, `restart_recovery=ok`, and zero gate failures. |
 | 8 workers x 2 ops mixed runtime-scrape smoke | PASS, 16/16 operations, 8 mutations, zero retries, zero reconnects, zero first-response timeouts, and the expected runtime metrics printed from `/metrics`. |
+
+### Rejected Pacing Variants
+
+Two scheduler pacing variants were rejected during this cycle:
+
+- Quarter-pool backlog threshold (`ready_depth > workers / 4`): one 2048x8 run passed at 1001.88 QPS with zero first-response timeouts, but a rerun of the same final shape missed two reads (`16382/16384`, two first-response timeouts). This was treated as unstable and not accepted.
+- 2048-context guard around the backlog skip: intended to keep 4096+ on the stronger poller-fairness path, but it failed the 2048x8 gate with `16373/16384` operations, 11 first-response timeouts, and 775.63 QPS.
+
+The accepted `REQ-QUIC-HC-176` threshold skips the post-turn sleep only when `ready_depth` exceeds the full cooperative scheduler worker count. That variant passed the 1024x8 and 2048x8 sustained gates and still documents the 4096x8 failure as the next ceiling.
 
 4096 mixed read/mutation gate:
 

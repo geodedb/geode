@@ -867,10 +867,17 @@ test "cooperative first stream scheduler yields to poll workers at high fanout" 
     defer allocator.free(handler);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-147") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-176") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativePollerFairness") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "BacklogAwareCooperativePacing") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "context_count: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "ready_depth: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "self.context_count.fetchAdd(1, .acq_rel)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "self.context_count.fetchSub(1, .acq_rel)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.ready_depth.fetchAdd(1, .acq_rel)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn decrementReadyDepth") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn readyBacklogPauseSkipThreshold") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "ready_depth > self.readyBacklogPauseSkipThreshold()") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn pauseAfterTurn") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "self.pauseAfterTurn();") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "active_contexts > 512") != null);
