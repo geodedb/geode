@@ -163,7 +163,8 @@ const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
 // cooperative first-stream workers block behind that lock only starves the read
 // tail. Keep a small global mutation window and requeue overflow mutating
 // packets so read-heavy mixed bursts continue to drain.
-const first_stream_scheduler_mutation_limit_cap: usize = 4;
+pub const default_first_stream_scheduler_mutation_limit_cap: usize = 4;
+pub const max_first_stream_scheduler_mutation_limit_cap: usize = 128;
 // CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
 // The scheduler runs persistent first streams through a shared worker pool.
@@ -2586,7 +2587,16 @@ pub const FirstStreamScheduler = struct {
     next_index: usize = 0,
     last_idle_sweep_ns: u64 = 0,
 
-    pub fn init(self: *FirstStreamScheduler, allocator: std.mem.Allocator, worker_count: usize) !void {
+    pub fn init(
+        self: *FirstStreamScheduler,
+        allocator: std.mem.Allocator,
+        worker_count: usize,
+        mutation_limit_cap: usize,
+    ) !void {
+        const effective_mutation_cap = @max(
+            @as(usize, 1),
+            @min(mutation_limit_cap, max_first_stream_scheduler_mutation_limit_cap),
+        );
         self.* = .{
             .allocator = allocator,
             .contexts = .empty,
@@ -2598,7 +2608,7 @@ pub const FirstStreamScheduler = struct {
             .shutdown = std.atomic.Value(bool).init(false),
             .context_count = std.atomic.Value(u32).init(0),
             .mutation_inflight = std.atomic.Value(u32).init(0),
-            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, first_stream_scheduler_mutation_limit_cap))),
+            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, effective_mutation_cap))),
             .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
             .next_index = 0,
             .last_idle_sweep_ns = 0,

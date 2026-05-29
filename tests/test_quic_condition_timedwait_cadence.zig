@@ -861,7 +861,9 @@ test "cooperative first stream scheduler requeues mutation overflow" {
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_inflight: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_limit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationWindowCap") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "default_first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "max_first_stream_scheduler_mutation_limit_cap: usize = 128") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "effective_mutation_cap") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn tryAcquireMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn releaseMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn packetNeedsCooperativeMutationAdmission") != null);
@@ -887,6 +889,9 @@ test "high concurrency harness batches workload start wake" {
     try testing.expect(std.mem.indexOf(u8, e2e, "FailureLogBackpressure") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "failure_log_limit: u32 = 64") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "failure_logs: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "read_failed: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "mutation_failed: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "fn recordOperationFailure") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "suppressing additional per-worker failures; summary follows") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "fn wakeWorkloadStart") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "worker_count >= 1024 and request_stagger_us != 0") != null);
@@ -2365,6 +2370,9 @@ test "quic high fanout e2e runs in single stream stress mode" {
     try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_cooperative_first_stream_worker_count") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_MUTATION_ADMISSION_CAP\"") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "default_first_stream_scheduler_mutation_limit_cap") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "max_first_stream_scheduler_mutation_limit_cap") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "first_stream_scheduler.init") != null);
 }
 

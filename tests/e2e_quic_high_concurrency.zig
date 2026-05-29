@@ -179,6 +179,8 @@ const Counters = struct {
     ok: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     read_ok: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_ok: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    read_failed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mutation_failed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     failed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     setup_failed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     setup_attempts: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -235,6 +237,15 @@ fn recordFailure(counters: *Counters, comptime fmt: []const u8, args: anytype) v
         std.debug.print("high-concurrency QUIC E2E failure: suppressing additional per-worker failures; summary follows\n", .{});
     }
     _ = counters.failed.fetchAdd(1, .acq_rel);
+}
+
+fn recordOperationFailure(counters: *Counters, is_mutation: bool, comptime fmt: []const u8, args: anytype) void {
+    if (is_mutation) {
+        _ = counters.mutation_failed.fetchAdd(1, .acq_rel);
+    } else {
+        _ = counters.read_failed.fetchAdd(1, .acq_rel);
+    }
+    recordFailure(counters, fmt, args);
 }
 
 fn recordSetupFailure(counters: *Counters, comptime fmt: []const u8, args: anytype) void {
@@ -374,7 +385,7 @@ fn workerRun(ctx: *WorkerCtx) void {
                 "MERGE (:HCParallel {{worker: {d}, seq: {d}}})",
                 .{ ctx.worker_id, op },
             ) catch |err| {
-                recordFailure(ctx.counters, "worker={d} op={d} format err={}", .{ ctx.worker_id, op, err });
+                recordOperationFailure(ctx.counters, is_mutation, "worker={d} op={d} format err={}", .{ ctx.worker_id, op, err });
                 return;
             }
         else
@@ -419,7 +430,7 @@ fn workerRun(ctx: *WorkerCtx) void {
         }
         var res = res_opt orelse {
             if (ctx.client_diagnostics) client.dumpTransportDiagnostics(ctx.worker_id, op);
-            recordFailure(ctx.counters, "worker={d} op={d} mutation={} execute err={}", .{ ctx.worker_id, op, is_mutation, last_err });
+            recordOperationFailure(ctx.counters, is_mutation, "worker={d} op={d} mutation={} execute err={}", .{ ctx.worker_id, op, is_mutation, last_err });
             continue;
         };
         const op_latency_ns = monoNs() -| op_start_ns;
@@ -427,7 +438,7 @@ fn workerRun(ctx: *WorkerCtx) void {
         defer res.deinit(allocator);
 
         expectNoQueryError(&res) catch |err| {
-            recordFailure(ctx.counters, "worker={d} op={d} mutation={} result err={}", .{ ctx.worker_id, op, is_mutation, err });
+            recordOperationFailure(ctx.counters, is_mutation, "worker={d} op={d} mutation={} result err={}", .{ ctx.worker_id, op, is_mutation, err });
             continue;
         };
         _ = ctx.counters.ok.fetchAdd(1, .acq_rel);
@@ -895,13 +906,15 @@ pub fn main() !void {
     if (failures != 0) {
         std.debug.print("high-concurrency QUIC E2E worker failures={d}\n", .{failures});
         std.debug.print(
-            "high-concurrency QUIC E2E phases connected={d} hello_ok={d} ready={d} ops_started={d} ok={d}\n",
+            "high-concurrency QUIC E2E phases connected={d} hello_ok={d} ready={d} ops_started={d} ok={d} read_failed={d} mutation_failed={d}\n",
             .{
                 counters.connected.load(.acquire),
                 counters.hello_ok.load(.acquire),
                 counters.ready.load(.acquire),
                 counters.ops_started.load(.acquire),
                 counters.ok.load(.acquire),
+                counters.read_failed.load(.acquire),
+                counters.mutation_failed.load(.acquire),
             },
         );
         std.debug.print(
@@ -921,11 +934,13 @@ pub fn main() !void {
     const observed_ops = counters.ok.load(.acquire);
     if (observed_ops != expected_ops) {
         std.debug.print(
-            "high-concurrency QUIC E2E ok={d} expected={d} failed={d} ops_started={d} elapsed_ms={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
+            "high-concurrency QUIC E2E ok={d} expected={d} failed={d} read_failed={d} mutation_failed={d} ops_started={d} elapsed_ms={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
             .{
                 observed_ops,
                 expected_ops,
                 counters.failed.load(.acquire),
+                counters.read_failed.load(.acquire),
+                counters.mutation_failed.load(.acquire),
                 counters.ops_started.load(.acquire),
                 workload_elapsed_ns / std.time.ns_per_ms,
                 counters.execute_attempts.load(.acquire),

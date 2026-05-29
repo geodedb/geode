@@ -31,7 +31,7 @@ read/write harness.
 Latest verified Geode high-concurrency run:
 
 ```sh
-GEODE_HC_WORKERS=3072 \
+GEODE_HC_WORKERS=4096 \
 GEODE_HC_OPS_PER_WORKER=1 \
 GEODE_HC_MUTATION_STRIDE=4 \
 GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
@@ -43,16 +43,16 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-Result: 3072 clients connected and completed 3072 operations, including 768 mutations, at
-984.44 QPS with zero setup retries, zero execution retries, zero reconnects, and no
-`pollCrypto` crash. A 1024-client smoke also passed at 994.64 QPS with zero retries.
+Result: 4096 clients connected and completed 4096 operations, including 1024 mutations, at
+995.00 QPS with zero setup retries, zero execution retries, zero reconnects, and no
+`pollCrypto` crash. A 3072-client mixed gate also passed at 988.01 QPS with zero retries.
 
-Known remaining throughput limit: synchronized 4096-client / 4096-operation runs now reach
-`ready=4096` without the TLS crash, and Geode-side lock-free count/mutation-admission work
-improved the post-ready result, but a 10s no-retry run still has execute timeout tails
-(`ok=2367/4096` in the current probe). That is a separate post-handshake packet/admission limit
-and is documented in
-`docs/audit/quic-high-concurrency-2026-05-28.md`.
+Known remaining throughput limit: a more aggressive 4096-client mixed ceiling probe with
+`GEODE_HC_REQUEST_STAGGER_US=250` reaches `connected=4096`, `hello_ok=4096`, and
+`ready=4096` without the TLS crash, but still has 10s execute timeout tails. The current
+instrumented split was `ok=1705/4096`, `read_failed=1814`, `mutation_failed=577`; that is a
+separate post-handshake transport/scheduler ceiling and is documented in
+`docs/audit/quic-high-concurrency-2026-05-29.md`.
 
 ---
 

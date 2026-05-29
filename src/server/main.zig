@@ -1893,7 +1893,14 @@ pub fn main() !void {
                 1,
                 512,
             );
-            try first_stream_scheduler.init(gpa, cooperative_worker_count);
+            const cooperative_mutation_limit_cap = envUsize(
+                gpa,
+                "GEODE_QUIC_MUTATION_ADMISSION_CAP",
+                quic_connection_handler.default_first_stream_scheduler_mutation_limit_cap,
+                1,
+                quic_connection_handler.max_first_stream_scheduler_mutation_limit_cap,
+            );
+            try first_stream_scheduler.init(gpa, cooperative_worker_count, cooperative_mutation_limit_cap);
             first_stream_scheduler_enabled = true;
             quic_connection_handler.setFirstStreamScheduler(&first_stream_scheduler);
         }
