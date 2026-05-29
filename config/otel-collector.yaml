@@ -1,0 +1,43 @@
+# OpenTelemetry Collector config for the geode docker-compose otel stack.
+# Receives OTLP (http+grpc) from geode and fans out to:
+#   - debug exporter  -> stdout (asserted by scripts/otel-compose-verify.sh via `docker compose logs`)
+#   - file exporters  -> /var/log/otel/*.jsonl on the otel-output named volume (offline inspection / baseline capture)
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 1s
+
+exporters:
+  debug:
+    verbosity: detailed
+  file/traces:
+    path: /var/log/otel/traces.jsonl
+  file/metrics:
+    path: /var/log/otel/metrics.jsonl
+  file/logs:
+    path: /var/log/otel/logs.jsonl
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, file/traces]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, file/metrics]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, file/logs]
