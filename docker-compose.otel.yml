@@ -1,0 +1,69 @@
+# Self-contained geode + OpenTelemetry collector stack.
+#
+# Usage:
+#   zig build -Doptimize=ReleaseSafe          # produce zig-out/bin/geode on the host
+#   docker compose -f docker-compose.otel.yml up --build -d
+#   scripts/otel-compose-verify.sh            # generate telemetry + assert it lands
+#   docker compose -f docker-compose.otel.yml down -v
+#
+# geode pushes OTLP/HTTP to the collector over the compose network (otel-collector:4318).
+# The verify script execs into the geode container and runs queries against 127.0.0.1:3141,
+# so no cross-container QUIC/UDP is required.
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: geode-otel-collector
+    # Run as root so the file exporters can create *.jsonl under the root-owned
+    # `otel-output` named volume (the contrib image's default UID 10001 cannot
+    # write to a freshly-created named-volume mount). See scripts/otel-compose-verify.sh.
+    user: "0:0"
+    command: ["--config", "/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - otel-output:/var/log/otel
+    ports:
+      - "4318:4318"   # OTLP/HTTP
+      - "4317:4317"   # OTLP/gRPC
+    healthcheck:
+      # The contrib image has no curl; check the OTLP/HTTP port is open via the collector process.
+      test: ["CMD", "/otelcol-contrib", "components"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  geode:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt
+    image: geode:otel-local
+    container_name: geode-otel
+    depends_on:
+      otel-collector:
+        condition: service_started
+    environment:
+      # --- OTel push to the in-compose collector ---
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+      OTEL_METRICS_EXPORTER: "otlp"
+      OTEL_TRACES_EXPORTER: "otlp"
+      OTEL_TRACES_SAMPLER: "always_on"
+      OTEL_METRIC_EXPORT_INTERVAL: "3000"
+      OTEL_BSP_SCHEDULE_DELAY: "2000"
+      OTEL_RESOURCE_ATTRIBUTES: "service.name=geode,service.namespace=codepros,deployment.environment.name=docker-compose"
+      # --- geode runtime ---
+      GEODE_ADMIN_PASSWORD: "geodeotel"
+      GEODE_USERNAME: "geode"
+      GEODE_PASSWORD: "geodeotel"
+      GEODE_METRICS_BIND: "0.0.0.0:9091"
+      LOG_LEVEL: "info"
+    command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
+    ports:
+      - "3141:3141/udp"   # QUIC
+      - "9091:9091/tcp"   # Prometheus /metrics
+    volumes:
+      - geode-data:/data
+
+volumes:
+  otel-output:
+  geode-data:
