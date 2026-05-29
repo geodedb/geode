@@ -82,6 +82,25 @@ otel-on vs otel-off overhead against the loadtest baseline; finalize docs and co
 
 ---
 
+## Phase B prerequisite: the BSP span-reuse UAF (resolved 2026-05-29)
+
+Discovery for Phase B surfaced a **hard blocker**: the otel `BatchSpanProcessor` has a span-reuse
+UAF (`otel docs/BUG_BSP_SPAN_REUSE_UAF.md`) — a non-atomic `SpanState.ended` lets two threads ending
+the same span both enqueue it → double-recycle → UAF (crashed geode under concurrent QUIC load;
+this is why an earlier execute-span attempt was rolled back at `execution.zig:1074`).
+
+- **Fixed in the otel lib** via `/bug:fix` (TDD, atomic end-claim) on branch `fix/bsp-span-reuse-uaf`
+  (commit `9fa2e97af5f9ee527db20dcf09847a0589cdd6df`, pushed). Regression test
+  `otel/test/bsp_span_reuse_race.zig`; full otel suite + TSan green.
+- **NOT pinned into geode.** Bumping geode's otel pin forces a ~18-lib ecosystem convergence (every
+  sibling lib declares `otel@455ad2b8` for its hardcoded-OFF observability seam — `detect_diamond_deps`
+  flags the mismatch). That is ~36 cross-repo pushes for zero functional change.
+- **Geode mitigation (Phase B):** geode's span facade enforces **exactly-once `end()`** per span (a
+  per-span atomic guard in the geode wrapper). Since the UAF requires a concurrent *double-end* of the
+  same span, exactly-once end() at the geode boundary means otel's `end()` is invoked once → single
+  enqueue → `exportBatch` is sole owner → no double-recycle. This makes geode safe on the converged
+  `455ad2b8` pin. Pin to `9fa2e97`+ at the next ecosystem-wide otel convergence (defense-in-depth).
+
 ## Guardrails
 - **Never enable a dependent lib's otel** — it fights the Zig dedup bug and the perf goal.
 - **No new perf overhead when telemetry is disabled** (`OTEL_*_EXPORTER` unset → noop tracer/pull-only).
