@@ -612,8 +612,15 @@ pub const GeodeSpan = struct {
 
     /// Mark the span as failed and record the bounded error type name.
     pub fn setError(self: *GeodeSpan, err: anyerror) void {
-        self.span.setStatus(.@"error", @errorName(err));
-        self.span.setStringAttribute("error.type", @errorName(err)) catch {};
+        self.setErrorName(@errorName(err));
+    }
+
+    /// Mark error with an already-resolved error name (bounded — pass an
+    /// @errorName, never user content). Used where the concrete error value
+    /// is not capturable (inferred-error-set functions).
+    pub fn setErrorName(self: *GeodeSpan, name: []const u8) void {
+        self.span.setStatus(.@"error", name);
+        self.span.setStringAttribute("error.type", name) catch {};
     }
 
     /// Mark the span as successful.

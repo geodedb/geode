@@ -1069,6 +1069,12 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     defer om.decQueryActive(qt);
     const t0_exec = otel_lib.internal.clock.unixNanoNow();
     var exec_outcome: om.Outcome = .success;
+    // NOTE: the concrete error VALUE is not capturable here — `errdefer |err|`
+    // does not compile against this function's large inferred error set, and
+    // extracting the whole body into an inner fn for a catch boundary is too
+    // invasive. The span carries status=error + a bounded generic error.type;
+    // the precise error name is a follow-up (give the fn an explicit error set,
+    // or move span creation to the caller that already `catch |err|`s).
     errdefer exec_outcome = .error_;
 
     // geode.query.execute span — re-enabled on the current otel pin
@@ -1107,7 +1113,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     defer {
         const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
         om.recordQueryExecution(op_name, op_name, qt, dur_s, exec_outcome, null);
-        if (exec_outcome == .error_) qspan.setError(error.QueryFailed) else qspan.setOk();
+        if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();
     }
     switch (stmt) {
         .Query => |q| {
