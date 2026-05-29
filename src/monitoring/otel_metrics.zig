@@ -74,6 +74,44 @@ var g_otlp_exporter: ?exporter_factory.OwnedMetricExporter = null;
 var g_tracer_provider: ?*TracerProvider = null;
 var g_tracer_owned_exporter: ?exporter_factory.OwnedSpanExporter = null;
 
+// Periodic span flush. The otel BatchSpanProcessor only spawns its own drain
+// timer when built with `-Dotel_use_devnw_pool=true` (export.zig:241,271);
+// geode builds otel with the pool OFF (avoids the otel<->thread-pool diamond),
+// so without this loop a long-running, low-span-volume server never exports
+// spans until the queue hits max_export_batch_size (512) or shutdown. This
+// background thread drains the BSP on the BSP-schedule cadence — the trace
+// analogue of the PeriodicMetricReader on the metrics side. forceFlush is
+// mutex-serialized against producers inside the SDK, so this is concurrency-safe.
+var g_tracer_flush_thread: ?std.Thread = null;
+var g_tracer_flush_stop: std.atomic.Value(bool) = .init(false);
+var g_tracer_flush_interval_ms: u64 = 5_000;
+
+// Same nanosleep idiom as src/server/leaked_conn_reaper.zig. Linux-only; the
+// flush thread only runs in the server (never the CLI), and the std.os.linux
+// namespace still compiles for cross-target builds.
+fn tracerFlushSleep(ms: u64) void {
+    const ns = ms * std.time.ns_per_ms;
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
+fn tracerFlushLoop() void {
+    while (!g_tracer_flush_stop.load(.acquire)) {
+        // Chunked wait so shutdown latency is bounded (~100ms) regardless of
+        // the configured interval.
+        var slept: u64 = 0;
+        while (slept < g_tracer_flush_interval_ms) : (slept += 100) {
+            if (g_tracer_flush_stop.load(.acquire)) return;
+            tracerFlushSleep(@min(@as(u64, 100), g_tracer_flush_interval_ms - slept));
+        }
+        forceFlushTraces(g_tracer_flush_interval_ms) catch {};
+    }
+}
+
 // Library binding handles. Each call to `bindLibraryGlobals` allocates a
 // stable Tracer / Meter handle on the heap (the lib's `global.tracer`
 // pointer needs a value that outlives the binding call). `shutdown()`
@@ -182,6 +220,14 @@ pub fn shutdown() void {
         g_lib_handles.deinit(a);
     }
     g_lib_handles = .empty;
+
+    // Stop the periodic span-flush thread before tearing down the provider it
+    // touches. Join guarantees no in-flight forceFlush races the deinit below.
+    if (g_tracer_flush_thread) |t| {
+        g_tracer_flush_stop.store(true, .release);
+        t.join();
+        g_tracer_flush_thread = null;
+    }
 
     // Tear down the tracer pipeline before the resource is freed below.
     // TracerProvider.deinit shuts down processors, which flushes the
@@ -453,6 +499,12 @@ fn tryWireOtlpTracer(allocator: std.mem.Allocator, resource: *Resource) !void {
 
     g_tracer_provider = provider;
     g_tracer_owned_exporter = owned;
+
+    // Start the geode-side periodic span flush (the no-pool BSP has no timer).
+    // Flush on the BSP schedule delay so spans reach the collector promptly.
+    g_tracer_flush_interval_ms = schedule_delay_ms;
+    g_tracer_flush_stop.store(false, .release);
+    g_tracer_flush_thread = std.Thread.spawn(.{}, tracerFlushLoop, .{}) catch null;
 }
 
 /// Test-only: wire a `TracerProvider` against a caller-supplied in-memory
