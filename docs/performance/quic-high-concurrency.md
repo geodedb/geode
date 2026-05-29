@@ -102,13 +102,21 @@ the next QUIC receive/scheduler pass:
 - `REQ-QUIC-HC-166`: mutating programs skip the shared optimizer. Mutation
   fast paths do not use optimizer hints, and literal-heavy mutation text creates
   one-shot cache misses and evictions under mixed fanout.
+- `REQ-QUIC-HC-167`: multi-property `MERGE` tuple locks now use a 16k
+  heap-allocated stripe table plus runtime wait/hold counters. This keeps
+  unrelated `{worker, seq}` tuples from sharing the old 4096-stripe mutex table
+  as often, while avoiding the ReleaseFast object bloat observed with a 65k
+  static mutex table.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
 shared AST and plan hits. The 4096x8 mixed low-stagger probe improved from the
 pre-cycle 12293-timeout ceiling to 9045 timeouts after skipping optimizer
 admission for mutations. This is still a failing stress ceiling; the passing
-sustained gate remains 2048x8 mixed.
+sustained gate remains 2048x8 mixed. The tuple-lock striping cycle adds
+instrumentation and collision reduction but has not promoted the 4096x8 gate;
+the first re-run was invalidated by a concurrent root-owned `goreleaser`
+cross-build saturating the host.
 
 ## Core Knobs
 
@@ -174,6 +182,11 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 - `quic_first_stream_packet_process_max_ns`
 - `quic_first_stream_mutation_deferrals_total`
 - `mg_rwlock_shared_hold_snapshot_ns_total`
+- `mg_merge_tuple_lock_acquired_total`
+- `mg_merge_tuple_lock_wait_ns_total`
+- `mg_merge_tuple_lock_hold_ns_total`
+- `mg_merge_tuple_lock_max_wait_ns_observed`
+- `mg_merge_tuple_lock_max_hold_ns_observed`
 - `quic_poll_cycle_max_ns`
 - `quic_poll_transport_max_ns`
 - `quic_poll_recv_short_endpoint_map_max_ns`

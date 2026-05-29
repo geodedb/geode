@@ -126,3 +126,43 @@ test "REQ-QUIC-HC-122: exact property index shards common merge keys" {
 
     try std.testing.expect(seen_count >= 16);
 }
+
+test "REQ-QUIC-HC-167: multi-property merge tuple locks are dense enough for fanout" {
+    try std.testing.expect(adapter_mod.merge_tuple_lock_count_for_test >= 16384);
+
+    const PropKV = adapter_mod.StorageAdapter.PropKV;
+    const PropertyValue = geode.graph_store.PropertyValue;
+
+    const props_ab = [_]PropKV{
+        .{ .key = "worker", .value = PropertyValue{ .Int = 7 } },
+        .{ .key = "seq", .value = PropertyValue{ .Int = 3 } },
+    };
+    const props_ba = [_]PropKV{
+        .{ .key = "seq", .value = PropertyValue{ .Int = 3 } },
+        .{ .key = "worker", .value = PropertyValue{ .Int = 7 } },
+    };
+    try std.testing.expectEqual(
+        adapter_mod.mergeTupleLockIndexForTest("HCParallel", &props_ab),
+        adapter_mod.mergeTupleLockIndexForTest("HCParallel", &props_ba),
+    );
+
+    var seen = [_]bool{false} ** adapter_mod.merge_tuple_lock_count_for_test;
+    var seen_count: usize = 0;
+    var props = [_]PropKV{
+        .{ .key = "worker", .value = PropertyValue{ .Int = 0 } },
+        .{ .key = "seq", .value = PropertyValue{ .Int = 0 } },
+    };
+
+    for (0..4096) |i| {
+        props[0].value = PropertyValue{ .Int = @intCast(i) };
+        props[1].value = PropertyValue{ .Int = @intCast(i % 8) };
+        const stripe = adapter_mod.mergeTupleLockIndexForTest("HCParallel", &props);
+        try std.testing.expect(stripe < adapter_mod.merge_tuple_lock_count_for_test);
+        if (!seen[stripe]) {
+            seen[stripe] = true;
+            seen_count += 1;
+        }
+    }
+
+    try std.testing.expect(seen_count >= 3200);
+}

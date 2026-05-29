@@ -631,7 +631,7 @@ fn shouldExposePropertyKey(key: []const u8) bool {
 // ManagedGraph — one engine instance + its label dictionary
 // ============================================================================
 
-const merge_tuple_lock_count: usize = 4096;
+const merge_tuple_lock_count: usize = 16384;
 
 /// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
@@ -680,13 +680,26 @@ pub const ManagedGraph = struct {
     merge_prop_index_lock: std.Io.RwLock = std.Io.RwLock.init,
 
     /// CANARY: REQ=REQ-QUIC-HC-109; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeTupleLocks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
+    /// CANARY: REQ=REQ-QUIC-HC-167; FEATURE="High-Concurrency Mutations"; ASPECT=MergeTupleLockStriping; STATUS=IMPL; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-29
     ///
     /// Striped mutexes for multi-property node MERGE. Single-property MERGE
     /// uses `merge_prop_index_lock`; multi-property MERGE needs to serialize
     /// only requests for the same property tuple while still allowing shard
-    /// writes for unrelated tuples to proceed under `rwlock` SHARED.
-    merge_tuple_locks: [merge_tuple_lock_count]std.Io.Mutex =
-        [_]std.Io.Mutex{std.Io.Mutex.init} ** merge_tuple_lock_count,
+    /// writes for unrelated tuples to proceed under `rwlock` SHARED. The
+    /// stripe table is intentionally larger than the current 4096 sustained
+    /// ceiling target so unrelated tuples rarely share a mutex. The table is
+    /// heap-allocated per graph so increasing the stripe count does not bloat
+    /// the ReleaseFast object file with a massive static mutex array.
+    merge_tuple_locks: []std.Io.Mutex,
+
+    /// Diagnostic: cumulative count of multi-property MERGE tuple-lock
+    /// acquires. Paired with the wait/hold counters below to distinguish
+    /// real same-tuple serialization from accidental stripe collision.
+    merge_tuple_lock_acquired_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    merge_tuple_lock_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    merge_tuple_lock_hold_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    merge_tuple_lock_max_wait_ns_observed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    merge_tuple_lock_max_hold_ns_observed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     /// Brief-hold mutex covering the other outer-StringHashMap
     /// metadata operations that shard writers touch indirectly
@@ -777,11 +790,20 @@ pub const ManagedGraph = struct {
         }
         self.engine.close() catch {};
         self.exact_node_property_index.deinit();
+        allocator.free(self.merge_tuple_locks);
         self.label_dict.deinit();
         allocator.free(self.name);
         allocator.destroy(self);
     }
 };
+
+fn initMergeTupleLocks(allocator: Allocator) ![]std.Io.Mutex {
+    const locks = try allocator.alloc(std.Io.Mutex, merge_tuple_lock_count);
+    for (locks) |*lock| {
+        lock.* = std.Io.Mutex.init;
+    }
+    return locks;
+}
 
 // ============================================================================
 // ShardedGraphEngine TxnId encoding helpers (mirrors sharded_engine.zig internals).
@@ -1982,8 +2004,19 @@ pub const StorageAdapter = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
 
         const tuple_lock_idx = mergeTupleLockIndex(label, merge_props);
+        const tuple_wait_start = monoNanosNow();
         mg.merge_tuple_locks[tuple_lock_idx].lockUncancelable(io);
-        defer mg.merge_tuple_locks[tuple_lock_idx].unlock(io);
+        const tuple_hold_start = monoNanosNow();
+        const tuple_wait_ns = tuple_hold_start -| tuple_wait_start;
+        _ = mg.merge_tuple_lock_acquired_total.fetchAdd(1, .monotonic);
+        _ = mg.merge_tuple_lock_wait_ns_total.fetchAdd(tuple_wait_ns, .monotonic);
+        observeMaxAtomic(&mg.merge_tuple_lock_max_wait_ns_observed, tuple_wait_ns);
+        defer {
+            const tuple_hold_ns = monoNanosNow() -| tuple_hold_start;
+            _ = mg.merge_tuple_lock_hold_ns_total.fetchAdd(tuple_hold_ns, .monotonic);
+            observeMaxAtomic(&mg.merge_tuple_lock_max_hold_ns_observed, tuple_hold_ns);
+            mg.merge_tuple_locks[tuple_lock_idx].unlock(io);
+        }
 
         const existing_id = existing_blk: {
             const _t_start = monoNanosNow();
@@ -3904,6 +3937,9 @@ pub const StorageAdapter = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
+        const merge_tuple_locks = try initMergeTupleLocks(self.allocator);
+        errdefer self.allocator.free(merge_tuple_locks);
+
         // GAP-0512: Only create per-graph audit for the security graph.
         // Other graphs use the global audit logger. Per-graph audit on every
         // graph caused recursive mutex deadlocks and unnecessary I/O.
@@ -3917,6 +3953,7 @@ pub const StorageAdapter = struct {
             // or directly via the per-shard label_store.
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
             .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
+            .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
@@ -3950,6 +3987,11 @@ pub const StorageAdapter = struct {
                 reg.register("mg_rwlock_shared_hold_bulk_merge_ns_total", &mg.rwlock_shared_hold_bulk_merge_ns_total) catch {};
                 reg.register("mg_rwlock_shared_hold_bulk_edge_ns_total", &mg.rwlock_shared_hold_bulk_edge_ns_total) catch {};
                 reg.register("mg_rwlock_shared_hold_fallback_ns_total", &mg.rwlock_shared_hold_fallback_ns_total) catch {};
+                reg.register("mg_merge_tuple_lock_acquired_total", &mg.merge_tuple_lock_acquired_total) catch {};
+                reg.register("mg_merge_tuple_lock_wait_ns_total", &mg.merge_tuple_lock_wait_ns_total) catch {};
+                reg.register("mg_merge_tuple_lock_hold_ns_total", &mg.merge_tuple_lock_hold_ns_total) catch {};
+                reg.register("mg_merge_tuple_lock_max_wait_ns_observed", &mg.merge_tuple_lock_max_wait_ns_observed) catch {};
+                reg.register("mg_merge_tuple_lock_max_hold_ns_observed", &mg.merge_tuple_lock_max_hold_ns_observed) catch {};
             }
         }
         self.upsertRegistryEntryLocked(name, graph_uuid, 0, 0);
@@ -3986,11 +4028,15 @@ pub const StorageAdapter = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
+        const merge_tuple_locks = try initMergeTupleLocks(self.allocator);
+        errdefer self.allocator.free(merge_tuple_locks);
+
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
             .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
+            .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
@@ -4762,6 +4808,20 @@ fn mergeTupleLockIndex(label: []const u8, props: []const StorageAdapter.PropKV) 
     }
 
     return @intCast(h % merge_tuple_lock_count);
+}
+
+pub const merge_tuple_lock_count_for_test = merge_tuple_lock_count;
+
+pub fn mergeTupleLockIndexForTest(label: []const u8, props: []const StorageAdapter.PropKV) usize {
+    if (!builtin.is_test) @compileError("test-only helper");
+    return mergeTupleLockIndex(label, props);
+}
+
+fn observeMaxAtomic(max: *std.atomic.Value(u64), value: u64) void {
+    const observed = max.load(.monotonic);
+    if (value > observed) {
+        max.store(value, .monotonic);
+    }
 }
 
 fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {

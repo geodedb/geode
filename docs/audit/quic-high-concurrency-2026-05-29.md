@@ -1,7 +1,7 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, storage/index contention fixes, and shared query-cache hit-path fixes. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the dominant tail is now first-response wait and QUIC receive/scheduler latency, with the Geode cache and hot-label refcount bottlenecks reduced.
+**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, storage/index contention fixes, shared query-cache hit-path fixes, and tuple-lock collision instrumentation. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the dominant tail is now first-response wait and QUIC receive/scheduler latency, with the Geode cache, hot-label refcount, and multi-property MERGE tuple-lock bottlenecks reduced or directly measurable.
 **Dependency state:** Geode now pins QUIC `eeeb2161ccd94c60f7c6b645bcfd16e20202593a` and `geode-client-zig` `533cde8f9b587e0a0b9065bb2f346f224479f02e`. QUIC `eeeb216` is the upstream-main revert of the rejected `6224b28` slow-batch short-header cadence experiment, preserving the proven `108d06d` four-batch server receive behavior while keeping downstream pins on current upstream `main`.
 
 ## Summary
@@ -32,6 +32,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 22. `REQ-QUIC-HC-165` applies the same shared-hit pattern to the shared plan cache and stores cached shared plans on stable heap allocations, avoiding active handles pointing into movable HashMap entries while unrelated misses insert/evict.
 23. `REQ-QUIC-HC-166` keeps mutating programs out of the shared optimizer. Mutation fast paths do not consume optimizer hints, and literal-heavy mutation requests create mostly one-shot plan-cache misses under mixed fanout.
 24. After the cache/storage cycle, the 4096x8 read-only low-stagger probe improved from 11466 first-response timeouts to 9851. The 4096x8 mixed low-stagger probe improved from the earlier 12293-timeout ceiling to 9045 after mutation optimizer admission was disabled, but it still fails the 10s first-response budget.
+25. `REQ-QUIC-HC-167` raises multi-property `MERGE` tuple-lock striping from 4096 to 16384 and heap-allocates the stripe table per graph so the ReleaseFast object file does not carry a large static mutex array. Runtime metrics now expose tuple-lock acquire count, cumulative wait/hold time, and max wait/hold samples. A 65k static-stripe variant was rejected because it regressed the 4096x8 probe and produced a much heavier ReleaseFast compile.
 
 ## Changed Files
 
@@ -44,6 +45,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Skips the shared optimizer for mutating programs, reusing the same mutation classification later for lock selection.
 - `src/storage/graph_storage_adapter.zig`
   - Adds exact-property posting-length probing and copies only the smallest available candidate posting for multi-property `MERGE`.
+  - Raises multi-property `MERGE` tuple-lock striping to 16k heap-allocated mutexes per graph.
+  - Registers tuple-lock wait/hold metrics as `mg_merge_tuple_lock_*` runtime counters.
 - `src/graph_store.zig`
   - Replaces the global label-count mutex with atomic refcount values guarded by an rwlock for map stability.
 - `src/server/query_ast_cache.zig`
@@ -98,7 +101,7 @@ All commands below were run on 2026-05-29.
 | Upstream QUIC `zig build test --summary all` | PASS, 116/126 tests passed, 10 skipped, after reverting the rejected slow-batch cadence experiment in QUIC `eeeb216`. |
 | `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `eeeb216`. |
 | `zig build test-quic-condition-cadence --summary all` | PASS, 72/72 tests after shard-parallel mutation admission, permit-gated overflow, dependency source audits, storage/index contention audits, shared cache audits, and read-only optimizer-admission audit. |
-| `zig build test-graph-storage-adapter-metrics --summary all` | PASS, 3/3 tests after the smallest-posting multi-property `MERGE` preselect. |
+| `zig build test-graph-storage-adapter-metrics --summary all` | PASS, 4/4 tests after the smallest-posting multi-property `MERGE` preselect and tuple-lock stripe-density regression. |
 | `zig build test-plan-cache-hit --summary all` | PASS, 5/5 tests after the shared plan cache concurrent-hit/release and stable-plan-handle changes. |
 | `zig build test --summary all -Dtest-shard-total=8 -Dtest-shard-index=1` | PASS, 404/404 tests, including the shared AST cache wrapper concurrent-hit test. |
 | `zig build test --summary all -Dtest-shard-total=8 -Dtest-shard-index=7` | PASS, 322/323 tests passed, 1 skipped, including graph-store unit coverage. |
@@ -407,6 +410,8 @@ All rows below used 4096 workers, one operation per worker, mutation stride 4, 1
 | QUIC one-batch server short-header app budget (`da08ef4`) | 1024x8 PASS but regressed to `2687.79 QPS`; 4096x8 regressed to `ok=15221/32768`, `setup_retries=118`, `first_response_timeouts=17547` | Rejected and reverted upstream in QUIC `9a35274`; downstream pins now point at the revert commit. |
 | QUIC short-header wall-clock yield (`c2874fb`/`76b45ec`) | The slice-shrinking variant regressed 4096x8 setup to `ready=3293/4096` at 60s with `setup_retries=2305`. The repaired full-batch variant completed setup but regressed the accepted 4096 single-op gate to `ok=1043/4096`, `first_response_timeouts=3053`. | Rejected and reverted upstream in QUIC `108d06d`; downstream pins later moved to upstream-main revert `eeeb216`. |
 | QUIC slow-batch short-header cadence (`6224b28`) | Preserved the four-batch cap but yielded after one complete batch and 500 ms. It regressed the accepted 4096 single-op gate to `ok=1026/4096`, `read_failed=2304`, `mutation_failed=766`, and `first_response_timeouts=3070`. | Rejected and reverted upstream in QUIC `eeeb216`; `geode-client-zig` `533cde8` and Geode pin that revert. |
+| 65k static multi-property MERGE tuple-lock stripes | 4096x8 mixed low-stagger probe regressed to `ok=21464/32768`, `read_failed=8468`, `mutation_failed=2836`, and `first_response_timeouts=11304`; ReleaseFast compile also inflated to a multi-minute, multi-GB object build. | Rejected. Final shape uses 16k heap-allocated stripes plus tuple-lock metrics. |
+| 16k heap tuple-lock stripes re-run during root `goreleaser` cross-build | 4096x8 mixed low-stagger probe reported `ok=14798/32768`, `first_response_timeouts=17970`, but a concurrent root-owned `goreleaser release --clean` tree was compiling seven cross targets under `/builds/devnw/codepros/geode/geode` for the entire execution window. | Invalidated, not accepted as a regression or improvement measurement. Re-run on an otherwise idle host before changing the current 9045-timeout ceiling. |
 
 ## Known Unrelated Test Failure
 
@@ -439,6 +444,7 @@ The failing nodes repeatedly log `raft transport getOrCreatePeerConnection faile
 ## Remaining Work
 
 1. Scrape `quic_stream_write_elapsed_*` during the next 250 us mixed run to separate server response write stalls from query execution and QUIC receive/admission stalls.
-2. Add scheduler-side phase counters for cooperative first-stream dequeue, query execution, and response write completion so long first-response tails can be split without relying only on client timing.
-3. Raise the sustained mixed gate from 2048 x 8 toward 4096 x 8 and then 8192+ workers without increasing the 10s execute timeout.
-4. Revisit mutation admission per graph once the storage write path can execute independent graph mutations concurrently.
+2. Scrape `mg_merge_tuple_lock_*` on an idle-host 4096x8 mixed run to quantify how much same-tuple serialization or stripe collision remains after `REQ-QUIC-HC-167`.
+3. Add scheduler-side phase counters for cooperative first-stream dequeue, query execution, and response write completion so long first-response tails can be split without relying only on client timing.
+4. Raise the sustained mixed gate from 2048 x 8 toward 4096 x 8 and then 8192+ workers without increasing the 10s execute timeout.
+5. Revisit mutation admission per graph once the storage write path can execute independent graph mutations concurrently.

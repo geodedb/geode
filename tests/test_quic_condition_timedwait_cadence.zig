@@ -1680,7 +1680,11 @@ test "multi-property merge mutations avoid whole graph writer lock" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "copy only the smallest candidate list") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exact_node_property_index.copy") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "copyIfPresent") != null);
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "const merge_tuple_lock_count: usize = 4096") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-167") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "const merge_tuple_lock_count: usize = 16384") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "merge_tuple_lock_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "merge_tuple_lock_hold_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "mg_merge_tuple_lock_wait_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exact_node_property_index_shard_count") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "NodePropertyExactIndexShard") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exactNodePropertyIndexShardForEncodedKey") != null);
