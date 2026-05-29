@@ -7,30 +7,8 @@ and tuning controls. It is the operator-facing companion to
 ## Current Gate
 
 The current no-retry high-concurrency regression gate is 4096 parallel clients,
-one operation per client, mixed reads and mutations at a 3:1 read/write ratio,
-and a 1000 us request stagger. This remains the latency-friendly gate:
-
-```sh
-GEODE_HC_WORKERS=4096 \
-GEODE_HC_OPS_PER_WORKER=1 \
-GEODE_HC_MUTATION_STRIDE=4 \
-GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
-GEODE_HC_CONNECT_STAGGER_US=1000 \
-GEODE_HC_REQUEST_STAGGER_US=1000 \
-GEODE_HC_EXEC_TIMEOUT_SECS=10 \
-GEODE_HC_EXEC_RETRIES=0 \
-GEODE_HC_POLL_WORKERS=16 \
-timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
-```
-
-The accepted 2026-05-29 post-RLS run completed all 4096 operations with zero
-setup retries, zero execute retries, zero reconnects, and 971.94 QPS.
-
-## Stress Ceiling
-
-The 4096-worker mixed workload with `GEODE_HC_REQUEST_STAGGER_US=250` is now a
-passing stress ceiling after `REQ-QUIC-HC-158`, which keeps authenticated reads
-on fast paths when the startup RLS engines have no policies installed:
+one operation per client, mixed reads and mutations at a 3:1 read/write ratio.
+The latest accepted run uses a 250 us request stagger:
 
 ```sh
 GEODE_HC_WORKERS=4096 \
@@ -45,17 +23,59 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The accepted stress run completed all 4096 operations with zero setup retries,
-zero execute retries, zero reconnects, zero first-response timeouts, and
-561.28 QPS. It still has multi-second first-response tail, so keep the 1000 us
-gate for latency-sensitive regression checks and use 250 us to diagnose the
-next throughput ceiling.
+The accepted 2026-05-29 run completed all 4096 operations with zero setup
+retries, zero execute retries, zero reconnects, zero first-response timeouts,
+and 786.60 QPS.
 
-With server metrics enabled, the stress run showed
-`mg_rwlock_shared_hold_snapshot_ns_total=0`, `quic_stream_write_errors_total=0`,
-and `quic_stream_write_timeouts_total=0`; the remaining tail is concentrated in
-cooperative first-stream scheduling, mutation deferrals, and QUIC short-header
-packet processing.
+## Sustained Gate
+
+The current sustained mixed read/write pass is 1024 clients x 8 operations per
+client:
+
+```sh
+GEODE_HC_WORKERS=1024 \
+GEODE_HC_OPS_PER_WORKER=8 \
+GEODE_HC_MUTATION_STRIDE=4 \
+GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
+GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_REQUEST_STAGGER_US=250 \
+GEODE_HC_EXEC_TIMEOUT_SECS=10 \
+GEODE_HC_EXEC_RETRIES=0 \
+GEODE_HC_POLL_WORKERS=16 \
+timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
+```
+
+The accepted sustained run completed all 8192 operations with zero setup
+retries, zero execute retries, zero reconnects, zero first-response timeouts,
+and 3471.63 QPS.
+
+## Stress Ceiling
+
+The 4096-worker mixed workload with 8 operations per client is still the failing
+stress ceiling and the next throughput target:
+
+```sh
+GEODE_HC_WORKERS=4096 \
+GEODE_HC_OPS_PER_WORKER=8 \
+GEODE_HC_MUTATION_STRIDE=4 \
+GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
+GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_REQUEST_STAGGER_US=250 \
+GEODE_HC_EXEC_TIMEOUT_SECS=10 \
+GEODE_HC_EXEC_RETRIES=0 \
+GEODE_HC_POLL_WORKERS=16 \
+timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
+```
+
+The latest run completed 17027/32768 operations with zero setup retries, zero
+execute retries, zero reconnects, and 15741 first-response timeouts. Keep this
+as the active ceiling probe; do not raise the 10s execute timeout to make it
+pass.
+
+With server metrics enabled, permit-gated mutation overflow reduced
+`quic_first_stream_mutation_deferrals_total` from earlier multi-million requeue
+churn to thousands. The remaining tail is concentrated in first-response wait,
+cooperative packet processing, and QUIC short-header receive processing.
 
 ## Core Knobs
 
@@ -132,8 +152,11 @@ broader query shape force snapshot execution.
 
 As of this cycle, Geode pins:
 
-- QUIC: `a68d36e06dc9a0815a7a02d5e18b9d8d06e9ad6b`
-- `geode-client-zig`: `e96ca352c11b36c55c3df517a0d9a3b0112145ab`
+- QUIC: `9a35274086e8cfb9cab5b78fa7471506aec03d3e`
+- `geode-client-zig`: `5a6b65a012e02db2a7acb6d0f37f2251f171edf0`
+
+QUIC `9a35274` reverts the rejected one-batch server short-header app receive
+experiment and preserves the proven `a68d36e` behavior.
 
 Dependency changes must be made in the upstream worktrees under
 `~/src/devnw/zig/*` before Geode is repinned.

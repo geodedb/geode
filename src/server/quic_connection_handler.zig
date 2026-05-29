@@ -2424,6 +2424,7 @@ const FirstStreamOwnerContext = struct {
     cooperative_force_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     cooperative_generation_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     cooperative_enqueued_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    cooperative_mutation_waiting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     pending_packet: ?schema.ClientPacket = null,
     post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
@@ -2583,6 +2584,7 @@ pub const FirstStreamScheduler = struct {
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     context_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mutation_retry_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_limit: u32 = 1,
     workers: []std.Thread = &.{},
     next_index: usize = 0,
@@ -2609,6 +2611,7 @@ pub const FirstStreamScheduler = struct {
             .shutdown = std.atomic.Value(bool).init(false),
             .context_count = std.atomic.Value(u32).init(0),
             .mutation_inflight = std.atomic.Value(u32).init(0),
+            .mutation_retry_waiters = std.atomic.Value(u32).init(0),
             .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, effective_mutation_cap))),
             .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
             .next_index = 0,
@@ -2672,6 +2675,7 @@ pub const FirstStreamScheduler = struct {
         ctx.cooperative_needs_reschedule.store(false, .release);
         ctx.cooperative_force_ready.store(false, .release);
         ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
+        ctx.cooperative_mutation_waiting.store(false, .release);
         ctx.pending_packet = null;
 
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -2728,9 +2732,13 @@ pub const FirstStreamScheduler = struct {
                     // WouldBlock, the RX-ready callback must either enqueue the
                     // owner directly or leave a flag this worker observes here.
                     ctx.cooperative_running.store(false, .release);
-                    const force = ctx.cooperative_force_ready.swap(false, .acq_rel);
+                    const force = ctx.cooperative_force_ready.load(.acquire);
                     const reschedule = ctx.cooperative_needs_reschedule.swap(false, .acq_rel);
-                    if (force or reschedule) {
+                    const parked_mutation = force and !self.forceReadyEligible(ctx);
+                    if ((force or reschedule) and !parked_mutation) {
+                        if (force and !ctx.cooperative_mutation_waiting.load(.acquire)) {
+                            _ = ctx.cooperative_force_ready.swap(false, .acq_rel);
+                        }
                         self.enqueueReady(ctx) catch |err| {
                             log.warn("Failed to requeue cooperative first-stream owner", &.{
                                 Attr.string("error", @errorName(err)),
@@ -2777,6 +2785,41 @@ pub const FirstStreamScheduler = struct {
 
     fn releaseMutationPermit(self: *FirstStreamScheduler) void {
         _ = self.mutation_inflight.fetchSub(1, .acq_rel);
+        if (self.mutation_retry_waiters.load(.acquire) != 0) {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            _ = self.ready_generation.fetchAdd(1, .release);
+            io.futexWake(u32, &self.ready_generation.raw, 1);
+        }
+    }
+
+    fn decrementMutationRetryWaiters(self: *FirstStreamScheduler) void {
+        var observed = self.mutation_retry_waiters.load(.acquire);
+        while (observed > 0) {
+            observed = self.mutation_retry_waiters.cmpxchgWeak(observed, observed - 1, .acq_rel, .acquire) orelse return;
+        }
+    }
+
+    fn markMutationRetryWaiter(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
+        // CANARY: REQ=REQ-QUIC-HC-159; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=PermitGatedMutationRetry; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+        //
+        // Overflow mutations must retain stream ordering, but immediately
+        // requeueing them spins the cooperative ready queue while the global
+        // mutation window is full. Park the packet until the next mutation
+        // permit release wakes a waiter.
+        if (!ctx.cooperative_mutation_waiting.swap(true, .acq_rel)) {
+            _ = self.mutation_retry_waiters.fetchAdd(1, .acq_rel);
+        }
+    }
+
+    fn clearMutationRetryWaiter(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
+        if (ctx.cooperative_mutation_waiting.swap(false, .acq_rel)) {
+            self.decrementMutationRetryWaiters();
+        }
+    }
+
+    fn forceReadyEligible(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) bool {
+        if (!ctx.cooperative_mutation_waiting.load(.acquire)) return true;
+        return self.mutation_inflight.load(.acquire) < self.mutation_limit;
     }
 
     fn dequeueReadyLocked(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
@@ -2813,7 +2856,7 @@ pub const FirstStreamScheduler = struct {
         return ctx;
     }
 
-    fn takeChangedContextLocked(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
+    fn takeChangedContextLocked(self: *FirstStreamScheduler, include_force_scan: bool, include_generation: bool) ?*FirstStreamOwnerContext {
         const len = self.contexts.items.len;
         if (len == 0) {
             self.next_index = 0;
@@ -2832,11 +2875,17 @@ pub const FirstStreamScheduler = struct {
             if (ctx.cooperative_queued.load(.acquire)) continue;
 
             const force = ctx.cooperative_force_ready.load(.acquire);
-            const current_generation = ctx.stream.readGeneration();
-            const seen_generation = ctx.cooperative_generation_seen.load(.acquire);
-            if (force or current_generation != seen_generation) {
+            if ((include_force_scan or include_generation) and force and self.forceReadyEligible(ctx)) {
                 self.next_index = idx;
                 return ctx;
+            }
+            if (include_generation) {
+                const current_generation = ctx.stream.readGeneration();
+                const seen_generation = ctx.cooperative_generation_seen.load(.acquire);
+                if (current_generation != seen_generation) {
+                    self.next_index = idx;
+                    return ctx;
+                }
             }
         }
 
@@ -2875,8 +2924,11 @@ pub const FirstStreamScheduler = struct {
             // per-connection RX generation with the last generation observed
             // at WouldBlock, giving long-idle connections a bounded recovery
             // path without polling every worker on every scheduler wait.
-            if (self.shouldSweepIdleContextsLocked()) {
-                if (self.takeChangedContextLocked()) |ctx| {
+            const scan_mutation_waiters = self.mutation_retry_waiters.load(.acquire) != 0 and
+                self.mutation_inflight.load(.acquire) < self.mutation_limit;
+            const sweep_idle_contexts = self.shouldSweepIdleContextsLocked();
+            if (scan_mutation_waiters or sweep_idle_contexts) {
+                if (self.takeChangedContextLocked(scan_mutation_waiters, sweep_idle_contexts)) |ctx| {
                     self.mutex.unlock(io);
                     return ctx;
                 }
@@ -2897,6 +2949,7 @@ pub const FirstStreamScheduler = struct {
 
     fn enqueueReady(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) !void {
         if (ctx.cooperative_done.load(.acquire)) return;
+        if (!self.forceReadyEligible(ctx)) return;
         if (ctx.cooperative_queued.cmpxchgStrong(false, true, .acq_rel, .acquire)) |_| {
             return;
         }
@@ -2920,6 +2973,8 @@ pub const FirstStreamScheduler = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
+
+        self.clearMutationRetryWaiter(ctx);
 
         var ready_idx: usize = self.ready_head;
         while (ready_idx < self.ready_queue.items.len) {
@@ -3066,6 +3121,10 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
         if (ctx.pending_packet) |pending| {
             packet = pending;
             ctx.pending_packet = null;
+            ctx.cooperative_force_ready.store(false, .release);
+            if (ctx.cooperative_scheduler) |scheduler| {
+                scheduler.clearMutationRetryWaiter(ctx);
+            }
         } else {
             const read_generation = ctx.stream.readGeneration();
             const packet_opt = ctx.reader.nextMessageNonBlocking() catch |err| {
@@ -3089,6 +3148,7 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
                 if (!scheduler.tryAcquireMutationPermit()) {
                     quic_response_metrics.recordFirstStreamMutationDeferral();
                     ctx.pending_packet = packet;
+                    scheduler.markMutationRetryWaiter(ctx);
                     ctx.cooperative_force_ready.store(true, .release);
                     return false;
                 }

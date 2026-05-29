@@ -743,8 +743,8 @@ test "cooperative first stream clears running before consuming reschedule flags"
     const tail = handler[marker_idx..];
     const running_idx = std.mem.indexOf(u8, tail, "ctx.cooperative_running.store(false, .release);") orelse
         return error.MissingRunningClear;
-    const force_idx = std.mem.indexOf(u8, tail, "const force = ctx.cooperative_force_ready.swap(false, .acq_rel);") orelse
-        return error.MissingForceReadySwap;
+    const force_idx = std.mem.indexOf(u8, tail, "const force = ctx.cooperative_force_ready.load(.acquire);") orelse
+        return error.MissingForceReadyLoad;
 
     try testing.expect(running_idx < force_idx);
 }
@@ -855,10 +855,14 @@ test "cooperative first stream scheduler requeues mutation overflow" {
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-148") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-150") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-159") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationAdmission") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationClassifier") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "PermitGatedMutationRetry") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "pending_packet: ?schema.ClientPacket = null") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_inflight: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "mutation_retry_waiters: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "cooperative_mutation_waiting: std.atomic.Value(bool)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_limit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationWindowCap") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "default_first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
@@ -866,10 +870,19 @@ test "cooperative first stream scheduler requeues mutation overflow" {
     try testing.expect(std.mem.indexOf(u8, handler, "effective_mutation_cap") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn tryAcquireMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn releaseMutationPermit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn markMutationRetryWaiter") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn clearMutationRetryWaiter") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn forceReadyEligible") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn packetNeedsCooperativeMutationAdmission") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn queryLooksMutatingForCooperativeAdmission") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "ctx.pending_packet = packet;") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.markMutationRetryWaiter(ctx);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.clearMutationRetryWaiter(ctx);") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "ctx.cooperative_force_ready.store(true, .release);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "parked_mutation") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.mutation_retry_waiters.load(.acquire) != 0") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.mutation_inflight.load(.acquire) < self.mutation_limit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "io.futexWake(u32, &self.ready_generation.raw, 1)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "scheduler.tryAcquireMutationPermit()") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "scheduler.releaseMutationPermit()") != null);
 }
