@@ -47,16 +47,18 @@ timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --s
 
 The latest accepted sustained run completed all 16384 operations with zero
 setup retries, zero execute retries, zero reconnects, zero first-response
-timeouts, and 848.39 QPS after backlog-aware cooperative pacing. This gate
+timeouts, and 1111.06 QPS after lowering shard-parallel mutation admission to
+80 on the final QUIC `a1858c1` dependency line. This gate
 exercises 4096 mutations and 12288 reads over 2048 live QUIC connections. The
-same run reported p50=2154.31 ms, p95=4723.65 ms, p99=6123.36 ms, and
-p99.9=7424.62 ms, so completion is clean but latency is still above the
+same run reported p50=1722.11 ms, p95=3760.27 ms, p99=5180.92 ms, and
+p99.9=6492.79 ms, so completion is clean but latency is still above the
 enterprise objective.
 
 After the QUIC `a1858c1` and `geode-client-zig` `942641c` dependency
-correction, the 1024x8 mixed gate completed all 8192 operations with zero
-first-response timeouts at 3213.45 QPS. The corresponding latency percentiles
-were p50=255.90 ms, p95=638.41 ms, p99=826.88 ms, and p99.9=1009.87 ms.
+correction and the cap-80 retune, the 1024x8 mixed gate completed all 8192
+operations with zero first-response timeouts at 3523.77 QPS. The corresponding
+latency percentiles were p50=244.83 ms, p95=552.59 ms, p99=732.43 ms, and
+p99.9=1037.43 ms.
 
 ## Stress Ceiling
 
@@ -113,11 +115,24 @@ accepted sustained gates or worsened the 4096x8 stress ceiling:
 - `GEODE_HC_POLL_WORKERS=64`. Higher poll-worker parallelism worsened the same
   4096x8 shape: `22207/32768` completed, `10561` first-response timeouts,
   447.78 QPS.
+- `GEODE_HC_GROUP_COMMIT_COALESCE_US=750` at 2048x8. One run passed, but
+  repeat runs failed with 53 first-response timeouts and scrape-enabled
+  attribution failed with 22 first-response timeouts.
+- `GEODE_HC_GROUP_COMMIT_COALESCE_US=1000` at 2048x8. This failed with 102
+  first-response timeouts on the final dependency line.
+- `GEODE_HC_POST_WRITE_POLL=1` at 2048x8. Immediate high-fanout post-write
+  endpoint polling failed with 143 first-response timeouts.
+- `GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS=640` with 750 us coalescing at
+  2048x8. This failed with 101 first-response timeouts.
+- `GEODE_HC_MUTATION_ADMISSION_CAP=96` and `192` at 2048x8. Cap 96 was a near
+  miss with four first-response timeouts; cap 192 overfed mutation work and
+  failed with 336 first-response timeouts. Cap 80 completed cleanly.
 
 The current high-fanout defaults remain 512 cooperative first-stream workers,
-16 poll workers, and no server short-header packet shedding. The next
-implementation target is scheduler-side mutation offload/continuation so
-group-commit waits do not occupy cooperative first-stream workers.
+16 poll workers, 500 us group-commit coalescing, an 80-request shard-parallel
+mutation cap, and no server short-header packet shedding. The next implementation
+target is scheduler-side mutation offload/continuation so group-commit waits do
+not occupy cooperative first-stream workers.
 
 ## Enterprise Objective Gate
 
@@ -219,9 +234,11 @@ the next QUIC receive/scheduler pass:
   failing mixed ceiling distinguish cheap count reads from mutation/storage
   execution tail without inferring from client latency alone.
 - `REQ-QUIC-HC-174`: group-commit shard coalescing is tunable through
-  `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default is
-  500 us: 2048x8 mixed probes completed cleanly at 500 us, while 100 us
-  produced tail timeouts and 2000 us regressed completion.
+  `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default remains
+  500 us; after the final QUIC `a1858c1` dependency correction, narrowing the
+  shard-parallel mutation admission cap to 80 restored the 1024x8 and 2048x8
+  mixed gates without increasing the coalescing wait. Earlier 100 us, 750 us,
+  1000 us, and 2000 us probes remain rejected as defaults.
 - `REQ-QUIC-HC-176`: cooperative first-stream pacing now tracks ready-queue
   depth and skips the high-fanout post-turn sleep only when queued ready work
   exceeds the scheduler worker count. The accepted variant passed the 1024x8
@@ -236,9 +253,12 @@ admission for mutations. This is still a failing stress ceiling; the passing
 sustained gate remains 2048x8 mixed. The tuple-lock striping cycle adds
 instrumentation and collision reduction but has not promoted the 4096x8 gate;
 the first re-run was invalidated by a concurrent root-owned `goreleaser`
-cross-build saturating the host. The backlog-aware pacing cycle promotes the
+cross-build saturating the host. The backlog-aware pacing cycle promoted the
 2048x8 sustained result from 821.63 QPS to 848.39 QPS with zero first-response
-timeouts, but it does not promote the 4096x8 stress ceiling.
+timeouts on the prior dependency line. After the final QUIC `a1858c1` revert,
+cap 128 produced rare 2048x8 first-response timeouts, and the current cap 80
+default restores a clean 2048x8 sustained pass at 1111.06 QPS. It still does
+not promote the 4096x8 stress ceiling.
 
 ## Restart And Durability Checks
 
@@ -288,11 +308,12 @@ smoke proving the restart/recovery and graph-isolation gates work.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
   Leave unset in normal operation. General writer-lock mutations keep an
   internal serial cap of `4`; the runtime cap now controls only the
-  shard-parallel multi-property `MERGE` window, which defaults to `128`.
+  shard-parallel multi-property `MERGE` window, which defaults to `80`.
 - `GEODE_GROUP_COMMIT_COALESCE_US`: group-commit shard worker coalescing wait
   in microseconds, clamped at 5000 us. Leave at the 500 us default unless
   running a documented sweep; 100 us timed out at 2048x8 after the latest
-  diagnostics, while 2000 us improved batch size but regressed tail latency.
+  diagnostics, while 750 us, 1000 us, and 2000 us did not produce a robust
+  default and could regress tail latency.
 - `GEODE_GROUP_COMMIT_PHASE_METRICS`: opt-in detailed coordinator phase
   timers. Leave unset in normal gates; it adds multiple clock reads and atomics
   per mutation and is intended for attribution runs only.
@@ -425,7 +446,7 @@ coalescing waits are actually increasing batch size enough to justify the
 latency cost. Coordinator phase timers are opt-in because a 2048x8 scraped run
 showed that detailed per-mutation timing can materially perturb the sustained
 gate; use them for diagnosis, not as the objective-gate default. The current
-best 2048x8 mixed setting is the default 500 us coalescing window with a 128
+best 2048x8 mixed setting is the default 500 us coalescing window with an 80
 shard-parallel mutation admission cap.
 `mg_rwlock_shared_hold_snapshot_ns_total` should stay at zero for the default
 high-concurrency count workload unless RLS policies or a broader query shape

@@ -914,7 +914,7 @@ test "cooperative first stream scheduler requeues mutation overflow" {
     try testing.expect(std.mem.indexOf(u8, handler, "shard_parallel_mutation_limit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationWindowCap") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "serial_first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "default_first_stream_scheduler_mutation_limit_cap: usize = 128") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "default_first_stream_scheduler_mutation_limit_cap: usize = 80") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "max_first_stream_scheduler_mutation_limit_cap: usize = 512") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "effective_mutation_cap") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "@max(worker_count, 1) / 4") != null);
@@ -1570,7 +1570,7 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_group_commit_coalesce_us: u32 = 500") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_MUTATION_ADMISSION_CAP={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_MUTATION_ADMISSION_CAP") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_mutation_admission_cap: u32 = 128") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_mutation_admission_cap: u32 = 80") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "highFanoutMutationAdmissionCapDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "REQ=REQ-QUIC-HC-053") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "REQ=REQ-QUIC-HC-141") != null);

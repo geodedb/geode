@@ -40,7 +40,7 @@ var cached_phase_metrics_enabled: ?bool = null;
 //
 // High-fanout QUIC mutation probes can otherwise drive the coordinator into
 // mostly single-op shard batches, paying one WAL commit per mutation. A 500us
-// default is the measured stable point for the 2048x8 mixed gate; the
+// default remains the measured stable point for the coordinator itself; the
 // server/harness can still choose a narrower or wider bounded window.
 fn shardCoalesceWaitNs() u64 {
     const cached = cached_shard_coalesce_wait_ns.load(.acquire);

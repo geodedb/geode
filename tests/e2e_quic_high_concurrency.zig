@@ -20,8 +20,8 @@ const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug
 const default_connection_worker_count = 64;
 const default_group_commit_coalesce_us: u32 = 500;
 const high_fanout_group_commit_coalesce_us: u32 = 500;
-const default_mutation_admission_cap: u32 = 128;
-const high_fanout_mutation_admission_cap: u32 = 128;
+const default_mutation_admission_cap: u32 = 80;
+const high_fanout_mutation_admission_cap: u32 = 80;
 const objective_worker_count: u32 = 16_384;
 const objective_ops_per_worker: u32 = 8;
 const objective_mutation_stride: u32 = 4;
@@ -186,7 +186,8 @@ fn highFanoutPollWorkerDefault(worker_count: u32) u32 {
 }
 
 fn highFanoutMutationAdmissionCapDefault(worker_count: u32) u32 {
-    return if (worker_count >= 2048) high_fanout_mutation_admission_cap else default_mutation_admission_cap;
+    _ = worker_count;
+    return high_fanout_mutation_admission_cap;
 }
 
 // CANARY: REQ=REQ-QUIC-HC-128; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
