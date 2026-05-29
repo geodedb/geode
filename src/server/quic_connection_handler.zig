@@ -165,9 +165,11 @@ const first_stream_scheduler_turn_delay_cap_ns: u64 = std.time.ns_per_ms;
 // funneled through a whole-graph writer. Keep that small serial window for
 // general mutations, but route simple multi-property MERGE through a wider
 // shard-parallel window because that path uses tuple and shard locks instead
-// of the whole-graph writer.
+// of the whole-graph writer. The default is intentionally below the full
+// 512-worker cooperative pool: 2048x8 mixed fan-out is fastest when enough
+// scheduler workers remain available for read progress and response flushes.
 const serial_first_stream_scheduler_mutation_limit_cap: usize = 4;
-pub const default_first_stream_scheduler_mutation_limit_cap: usize = 512;
+pub const default_first_stream_scheduler_mutation_limit_cap: usize = 128;
 pub const max_first_stream_scheduler_mutation_limit_cap: usize = 512;
 // CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //

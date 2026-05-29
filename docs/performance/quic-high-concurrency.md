@@ -15,7 +15,7 @@ GEODE_HC_WORKERS=4096 \
 GEODE_HC_OPS_PER_WORKER=1 \
 GEODE_HC_MUTATION_STRIDE=4 \
 GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
-GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_CONNECT_STAGGER_US=500 \
 GEODE_HC_REQUEST_STAGGER_US=250 \
 GEODE_HC_EXEC_TIMEOUT_SECS=10 \
 GEODE_HC_EXEC_RETRIES=0 \
@@ -47,7 +47,7 @@ timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --s
 
 The latest accepted sustained run completed all 16384 operations with zero
 setup retries, zero execute retries, zero reconnects, zero first-response
-timeouts, and 1189.34 QPS. This gate exercises 4096 mutations and 12288 reads
+timeouts, and 821.63 QPS after the 500 us / cap 128 default update. This gate exercises 4096 mutations and 12288 reads
 over 2048 live QUIC connections.
 
 ## Stress Ceiling
@@ -185,9 +185,9 @@ the next QUIC receive/scheduler pass:
   failing mixed ceiling distinguish cheap count reads from mutation/storage
   execution tail without inferring from client latency alone.
 - `REQ-QUIC-HC-174`: group-commit shard coalescing is tunable through
-  `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default remains
-  100 us because a 1000 us sweep increased batch size but regressed throughput
-  and tail latency.
+  `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default is
+  500 us: 2048x8 mixed probes completed cleanly at 500 us, while 100 us
+  produced tail timeouts and 2000 us regressed completion.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
@@ -247,11 +247,11 @@ smoke proving the restart/recovery and graph-isolation gates work.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
   Leave unset in normal operation. General writer-lock mutations keep an
   internal serial cap of `4`; the runtime cap now controls only the
-  shard-parallel multi-property `MERGE` window, which defaults to `512`.
+  shard-parallel multi-property `MERGE` window, which defaults to `128`.
 - `GEODE_GROUP_COMMIT_COALESCE_US`: group-commit shard worker coalescing wait
-  in microseconds, clamped at 5000 us. Leave at the 100 us default unless
-  running a documented sweep; 1000 us regressed the mixed workload despite
-  larger average coordinator batches.
+  in microseconds, clamped at 5000 us. Leave at the 500 us default unless
+  running a documented sweep; 100 us timed out at 2048x8 after the latest
+  diagnostics, while 2000 us improved batch size but regressed tail latency.
 - `GEODE_GROUP_COMMIT_PHASE_METRICS`: opt-in detailed coordinator phase
   timers. Leave unset in normal gates; it adds multiple clock reads and atomics
   per mutation and is intended for attribution runs only.
@@ -383,7 +383,9 @@ and short-header processing stalls. Coordinator counters reveal whether longer
 coalescing waits are actually increasing batch size enough to justify the
 latency cost. Coordinator phase timers are opt-in because a 2048x8 scraped run
 showed that detailed per-mutation timing can materially perturb the sustained
-gate; use them for diagnosis, not as the objective-gate default.
+gate; use them for diagnosis, not as the objective-gate default. The current
+best 2048x8 mixed setting is the default 500 us coalescing window with a 128
+shard-parallel mutation admission cap.
 `mg_rwlock_shared_hold_snapshot_ns_total` should stay at zero for the default
 high-concurrency count workload unless RLS policies or a broader query shape
 force snapshot execution.

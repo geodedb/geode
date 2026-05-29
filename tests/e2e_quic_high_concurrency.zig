@@ -18,10 +18,10 @@ const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 els
 const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
-const default_group_commit_coalesce_us: u32 = 100;
-const high_fanout_group_commit_coalesce_us: u32 = 100;
-const default_mutation_admission_cap: u32 = 512;
-const high_fanout_mutation_admission_cap: u32 = 512;
+const default_group_commit_coalesce_us: u32 = 500;
+const high_fanout_group_commit_coalesce_us: u32 = 500;
+const default_mutation_admission_cap: u32 = 128;
+const high_fanout_mutation_admission_cap: u32 = 128;
 const objective_worker_count: u32 = 16_384;
 const objective_ops_per_worker: u32 = 8;
 const objective_mutation_stride: u32 = 4;

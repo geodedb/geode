@@ -30,7 +30,7 @@ const StorageAdapter = graph_storage_adapter.StorageAdapter;
 const PropKV = StorageAdapter.PropKV;
 const PropertyValue = graph_store.PropertyValue;
 
-const default_shard_coalesce_wait_us: u64 = 100;
+const default_shard_coalesce_wait_us: u64 = 500;
 const max_shard_coalesce_wait_us: u64 = 5000;
 const unset_shard_coalesce_wait_ns = std.math.maxInt(u64);
 var cached_shard_coalesce_wait_ns = std.atomic.Value(u64).init(unset_shard_coalesce_wait_ns);
@@ -39,9 +39,9 @@ var cached_phase_metrics_enabled: ?bool = null;
 // CANARY: REQ=REQ-QUIC-HC-174; FEATURE="HighConcurrencyMutations"; ASPECT=ConfigurableCoordinatorCoalescing; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-29
 //
 // High-fanout QUIC mutation probes can otherwise drive the coordinator into
-// mostly single-op shard batches, paying one WAL commit per mutation. Keep the
-// legacy 100us default, but allow the server/harness to choose a slightly wider
-// bounded window for throughput gates.
+// mostly single-op shard batches, paying one WAL commit per mutation. A 500us
+// default is the measured stable point for the 2048x8 mixed gate; the
+// server/harness can still choose a narrower or wider bounded window.
 fn shardCoalesceWaitNs() u64 {
     const cached = cached_shard_coalesce_wait_ns.load(.acquire);
     if (cached != unset_shard_coalesce_wait_ns) return cached;
