@@ -1,7 +1,7 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, backlog-aware cooperative pacing, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, and restart/recovery regression coverage. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest attribution runs show clean response writes, cheap read execution, dominant mutation execution/storage tail, and multi-second QUIC poll/scheduler cycles.
+**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, backlog-aware cooperative pacing, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, cooperative mutation offload, and restart/recovery regression coverage. The best accepted 2048x8/1000 us sustained run is 1895.40 QPS with zero first-response timeouts; the final pre-push rerun of the same gate also completed cleanly at 948.72 QPS. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest attribution runs show clean response writes, cheap read execution, dominant mutation execution/storage tail, and multi-second QUIC short-header receive/frame-processing cycles.
 **Dependency state:** Geode now pins QUIC `a1858c19ad91026eb412db263cb159d68de282ac` and `geode-client-zig` `942641cd1e71544560bbfe96db280fa271827a2c`. QUIC `a1858c1` preserves the proven `06f4aad` generic/coalesced long-header TLS serialization and reverts the rejected `REQ-QUIC-HC-177` server short-header busy-connection shedding experiment after it regressed the 2048x8 mixed gate.
 
 ## Summary
@@ -45,6 +45,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 35. Upstream QUIC `REQ-QUIC-HC-177` tested server short-header busy-connection shedding before packet-number tracking. The hypothesis was valid for poll-loop protection, but the 2048x8 mixed gate rejected it: completion fell to `16359/16384`, first-response timeouts rose to `25`, and QPS dropped to `715.39`. QUIC `a1858c1`, `geode-client-zig` `942641c`, and Geode now pin the revert.
 36. Two Geode runtime tuning sweeps were also rejected after the dependency correction. Raising cooperative first-stream workers to 768 worsened the 4096x8 mixed run to `22484/32768` with `10284` first-response timeouts. Raising poll workers to 64 worsened the same shape to `22207/32768` with `10561` first-response timeouts. The accepted defaults remain 512 cooperative workers and 16 poll workers for high fanout.
 37. The final 2048x8 sustained retune kept group-commit coalescing at 500 us and narrowed shard-parallel mutation admission to 80. This restored zero-timeout 1024x8 and 2048x8 gates after cap 128 began producing rare first-response timeouts on the final dependency line. Wider coalescing waits, immediate high-fanout post-write polling, 640 cooperative workers, and cap 96/192 variants were all rejected before promotion.
+38. `REQ-QUIC-HC-178` moves shard-parallel mutation packet execution and group-commit waits out of cooperative scheduler workers into a bounded offload pool after mutation admission succeeds. The stream owner remains marked running for ordering, the offload task releases the mutation permit and completes or finishes the cooperative context, and shutdown waits for outstanding offload tasks before reclaiming contexts. The best accepted 2048x8/1000 us sustained gate improved to 1895.40 QPS with zero first-response timeouts, and the final pre-push rerun of that gate also completed cleanly at 948.72 QPS; 2048x8/250 us and 4096x8 remain failing ceilings.
 
 ## Changed Files
 
@@ -56,6 +57,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Lowers cooperative first-stream post-turn sleep to a 1 ms cap so sustained follow-up operations do not accumulate avoidable scheduler tail.
   - Tracks cooperative ready-queue depth and skips the post-turn backoff only while the ready backlog is larger than the scheduler worker pool.
   - Skips the shared optimizer for mutating programs, reusing the same mutation classification later for lock selection.
+  - Adds a bounded cooperative mutation offload pool for shard-parallel first-stream packets after mutation admission succeeds, so cooperative scheduler workers no longer sit inside group-commit waits.
+  - Keeps the stream owner marked running while an offloaded mutation packet executes, releases the mutation permit in the offload task, and waits for outstanding offload tasks during scheduler shutdown.
 - `src/storage/graph_storage_adapter.zig`
   - Adds exact-property posting-length probing and copies only the smallest available candidate posting for multi-property `MERGE`.
   - Raises multi-property `MERGE` tuple-lock striping to 16k heap-allocated mutexes per graph.
@@ -105,6 +108,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Source-audits the objective gate knobs, percentile emission, graph-isolation verification, restart recovery, RSS gate wiring, adapter-shutdown checkpoint, and group-commit label dictionary persistence guard.
   - Source-audits the runtime metrics scrape callback, accept-loop wake, read/mutation execution split, group-commit coalescing knob, and new harness passthroughs.
   - Source-audits backlog-aware cooperative first-stream pacing and ready-depth accounting.
+  - Source-audits cooperative mutation offload pool creation, shard-parallel-only admission, mutation-permit ownership, async completion, and shutdown draining.
 - `tests/test_metrics_server_lifecycle.zig`
   - Adds a `/metrics` lifecycle regression proving runtime high-concurrency counters are appended and server shutdown returns after a scrape.
 - `tests/test_gap0810_parse_cache_wrapper.zig`
@@ -129,6 +133,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Pins both direct QUIC and embedded `geode-client-zig` to the upstream server STREAM ACK fanout fix plus the reverts of the rejected one-batch, wall-clock, and slow-batch short-header cadence experiments.
 - `docs/performance/quic-high-concurrency.md`
   - Documents the full 16k x 8 objective command, threshold semantics, percentile output, RSS output, and objective gate controls.
+  - Documents the accepted 2048x8/1000 us cooperative mutation-offload gate, the still-failing 2048x8/250 us and 4096x8 ceilings, and the rejected 128-worker offload, poll-worker, and mutation-cap follow-ups.
 
 ## Accepted Verification
 
@@ -146,6 +151,7 @@ All commands below were run on 2026-05-29.
 | `geode-client-zig` `zig build --summary all` after QUIC `a1858c1` revert pin | PASS, 15/15 steps. |
 | `geode-client-zig` `zig build test --summary all` after QUIC `a1858c1` revert pin | PASS, 420/420 tests. |
 | `zig build test-quic-condition-cadence --summary all` | PASS, 74/74 tests after shard-parallel mutation admission, permit-gated overflow, dependency source audits, storage/index contention audits, shared cache audits, objective gate source audits, group-commit durability source audits, and runtime metrics scrape/source audits. |
+| `zig build test-quic-condition-cadence --summary all` after cooperative mutation offload | PASS, 75/75 tests including the `REQ-QUIC-HC-178` source audit. |
 | `zig build test-metrics-server --summary all` | PASS, 4/4 tests including the `/metrics` runtime snapshot append and shutdown wake regression. |
 | `zig build test-group-commit-coordinator --summary all` | PASS, 9/9 tests including `REQ-QUIC-HC-171: group commit inserts survive adapter reopen`. |
 | `zig build test-graph-storage-adapter-metrics --summary all` | PASS, 4/4 tests after the smallest-posting multi-property `MERGE` preselect and tuple-lock stripe-density regression. |
@@ -166,6 +172,15 @@ All commands below were run on 2026-05-29.
 | 1024 workers x 8 ops mixed E2E with cap 80 | PASS, 8192/8192 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 3523.77 QPS, p50=244.83 ms, p95=552.59 ms, p99=732.43 ms, p99.9=1037.43 ms. |
 | 2048 workers x 8 ops mixed E2E with cap 80 | PASS, 16384/16384 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 1111.06 QPS, p50=1722.11 ms, p95=3760.27 ms, p99=5180.92 ms, p99.9=6492.79 ms. This promotes cap 80 as the current default. |
 | 1024 workers x 8 ops mixed E2E with code-default cap 80 | PASS, 8192/8192 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts. This run proved the default path wires cap 80 into the child server, but its 838.55 QPS timing is not used as a baseline because an unrelated Go fuzz suite was saturating the host. |
+| 1024 workers x 8 ops mixed E2E after cooperative mutation offload at 250 us request stagger | PASS, 8192/8192 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 3270.91 QPS, p50=261.67 ms, p95=552.62 ms, p99=704.47 ms, p99.9=1088.92 ms. |
+| 2048 workers x 8 ops mixed E2E after cooperative mutation offload at 1000 us request stagger | PASS, 16384/16384 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 1895.40 QPS, p50=457.29 ms, p95=2191.47 ms, p99=3026.73 ms, p99.9=3763.53 ms. This is the current accepted sustained gate. |
+| Final pre-push 2048 workers x 8 ops mixed E2E after cooperative mutation offload at 1000 us request stagger | PASS, 16384/16384 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 948.72 QPS, p50=1699.74 ms, p95=3918.29 ms, p99=5199.97 ms, p99.9=6906.88 ms. This confirms the completion gate while showing host/runtime throughput variance remains material. |
+| 2048 workers x 8 ops mixed E2E after cooperative mutation offload at 250 us request stagger | FAIL, 16376/16384 operations, eight first-response timeouts, 767.16 QPS, p50=2263.90 ms, p95=4968.18 ms, p99=7842.37 ms, p99.9=9046.53 ms. This keeps 250 us as a diagnostic ceiling. |
+| 2048 workers x 8 ops mixed E2E after cooperative mutation offload at 250 us request stagger with runtime scrape | FAIL, 16376/16384 operations, eight first-response timeouts, 798.16 QPS. The scrape showed mutation execution/coordinator submit wait still dominates successful server work. |
+| 4096 workers x 8 ops mixed E2E after cooperative mutation offload at 1000 us request stagger with runtime scrape | FAIL, 22709/32768 operations, 10059 first-response timeouts, 458.00 QPS, p50=2824.89 ms, p95=9060.05 ms, p99=9800.29 ms, p99.9=9973.57 ms. |
+| 2048 workers x 8 ops mixed E2E with cooperative mutation offload pool cap raised to 128 | FAIL, child server did not reach readiness before the harness startup timeout. This rejected raising the internal offload cap above 64 workers. |
+| 2048 workers x 8 ops mixed E2E with `GEODE_HC_POLL_WORKERS=4` at 250 us request stagger | FAIL, 16341/16384 operations, 43 first-response timeouts, 589.37 QPS. |
+| 2048 workers x 8 ops mixed E2E with `GEODE_HC_MUTATION_ADMISSION_CAP=40` at 250 us request stagger | FAIL, 16372/16384 operations, 12 first-response timeouts, 659.79 QPS. |
 | 2048 workers x 8 ops mixed E2E with rejected QUIC `8bb3733` busy-connection shedding | FAIL, 16359/16384 operations, 25 first-response timeouts, 715.39 QPS. This rejected the upstream packet-shedding default. |
 | 4096 workers x 8 ops mixed E2E with `GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS=768` | FAIL, 22484/32768 operations, 10284 first-response timeouts, 460.19 QPS. This rejected raising the cooperative worker default. |
 | 4096 workers x 8 ops mixed E2E with `GEODE_HC_POLL_WORKERS=64` | FAIL, 22207/32768 operations, 10561 first-response timeouts, 447.78 QPS. This rejected raising the high-fanout poll worker default. |

@@ -25,12 +25,15 @@ dependency pins:
 | `devnw/zig/quic` | `6224b28fc1654ccd20d1b5dc951e6502cb984aa7` | Rejected slow-batch server short-header cadence experiment; it regressed Geode's accepted 4096 single-op gate and is kept here only as an audit waypoint. |
 | `devnw/zig/quic` | `eeeb2161ccd94c60f7c6b645bcfd16e20202593a` | Reverts the rejected `6224b28` slow-batch cadence experiment on upstream `main`, preserving the proven four-batch receive behavior. |
 | `devnw/zig/quic` | `06f4aadcf045a0d6295c7e85398b94c7096accb9` | Adds `REQ-QUIC-HC-168`: routes generic/coalesced long-header Initial and Handshake dispatch through the same per-connection TLS serializer as the optimized burst receive path. |
+| `devnw/zig/quic` | `a1858c19ad91026eb412db263cb159d68de282ac` | Reverts the rejected `REQ-QUIC-HC-177` server short-header busy-connection shedding experiment, preserving the proven TLS serialization and receive-drain behavior on the final `v0.1.21` line. |
 | `devnw/codepros/geode/geode-client-zig` | `959a43a7f6981a87131561bb6cb99605272c8ce8` | Pins the client package to the same QUIC fix set. |
 | `devnw/codepros/geode/geode-client-zig` | `5a6b65a012e02db2a7acb6d0f37f2251f171edf0` | Pins the client package to QUIC `9a35274` so downstream consumers do not observe the rejected intermediate QUIC commit. |
 | `devnw/codepros/geode/geode-client-zig` | `2f1bfe03fdf51476346ff8aca1c3e7c235a98931` | Pins the client package to QUIC `108d06d` so client and server both consume the accepted four-batch receive behavior. |
 | `devnw/codepros/geode/geode-client-zig` | `b7eef87da566cf051ae5cd9e30b1d51507c59b9e` | Rejected client pin to QUIC `6224b28`; retained as an audit waypoint only. |
 | `devnw/codepros/geode/geode-client-zig` | `533cde8f9b587e0a0b9065bb2f346f224479f02e` | Pins the client package to QUIC `eeeb216` so client and server share the upstream-main revert. |
 | `devnw/codepros/geode/geode-client-zig` | `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd` | Pins the client package to QUIC `06f4aad` so client and server share the generic long-header TLS dispatch serialization fix. |
+| `devnw/codepros/geode/geode-client-zig` | `942641cd1e71544560bbfe96db280fa271827a2c` | Pins the client package to QUIC `a1858c1` so client and server both consume the rejected-shedding revert. |
+| `devnw/zig/wireguard` | this dependency update | Pins the upstream Zig consumer to QUIC `a1858c1` so the final `v0.1.21` dependency line is shared outside Geode. |
 | `devnw/codepros/geode/geode` | this dependency update | Pins direct `quic` and `geode_client_zig` dependencies to the same upstream QUIC revision. |
 
 Regression coverage now includes the Geode vendored-source guard
@@ -59,13 +62,16 @@ shard-parallel admission, and final dependency-pin follow-ups: 4096 clients
 connected and completed 4096 operations, including 1024 mutations, at 664.88 QPS
 with zero setup retries, zero execution retries, zero reconnects, zero
 first-response timeouts, and no `pollCrypto` crash. The sustained mixed gate is
-now 2048 workers x 8 operations
-(`16384/16384` complete, zero first-response timeouts, 1081.10 QPS).
+now 2048 workers x 8 operations after Geode-side cooperative mutation offload:
+the best run completed `16384/16384` with zero first-response timeouts at
+1895.40 QPS, and the final pre-push rerun completed the same gate cleanly at
+948.72 QPS.
 
-Known remaining throughput limit: sustained 4096 workers x 8 operations still
-fails within the 10s execute timeout (`ok=20475/32768` at 250 us request
-stagger, `ok=25800/32768` at 1000 us in the latest final runs). That is a
-separate post-handshake transport/scheduler ceiling and is documented in
+Known remaining throughput limit: the aggressive 2048x8/250 us diagnostic
+ceiling and sustained 4096 workers x 8 operations still fail within the 10s
+execute timeout (`ok=16376/16384` at 2048x8/250 us, and `ok=22709/32768` at
+4096x8/1000 us in the latest scrape-enabled run). That is a separate
+post-handshake transport/scheduler/storage ceiling and is documented in
 `docs/audit/quic-high-concurrency-2026-05-29.md`.
 
 ---
@@ -248,6 +254,21 @@ ownership transfer.
    `processInitialDatagramConcurrent()` and `processHandshakeDatagramConcurrent()`, so coalesced
    long-header paths get the same endpoint and per-connection TLS serialization as the optimized
    burst receive path. `geode-client-zig` `5ae3102` and Geode now pin that fix.
+
+8. **Reject server short-header busy-connection shedding and align the final `v0.1.21` line.**
+   Upstream QUIC commit `8bb3733` tried to shed busy server short-header packets before packet
+   number tracking, but Geode's 2048x8 mixed gate rejected it with `16359/16384` complete and
+   `25` first-response timeouts. QUIC `a1858c19ad91026eb412db263cb159d68de282ac`,
+   `geode-client-zig` `942641c`, Geode, and the upstream Zig consumer pins now track the revert.
+
+9. **Move Geode shard-parallel mutation group-commit waits off cooperative scheduler workers.**
+   `REQ-QUIC-HC-178` keeps per-stream ordering by leaving the stream context marked running, but
+   executes admitted shard-parallel mutation packets in a bounded offload pool and releases the
+   mutation permit from the offload task. This improves the best accepted 2048x8 sustained gate to
+   1895.40 QPS with zero first-response timeouts; the final pre-push rerun also completed cleanly
+   at 948.72 QPS. It does not close the remaining 4096x8 ceiling, which now points at mutation
+   storage/WAL commit tail plus upstream QUIC short-header receive/frame-processing tail rather
+   than the TLS `pollCrypto` crash class.
 
 The original defense-in-depth guidance still applies for future TLS work: ownership transfer
 from TLS outbound buffers must stay inside a single-writer critical section, and debug-only owner

@@ -771,8 +771,11 @@ test "cooperative first stream clears running before consuming reschedule flags"
     const handler = maybe_handler orelse return error.FileNotFound;
     defer allocator.free(handler);
 
-    const marker_idx = std.mem.indexOf(u8, handler, "const done = processCooperativeFirstStream(ctx);") orelse
-        return error.MissingSchedulerWorkerLoop;
+    try testing.expect(std.mem.indexOf(u8, handler, "switch (processCooperativeFirstStream(ctx))") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, ".keep => self.completeCooperativeTurn(ctx)") != null);
+
+    const marker_idx = std.mem.indexOf(u8, handler, "fn completeCooperativeTurn") orelse
+        return error.MissingCompleteCooperativeTurn;
     const tail = handler[marker_idx..];
     const running_idx = std.mem.indexOf(u8, tail, "ctx.cooperative_running.store(false, .release);") orelse
         return error.MissingRunningClear;
@@ -854,6 +857,41 @@ test "cooperative first stream scheduler uses bounded batch budget" {
     try testing.expect(std.mem.indexOf(u8, handler, "fn hasBufferedUnread") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "if (ctx.reader.hasBufferedUnread())") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);") != null);
+}
+
+test "cooperative first stream mutations offload group commit waits" {
+    // Shard-parallel mutation packets may wait on group commit long enough to
+    // occupy cooperative scheduler workers during 4k+ fan-out. The offload path
+    // keeps the stream owner marked running for ordering, but moves the packet
+    // execution and permit release to a bounded pool.
+    const allocator = testing.allocator;
+    const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
+    const handler = maybe_handler orelse return error.FileNotFound;
+    defer allocator.free(handler);
+
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-178") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "mutation_offload_pool: ?*pooled.ThreadPool") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "mutation_offload_inflight: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn submitMutationOffload") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "if (class != .shard_parallel) return false;") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, ".callback = processCooperativeMutationOffload") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, ".offloaded => {}") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn processCooperativeMutationOffload") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "defer scheduler.releaseMutationPermit(task.mutation_class);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.completeCooperativeTurn(ctx);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.finishCooperativeContext(ctx);") != null);
+
+    const process_idx = std.mem.indexOf(u8, handler, "fn processCooperativeFirstStream") orelse
+        return error.MissingProcessCooperativeFirstStream;
+    const process_body = handler[process_idx..];
+    const permit_idx = std.mem.indexOf(u8, process_body, "if (!scheduler.tryAcquireMutationPermit(admission_class))") orelse
+        return error.MissingMutationPermit;
+    const offload_idx = std.mem.indexOf(u8, process_body, "if (scheduler.submitMutationOffload(ctx, packet, admission_class))") orelse
+        return error.MissingMutationOffloadSubmit;
+    const sync_release_idx = std.mem.indexOf(u8, process_body, "mutation_scheduler = scheduler;") orelse
+        return error.MissingSyncMutationFallback;
+    try testing.expect(permit_idx < offload_idx);
+    try testing.expect(offload_idx < sync_release_idx);
 }
 
 test "cooperative first stream scheduler yields to poll workers at high fanout" {

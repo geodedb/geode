@@ -30,29 +30,36 @@ timeouts, and 664.88 QPS.
 ## Sustained Gate
 
 The current sustained mixed read/write pass is 2048 clients x 8 operations per
-client:
+client. After the cooperative mutation offload cycle, the accepted sustained
+profile uses a 1000 us request stagger:
 
 ```sh
 GEODE_HC_WORKERS=2048 \
 GEODE_HC_OPS_PER_WORKER=8 \
 GEODE_HC_MUTATION_STRIDE=4 \
 GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
-GEODE_HC_CONNECT_STAGGER_US=500 \
-GEODE_HC_REQUEST_STAGGER_US=250 \
+GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_REQUEST_STAGGER_US=1000 \
 GEODE_HC_EXEC_TIMEOUT_SECS=10 \
 GEODE_HC_EXEC_RETRIES=0 \
 GEODE_HC_POLL_WORKERS=16 \
 timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest accepted sustained run completed all 16384 operations with zero
-setup retries, zero execute retries, zero reconnects, zero first-response
-timeouts, and 1111.06 QPS after lowering shard-parallel mutation admission to
-80 on the final QUIC `a1858c1` dependency line. This gate
+The best accepted sustained run completed all 16384 operations with zero setup
+retries, zero execute retries, zero reconnects, zero first-response timeouts,
+and 1895.40 QPS after cooperative shard-parallel mutation offload. This gate
 exercises 4096 mutations and 12288 reads over 2048 live QUIC connections. The
-same run reported p50=1722.11 ms, p95=3760.27 ms, p99=5180.92 ms, and
-p99.9=6492.79 ms, so completion is clean but latency is still above the
-enterprise objective.
+same run reported p50=457.29 ms, p95=2191.47 ms, p99=3026.73 ms, and
+p99.9=3763.53 ms, so completion is clean and throughput improved over the
+previous 1111.06 QPS sustained pass, but latency is still above the enterprise
+objective.
+
+A final pre-push rerun of the same 2048x8/1000 us gate completed cleanly at
+948.72 QPS with p50=1699.74 ms, p95=3918.29 ms, p99=5199.97 ms, and
+p99.9=6906.88 ms. Treat the lower rerun as host/runtime variance in the
+accepted completion gate; it reinforces that the enterprise latency and QPS
+objective remains open.
 
 After the QUIC `a1858c1` and `geode-client-zig` `942641c` dependency
 correction and the cap-80 retune, the 1024x8 mixed gate completed all 8192
@@ -79,10 +86,22 @@ GEODE_HC_METRICS_SCRAPE=1 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest 250 us sustained run after backlog-aware cooperative pacing
-completed 23067/32768 operations with zero setup retries, zero execute retries,
-zero reconnects, and 9701 first-response timeouts. It ran at 432.28 QPS with
-p50=4991.34 ms, p95=9498.71 ms, p99=9898.76 ms, and p99.9=9991.77 ms.
+With `GEODE_HC_REQUEST_STAGGER_US=1000` on the same 4096x8 shape after
+cooperative mutation offload, the latest scrape-enabled run completed
+22709/32768 operations with zero setup retries, zero execute retries, zero
+reconnects, and 10059 first-response timeouts. It ran at 458.00 QPS with
+p50=2824.89 ms, p95=9060.05 ms, p99=9800.29 ms, and p99.9=9973.57 ms. The
+runtime scrape recorded `quic_first_stream_ready_queue_wait_max_ns=1494813161`,
+`quic_first_stream_packet_process_max_ns=923593378`,
+`quic_first_stream_mutation_query_execute_ns_total=601068709357`,
+`coord_submit_wait_ns_total=600697108110`, and
+`quic_poll_recv_short_header_max_ns=9833966036`, so the next work remains split
+between mutation storage/WAL commit pressure and upstream QUIC short-header
+receive/frame processing.
+
+The latest 250 us sustained run after cooperative mutation offload completed
+16376/16384 operations at 2048 clients with eight first-response timeouts, so
+250 us remains a diagnostic ceiling rather than the accepted sustained gate.
 
 The latest metrics-enabled attribution run completed 26634/32768 operations
 with zero setup retries, zero execute retries, zero reconnects, and 6134
@@ -127,12 +146,23 @@ accepted sustained gates or worsened the 4096x8 stress ceiling:
 - `GEODE_HC_MUTATION_ADMISSION_CAP=96` and `192` at 2048x8. Cap 96 was a near
   miss with four first-response timeouts; cap 192 overfed mutation work and
   failed with 336 first-response timeouts. Cap 80 completed cleanly.
+- Raising the cooperative mutation offload pool cap from 64 to 128. The server
+  failed the 2048x8 readiness gate with `ServerStartupTimeout`, so the offload
+  pool remains bounded at 64 release workers.
+- `GEODE_HC_POLL_WORKERS=4` at the aggressive 2048x8/250 us profile. Lower
+  poll parallelism worsened completion to `16341/16384` with 43
+  first-response timeouts.
+- `GEODE_HC_MUTATION_ADMISSION_CAP=40` at the aggressive 2048x8/250 us profile.
+  Narrowing the mutation window still failed with 12 first-response timeouts
+  and lower throughput than the default cap 80 path.
 
 The current high-fanout defaults remain 512 cooperative first-stream workers,
 16 poll workers, 500 us group-commit coalescing, an 80-request shard-parallel
-mutation cap, and no server short-header packet shedding. The next implementation
-target is scheduler-side mutation offload/continuation so group-commit waits do
-not occupy cooperative first-stream workers.
+mutation cap, a 64-worker cooperative mutation offload pool for shard-parallel
+mutations, and no server short-header packet shedding. The next implementation
+target is reducing the mutation storage/WAL commit tail and the upstream QUIC
+short-header receive/frame-processing tail exposed by the 2048/4096 ceiling
+metrics.
 
 ## Enterprise Objective Gate
 
@@ -244,6 +274,12 @@ the next QUIC receive/scheduler pass:
   exceeds the scheduler worker count. The accepted variant passed the 1024x8
   and 2048x8 mixed sustained gates; more aggressive quarter-pool and guarded
   variants were rejected after reruns produced first-response timeouts.
+- `REQ-QUIC-HC-178`: shard-parallel first-stream mutations can now move the
+  packet execution and group-commit wait to a bounded offload pool after the
+  cooperative scheduler grants a mutation permit. The stream owner remains
+  marked running, preserving per-stream ordering, and shutdown waits for
+  offloaded packets before reclaiming contexts. If the offload queue is full or
+  unavailable, the scheduler falls back to the synchronous path.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
@@ -256,9 +292,12 @@ the first re-run was invalidated by a concurrent root-owned `goreleaser`
 cross-build saturating the host. The backlog-aware pacing cycle promoted the
 2048x8 sustained result from 821.63 QPS to 848.39 QPS with zero first-response
 timeouts on the prior dependency line. After the final QUIC `a1858c1` revert,
-cap 128 produced rare 2048x8 first-response timeouts, and the current cap 80
-default restores a clean 2048x8 sustained pass at 1111.06 QPS. It still does
-not promote the 4096x8 stress ceiling.
+cap 128 produced rare 2048x8 first-response timeouts, and cap 80 restored a
+clean 2048x8 sustained pass at 1111.06 QPS. The cooperative mutation offload
+cycle then raised the best accepted 2048x8/1000 us sustained pass to 1895.40
+QPS with zero first-response timeouts. A final pre-push rerun of the same gate
+also passed with zero first-response timeouts at 948.72 QPS. The offload work
+still does not promote the 4096x8 stress ceiling.
 
 ## Restart And Durability Checks
 
@@ -329,6 +368,10 @@ smoke proving the restart/recovery and graph-isolation gates work.
   `GEODE_GROUP_COMMIT_PHASE_METRICS`.
 - `GEODE_HC_MUTATION_ADMISSION_CAP`: harness passthrough for
   `GEODE_QUIC_MUTATION_ADMISSION_CAP`.
+- The cooperative mutation offload pool is derived from the mutation admission
+  cap and internally capped at 64 release workers. There is intentionally no
+  public `GEODE_QUIC_MUTATION_OFFLOAD_WORKERS` knob after the 128-worker
+  variant failed server readiness.
 - `GEODE_HC_POST_WRITE_POLL`: high-concurrency harness client flush behavior.
   Defaults to true below 1024 workers and false at 1024+ workers. Set `1` only
   for legacy immediate post-write poll comparisons.

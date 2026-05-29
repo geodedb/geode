@@ -159,6 +159,8 @@ const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .De
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
 const first_stream_scheduler_turn_delay_per_excess_ns: u64 = 2 * std.time.ns_per_us;
 const first_stream_scheduler_turn_delay_cap_ns: u64 = std.time.ns_per_ms;
+const first_stream_mutation_offload_worker_cap: usize = if (builtin.mode == .Debug) 8 else 64;
+const first_stream_mutation_offload_shutdown_wait_ns: u64 = 30 * std.time.ns_per_s;
 // CANARY: REQ=REQ-QUIC-HC-150; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationWindowCap; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
 //
 // The original four-wide mutation window protected reads while all mutations
@@ -180,6 +182,12 @@ pub const max_first_stream_scheduler_mutation_limit_cap: usize = 512;
 // fan-out from timing out without raising the worker pool into thread-storm
 // territory.
 const first_stream_scheduler_messages_per_tick: u32 = 1;
+
+const CooperativeFirstStreamTurn = enum {
+    keep,
+    done,
+    offloaded,
+};
 
 // CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
 //
@@ -2607,6 +2615,8 @@ pub const FirstStreamScheduler = struct {
     mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     shard_parallel_mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_retry_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mutation_offload_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mutation_offload_pool: ?*pooled.ThreadPool = null,
     mutation_limit: u32 = 1,
     shard_parallel_mutation_limit: u32 = 1,
     workers: []std.Thread = &.{},
@@ -2623,6 +2633,19 @@ pub const FirstStreamScheduler = struct {
             @as(usize, 1),
             @min(mutation_limit_cap, max_first_stream_scheduler_mutation_limit_cap),
         );
+        const offload_workers = @min(effective_mutation_cap, first_stream_mutation_offload_worker_cap);
+        const offload_pool = try pooled.ThreadPool.init(allocator, .{
+            .num_threads = @max(offload_workers, 1),
+            .queue_capacity = @max(effective_mutation_cap * 8, 64),
+            .blocking_workers = 0,
+            .deinit_timeout_ns = first_stream_mutation_offload_shutdown_wait_ns,
+        });
+        var offload_pool_owned = true;
+        errdefer if (offload_pool_owned) offload_pool.deinit();
+
+        const worker_threads = try allocator.alloc(std.Thread, @max(worker_count, 1));
+        errdefer allocator.free(worker_threads);
+
         self.* = .{
             .allocator = allocator,
             .contexts = .empty,
@@ -2637,19 +2660,25 @@ pub const FirstStreamScheduler = struct {
             .mutation_inflight = std.atomic.Value(u32).init(0),
             .shard_parallel_mutation_inflight = std.atomic.Value(u32).init(0),
             .mutation_retry_waiters = std.atomic.Value(u32).init(0),
+            .mutation_offload_inflight = std.atomic.Value(u32).init(0),
+            .mutation_offload_pool = offload_pool,
             .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, serial_first_stream_scheduler_mutation_limit_cap))),
             .shard_parallel_mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1), effective_mutation_cap))),
-            .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
+            .workers = worker_threads,
             .next_index = 0,
             .last_idle_sweep_ns = 0,
         };
-        errdefer allocator.free(self.workers);
+        offload_pool_owned = false;
 
         for (self.workers, 0..) |*worker, i| {
             errdefer {
                 self.shutdown.store(true, .release);
                 var j: usize = 0;
                 while (j < i) : (j += 1) self.workers[j].join();
+                if (self.mutation_offload_pool) |pool| {
+                    pool.deinit();
+                    self.mutation_offload_pool = null;
+                }
             }
             // CANARY: REQ=REQ-QUIC-HC-139; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeWorkerStackCap; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
             //
@@ -2671,6 +2700,29 @@ pub const FirstStreamScheduler = struct {
             self.mutex.unlock(io);
         }
         for (self.workers) |*worker| worker.join();
+
+        // CANARY: REQ=REQ-QUIC-HC-178; FEATURE="HighConcurrencyMutations"; ASPECT=CooperativeMutationOffload; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+        //
+        // Shard-parallel mutations can wait on group commit for milliseconds
+        // to seconds under 4k+ fanout. The cooperative scheduler worker that
+        // admitted the packet must not remain tied to that wait. Offloaded
+        // packets keep their owner marked running, and shutdown waits for those
+        // packet tasks before reclaiming contexts.
+        const offload_wait_start = monoNsFromHandler();
+        while (self.mutation_offload_inflight.load(.acquire) != 0 and
+            monoNsFromHandler() -| offload_wait_start < first_stream_mutation_offload_shutdown_wait_ns)
+        {
+            compat_sleepNs(std.time.ns_per_ms);
+        }
+        if (self.mutation_offload_inflight.load(.acquire) != 0) {
+            log.warn("cooperative mutation offload tasks still active at scheduler shutdown", &.{
+                Attr.int("inflight", @intCast(self.mutation_offload_inflight.load(.acquire))),
+            });
+        }
+        if (self.mutation_offload_pool) |pool| {
+            pool.deinit();
+            self.mutation_offload_pool = null;
+        }
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
@@ -2723,6 +2775,51 @@ pub const FirstStreamScheduler = struct {
         self.workerLoop();
     }
 
+    fn finishCooperativeContext(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
+        ctx.cooperative_done.store(true, .release);
+        self.removeContext(ctx);
+        // CANARY: REQ=REQ-QUIC-HC-073; FEATURE="QUIC High-Concurrency Requests"; ASPECT=SchedulerNonBlockingCleanup; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+        //
+        // Connection cleanup can wait for QUIC teardown and stream
+        // drain. Running it on the cooperative scheduler worker
+        // starves the ready queue after the first worker-count
+        // streams finish, so detach cleanup and keep the scheduler
+        // focused on request processing.
+        const cleanup_thread = std.Thread.spawn(
+            .{ .stack_size = first_stream_owner_stack_size },
+            cleanupFirstStreamOwnerAsync,
+            .{ctx},
+        ) catch |err| {
+            log.warn("Failed to detach first-stream cleanup, running inline", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            cleanupFirstStreamOwner(ctx);
+            return;
+        };
+        cleanup_thread.detach();
+    }
+
+    fn completeCooperativeTurn(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
+        // Clear `running` before consuming reschedule flags. If a STREAM frame
+        // arrives after the non-blocking read returned WouldBlock, the
+        // RX-ready callback must either enqueue the owner directly or leave a
+        // flag this worker observes here.
+        ctx.cooperative_running.store(false, .release);
+        const force = ctx.cooperative_force_ready.load(.acquire);
+        const reschedule = ctx.cooperative_needs_reschedule.swap(false, .acq_rel);
+        const parked_mutation = force and !self.forceReadyEligible(ctx);
+        if ((force or reschedule) and !parked_mutation) {
+            if (force and !ctx.cooperative_mutation_waiting.load(.acquire)) {
+                _ = ctx.cooperative_force_ready.swap(false, .acq_rel);
+            }
+            self.enqueueReady(ctx) catch |err| {
+                log.warn("Failed to requeue cooperative first-stream owner", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+    }
+
     fn workerLoop(self: *FirstStreamScheduler) void {
         while (!self.shutdown.load(.acquire)) {
             if (self.takeReady()) |ctx| {
@@ -2731,48 +2828,10 @@ pub const FirstStreamScheduler = struct {
                     ctx.cooperative_needs_reschedule.store(true, .release);
                     continue;
                 }
-                const done = processCooperativeFirstStream(ctx);
-                if (done) {
-                    ctx.cooperative_done.store(true, .release);
-                    self.removeContext(ctx);
-                    // CANARY: REQ=REQ-QUIC-HC-073; FEATURE="QUIC High-Concurrency Requests"; ASPECT=SchedulerNonBlockingCleanup; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
-                    //
-                    // Connection cleanup can wait for QUIC teardown and stream
-                    // drain. Running it on the cooperative scheduler worker
-                    // starves the ready queue after the first worker-count
-                    // streams finish, so detach cleanup and keep the scheduler
-                    // focused on request processing.
-                    const cleanup_thread = std.Thread.spawn(
-                        .{ .stack_size = first_stream_owner_stack_size },
-                        cleanupFirstStreamOwnerAsync,
-                        .{ctx},
-                    ) catch |err| {
-                        log.warn("Failed to detach first-stream cleanup, running inline", &.{
-                            Attr.string("error", @errorName(err)),
-                        });
-                        cleanupFirstStreamOwner(ctx);
-                        continue;
-                    };
-                    cleanup_thread.detach();
-                } else {
-                    // Clear `running` before consuming reschedule flags. If a
-                    // STREAM frame arrives after the non-blocking read returned
-                    // WouldBlock, the RX-ready callback must either enqueue the
-                    // owner directly or leave a flag this worker observes here.
-                    ctx.cooperative_running.store(false, .release);
-                    const force = ctx.cooperative_force_ready.load(.acquire);
-                    const reschedule = ctx.cooperative_needs_reschedule.swap(false, .acq_rel);
-                    const parked_mutation = force and !self.forceReadyEligible(ctx);
-                    if ((force or reschedule) and !parked_mutation) {
-                        if (force and !ctx.cooperative_mutation_waiting.load(.acquire)) {
-                            _ = ctx.cooperative_force_ready.swap(false, .acq_rel);
-                        }
-                        self.enqueueReady(ctx) catch |err| {
-                            log.warn("Failed to requeue cooperative first-stream owner", &.{
-                                Attr.string("error", @errorName(err)),
-                            });
-                        };
-                    }
+                switch (processCooperativeFirstStream(ctx)) {
+                    .done => self.finishCooperativeContext(ctx),
+                    .keep => self.completeCooperativeTurn(ctx),
+                    .offloaded => {},
                 }
                 self.pauseAfterTurn();
                 continue;
@@ -2886,6 +2945,34 @@ pub const FirstStreamScheduler = struct {
             self.decrementMutationRetryWaiters();
         }
         ctx.cooperative_mutation_wait_class.store(@intFromEnum(CooperativeMutationAdmissionClass.none), .release);
+    }
+
+    fn submitMutationOffload(
+        self: *FirstStreamScheduler,
+        ctx: *FirstStreamOwnerContext,
+        packet: schema.ClientPacket,
+        class: CooperativeMutationAdmissionClass,
+    ) bool {
+        if (class != .shard_parallel) return false;
+        const pool = self.mutation_offload_pool orelse return false;
+
+        const task = self.allocator.create(CooperativeMutationOffloadTask) catch return false;
+        task.* = .{
+            .scheduler = self,
+            .ctx = ctx,
+            .packet = packet,
+            .mutation_class = class,
+        };
+        _ = self.mutation_offload_inflight.fetchAdd(1, .acq_rel);
+        if (!pool.submitDefault(.{
+            .context = @ptrCast(task),
+            .callback = processCooperativeMutationOffload,
+        })) {
+            _ = self.mutation_offload_inflight.fetchSub(1, .acq_rel);
+            self.allocator.destroy(task);
+            return false;
+        }
+        return true;
     }
 
     fn forceReadyEligible(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) bool {
@@ -3021,6 +3108,7 @@ pub const FirstStreamScheduler = struct {
     }
 
     fn enqueueReady(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) !void {
+        if (self.shutdown.load(.acquire)) return;
         if (ctx.cooperative_done.load(.acquire)) return;
         if (!self.forceReadyEligible(ctx)) return;
         if (ctx.cooperative_queued.cmpxchgStrong(false, true, .acq_rel, .acquire)) |_| {
@@ -3313,7 +3401,72 @@ fn packetCooperativeMutationAdmissionClass(packet: *const schema.ClientPacket) C
     };
 }
 
-fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
+const CooperativeMutationOffloadTask = struct {
+    scheduler: *FirstStreamScheduler,
+    ctx: *FirstStreamOwnerContext,
+    packet: schema.ClientPacket,
+    mutation_class: CooperativeMutationAdmissionClass,
+};
+
+fn processCooperativeFirstStreamPacket(ctx: *FirstStreamOwnerContext, packet: *schema.ClientPacket) bool {
+    // CANARY: REQ=REQ-QUIC-HC-157; FEATURE="HighConcurrencyDiagnostics"; ASPECT=FirstStreamSchedulerLatency; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // Record one server-side application-processing sample per delivered
+    // first-stream packet. Combined with response write metrics, this
+    // separates scheduler queue tail from execution/write tail.
+    quic_response_metrics.recordFirstStreamPacketStart();
+    const packet_process_start_ns = monoNsFromHandler();
+    const packet_processed = blk: {
+        quic_response_metrics.beginFirstStreamPhaseSample();
+        defer quic_response_metrics.endFirstStreamPhaseSample();
+        break :blk processFirstStreamPacket(
+            ctx.allocator,
+            ctx.transport,
+            ctx.stream,
+            &ctx.reader,
+            &ctx.state,
+            &ctx.conn_state,
+            ctx.conn_state.disable_estimates,
+            ctx.conn_state.compact_profile,
+            ctx.conn_state.memcurve_profile,
+            ctx.peer_ip,
+            packet,
+        );
+    };
+    quic_response_metrics.recordFirstStreamPacketComplete(monoNsFromHandler() -| packet_process_start_ns);
+    return packet_processed;
+}
+
+fn processCooperativeMutationOffload(task_ptr: *anyopaque) void {
+    const task: *CooperativeMutationOffloadTask = @ptrCast(@alignCast(task_ptr));
+    const scheduler = task.scheduler;
+    const ctx = task.ctx;
+    const gpa = ctx.allocator;
+    defer {
+        _ = scheduler.mutation_offload_inflight.fetchSub(1, .acq_rel);
+        scheduler.allocator.destroy(task);
+    }
+    defer scheduler.releaseMutationPermit(task.mutation_class);
+    defer task.packet.deinit(gpa);
+
+    installThreadLocalSessionState(&ctx.state);
+    defer clearThreadLocalSessionState();
+
+    const packet_processed = processCooperativeFirstStreamPacket(ctx, &task.packet);
+    if (!packet_processed) {
+        scheduler.finishCooperativeContext(ctx);
+        return;
+    }
+
+    if (ctx.reader.hasBufferedUnread()) {
+        ctx.cooperative_force_ready.store(true, .release);
+    } else {
+        ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
+    }
+    scheduler.completeCooperativeTurn(ctx);
+}
+
+fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) CooperativeFirstStreamTurn {
     const gpa = ctx.allocator;
     installThreadLocalSessionState(&ctx.state);
     defer clearThreadLocalSessionState();
@@ -3333,14 +3486,14 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
             const packet_opt = ctx.reader.nextMessageNonBlocking() catch |err| {
                 if (err == error.WouldBlock) {
                     ctx.cooperative_generation_seen.store(read_generation, .release);
-                    return false;
+                    return .keep;
                 }
-                if (isIdleStreamReadError(err)) return true;
+                if (isIdleStreamReadError(err)) return .done;
                 log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
-                return true;
+                return .done;
             };
 
-            if (packet_opt == null) return true;
+            if (packet_opt == null) return .done;
             packet = packet_opt.?;
             _ = ctx.post_hello_packets.fetchAdd(1, .acq_rel);
         }
@@ -3355,7 +3508,10 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
                     ctx.pending_packet = packet;
                     scheduler.markMutationRetryWaiter(ctx, admission_class);
                     ctx.cooperative_force_ready.store(true, .release);
-                    return false;
+                    return .keep;
+                }
+                if (scheduler.submitMutationOffload(ctx, packet, admission_class)) {
+                    return .offloaded;
                 }
                 mutation_scheduler = scheduler;
                 mutation_class = admission_class;
@@ -3366,32 +3522,7 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
             packet.deinit(gpa);
         }
 
-        // CANARY: REQ=REQ-QUIC-HC-157; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=FirstStreamSchedulerLatency; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
-        //
-        // Record one server-side application-processing sample per delivered
-        // first-stream packet. Combined with response write metrics, this
-        // separates scheduler queue tail from execution/write tail.
-        quic_response_metrics.recordFirstStreamPacketStart();
-        const packet_process_start_ns = monoNsFromHandler();
-        const packet_processed = blk: {
-            quic_response_metrics.beginFirstStreamPhaseSample();
-            defer quic_response_metrics.endFirstStreamPhaseSample();
-            break :blk processFirstStreamPacket(
-                gpa,
-                ctx.transport,
-                ctx.stream,
-                &ctx.reader,
-                &ctx.state,
-                &ctx.conn_state,
-                ctx.conn_state.disable_estimates,
-                ctx.conn_state.compact_profile,
-                ctx.conn_state.memcurve_profile,
-                ctx.peer_ip,
-                &packet,
-            );
-        };
-        quic_response_metrics.recordFirstStreamPacketComplete(monoNsFromHandler() -| packet_process_start_ns);
-        if (!packet_processed) return true;
+        if (!processCooperativeFirstStreamPacket(ctx, &packet)) return .done;
     }
 
     if (ctx.reader.hasBufferedUnread()) {
@@ -3399,7 +3530,7 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
     } else {
         ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
     }
-    return false;
+    return .keep;
 }
 
 // CANARY: REQ=REQ-QUIC-HC-011; FEATURE="DetachedFirstStream"; ASPECT=ConnectionAdmission; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
