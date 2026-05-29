@@ -59,7 +59,12 @@ services:
       LOG_LEVEL: "info"
     command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
     ports:
-      - "3141:3141/udp"   # QUIC
+      # Host QUIC published on 13141 (not 3141) so this stack coexists with a
+      # host-resident geode (e.g. a systemd geode.service) that already owns
+      # UDP 3141. The container still listens on 3141 internally; the verify
+      # script queries geode from inside the container, so this mapping only
+      # affects external host access.
+      - "13141:3141/udp"  # QUIC (host 13141 -> container 3141)
       - "9091:9091/tcp"   # Prometheus /metrics
     volumes:
       - geode-data:/data
