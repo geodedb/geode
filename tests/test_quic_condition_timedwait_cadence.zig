@@ -823,6 +823,70 @@ test "cooperative first stream scheduler uses bounded batch budget" {
     try testing.expect(std.mem.indexOf(u8, handler, "ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);") != null);
 }
 
+test "cooperative first stream scheduler yields to poll workers at high fanout" {
+    // The cooperative path replaced one OS thread per first stream. Once the
+    // shared worker pool is large, it still needs a post-turn yield/backoff so
+    // QUIC poll workers can flush request and response packets during 4k+
+    // connection fan-out.
+    const allocator = testing.allocator;
+    const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
+    const handler = maybe_handler orelse return error.FileNotFound;
+    defer allocator.free(handler);
+
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-147") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "CooperativePollerFairness") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "context_count: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.context_count.fetchAdd(1, .acq_rel)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.context_count.fetchSub(1, .acq_rel)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn pauseAfterTurn") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.pauseAfterTurn();") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "active_contexts > 512") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "excess * 10 * std.time.ns_per_us") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "std.Thread.yield() catch {};") != null);
+}
+
+test "cooperative first stream scheduler requeues mutation overflow" {
+    // A burst of mutations must not occupy every cooperative first-stream
+    // worker while lock-free reads are still waiting in the ready queue.
+    const allocator = testing.allocator;
+    const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
+    const handler = maybe_handler orelse return error.FileNotFound;
+    defer allocator.free(handler);
+
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-148") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationAdmission") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationClassifier") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "pending_packet: ?schema.ClientPacket = null") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "mutation_inflight: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "mutation_limit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn tryAcquireMutationPermit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn releaseMutationPermit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn packetNeedsCooperativeMutationAdmission") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn queryLooksMutatingForCooperativeAdmission") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "ctx.pending_packet = packet;") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "ctx.cooperative_force_ready.store(true, .release);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.tryAcquireMutationPermit()") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.releaseMutationPermit()") != null);
+}
+
+test "high concurrency harness batches workload start wake" {
+    // The high-fanout harness should shape the local client wakeup as well as
+    // the request send time; otherwise thousands of same-process client threads
+    // can starve the child server before request_stagger_us takes effect.
+    const allocator = testing.allocator;
+    const maybe_e2e = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");
+    const e2e = maybe_e2e orelse return error.FileNotFound;
+    defer allocator.free(e2e);
+
+    try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-145") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "BatchedStartBarrierWake") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "fn wakeWorkloadStart") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "worker_count >= 1024 and request_stagger_us != 0") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "const wake_count = @min(remaining, @as(u32, 256));") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "sleepNs(250 * std.time.ns_per_us);") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "wakeWorkloadStart(&start, &start_generation, worker_count, request_stagger_us);") != null);
+}
+
 test "store-free scalar reads bypass graph snapshot locks" {
     const allocator = testing.allocator;
 
@@ -1523,6 +1587,8 @@ test "multi-property merge mutations avoid whole graph writer lock" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-122") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "copySmallestMergePropCandidates") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exact_node_property_index.copy") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "copyIfPresent") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "const merge_tuple_lock_count: usize = 4096") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exact_node_property_index_shard_count") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "NodePropertyExactIndexShard") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exactNodePropertyIndexShardForEncodedKey") != null);
@@ -2005,6 +2071,10 @@ test "quic count-only reads bypass query snapshot clone" {
     defer allocator.free(content);
 
     try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-008") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-146") != null);
+    const direct_count = std.mem.indexOf(u8, content, "execution.countNodesLabelRefcountFastPath") orelse return error.MissingGraphLockFreeCountPath;
+    const point_read_lock = std.mem.indexOf(u8, content, "graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read)") orelse return error.MissingPointReadLock;
+    try testing.expect(direct_count < point_read_lock);
     const fast_path = std.mem.indexOf(u8, content, "execution.countNodesFastPath") orelse return error.MissingCountFastPath;
     const snapshot_path = std.mem.indexOf(u8, content, "graph_store.snapshotUnderReadLock(gpa, query_graph_name)") orelse return error.MissingSnapshotPath;
     try testing.expect(fast_path < snapshot_path);
@@ -2027,9 +2097,13 @@ test "quic count fast path batches schema and page responses" {
     const audit_idx = std.mem.indexOf(u8, fast_path_rest, "auditQueryExecution(state, query_text, is_mutation)") orelse return error.MissingCountFastPathAudit;
     const fast_path_body = fast_path_rest[0..audit_idx];
 
-    try testing.expect(std.mem.indexOf(u8, fast_path_body, "const batched = [_]schema.QuicServerMessage") != null);
-    try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendQuicMessagesBatched(ra, stream, &batched)") != null);
+    try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result)") != null);
     try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendQuicMessage(") == null);
+
+    const helper_start = std.mem.indexOf(u8, content, "fn sendSinglePageExecutionResultBatched") orelse return error.MissingBatchedCountHelper;
+    const helper_body = content[helper_start..];
+    try testing.expect(std.mem.indexOf(u8, helper_body, "const batched = [_]schema.QuicServerMessage") != null);
+    try testing.expect(std.mem.indexOf(u8, helper_body, "try sendQuicMessagesBatched(ra, stream, &batched)") != null);
 }
 
 test "quic count fast path reuses active read store without nested ReadView" {
@@ -2044,6 +2118,9 @@ test "quic count fast path reuses active read store without nested ReadView" {
     defer allocator.free(match_ops);
 
     try testing.expect(std.mem.indexOf(u8, match_ops, "REQ-QUIC-HC-017") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "REQ-QUIC-HC-146") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "pub fn countNodesLabelRefcountFastPath") != null);
+    try testing.expect(std.mem.indexOf(u8, match_ops, "graph_store.getGlobalStore(allocator)") != null);
 
     const fn_start = std.mem.indexOf(u8, match_ops, "pub fn countNodesFastPath") orelse return error.MissingCountFastPath;
     const count_fast_path = match_ops[fn_start..];

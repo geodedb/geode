@@ -274,6 +274,36 @@ fn releaseAllClients(release_clients: *std.atomic.Value(bool), release_generatio
     std.Io.Threaded.global_single_threaded.io().futexWake(u32, &release_generation.raw, std.math.maxInt(u32));
 }
 
+fn wakeWorkloadStart(
+    start: *std.atomic.Value(bool),
+    start_generation: *std.atomic.Value(u32),
+    worker_count: u32,
+    request_stagger_us: u32,
+) void {
+    start.store(true, .release);
+    _ = start_generation.fetchAdd(1, .acq_rel);
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    // CANARY: REQ=REQ-QUIC-HC-145; FEATURE="High-Concurrency Test Harness"; ASPECT=BatchedStartBarrierWake; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+    //
+    // The harness runs thousands of clients in the same process as the test
+    // driver. Waking all client threads on one futex tick creates a local
+    // scheduler storm before the configured request stagger can shape offered
+    // load. Batch only the wakeup; each worker still sleeps according to
+    // `GEODE_HC_REQUEST_STAGGER_US`, so the measured request rate is unchanged.
+    if (worker_count >= 1024 and request_stagger_us != 0) {
+        var remaining = worker_count;
+        while (remaining > 0) {
+            const wake_count = @min(remaining, @as(u32, 256));
+            io.futexWake(u32, &start_generation.raw, wake_count);
+            remaining -= wake_count;
+            if (remaining != 0) sleepNs(250 * std.time.ns_per_us);
+        }
+    } else {
+        io.futexWake(u32, &start_generation.raw, std.math.maxInt(u32));
+    }
+}
+
 fn workerRun(ctx: *WorkerCtx) void {
     const allocator = std.heap.smp_allocator;
 
@@ -836,9 +866,7 @@ pub fn main() !void {
     }
 
     const workload_start_ns = monoNs();
-    start.store(true, .release);
-    _ = start_generation.fetchAdd(1, .acq_rel);
-    std.Io.Threaded.global_single_threaded.io().futexWake(u32, &start_generation.raw, std.math.maxInt(u32));
+    wakeWorkloadStart(&start, &start_generation, worker_count, request_stagger_us);
 
     const workload_deadline_ns = workload_start_ns + (@as(u64, execute_timeout_secs) + 30) * @as(u64, @max(ops_per_worker, 1)) * std.time.ns_per_s;
     while (counters.ok.load(.acquire) + counters.failed.load(.acquire) < expected_ops and monoNs() < workload_deadline_ns) {

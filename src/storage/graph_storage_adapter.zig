@@ -203,8 +203,10 @@ const NodePropertyExactIndex = struct {
     }
 
     fn remove(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) void {
-        const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return;
-        defer self.allocator.free(probe_key);
+        var key_buf: [1024]u8 = undefined;
+        const encoded = self.encodeKeyScratch(key_buf[0..], label_id, property_key, value_hash) catch return;
+        defer if (encoded.owned) |owned| self.allocator.free(owned);
+        const probe_key = encoded.key;
         const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
         const shard = &self.shards[shard_idx];
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -230,8 +232,10 @@ const NodePropertyExactIndex = struct {
     }
 
     fn get(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ?[]const u64 {
-        const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return null;
-        defer self.allocator.free(probe_key);
+        var key_buf: [1024]u8 = undefined;
+        const encoded = self.encodeKeyScratch(key_buf[0..], label_id, property_key, value_hash) catch return null;
+        defer if (encoded.owned) |owned| self.allocator.free(owned);
+        const probe_key = encoded.key;
         const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
         const shard = &self.shards[shard_idx];
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -245,8 +249,15 @@ const NodePropertyExactIndex = struct {
     }
 
     fn copy(self: *NodePropertyExactIndex, allocator: Allocator, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u64 {
-        const probe_key = try self.encodeKey(label_id, property_key, value_hash);
-        defer self.allocator.free(probe_key);
+        return (try self.copyIfPresent(allocator, label_id, property_key, value_hash)) orelse
+            try allocator.alloc(u64, 0);
+    }
+
+    fn copyIfPresent(self: *NodePropertyExactIndex, allocator: Allocator, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) !?[]u64 {
+        var key_buf: [1024]u8 = undefined;
+        const encoded = try self.encodeKeyScratch(key_buf[0..], label_id, property_key, value_hash);
+        defer if (encoded.owned) |owned| self.allocator.free(owned);
+        const probe_key = encoded.key;
         const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
         const shard = &self.shards[shard_idx];
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -256,17 +267,37 @@ const NodePropertyExactIndex = struct {
         if (shard.postings.get(probe_key)) |list| {
             return try allocator.dupe(u64, list.items);
         }
-        return try allocator.alloc(u64, 0);
+        return null;
     }
 
     fn encodeKey(self: *const NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u8 {
         const total_len = 4 + 4 + property_key.len + 8;
         const key = try self.allocator.alloc(u8, total_len);
-        std.mem.writeInt(u32, key[0..4], label_id, .little);
-        std.mem.writeInt(u32, key[4..8], @intCast(property_key.len), .little);
-        @memcpy(key[8 .. 8 + property_key.len], property_key);
-        std.mem.writeInt(u64, key[8 + property_key.len ..][0..8], value_hash, .little);
+        _ = self.encodeKeyInto(key, label_id, property_key, value_hash) orelse unreachable;
         return key;
+    }
+
+    const EncodedKey = struct {
+        key: []const u8,
+        owned: ?[]u8,
+    };
+
+    fn encodeKeyScratch(self: *const NodePropertyExactIndex, scratch: []u8, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) !EncodedKey {
+        if (self.encodeKeyInto(scratch, label_id, property_key, value_hash)) |key| {
+            return .{ .key = key, .owned = null };
+        }
+        const owned = try self.encodeKey(label_id, property_key, value_hash);
+        return .{ .key = owned, .owned = owned };
+    }
+
+    fn encodeKeyInto(_: *const NodePropertyExactIndex, buf: []u8, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ?[]const u8 {
+        const total_len = 4 + 4 + property_key.len + 8;
+        if (total_len > buf.len) return null;
+        std.mem.writeInt(u32, buf[0..4], label_id, .little);
+        std.mem.writeInt(u32, buf[4..8], @intCast(property_key.len), .little);
+        @memcpy(buf[8 .. 8 + property_key.len], property_key);
+        std.mem.writeInt(u64, buf[8 + property_key.len ..][0..8], value_hash, .little);
+        return buf[0..total_len];
     }
 
     /// Persist the index to `prop_exact.idx` inside `graph_dir_path`.
@@ -583,7 +614,7 @@ fn shouldExposePropertyKey(key: []const u8) bool {
 // ManagedGraph — one engine instance + its label dictionary
 // ============================================================================
 
-const merge_tuple_lock_count: usize = 256;
+const merge_tuple_lock_count: usize = 4096;
 
 /// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
@@ -4822,7 +4853,10 @@ fn copySmallestMergePropCandidates(
         defer freeTemporaryStorageProperty(allocator, storage_value);
         const value_hash = try hashStorageProperty(allocator, storage_value);
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
-        const candidates = try mg.exact_node_property_index.copy(allocator, label_id, kv.key, value_hash);
+        const candidates = (try mg.exact_node_property_index.copyIfPresent(allocator, label_id, kv.key, value_hash)) orelse {
+            if (best) |items| allocator.free(items);
+            return try allocator.alloc(u64, 0);
+        };
 
         if (candidates.len == 0) {
             if (best) |items| allocator.free(items);

@@ -19,7 +19,8 @@ dependency pins:
 |------|--------|---------|
 | `devnw/zig/quic` | `292fb1aa2e7a1da80768c6d11bbf3354a7410a79` | Serializes deferred per-connection TLS handshake retries so concurrent endpoint poll workers cannot drain the same TLS `pollCrypto` buffer. |
 | `devnw/zig/quic` | `553975f8da04e079888e78f12dc43a68e2fb4d07` | Adds a server-side receive-drain budget for request bursts after the crash fix, preventing high-fanout STREAM frames from being stranded behind PTO. |
-| `devnw/codepros/geode/geode-client-zig` | `0fb1eaee496a7983f3d200272990c92586fc20e8` | Pins the client package to the same QUIC fix set. |
+| `devnw/zig/quic` | `fc7efc2d98a435a82598c2a34f697bde1c7532e2` | Final pushed v0.1.21 pin for Geode: preserves TLS serialization and the proven server receive/short-header drain after rejecting narrower drain variants. |
+| `devnw/codepros/geode/geode-client-zig` | `959a43a7f6981a87131561bb6cb99605272c8ce8` | Pins the client package to the same QUIC fix set. |
 | `devnw/codepros/geode/geode` | this dependency update | Pins direct `quic` and `geode_client_zig` dependencies to the same upstream QUIC revision. |
 
 Regression coverage now includes the Geode vendored-source guard
@@ -30,25 +31,27 @@ read/write harness.
 Latest verified Geode high-concurrency run:
 
 ```sh
-GEODE_HC_WORKERS=2048 \
-GEODE_HC_OPS_PER_WORKER=2 \
+GEODE_HC_WORKERS=3072 \
+GEODE_HC_OPS_PER_WORKER=1 \
 GEODE_HC_MUTATION_STRIDE=4 \
 GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
 GEODE_HC_CONNECT_STAGGER_US=1000 \
 GEODE_HC_REQUEST_STAGGER_US=1000 \
-GEODE_HC_EXEC_TIMEOUT_SECS=6 \
+GEODE_HC_EXEC_TIMEOUT_SECS=10 \
 GEODE_HC_EXEC_RETRIES=0 \
 GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-Result: 2048 clients connected and completed 4096 operations, including 1024 mutations, at
-1972.24 QPS with zero setup retries, zero execution retries, zero reconnects, and no
-`pollCrypto` crash.
+Result: 3072 clients connected and completed 3072 operations, including 768 mutations, at
+984.44 QPS with zero setup retries, zero execution retries, zero reconnects, and no
+`pollCrypto` crash. A 1024-client smoke also passed at 994.64 QPS with zero retries.
 
-Known remaining throughput limit: a synchronized 4096-client / 4096-operation run now reaches
-`ready=4096` without the TLS crash, but most operations time out after they are started. That
-is a separate post-handshake scheduling/backpressure limit and is documented in
+Known remaining throughput limit: synchronized 4096-client / 4096-operation runs now reach
+`ready=4096` without the TLS crash, and Geode-side lock-free count/mutation-admission work
+improved the post-ready result, but a 10s no-retry run still has execute timeout tails
+(`ok=2367/4096` in the current probe). That is a separate post-handshake packet/admission limit
+and is documented in
 `docs/audit/quic-high-concurrency-2026-05-28.md`.
 
 ---

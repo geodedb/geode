@@ -317,45 +317,12 @@ fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
 }
 
 // CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=FastPath; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
-// CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelScopedCount; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
-// COUNT_PUSHDOWN: fast-path for `MATCH (n) RETURN count(n)` / `count(*)`,
-// now also covering the single-label case `MATCH (n:Label) RETURN count(n)`.
-// Mirrors the labeled fast-path in `executeMultiChainRelationshipMatch` at
-// :1726-1735 which uses the label index. Rather than iterating every node
-// and building a MatchBinding per row (the old unlabeled fallback at
-// :1736-1754 / :5725-5860), we delegate directly to
-// `store.countNodesForGraph(filter_graph, filter_tenant)` for the unlabeled
-// case, or `store.countNodesByLabel(filter_graph, label, filter_tenant)`
-// for the labeled case (GAP-0811), and emit a single-row result. Zero
-// per-row allocations, zero iterator contention with concurrent WAL/
-// checkpoint writers — which is the root cause of the 1-in-4
-// `shell_comprehensive_tests.yml::count-nodes` 30-second flake triaged
-// in docs/audit/bugfix-shell-count-nodes-triage.md.
-//
-// Returns null when the query is NOT a count-only pushdown candidate so
-// the caller falls back to the regular executor. Preconditions (all must
-// hold):
-//   - single MATCH chain with a single simple node pattern (n) or (n:L) —
-//     at most one label, no inline properties, no relationships, no path
-//     variable. Multi-label still falls back because posting-list
-//     intersection cost is better amortized with early-termination;
-//   - RETURN has exactly one item which is `count(<single-var-expr>)` or
-//     `count(*)` (case-insensitive), no DISTINCT qualifier;
-//   - no WHERE, no FILTER, no WITH, no GROUP BY, no ORDER BY, no SET,
-//     no LIMIT / OFFSET that would constrain row cardinality (since the
-//     result is a single row regardless — LIMIT >=1 is fine, LIMIT 0 is
-//     bailed to the regular path for correctness);
-//   - no active RLS engine with an authenticated user (RLS can filter
-//     per-row; the fast-path can't honour that cleanly — fall back).
-// Tenant filtering IS honoured: both `countNodesForGraph` and
-// `countNodesByLabel` apply the same `filter_tenant` the regular path
-// would.
-pub fn countNodesFastPath(
-    allocator: std.mem.Allocator,
-    q: ast.Query,
-    filter_graph: []const u8,
-    filter_tenant: ?[]const u8,
-) !?ExecutionResult {
+const CountFastPathPlan = struct {
+    label: ?[]const u8,
+    column_name: []const u8,
+};
+
+fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     // Shape: single chain, single simple node pattern, no relationship.
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];
@@ -419,15 +386,89 @@ pub fn countNodesFastPath(
     };
     if (!is_star and !is_var) return null;
 
+    return .{
+        .label = if (head.labels.len == 1) head.labels[0] else null,
+        .column_name = item.alias orelse "count(n)",
+    };
+}
+
+fn countFastPathRlsAllowed() bool {
     // RLS check: if an RLS engine is registered AND a user is authenticated,
     // per-row policies could change the answer. Bail to the regular path so
     // `passesRLSFilter` runs for every node.
     if (execution.getActiveContext()) |ctx| {
         if (ctx.user != null) {
-            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
-            if (rls_types.getGlobalExprRLSEngine() != null) return null;
+            if (rls_types.getGlobalRLSFilterEngine() != null) return false;
+            if (rls_types.getGlobalExprRLSEngine() != null) return false;
         }
     }
+    return true;
+}
+
+fn buildCountFastPathResult(allocator: std.mem.Allocator, column_name_src: []const u8, n: usize) !ExecutionResult {
+    const col_name = try allocator.dupe(u8, column_name_src);
+    errdefer allocator.free(col_name);
+
+    var columns = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(columns);
+    columns[0] = col_name;
+
+    var row = try allocator.alloc(Value, 1);
+    errdefer allocator.free(row);
+    row[0] = Value{ .Int = @intCast(n) };
+
+    var rows = try allocator.alloc([]Value, 1);
+    errdefer allocator.free(rows);
+    rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+// CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelScopedCount; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
+// COUNT_PUSHDOWN: fast-path for `MATCH (n) RETURN count(n)` / `count(*)`,
+// now also covering the single-label case `MATCH (n:Label) RETURN count(n)`.
+// Mirrors the labeled fast-path in `executeMultiChainRelationshipMatch` at
+// :1726-1735 which uses the label index. Rather than iterating every node
+// and building a MatchBinding per row (the old unlabeled fallback at
+// :1736-1754 / :5725-5860), we delegate directly to
+// `store.countNodesForGraph(filter_graph, filter_tenant)` for the unlabeled
+// case, or `store.countNodesByLabel(filter_graph, label, filter_tenant)`
+// for the labeled case (GAP-0811), and emit a single-row result. Zero
+// per-row allocations, zero iterator contention with concurrent WAL/
+// checkpoint writers — which is the root cause of the 1-in-4
+// `shell_comprehensive_tests.yml::count-nodes` 30-second flake triaged
+// in docs/audit/bugfix-shell-count-nodes-triage.md.
+//
+// Returns null when the query is NOT a count-only pushdown candidate so
+// the caller falls back to the regular executor. Preconditions (all must
+// hold):
+//   - single MATCH chain with a single simple node pattern (n) or (n:L) —
+//     at most one label, no inline properties, no relationships, no path
+//     variable. Multi-label still falls back because posting-list
+//     intersection cost is better amortized with early-termination;
+//   - RETURN has exactly one item which is `count(<single-var-expr>)` or
+//     `count(*)` (case-insensitive), no DISTINCT qualifier;
+//   - no WHERE, no FILTER, no WITH, no GROUP BY, no ORDER BY, no SET,
+//     no LIMIT / OFFSET that would constrain row cardinality (since the
+//     result is a single row regardless — LIMIT >=1 is fine, LIMIT 0 is
+//     bailed to the regular path for correctness);
+//   - no active RLS engine with an authenticated user (RLS can filter
+//     per-row; the fast-path can't honour that cleanly — fall back).
+// Tenant filtering IS honoured: both `countNodesForGraph` and
+// `countNodesByLabel` apply the same `filter_tenant` the regular path
+// would.
+pub fn countNodesFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    const plan = analyzeCountFastPath(q) orelse return null;
+    if (!countFastPathRlsAllowed()) return null;
 
     // All preconditions met — delegate to the store counter.
     //
@@ -454,33 +495,41 @@ pub fn countNodesFastPath(
         fallback_read_view_active = true;
         break :blk fallback_read_view.getReadStore();
     };
-    const n: usize = if (head.labels.len == 1)
-        store.countNodesByLabel(filter_graph, head.labels[0], filter_tenant)
+    const n: usize = if (plan.label) |label|
+        store.countNodesByLabel(filter_graph, label, filter_tenant)
     else
         store.countNodesForGraph(filter_graph, filter_tenant);
 
     // Build single-row `{<alias>: n}` result. Match the column-naming
     // conventions of `generateUniqueColumnNames`: prefer explicit alias,
     // fall back to a synthesized name derived from the expression shape.
-    const col_name: []const u8 = if (item.alias) |a|
-        try allocator.dupe(u8, a)
-    else
-        try allocator.dupe(u8, "count(n)");
+    return try buildCountFastPathResult(allocator, plan.column_name, n);
+}
 
-    var columns = try allocator.alloc([]const u8, 1);
-    columns[0] = col_name;
+// CANARY: REQ=REQ-QUIC-HC-146; FEATURE="QUIC High-Concurrency Reads"; ASPECT=GraphLockFreeLabelCount; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=execution; UPDATED=2026-05-28
+/// Narrow count-only fast path for the QUIC handler's hot read shape.
+///
+/// The general `countNodesFastPath` must be prepared to scan unlabeled nodes or
+/// tenant-filtered label postings, so the transport handler historically took a
+/// graph SHARED lock before calling it. The common high-concurrency query,
+/// `MATCH (n:<Label>) RETURN count(n)`, can be answered from GraphStore's
+/// maintained graph+label refcount under its own short mutex. That avoids
+/// thousands of graph-rwlock acquisitions during mixed read/write fan-out while
+/// preserving the locked fallback for every broader shape.
+pub fn countNodesLabelRefcountFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    if (filter_tenant != null) return null;
+    const plan = analyzeCountFastPath(q) orelse return null;
+    const label = plan.label orelse return null;
+    if (!countFastPathRlsAllowed()) return null;
 
-    var row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Int = @intCast(n) };
-
-    var rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
+    const store = graph_store.getGlobalStore(allocator);
+    const n = store.countNodesByLabel(filter_graph, label, null);
+    return try buildCountFastPathResult(allocator, plan.column_name, n);
 }
 
 // GAP-0811 Task 2.2: property-aggregate fast-path shared types.

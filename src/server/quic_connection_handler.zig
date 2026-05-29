@@ -1380,6 +1380,37 @@ fn sendEmptySuccessResult(
     try sendQuicMessagesBatched(ra, stream, &batched);
 }
 
+// CANARY: REQ=REQ-QUIC-HC-146; FEATURE="QUIC High-Concurrency Reads"; ASPECT=SharedCountResponseBatch; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+fn sendSinglePageExecutionResultBatched(
+    allocator: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    result: *execution.ExecutionResult,
+) !void {
+    var response_arena = std.heap.ArenaAllocator.init(allocator);
+    defer response_arena.deinit();
+    const ra = response_arena.allocator();
+
+    const status = try proto_util.buildStatus(ra, "00000", result.flags.items);
+    const schema_def = try proto_util.buildSchemaDefinition(ra, result);
+    const schema_resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{ .schema = schema_def },
+    };
+
+    const page = try proto_util.buildDataPage(ra, result, 0, 1, false, &.{});
+    const page_status = try proto_util.buildStatus(ra, "00000", result.flags.items);
+    const page_resp = schema.ExecutionResponse{
+        .status = page_status,
+        .payload = .{ .page = page },
+    };
+
+    const batched = [_]schema.QuicServerMessage{
+        .{ .execute = schema_resp },
+        .{ .execute = page_resp },
+    };
+    try sendQuicMessagesBatched(ra, stream, &batched);
+}
+
 fn sendExecuteError(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -2384,6 +2415,7 @@ const FirstStreamOwnerContext = struct {
     cooperative_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     cooperative_force_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     cooperative_generation_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    pending_packet: ?schema.ClientPacket = null,
     post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
@@ -2431,6 +2463,11 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     if (ctx.reader_registered) {
         g_proto_reader_registry.unregister(@ptrCast(&ctx.reader));
         ctx.reader_registered = false;
+    }
+
+    if (ctx.pending_packet) |*packet| {
+        packet.deinit(gpa);
+        ctx.pending_packet = null;
     }
     ctx.reader.deinit();
 
@@ -2535,6 +2572,9 @@ pub const FirstStreamScheduler = struct {
     ready_cv: std.Io.Condition = std.Io.Condition.init,
     ready_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    context_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mutation_limit: u32 = 1,
     workers: []std.Thread = &.{},
     next_index: usize = 0,
     last_idle_sweep_ns: u64 = 0,
@@ -2549,6 +2589,9 @@ pub const FirstStreamScheduler = struct {
             .ready_cv = std.Io.Condition.init,
             .ready_generation = std.atomic.Value(u32).init(0),
             .shutdown = std.atomic.Value(bool).init(false),
+            .context_count = std.atomic.Value(u32).init(0),
+            .mutation_inflight = std.atomic.Value(u32).init(0),
+            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, @as(usize, 128)))),
             .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
             .next_index = 0,
             .last_idle_sweep_ns = 0,
@@ -2611,10 +2654,12 @@ pub const FirstStreamScheduler = struct {
         ctx.cooperative_needs_reschedule.store(false, .release);
         ctx.cooperative_force_ready.store(false, .release);
         ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
+        ctx.pending_packet = null;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
         try self.contexts.append(self.allocator, ctx);
+        _ = self.context_count.fetchAdd(1, .acq_rel);
         self.mutex.unlock(io);
 
         ctx.stream.setReadReadyNotifier(@ptrCast(ctx), firstStreamReadyCallback);
@@ -2675,9 +2720,45 @@ pub const FirstStreamScheduler = struct {
                         };
                     }
                 }
+                self.pauseAfterTurn();
                 continue;
             }
         }
+    }
+
+    fn pauseAfterTurn(self: *FirstStreamScheduler) void {
+        // CANARY: REQ=REQ-QUIC-HC-147; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativePollerFairness; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+        //
+        // Cooperative first-stream workers can process cheap count responses
+        // faster than the QUIC poll workers can flush request/response packets
+        // during 4k+ same-process fan-out. Keep low fan-out hot, but yield once
+        // the pool is large and add the same bounded backoff used by the legacy
+        // persistent stream loop when thousands of first streams are live.
+        const active_contexts = self.context_count.load(.acquire);
+        if (active_contexts > 512) {
+            const excess: u64 = @intCast(active_contexts - 512);
+            const delay_ns = @min(excess * 10 * std.time.ns_per_us, 3 * std.time.ns_per_ms);
+            compat_sleepNs(delay_ns);
+        } else if (self.workers.len > 64) {
+            std.Thread.yield() catch {};
+        }
+    }
+
+    fn tryAcquireMutationPermit(self: *FirstStreamScheduler) bool {
+        // CANARY: REQ=REQ-QUIC-HC-148; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationAdmission; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+        //
+        // Mutating requests can occupy scheduler workers for longer than
+        // lock-free count reads. Cap concurrent cooperative mutation turns and
+        // requeue overflow packets so read work always keeps scheduler headroom.
+        var observed = self.mutation_inflight.load(.acquire);
+        while (observed < self.mutation_limit) {
+            observed = self.mutation_inflight.cmpxchgWeak(observed, observed + 1, .acq_rel, .acquire) orelse return true;
+        }
+        return false;
+    }
+
+    fn releaseMutationPermit(self: *FirstStreamScheduler) void {
+        _ = self.mutation_inflight.fetchSub(1, .acq_rel);
     }
 
     fn dequeueReadyLocked(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
@@ -2838,6 +2919,7 @@ pub const FirstStreamScheduler = struct {
                 } else if (self.next_index >= self.contexts.items.len) {
                     self.next_index = 0;
                 }
+                _ = self.context_count.fetchSub(1, .acq_rel);
                 return;
             }
         }
@@ -2866,6 +2948,89 @@ fn firstStreamReadyCallback(ctx_ptr: *anyopaque, _: *quic_transport.QuicInnerCon
     };
 }
 
+fn isGqlIdentifierByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn skipQuotedToken(query: []const u8, start: usize, quote: u8) usize {
+    var i = start + 1;
+    while (i < query.len) : (i += 1) {
+        if (query[i] != quote) continue;
+        if (i + 1 < query.len and query[i + 1] == quote) {
+            i += 1;
+            continue;
+        }
+        return i + 1;
+    }
+    return query.len;
+}
+
+fn queryLooksMutatingForCooperativeAdmission(query: []const u8) bool {
+    // CANARY: REQ=REQ-QUIC-HC-148; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationClassifier; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+    //
+    // This is an admission-control prefilter, not the semantic authority. The
+    // normal parser and query_traits still decide lock mode. Here we only need
+    // to recognize mutating packets early enough to avoid letting a mutation
+    // burst consume every cooperative scheduler worker.
+    var i: usize = 0;
+    while (i < query.len) {
+        const c = query[i];
+        if (std.ascii.isWhitespace(c)) {
+            i += 1;
+            continue;
+        }
+        if (c == '\'' or c == '"' or c == '`') {
+            i = skipQuotedToken(query, i, c);
+            continue;
+        }
+        if (c == '/' and i + 1 < query.len and query[i + 1] == '/') {
+            i += 2;
+            while (i < query.len and query[i] != '\n') : (i += 1) {}
+            continue;
+        }
+        if (c == '/' and i + 1 < query.len and query[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < query.len and !(query[i] == '*' and query[i + 1] == '/')) : (i += 1) {}
+            i = @min(i + 2, query.len);
+            continue;
+        }
+        if (!isGqlIdentifierByte(c)) {
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < query.len and isGqlIdentifierByte(query[i])) : (i += 1) {}
+        const token = query[start..i];
+        if (std.ascii.eqlIgnoreCase(token, "CREATE") or
+            std.ascii.eqlIgnoreCase(token, "MERGE") or
+            std.ascii.eqlIgnoreCase(token, "DELETE") or
+            std.ascii.eqlIgnoreCase(token, "DETACH") or
+            std.ascii.eqlIgnoreCase(token, "SET") or
+            std.ascii.eqlIgnoreCase(token, "REMOVE") or
+            std.ascii.eqlIgnoreCase(token, "INSERT") or
+            std.ascii.eqlIgnoreCase(token, "DROP") or
+            std.ascii.eqlIgnoreCase(token, "ALTER") or
+            std.ascii.eqlIgnoreCase(token, "GRANT") or
+            std.ascii.eqlIgnoreCase(token, "DENY") or
+            std.ascii.eqlIgnoreCase(token, "REVOKE") or
+            std.ascii.eqlIgnoreCase(token, "RESTORE"))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn packetNeedsCooperativeMutationAdmission(packet: *const schema.ClientPacket) bool {
+    const msg = packet.quic orelse return false;
+    return switch (msg) {
+        .execute => |execute_req| queryLooksMutatingForCooperativeAdmission(execute_req.query),
+        .commit, .rollback, .rollback_to, .restore, .upload_backup, .cdc_ctrl => true,
+        else => false,
+    };
+}
+
 fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
     const gpa = ctx.allocator;
     installThreadLocalSessionState(&ctx.state);
@@ -2873,21 +3038,42 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
 
     var processed: u32 = 0;
     while (processed < first_stream_scheduler_messages_per_tick) : (processed += 1) {
-        const read_generation = ctx.stream.readGeneration();
-        const packet_opt = ctx.reader.nextMessageNonBlocking() catch |err| {
-            if (err == error.WouldBlock) {
-                ctx.cooperative_generation_seen.store(read_generation, .release);
-                return false;
-            }
-            if (isIdleStreamReadError(err)) return true;
-            log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
-            return true;
-        };
+        var packet: schema.ClientPacket = undefined;
+        if (ctx.pending_packet) |pending| {
+            packet = pending;
+            ctx.pending_packet = null;
+        } else {
+            const read_generation = ctx.stream.readGeneration();
+            const packet_opt = ctx.reader.nextMessageNonBlocking() catch |err| {
+                if (err == error.WouldBlock) {
+                    ctx.cooperative_generation_seen.store(read_generation, .release);
+                    return false;
+                }
+                if (isIdleStreamReadError(err)) return true;
+                log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
+                return true;
+            };
 
-        if (packet_opt == null) return true;
-        var packet = packet_opt.?;
-        defer packet.deinit(gpa);
-        _ = ctx.post_hello_packets.fetchAdd(1, .acq_rel);
+            if (packet_opt == null) return true;
+            packet = packet_opt.?;
+            _ = ctx.post_hello_packets.fetchAdd(1, .acq_rel);
+        }
+
+        var mutation_scheduler: ?*FirstStreamScheduler = null;
+        if (packetNeedsCooperativeMutationAdmission(&packet)) {
+            if (ctx.cooperative_scheduler) |scheduler| {
+                if (!scheduler.tryAcquireMutationPermit()) {
+                    ctx.pending_packet = packet;
+                    ctx.cooperative_force_ready.store(true, .release);
+                    return false;
+                }
+                mutation_scheduler = scheduler;
+            }
+        }
+        defer {
+            if (mutation_scheduler) |scheduler| scheduler.releaseMutationPermit();
+            packet.deinit(gpa);
+        }
 
         if (!processFirstStreamPacket(
             gpa,
@@ -4669,6 +4855,33 @@ fn handleClientMessage(
                     break :blk null;
                 };
 
+                // CANARY: REQ=REQ-QUIC-HC-146; FEATURE="QUIC High-Concurrency Reads"; ASPECT=GraphLockFreeLabelCount; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+                //
+                // The dominant mixed fan-out read shape is a tenantless
+                // single-label count. That can be answered from the exact
+                // label refcount under GraphStore's label-count mutex, so it
+                // does not need the per-graph SHARED rwlock at all. Broader
+                // count shapes fall through to the existing locked active
+                // read-store path below.
+                {
+                    const prev_ctx = execution.pushActiveContext(&exec_context);
+                    defer execution.popActiveContext(prev_ctx);
+                    if (try execution.countNodesLabelRefcountFastPath(gpa, target.Query, query_graph_name, fast_count_tenant)) |fast_result| {
+                        var exec_result = fast_result;
+                        defer exec_result.deinit(gpa);
+
+                        for (flags.items) |flag| {
+                            try appendFlagToResult(gpa, &exec_result, flag);
+                        }
+
+                        try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
+                        auditQueryExecution(state, query_text, is_mutation);
+                        syncGraphFromSession(state);
+                        updateTxnStateFromProgram(state, &parse_result.program);
+                        return;
+                    }
+                }
+
                 const count_lock = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
                 var count_lock_held = true;
                 defer if (count_lock_held) graph_store.releaseGraphLock(count_lock);
@@ -4698,30 +4911,7 @@ fn handleClientMessage(
                     // response on the same single-write schema+page path as
                     // regular small row results so high fan-out count reads
                     // do not double stream write pressure.
-                    {
-                        var response_arena = std.heap.ArenaAllocator.init(gpa);
-                        defer response_arena.deinit();
-                        const ra = response_arena.allocator();
-                        const status = try proto_util.buildStatus(ra, "00000", exec_result.flags.items);
-                        const schema_def = try proto_util.buildSchemaDefinition(ra, &exec_result);
-                        const schema_resp = schema.ExecutionResponse{
-                            .status = status,
-                            .payload = .{ .schema = schema_def },
-                        };
-
-                        const page = try proto_util.buildDataPage(ra, &exec_result, 0, 1, false, &.{});
-                        const page_status = try proto_util.buildStatus(ra, "00000", exec_result.flags.items);
-                        const page_resp = schema.ExecutionResponse{
-                            .status = page_status,
-                            .payload = .{ .page = page },
-                        };
-
-                        const batched = [_]schema.QuicServerMessage{
-                            .{ .execute = schema_resp },
-                            .{ .execute = page_resp },
-                        };
-                        try sendQuicMessagesBatched(ra, stream, &batched);
-                    }
+                    try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
 
                     auditQueryExecution(state, query_text, is_mutation);
                     syncGraphFromSession(state);
