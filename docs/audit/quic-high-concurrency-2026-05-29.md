@@ -2,7 +2,7 @@
 
 **Scope:** `geode`
 **Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load now passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission and tighter cooperative scheduler backoff. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the dominant tail is now QUIC receive/first-response latency, not mutation requeue spin.
-**Dependency state:** Geode now pins QUIC `9a35274086e8cfb9cab5b78fa7471506aec03d3e` and `geode-client-zig` `5a6b65a012e02db2a7acb6d0f37f2251f171edf0`. QUIC `9a35274` is the upstream revert of the rejected one-batch server short-header app receive experiment, preserving the proven `a68d36e` behavior while keeping the rejected commit out of downstream pins.
+**Dependency state:** Geode now pins QUIC `108d06d9bc3852a897699d83a677a61677f3f0a2` and `geode-client-zig` `2f1bfe03fdf51476346ff8aca1c3e7c235a98931`. QUIC `108d06d` reverts the rejected `c2874fb`/`76b45ec` short-header wall-clock yield experiments, preserving the proven `a68d36e`/`9a35274` four-batch server receive behavior while keeping regressing cadence experiments out of downstream pins.
 
 ## Summary
 
@@ -21,9 +21,10 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 11. `REQ-QUIC-HC-157` adds first-stream scheduler metrics for ready-queue wait, per-packet processing time, and mutation-admission deferrals. The 4096/250 us diagnostic showed `quic_stream_write_errors_total=0` and `quic_stream_write_timeouts_total=0`, separating response-write health from scheduler and packet-processing tail.
 12. `REQ-QUIC-HC-158` fixes an RLS classification bottleneck: authenticated reads no longer treat startup's empty label/expression RLS engines as active row filters. The 4096/250 us stress ceiling now passes with `mg_rwlock_shared_hold_snapshot_ns_total=0`, confirming count reads stay on the label-refcount fast path unless policies are actually installed.
 13. `REQ-QUIC-HC-159` changes cooperative mutation overflow from immediate ready-queue requeue to permit-gated parking. Overflow packets keep stream ordering in `pending_packet`, but are only schedulable again when `mutation_inflight < mutation_limit`; `releaseMutationPermit()` wakes one parked waiter. This drops 4096x8 mutation deferrals from multi-million churn to thousands while preserving the 1024x8 sustained pass.
-14. Upstream QUIC commit `da08ef4` tested a one-batch server short-header app receive budget. It regressed 1024x8 throughput and 4096 setup, so QUIC `9a35274`, `geode-client-zig` `5a6b65a`, and Geode now pin the revert.
+14. Upstream QUIC commit `da08ef4` tested a one-batch server short-header app receive budget. It regressed 1024x8 throughput and 4096 setup, so QUIC `9a35274`, `geode-client-zig` `5a6b65a`, and Geode pinned the revert.
 15. `REQ-QUIC-HC-160` splits cooperative mutation admission into a four-wide serial window and a wider shard-parallel window. The wider window is deliberately limited to single no-RETURN node `MERGE` statements with at least two merge properties, matching the `bulkMergeNodeWithReservedIdMultiProp` tuple-lock path instead of the whole-graph writer path.
 16. `REQ-QUIC-HC-147` follow-up tightens the cooperative post-turn backoff from the previous 3 ms cap to a 1 ms cap. This keeps poll-worker yielding under high fanout but avoids adding seconds of scheduler latency across sustained multi-operation streams.
+17. Upstream QUIC commits `c2874fb` and `76b45ec` tested a short-header wall-clock receive yield after the 4096x8 diagnostics pointed at multi-second poll cycles. The first variant regressed setup retries by shrinking server receive slices; the repaired full-batch variant still regressed the accepted 4096 single-op gate to `ok=1043/4096` with `3053` first-response timeouts. QUIC `108d06d`, `geode-client-zig` `2f1bfe0`, and Geode now pin the revert.
 
 ## Changed Files
 
@@ -62,7 +63,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 - `build.zig`
   - Adds a focused `test-rls-expr-engine-wiring` step for the RLS dispatch regression.
 - `build.zig.zon`
-  - Pins both direct QUIC and embedded `geode-client-zig` to the upstream server STREAM ACK fanout fix plus the revert of the rejected one-batch short-header experiment.
+  - Pins both direct QUIC and embedded `geode-client-zig` to the upstream server STREAM ACK fanout fix plus the revert of the rejected one-batch and wall-clock short-header cadence experiments.
 
 ## Accepted Verification
 
@@ -71,15 +72,15 @@ All commands below were run on 2026-05-29.
 | Command | Result |
 |---------|--------|
 | `zig build test-rls-expr-engine-wiring --summary all` | PASS, 4/4 tests after the empty-RLS-engine fast-path regression coverage. |
-| Upstream QUIC `zig build test --summary all` | PASS, 116/126 tests passed, 10 skipped, after reverting the rejected one-batch short-header experiment. |
-| `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `9a35274`. |
+| Upstream QUIC `zig build test --summary all` | PASS, 116/126 tests passed, 10 skipped, after reverting the rejected wall-clock cadence experiment. |
+| `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `108d06d`. |
 | `zig build test-quic-condition-cadence --summary all` | PASS, 72/72 tests after shard-parallel mutation admission, permit-gated overflow, and dependency source audits. |
 | 1024 workers x 8 ops mixed sustained E2E | PASS, 8192/8192 operations, zero retries, zero reconnects, zero first-response timeouts, 3471.63 QPS. |
 | 2048 workers x 8 ops mixed sustained E2E | PASS, 16384/16384 operations, zero retries, zero reconnects, zero first-response timeouts, 1007.96 QPS. |
-| 4096 mixed single-op E2E at 250 us | PASS, 4096/4096 operations, zero retries, zero reconnects, zero first-response timeouts, 884.81 QPS. |
+| 4096 mixed single-op E2E at 250 us | PASS, 4096/4096 operations, zero retries, zero reconnects, zero first-response timeouts, 895.00 QPS after the final QUIC `108d06d` and client `2f1bfe0` repin. |
 | 4096 workers x 8 ops mixed sustained E2E at 250 us | FAIL, 21719/32768 operations, zero setup/execute retries, 11049 first-response timeouts. This is the remaining low-stagger ceiling. |
 | 4096 workers x 8 ops mixed sustained E2E at 1000 us | FAIL, 25800/32768 operations, zero setup/execute retries, 6968 first-response timeouts. This is the current latency-friendly ceiling. |
-| `zig build --summary all` after final dependency repin | PASS, 52/52 steps succeeded against QUIC `9a35274` and `geode-client-zig` `5a6b65a`. |
+| `zig build --summary all` after final dependency repin | PASS, 52/52 steps succeeded against QUIC `108d06d` and `geode-client-zig` `2f1bfe0`. |
 | 4096 read-only 250 us low-stagger probe | PASS, 4096/4096 operations, zero retries, zero reconnects. |
 | 1024 mixed 250 us timing smoke | PASS, 1024/1024 operations at 3822.30 QPS after deferred high-fanout post-write flush, validating the split timing summary path. |
 
@@ -120,7 +121,7 @@ avg_first_response_read_ms=118.10 avg_response_read_ms=118.14
 avg_response_message_read_ms=59.07
 ```
 
-4096 mixed read/mutation 250 us single-op gate after the shard-parallel admission follow-up:
+4096 mixed read/mutation 250 us single-op gate after the final dependency repin:
 
 ```sh
 GEODE_HC_WORKERS=4096 \
@@ -139,15 +140,17 @@ Result:
 
 ```text
 workers=4096 ops_per_worker=1 mutation_stride=4 ops=4096 reads=3072 mutations=1024
-setup_ms=5456 elapsed_ms=4629 qps=884.81
-avg_read_ms=2857.71 avg_mut_ms=2865.69 avg_first_op_ms=2859.71 max_ms=4474.02
+setup_ms=5348 elapsed_ms=4576 qps=895.00
+avg_read_ms=2611.19 avg_mut_ms=2606.53 avg_first_op_ms=2610.03 max_ms=4291.15
 setup_attempts=4096 setup_retries=0
 execute_attempts=4096 execute_retries=0 execute_reconnects=0
 timing samples=4096 response_messages=8192 first_response_timeouts=0
-avg_ready_to_first_execute_ms=15.26 max_ready_to_first_execute_ms=291.16
-avg_execute_write_ms=0.40 avg_execute_prepare_ms=0.23
-avg_execute_stream_write_ms=0.17 avg_execute_post_write_poll_ms=0.00
-avg_first_response_wait_ms=2858.11 max_first_response_wait_ms=4473.95
+avg_ready_to_first_execute_ms=16.27 max_ready_to_first_execute_ms=286.73
+avg_execute_write_ms=0.37 avg_execute_prepare_ms=0.32
+avg_execute_stream_write_ms=0.04 avg_execute_post_write_poll_ms=0.00
+avg_first_response_wait_ms=2608.34 max_first_response_wait_ms=4291.07
+avg_first_response_read_ms=2608.33 avg_response_read_ms=2608.37
+avg_response_message_read_ms=1304.18
 ```
 
 Diagnostic run with server metrics enabled (`GEODE_HC_CAPTURE_SERVER_LOGS=1`,
@@ -367,6 +370,7 @@ All rows below used 4096 workers, one operation per worker, mutation stride 4, 1
 | Split client EXECUTE write timing at 250 us mixed | `ok=1318/4096`, `read_failed=2109`, `mutation_failed=669`, `first_response_timeouts=2778`, `avg_execute_write_ms=205.15`, `avg_execute_prepare_ms=0.67`, `avg_execute_stream_write_ms=0.06`, `avg_execute_post_write_poll_ms=204.40` | Diagnostic only. It proved the remaining local client write cost was almost entirely same-process post-write endpoint polling. |
 | Deferred high-fanout post-write flush at 250 us mixed, before `REQ-QUIC-HC-158` | `ok=1823/4096`, `read_failed=1684`, `mutation_failed=589`, `first_response_timeouts=2273`, `avg_execute_write_ms=0.46`, `avg_execute_post_write_poll_ms=0.00`, `avg_first_response_wait_ms=7852.70` | Accepted for harness behavior because it removes client-side write/poll contention and preserves the accepted 1000 us gate. Superseded as a failure by the empty-RLS-engine fix. |
 | QUIC one-batch server short-header app budget (`da08ef4`) | 1024x8 PASS but regressed to `2687.79 QPS`; 4096x8 regressed to `ok=15221/32768`, `setup_retries=118`, `first_response_timeouts=17547` | Rejected and reverted upstream in QUIC `9a35274`; downstream pins now point at the revert commit. |
+| QUIC short-header wall-clock yield (`c2874fb`/`76b45ec`) | The slice-shrinking variant regressed 4096x8 setup to `ready=3293/4096` at 60s with `setup_retries=2305`. The repaired full-batch variant completed setup but regressed the accepted 4096 single-op gate to `ok=1043/4096`, `first_response_timeouts=3053`. | Rejected and reverted upstream in QUIC `108d06d`; downstream pins now point at the revert commit. |
 
 ## Known Unrelated Test Failure
 

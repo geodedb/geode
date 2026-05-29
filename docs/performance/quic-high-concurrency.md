@@ -23,9 +23,9 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest 2026-05-29 follow-up run completed all 4096 operations with zero
+The latest 2026-05-29 final dependency-pin run completed all 4096 operations with zero
 setup retries, zero execute retries, zero reconnects, zero first-response
-timeouts, and 884.81 QPS.
+timeouts, and 895.00 QPS.
 
 ## Sustained Gate
 
@@ -157,11 +157,14 @@ broader query shape force snapshot execution.
 
 As of this cycle, Geode pins:
 
-- QUIC: `9a35274086e8cfb9cab5b78fa7471506aec03d3e`
-- `geode-client-zig`: `5a6b65a012e02db2a7acb6d0f37f2251f171edf0`
+- QUIC: `108d06d9bc3852a897699d83a677a61677f3f0a2`
+- `geode-client-zig`: `2f1bfe03fdf51476346ff8aca1c3e7c235a98931`
 
-QUIC `9a35274` reverts the rejected one-batch server short-header app receive
-experiment and preserves the proven `a68d36e` behavior.
+QUIC `108d06d` reverts the rejected `c2874fb`/`76b45ec` short-header
+wall-clock yield experiments and preserves the proven `a68d36e`/`9a35274`
+four-batch server receive behavior. Those cadence experiments are documented as
+rejected because they regressed the accepted 4096 single-op gate to 3053/4096
+first-response timeouts.
 
 Dependency changes must be made in the upstream worktrees under
 `~/src/devnw/zig/*` before Geode is repinned.

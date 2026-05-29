@@ -146,11 +146,10 @@
             // 2026-05-29: defers the first server-side STREAM-only standalone
             // ACK so request/response traffic can piggyback ACKs on response
             // packets, with AppAckDelay preserving max_ack_delay for quiet peers.
-            // 2026-05-29: pin to the upstream revert of the one-batch
-            // short-header experiment after it regressed 4k setup and sustained
-            // mixed throughput; this keeps the proven a68d36e behavior while
-            // ensuring main no longer exposes the rejected intermediate commit.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#9a35274086e8cfb9cab5b78fa7471506aec03d3e",
+            // 2026-05-29: restores the proven four-batch server drain after
+            // short-header wall-clock yield experiments regressed Geode's
+            // accepted 4096 single-op gate.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#108d06d9bc3852a897699d83a677a61677f3f0a2",
             .hash = "quic-0.1.21-gBIqUeHmPADddO39D62L-gMpkIq0hQYX0-BpsXL20uX3",
         },
 
@@ -276,8 +275,12 @@
             // 2026-05-29: bumped to 5a6b65a so client and server share
             // quic 9a35274's revert of the rejected one-batch short-header
             // receive budget experiment.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#5a6b65a012e02db2a7acb6d0f37f2251f171edf0",
-            .hash = "geode_client_zig-0.2.9-8ysbV8xkCQDG-5Zx4G2m5W7D-OjliJ2UC_T-1QbmykGk",
+            // 2026-05-29: bumped to 2f1bfe0 after rejecting quic
+            // c2874fb/76b45ec's receive-cadence yield experiments; client and
+            // server now share quic 108d06d's revert to the proven four-batch
+            // drain.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#2f1bfe03fdf51476346ff8aca1c3e7c235a98931",
+            .hash = "geode_client_zig-0.2.9-8ysbV1lkCQDopkdKFn4uXDj7sOjnFwAF7W57fEC-7GDZ",
         },
 
         // =======================================================================
