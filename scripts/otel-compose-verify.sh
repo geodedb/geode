@@ -12,7 +12,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 COMPOSE="docker compose -f docker-compose.otel.yml"
 REQUIRE_SPANS="${REQUIRE_SPANS:-0}"
-PW="geodeotel"
+
+# No secret is committed: generate a random per-run password (od reads exactly 16
+# bytes and exits, avoiding the tr|head SIGPIPE trap under `set -o pipefail`).
+# Exported so docker compose substitutes ${GEODE_OTEL_PASSWORD} in the stack.
+export GEODE_OTEL_PASSWORD="${GEODE_OTEL_PASSWORD:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}"
+PW="$GEODE_OTEL_PASSWORD"
 
 cleanup() { $COMPOSE down -v >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -22,6 +27,12 @@ zig build -Doptimize=ReleaseSafe >/dev/null
 
 echo "==> Bringing up stack"
 $COMPOSE up --build -d
+
+echo "==> Waiting for collector readiness (health_check :13133, max 30s)"
+for _ in $(seq 1 30); do
+  curl -sf http://localhost:13133/ >/dev/null 2>&1 && { echo "    collector ready"; break; }
+  sleep 1
+done
 
 echo "==> Waiting for geode to become healthy (max 90s)"
 deadline=$(( $(date +%s) + 90 ))

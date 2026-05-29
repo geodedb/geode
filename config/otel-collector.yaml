@@ -10,6 +10,14 @@ receivers:
       grpc:
         endpoint: 0.0.0.0:4317
 
+extensions:
+  # Real readiness endpoint. scripts/otel-compose-verify.sh curls
+  # http://localhost:13133/ (published) to confirm the collector is up before
+  # generating telemetry. The contrib image is distroless (no curl/sh), so the
+  # compose container healthcheck can only smoke-test the binary, not the port.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 processors:
   batch:
     timeout: 1s
@@ -25,6 +33,7 @@ exporters:
     path: /var/log/otel/logs.jsonl
 
 service:
+  extensions: [health_check]
   telemetry:
     logs:
       level: info

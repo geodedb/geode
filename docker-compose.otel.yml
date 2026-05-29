@@ -9,6 +9,10 @@
 # geode pushes OTLP/HTTP to the collector over the compose network (otel-collector:4318).
 # The verify script execs into the geode container and runs queries against 127.0.0.1:3141,
 # so no cross-container QUIC/UDP is required.
+#
+# GEODE_OTEL_PASSWORD MUST be set in the environment (no secret is committed). The verify
+# script and `make otel-compose-up` auto-generate a random one; for a manual `docker compose
+# up` export your own, e.g.  GEODE_OTEL_PASSWORD=$(openssl rand -hex 12) docker compose ... up
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.96.0
@@ -22,10 +26,13 @@ services:
       - ./config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
       - otel-output:/var/log/otel
     ports:
-      - "4318:4318"   # OTLP/HTTP
-      - "4317:4317"   # OTLP/gRPC
+      - "4318:4318"     # OTLP/HTTP
+      - "4317:4317"     # OTLP/gRPC
+      - "13133:13133"   # health_check extension (real readiness; curled by the verify script)
     healthcheck:
-      # The contrib image has no curl; check the OTLP/HTTP port is open via the collector process.
+      # The contrib image is distroless (no curl/sh), so this only smoke-tests that
+      # the binary runs — it does NOT prove the OTLP receiver is bound. Real readiness
+      # is the health_check extension on :13133 (see config + scripts/otel-compose-verify.sh).
       test: ["CMD", "/otelcol-contrib", "components"]
       interval: 5s
       timeout: 3s
@@ -52,9 +59,12 @@ services:
       OTEL_BSP_SCHEDULE_DELAY: "2000"
       OTEL_RESOURCE_ATTRIBUTES: "service.name=geode,service.namespace=codepros,deployment.environment.name=docker-compose"
       # --- geode runtime ---
-      GEODE_ADMIN_PASSWORD: "geodeotel"
+      # No secret committed: GEODE_OTEL_PASSWORD must be provided by the caller
+      # (verify script / make target auto-generate one). Matches the ${VAR:?...}
+      # convention used by the other docker-compose*.yml files.
+      GEODE_ADMIN_PASSWORD: "${GEODE_OTEL_PASSWORD:?set GEODE_OTEL_PASSWORD (verify script/make auto-generate; or export your own)}"
       GEODE_USERNAME: "geode"
-      GEODE_PASSWORD: "geodeotel"
+      GEODE_PASSWORD: "${GEODE_OTEL_PASSWORD:?set GEODE_OTEL_PASSWORD (verify script/make auto-generate; or export your own)}"
       # GEODE_METRICS_PORT starts the Prometheus /metrics server (main.zig:1258 —
       # the server is only created when this env is set). GEODE_METRICS_BIND is an
       # IP-only dotted-quad (metrics_server.zig:359 parses address only, no port).

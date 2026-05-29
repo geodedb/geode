@@ -1565,7 +1565,8 @@ test-mermaid-integration:
 
 otel-compose-up: ## Build geode + bring up the geode/collector otel stack
 	zig build -Doptimize=ReleaseSafe
-	docker compose -f docker-compose.otel.yml up --build -d
+	GEODE_OTEL_PASSWORD="$${GEODE_OTEL_PASSWORD:-$$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}" \
+		docker compose -f docker-compose.otel.yml up --build -d
 
 otel-compose-verify: ## Run the end-to-end telemetry verification (metrics land in collector)
 	scripts/otel-compose-verify.sh
