@@ -54,17 +54,25 @@ fn encodeTimeBasedNodeId(ms: u64, seq: u16) u64 {
 }
 
 fn realtimeMillis() u64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
+        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
         const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
         if (rc != 0) return 0;
+        const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+        const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+        return sec * 1000 + nsec / std.time.ns_per_ms;
     } else {
+        // On non-linux targets std.c.clock_gettime expects std.c.timespec --
+        // a different struct from std.posix.timespec when cross-compiling
+        // from linux to macos under Zig 0.16. Use the c-namespaced type for
+        // the c-namespaced call.
+        var ts: std.c.timespec = .{ .sec = 0, .nsec = 0 };
         const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
         if (rc != 0) return 0;
+        const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+        const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+        return sec * 1000 + nsec / std.time.ns_per_ms;
     }
-    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
-    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
-    return sec * 1000 + nsec / std.time.ns_per_ms;
 }
 
 // CANARY: REQ=REQ-QUIC-HC-015; FEATURE="High-Concurrency Mutations"; ASPECT=AtomicNodeIdReservation; STATUS=IMPL; OWNER=storage; UPDATED=2026-05-26

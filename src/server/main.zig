@@ -36,17 +36,24 @@ fn compat_microTimestamp() i64 {
 }
 
 fn monoNs() u64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
+        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
         const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
         if (rc != 0) return 0;
+        const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+        const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+        return sec * std.time.ns_per_s + nsec;
     } else {
+        // std.c.timespec on macos differs from std.posix.timespec when
+        // cross-compiling from linux to macos under Zig 0.16; pair the
+        // c-namespaced call with the c-namespaced type.
+        var ts: std.c.timespec = .{ .sec = 0, .nsec = 0 };
         const rc = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
         if (rc != 0) return 0;
+        const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+        const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+        return sec * std.time.ns_per_s + nsec;
     }
-    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
-    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
-    return sec * std.time.ns_per_s + nsec;
 }
 
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.
