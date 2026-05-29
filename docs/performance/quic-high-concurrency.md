@@ -209,8 +209,8 @@ broader query shape force snapshot execution.
 
 As of this cycle, Geode pins:
 
-- QUIC: `eeeb2161ccd94c60f7c6b645bcfd16e20202593a`
-- `geode-client-zig`: `533cde8f9b587e0a0b9065bb2f346f224479f02e`
+- QUIC: `06f4aadcf045a0d6295c7e85398b94c7096accb9`
+- `geode-client-zig`: `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd`
 
 QUIC `108d06d` reverts the rejected `c2874fb`/`76b45ec` short-header
 wall-clock yield experiments and preserves the proven `a68d36e`/`9a35274`
@@ -221,6 +221,12 @@ yield after one full batch and 500 ms, but it also regressed the accepted 4096
 single-operation gate. QUIC `eeeb216` is the upstream-main revert of that
 experiment, so downstream consumers track upstream `main` while preserving the
 proven four-batch receive behavior.
+
+QUIC `06f4aad` then closes the remaining `pollCrypto` race class documented in
+`QUIC_TLS_POLLCRYPTO_CRASH.md`: generic and coalesced long-header Initial and
+Handshake packets now dispatch through the same serialized wrappers as the
+optimized receive drain, so TLS `processCrypto`/`pollCrypto` remains
+single-writer per connection even outside the hot burst path.
 
 Dependency changes must be made in the upstream worktrees under
 `~/src/devnw/zig/*` before Geode is repinned.

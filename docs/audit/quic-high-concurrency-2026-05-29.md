@@ -2,7 +2,7 @@
 
 **Scope:** `geode`
 **Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, storage/index contention fixes, shared query-cache hit-path fixes, and tuple-lock collision instrumentation. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the dominant tail is now first-response wait and QUIC receive/scheduler latency, with the Geode cache, hot-label refcount, and multi-property MERGE tuple-lock bottlenecks reduced or directly measurable.
-**Dependency state:** Geode now pins QUIC `eeeb2161ccd94c60f7c6b645bcfd16e20202593a` and `geode-client-zig` `533cde8f9b587e0a0b9065bb2f346f224479f02e`. QUIC `eeeb216` is the upstream-main revert of the rejected `6224b28` slow-batch short-header cadence experiment, preserving the proven `108d06d` four-batch server receive behavior while keeping downstream pins on current upstream `main`.
+**Dependency state:** Geode now pins QUIC `06f4aadcf045a0d6295c7e85398b94c7096accb9` and `geode-client-zig` `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd`. QUIC `06f4aad` preserves the proven `eeeb216` four-batch server receive behavior and adds `REQ-QUIC-HC-168`, routing generic/coalesced long-header dispatch through the same per-connection TLS serializer as the optimized burst receive path.
 
 ## Summary
 
@@ -33,6 +33,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 23. `REQ-QUIC-HC-166` keeps mutating programs out of the shared optimizer. Mutation fast paths do not consume optimizer hints, and literal-heavy mutation requests create mostly one-shot plan-cache misses under mixed fanout.
 24. After the cache/storage cycle, the 4096x8 read-only low-stagger probe improved from 11466 first-response timeouts to 9851. The 4096x8 mixed low-stagger probe improved from the earlier 12293-timeout ceiling to 9045 after mutation optimizer admission was disabled, but it still fails the 10s first-response budget.
 25. `REQ-QUIC-HC-167` raises multi-property `MERGE` tuple-lock striping from 4096 to 16384 and heap-allocates the stripe table per graph so the ReleaseFast object file does not carry a large static mutex array. Runtime metrics now expose tuple-lock acquire count, cumulative wait/hold time, and max wait/hold samples. A 65k static-stripe variant was rejected because it regressed the 4096x8 probe and produced a much heavier ReleaseFast compile.
+26. Upstream QUIC `REQ-QUIC-HC-168` closes the remaining `pollCrypto` crash surface in the generic/coalesced long-header dispatcher. `processIncomingDatagram()` no longer calls `incoming.processInitial()` or `incoming.processHandshake()` directly for supported Initial/Handshake packets; it uses the endpoint-owned concurrent wrappers so Endpoint.mu protects connection lookup/creation and `endpoint_rx_serial_mu` protects per-connection TLS mutation.
 
 ## Changed Files
 
@@ -98,8 +99,11 @@ All commands below were run on 2026-05-29.
 | Command | Result |
 |---------|--------|
 | `zig build test-rls-expr-engine-wiring --summary all` | PASS, 4/4 tests after the empty-RLS-engine fast-path regression coverage. |
-| Upstream QUIC `zig build test --summary all` | PASS, 116/126 tests passed, 10 skipped, after reverting the rejected slow-batch cadence experiment in QUIC `eeeb216`. |
-| `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `eeeb216`. |
+| Upstream QUIC `zig build test -Dtest-filter=thread_safety --summary all` | PASS, 10/10 tests including `generic_long_header_dispatch_uses_serialized_tls_wrappers` after QUIC `06f4aad`. |
+| Upstream QUIC `zig build test -Dtest-filter=pending_hs_send --summary all` | PASS, 3/3 tests after QUIC `06f4aad`, preserving the earlier deferred-handshake retry serialization guard. |
+| Upstream QUIC `zig build --summary all` | PASS, 10/10 steps after QUIC `06f4aad`. |
+| `geode-client-zig` `zig build --summary all` | PASS, 15/15 steps after repinning to QUIC `06f4aad`. |
+| `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `06f4aad`. |
 | `zig build test-quic-condition-cadence --summary all` | PASS, 72/72 tests after shard-parallel mutation admission, permit-gated overflow, dependency source audits, storage/index contention audits, shared cache audits, and read-only optimizer-admission audit. |
 | `zig build test-graph-storage-adapter-metrics --summary all` | PASS, 4/4 tests after the smallest-posting multi-property `MERGE` preselect and tuple-lock stripe-density regression. |
 | `zig build test-plan-cache-hit --summary all` | PASS, 5/5 tests after the shared plan cache concurrent-hit/release and stable-plan-handle changes. |
@@ -111,7 +115,8 @@ All commands below were run on 2026-05-29.
 | 4096 workers x 8 ops read-only sustained E2E at 250 us | FAIL, 22917/32768 operations, zero setup/execute retries, 9851 first-response timeouts after shared AST/plan cache hit-path changes. This improved from 21302/32768 and 11466 first-response timeouts before the shared-cache work. |
 | 4096 workers x 8 ops mixed sustained E2E at 250 us | FAIL, 23723/32768 operations, zero setup/execute retries, 9045 first-response timeouts after mutation optimizer admission was disabled. This is the remaining low-stagger ceiling. |
 | 4096 workers x 8 ops mixed sustained E2E at 1000 us | FAIL, 25800/32768 operations, zero setup/execute retries, 6968 first-response timeouts. This is the current latency-friendly ceiling. |
-| `zig build --summary all` after final dependency repin | PASS, 52/52 steps succeeded against QUIC `eeeb216` and `geode-client-zig` `533cde8`. |
+| `zig build --summary all` after final dependency repin | PASS, 52/52 steps succeeded against QUIC `06f4aad` and `geode-client-zig` `5ae3102`. |
+| 1024 mixed single-op E2E after `06f4aad` repin | PASS, 1024/1024 operations, 256 mutations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 3822.45 QPS. |
 | 4096 read-only 250 us low-stagger probe | PASS, 4096/4096 operations, zero retries, zero reconnects. |
 | 1024 mixed 250 us timing smoke | PASS, 1024/1024 operations at 3822.30 QPS after deferred high-fanout post-write flush, validating the split timing summary path. |
 

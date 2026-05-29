@@ -376,6 +376,13 @@ test "quic endpoint poll cycle has a receive fairness budget" {
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-066") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "processHandshakeDatagramConcurrent") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "processHandshakeResolved") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-168") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "generic_long_header_dispatch_serializes_tls_for_test") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "self.processInitialDatagramConcurrent(norm_peer, packet_bytes, version);") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "self.processHandshakeDatagramConcurrent(norm_peer, packet_bytes, version, ecn_bits);") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "incoming.processInitial(&rx_ctx, norm_peer, packet_bytes, version);") == null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "incoming.processHandshake(&rx_ctx, norm_peer, packet_bytes, version, ecn_bits, rx_ctx.send_fn);") == null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "const previous_io_endpoint = current_io_endpoint;") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "stats.packets_processed += 1;") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-035") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "PtoDirtyDestroySerialization") != null);
