@@ -1,7 +1,7 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, storage/index contention fixes, shared query-cache hit-path fixes, and tuple-lock collision instrumentation. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the dominant tail is now first-response wait and QUIC receive/scheduler latency, with the Geode cache, hot-label refcount, and multi-property MERGE tuple-lock bottlenecks reduced or directly measurable.
+**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, and restart/recovery regression coverage. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the dominant tail is now first-response wait and QUIC receive/scheduler latency, with the Geode cache, hot-label refcount, multi-property MERGE tuple-lock, and group-commit durability bottlenecks reduced or directly measurable.
 **Dependency state:** Geode now pins QUIC `06f4aadcf045a0d6295c7e85398b94c7096accb9` and `geode-client-zig` `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd`. QUIC `06f4aad` preserves the proven `eeeb216` four-batch server receive behavior and adds `REQ-QUIC-HC-168`, routing generic/coalesced long-header dispatch through the same per-connection TLS serializer as the optimized burst receive path.
 
 ## Summary
@@ -35,6 +35,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 25. `REQ-QUIC-HC-167` raises multi-property `MERGE` tuple-lock striping from 4096 to 16384 and heap-allocates the stripe table per graph so the ReleaseFast object file does not carry a large static mutex array. Runtime metrics now expose tuple-lock acquire count, cumulative wait/hold time, and max wait/hold samples. A 65k static-stripe variant was rejected because it regressed the 4096x8 probe and produced a much heavier ReleaseFast compile.
 26. Upstream QUIC `REQ-QUIC-HC-168` closes the remaining `pollCrypto` crash surface in the generic/coalesced long-header dispatcher. `processIncomingDatagram()` no longer calls `incoming.processInitial()` or `incoming.processHandshake()` directly for supported Initial/Handshake packets; it uses the endpoint-owned concurrent wrappers so Endpoint.mu protects connection lookup/creation and `endpoint_rx_serial_mu` protects per-connection TLS mutation.
 27. `REQ-QUIC-HC-169` adds first-stream phase metrics for query prepare, query execution, and response send. The next 4096x8 diagnostic can now split the existing aggregate packet-processing tail into parse/cache/authorization prep, storage/executor work, and protobuf/QUIC response delivery.
+28. `REQ-QUIC-HC-170` turns the high-concurrency E2E harness into an objective runner when `GEODE_HC_OBJECTIVE_GATE=1` is set. The objective mode defaults to 16384 clients x 8 ops, 25% mutations, 99.95% completion, zero first-response timeouts, 10k QPS, p50/p95/p99/p99.9 latency gates, graph-isolation verification, restart/recovery verification, and a bounded server RSS delta. The default test step remains lightweight and strict at 100% completion unless the explicit gate knobs are overridden.
+29. `REQ-QUIC-HC-171` fixes the group-commit restart durability gap exposed by the new recovery gate. Clean adapter shutdown now checkpoints loaded per-graph engines even when group-commit writes did not mark the compatibility `GraphStore` dirty, and first-seen labels now go through the sharded engine label API so label dictionaries are broadcast, dirtied, checkpointed, and available when nodes reload.
 
 ## Changed Files
 
@@ -49,8 +51,10 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Adds exact-property posting-length probing and copies only the smallest available candidate posting for multi-property `MERGE`.
   - Raises multi-property `MERGE` tuple-lock striping to 16k heap-allocated mutexes per graph.
   - Registers tuple-lock wait/hold metrics as `mg_merge_tuple_lock_*` runtime counters.
+  - Resolves first-seen labels through `ShardedGraphEngine.getOrAssignLabel()` so group-commit-created nodes reload with label names after checkpoint/restart.
 - `src/graph_store.zig`
   - Replaces the global label-count mutex with atomic refcount values guarded by an rwlock for map stability.
+  - Checkpoints loaded per-graph engines during global adapter shutdown after group-commit coordinators drain.
 - `src/server/query_ast_cache.zig`
   - Converts shared AST cache hits/releases to shared rwlock access with atomic counters and refcounts.
 - `src/server/query_plan_cache.zig`
@@ -70,9 +74,16 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Adds request/response phase timing summaries and reduces high-fanout start-barrier wake batches to 64.
   - Defaults `GEODE_HC_POST_WRITE_POLL` to false for 1024+ workers and true below that threshold.
   - Forwards `GEODE_HC_SHORT_HEADER_TIMING=1` to the child server as `GEODE_QUIC_SHORT_HEADER_TIMING=1` for upstream short-header subphase diagnostics.
+  - Adds opt-in objective gate defaults and pass/fail thresholds through `GEODE_HC_OBJECTIVE_GATE=1`.
+  - Records successful operation latency samples and emits p50/p95/p99/p99.9 percentiles.
+  - Reports child-server RSS before/after client release and gates the delta when `GEODE_HC_MEMORY_GROWTH_MAX_KB` is nonzero.
+  - Optionally verifies graph isolation and restart recovery after the workload.
+- `tests/perf/test_group_commit_coordinator.zig`
+  - Adds `REQ-QUIC-HC-171` coverage proving sharded coordinator inserts survive adapter teardown/reopen with labels and properties intact.
 - `tests/test_quic_condition_timedwait_cadence.zig`
   - Source-audits the mutation window cap, runtime override, adaptive polling shape, failure-log backpressure, failure split counters, response write latency metrics, split timing summaries, deferred high-fanout post-write flushing, and the short-header timing harness switch.
   - Source-audits the smallest-posting MERGE preselect, atomic label refcounts, shared AST/plan cache hit paths, stable shared-plan storage, and read-only optimizer admission.
+  - Source-audits the objective gate knobs, percentile emission, graph-isolation verification, restart recovery, RSS gate wiring, adapter-shutdown checkpoint, and group-commit label dictionary persistence guard.
 - `tests/test_gap0810_parse_cache_wrapper.zig`
   - Adds a concurrent shared AST cache hit/release regression test.
 - `tests/test_plan_cache_hit.zig`
@@ -92,6 +103,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Adds a focused `test-rls-expr-engine-wiring` step for the RLS dispatch regression.
 - `build.zig.zon`
   - Pins both direct QUIC and embedded `geode-client-zig` to the upstream server STREAM ACK fanout fix plus the reverts of the rejected one-batch, wall-clock, and slow-batch short-header cadence experiments.
+- `docs/performance/quic-high-concurrency.md`
+  - Documents the full 16k x 8 objective command, threshold semantics, percentile output, RSS output, and objective gate controls.
 
 ## Accepted Verification
 
@@ -105,7 +118,8 @@ All commands below were run on 2026-05-29.
 | Upstream QUIC `zig build --summary all` | PASS, 10/10 steps after QUIC `06f4aad`. |
 | `geode-client-zig` `zig build --summary all` | PASS, 15/15 steps after repinning to QUIC `06f4aad`. |
 | `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `06f4aad`. |
-| `zig build test-quic-condition-cadence --summary all` | PASS, 72/72 tests after shard-parallel mutation admission, permit-gated overflow, dependency source audits, storage/index contention audits, shared cache audits, and read-only optimizer-admission audit. |
+| `zig build test-quic-condition-cadence --summary all` | PASS, 73/73 tests after shard-parallel mutation admission, permit-gated overflow, dependency source audits, storage/index contention audits, shared cache audits, objective gate source audits, and group-commit durability source audits. |
+| `zig build test-group-commit-coordinator --summary all` | PASS, 9/9 tests including `REQ-QUIC-HC-171: group commit inserts survive adapter reopen`. |
 | `zig build test-graph-storage-adapter-metrics --summary all` | PASS, 4/4 tests after the smallest-posting multi-property `MERGE` preselect and tuple-lock stripe-density regression. |
 | `zig build test-plan-cache-hit --summary all` | PASS, 5/5 tests after the shared plan cache concurrent-hit/release and stable-plan-handle changes. |
 | `zig build test --summary all -Dtest-shard-total=8 -Dtest-shard-index=1` | PASS, 404/404 tests, including the shared AST cache wrapper concurrent-hit test. |
@@ -120,6 +134,7 @@ All commands below were run on 2026-05-29.
 | 1024 mixed single-op E2E after `06f4aad` repin | PASS, 1024/1024 operations, 256 mutations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 3822.45 QPS. |
 | 4096 read-only 250 us low-stagger probe | PASS, 4096/4096 operations, zero retries, zero reconnects. |
 | 1024 mixed 250 us timing smoke | PASS, 1024/1024 operations at 3822.30 QPS after deferred high-fanout post-write flush, validating the split timing summary path. |
+| 8 workers x 2 ops mixed restart smoke | PASS, 16/16 operations, 8 mutations, zero retries, zero reconnects, zero first-response timeouts, `graph_isolation=ok`, `restart_recovery=ok`, and zero gate failures. |
 
 4096 mixed read/mutation gate:
 

@@ -797,6 +797,18 @@ pub const ManagedGraph = struct {
     }
 };
 
+fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
+    if (mg.label_dict.getId(label)) |id| return id;
+    // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=LabelDictionaryCheckpoint; STATUS=IMPL; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-29
+    //
+    // LabelStringDict is a view over shard 0's dictionary. Creating labels
+    // through that view updates memory but does not dirty the sharded engines,
+    // so checkpoint/reopen can recover nodes with label IDs whose names were
+    // never persisted. Use the engine API for first sight of a label: it
+    // broadcasts the mapping to every shard and dirties the dictionaries.
+    return mg.engine.getOrAssignLabel(label);
+}
+
 fn initMergeTupleLocks(allocator: Allocator) ![]std.Io.Mutex {
     const locks = try allocator.alloc(std.Io.Mutex, merge_tuple_lock_count);
     for (locks) |*lock| {
@@ -1465,7 +1477,7 @@ pub const StorageAdapter = struct {
         // Attach each label via the engine (updates label blocks in var.store
         // and the label index).
         for (labels) |lbl| {
-            const label_id = try mg.label_dict.getOrCreate(lbl);
+            const label_id = try resolvePersistedLabelId(mg, lbl);
             try node_shard.addLabelTxn(node_id, label_id, local_txn);
         }
 
@@ -1706,7 +1718,7 @@ pub const StorageAdapter = struct {
             mg.string_indexes_mutex.lockUncancelable(io);
             defer mg.string_indexes_mutex.unlock(io);
             for (labels, 0..) |lbl, i| {
-                label_ids[i] = try mg.label_dict.getOrCreate(lbl);
+                label_ids[i] = try resolvePersistedLabelId(mg, lbl);
             }
         }
 
@@ -2489,7 +2501,7 @@ pub const StorageAdapter = struct {
             try self.allocator.alloc(gs.LabelId, labels.len);
         defer if (labels.len > label_ids_buf.len) self.allocator.free(label_ids);
         for (labels, 0..) |lbl, i| {
-            label_ids[i] = try mg.label_dict.getOrCreate(lbl);
+            label_ids[i] = try resolvePersistedLabelId(mg, lbl);
         }
 
         const rec_template = gs.node.NodeRec{
@@ -2618,7 +2630,7 @@ pub const StorageAdapter = struct {
         // span emission. The `_om12e.recordEdgeMutation` counter below
         // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
-        const rel_type = try mg.label_dict.getOrCreate(label);
+        const rel_type = try resolvePersistedLabelId(mg, label);
 
         // R10 (2026-04-22): join the active session/statement engine txn
         // when one exists on this graph so a whole edges_*.jsonl batch of
@@ -4295,7 +4307,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
-        const label_id = try mg.label_dict.getOrCreate(label);
+        const label_id = try resolvePersistedLabelId(mg, label);
         const node_shard = mg.shardEngineForNode(node_id);
         // R10: join active session/statement engine txn if on the same shard.
         if (currentStatementTxnForGraph(graph_name)) |s| {

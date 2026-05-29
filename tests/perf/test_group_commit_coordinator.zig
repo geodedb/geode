@@ -227,6 +227,55 @@ test "REQ-QUIC-HC-016: group commit reserves shard-aligned engine slots" {
     }
 }
 
+test "REQ-QUIC-HC-171: group commit inserts survive adapter reopen" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    _ = graph_store.getGlobalStore(testing.allocator);
+    _ = try adapter.getOrCreateGraph("default");
+
+    const coord = try group_commit.getOrStartCoordinator(testing.allocator, adapter, "default");
+
+    const labels = [_][]const u8{"RecoveredGroupCommit"};
+    const props = [_]adapter_mod.StorageAdapter.PropKV{
+        .{ .key = "worker", .value = .{ .Int = 11 } },
+        .{ .key = "seq", .value = .{ .Int = 29 } },
+    };
+    const node_id = try submitInsertNode(coord, &labels, &props);
+    try testing.expect(node_id != 0);
+
+    group_commit.shutdownAllCoordinators();
+    try adapter.checkpointAll();
+    {
+        const store = graph_store.getGlobalStore(testing.allocator);
+        const id_map = store.getIdMap("default") orelse return error.IdMapMissing;
+        const slot_id = id_map.nodeSlot(@as(u128, node_id)) orelse return error.NodeSlotMappingMissing;
+        const adapter_labels = try adapter.getNodeLabels("default", slot_id, testing.allocator);
+        defer {
+            for (adapter_labels) |label| testing.allocator.free(label);
+            testing.allocator.free(adapter_labels);
+        }
+        try testing.expectEqual(@as(usize, 1), adapter_labels.len);
+    }
+
+    execution.cleanupCatalogInstance();
+    graph_store.deinitGlobalStore();
+    graph_store.setDataDirOverride(testing.allocator, h.data_dir);
+
+    const reopened = graph_store.getGlobalStore(testing.allocator);
+    try reopened.loadFromFile();
+
+    try testing.expectEqual(@as(usize, 1), reopened.countNodesByLabel("default", "RecoveredGroupCommit", null));
+    const node = reopened.getNodePtr(node_id) orelse return error.NodeNotFound;
+    try testing.expectEqual(@as(usize, 1), node.labels.len);
+    try testing.expectEqualStrings("RecoveredGroupCommit", node.labels[0]);
+    const worker = node.properties.get("worker") orelse return error.PropertyNotFound;
+    const seq = node.properties.get("seq") orelse return error.PropertyNotFound;
+    try testing.expect(worker == .Int and worker.Int == 11);
+    try testing.expect(seq == .Int and seq.Int == 29);
+}
+
 // ----------------------------------------------------------------------
 // Shutdown: all in-flight ops complete before stop() returns.
 // ----------------------------------------------------------------------

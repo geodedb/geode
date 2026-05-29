@@ -7073,6 +7073,21 @@ pub fn deinitGlobalAdapter() void {
     const group_commit = @import("storage/group_commit.zig");
     group_commit.shutdownAllCoordinators();
 
+    // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=AdapterShutdownCheckpoint; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-05-29
+    //
+    // Group-commit mutation fast paths write through the engine-backed adapter
+    // and may not mark the legacy compatibility GraphStore dirty. A clean
+    // server shutdown must still checkpoint loaded per-graph engines before the
+    // adapter is destroyed, otherwise the in-memory high-concurrency mutations
+    // are visible before shutdown but missing after restart.
+    if (global_adapter) |adapter| {
+        adapter.checkpointAll() catch |err| {
+            log.err("per-graph storage checkpoint failed during adapter shutdown", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
+
     if (global_vtable) |vt| {
         vt.deinitFn(vt.ctx);
         global_vtable = null;

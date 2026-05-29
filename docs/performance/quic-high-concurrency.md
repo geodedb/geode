@@ -81,6 +81,62 @@ from 1024 x 8 to 2048 x 8. The remaining 4096 x 8 tail is still concentrated in
 first-response wait, cooperative packet processing, and QUIC short-header
 receive processing.
 
+## Enterprise Objective Gate
+
+The full target gate is now encoded directly in the E2E harness behind
+`GEODE_HC_OBJECTIVE_GATE=1`. It sets the formal single-instance target defaults:
+
+- 16384 live clients.
+- 8 operations per client.
+- 131072 total operations.
+- 25% successful mutations minimum.
+- 99.95% successful completion minimum.
+- zero first-response timeouts.
+- p50 < 20 ms, p95 < 100 ms, p99 < 250 ms, p99.9 < 1000 ms.
+- 10000 QPS minimum.
+- mutation visibility verification.
+- graph-isolation verification.
+- restart/recovery verification using the same data directory.
+- server RSS delta bound of 2 GiB by default.
+
+Run it only on a host prepared for high thread and UDP fanout:
+
+```sh
+GEODE_HC_OBJECTIVE_GATE=1 \
+GEODE_HC_CONNECT_STAGGER_US=1000 \
+GEODE_HC_REQUEST_STAGGER_US=250 \
+GEODE_HC_EXEC_TIMEOUT_SECS=10 \
+GEODE_HC_EXEC_RETRIES=0 \
+GEODE_HC_POLL_WORKERS=16 \
+timeout 2400s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
+```
+
+The objective gate intentionally remains opt-in; the default build step keeps
+the lightweight smoke defaults. The individual gates are independently tunable
+for diagnostic sweeps:
+
+- `GEODE_HC_MIN_COMPLETION_PPM`: success threshold in parts per million. The
+  objective default is `999500`.
+- `GEODE_HC_MIN_MUTATION_PPM`: successful mutation share in parts per million.
+  The objective default is `250000`.
+- `GEODE_HC_REQUIRE_ZERO_FIRST_RESPONSE_TIMEOUTS`: requires
+  `first_response_timeouts=0` when true.
+- `GEODE_HC_MIN_QPS`: minimum whole-operation throughput.
+- `GEODE_HC_P50_MAX_MS`, `GEODE_HC_P95_MAX_MS`, `GEODE_HC_P99_MAX_MS`,
+  `GEODE_HC_P999_MAX_MS`: percentile latency limits. A value of `0` disables
+  the corresponding check.
+- `GEODE_HC_GRAPH_ISOLATION_VERIFY`: creates a separate graph and asserts that
+  `HCParallel` mutations are not visible there.
+- `GEODE_HC_RESTART_VERIFY`: stops the child server, restarts on the same data
+  directory, and asserts the committed mutation count survives recovery.
+- `GEODE_HC_MEMORY_GROWTH_MAX_KB`: server RSS delta limit measured after
+  workload clients are released and joined. A value of `0` reports RSS without
+  gating it.
+
+Passing the objective gate is the condition for claiming the 16k x 8 enterprise
+target. A lower-scale pass should be recorded as a sustained gate or ceiling
+probe, not as objective completion.
+
 ## 2026-05-29 Contention Fixes
 
 The latest Geode-side cycle reduced avoidable shared-state contention before
@@ -107,6 +163,14 @@ the next QUIC receive/scheduler pass:
   unrelated `{worker, seq}` tuples from sharing the old 4096-stripe mutex table
   as often, while avoiding the ReleaseFast object bloat observed with a 65k
   static mutex table.
+- `REQ-QUIC-HC-170`: the E2E harness now has an opt-in objective gate for the
+  16384 x 8 enterprise target, with completion, mutation-share, QPS, latency,
+  graph-isolation, restart/recovery, and RSS-delta checks.
+- `REQ-QUIC-HC-171`: group-commit restart durability now checkpoints loaded
+  per-graph engines during adapter shutdown and resolves first-seen labels
+  through the sharded engine API. This broadcasts and dirties label
+  dictionaries, preventing nodes from reloading without label names after
+  high-concurrency mutation batches.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
@@ -117,6 +181,45 @@ sustained gate remains 2048x8 mixed. The tuple-lock striping cycle adds
 instrumentation and collision reduction but has not promoted the 4096x8 gate;
 the first re-run was invalidated by a concurrent root-owned `goreleaser`
 cross-build saturating the host.
+
+## Restart And Durability Checks
+
+High-concurrency mutation passes must verify more than in-memory visibility.
+The restart check now uses the same data directory, performs a graceful child
+server stop, starts a fresh server, and verifies `HCParallel` mutation counts
+through the normal QUIC client path.
+
+The storage-level regression for this path is:
+
+```sh
+zig build test-group-commit-coordinator --summary all
+```
+
+It includes `REQ-QUIC-HC-171: group commit inserts survive adapter reopen`,
+which submits through the sharded coordinator, checkpoints, tears down the
+global adapter/store, reopens the same data directory, and verifies the label
+posting and properties survived reload.
+
+The current low-scale QUIC restart smoke is:
+
+```sh
+GEODE_HC_WORKERS=8 \
+GEODE_HC_OPS_PER_WORKER=2 \
+GEODE_HC_MUTATION_STRIDE=2 \
+GEODE_HC_CONNECT_STAGGER_US=100 \
+GEODE_HC_REQUEST_STAGGER_US=100 \
+GEODE_HC_EXEC_TIMEOUT_SECS=10 \
+GEODE_HC_EXEC_RETRIES=0 \
+GEODE_HC_GRAPH_ISOLATION_VERIFY=1 \
+GEODE_HC_RESTART_VERIFY=1 \
+GEODE_HC_MEMORY_GROWTH_MAX_KB=1048576 \
+timeout 600s zig build test-quic-high-concurrency-e2e --summary all
+```
+
+The accepted run completed 16/16 operations, 8 mutations, zero retries, zero
+first-response timeouts, `graph_isolation=ok`, `restart_recovery=ok`, and no
+gate failures. This is not the enterprise objective pass; it is the regression
+smoke proving the restart/recovery and graph-isolation gates work.
 
 ## Core Knobs
 
@@ -163,6 +266,14 @@ The most important fields are:
   completion to the first response message.
 - `avg_response_message_read_ms`: average per-message response read time across
   all response messages.
+- `latency_percentiles`: sorted successful operation latency samples with
+  p50/p95/p99/p99.9 in milliseconds. These percentiles are the values used by
+  the objective latency gate.
+- `memory`: child-server RSS at server start and after workload clients are
+  released. Use this with `GEODE_HC_MEMORY_GROWTH_MAX_KB` for leak/regression
+  gates.
+- `gate`: final objective summary with completion PPM, mutation PPM, raw
+  failure count, and gate-failure count.
 
 When `avg_execute_post_write_poll_ms` is high, the local same-process client
 driver is contributing to the measurement. When `avg_execute_write_ms` is low

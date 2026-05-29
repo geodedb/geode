@@ -2462,7 +2462,7 @@ test "quic high fanout connection limits and setup retries are tunable" {
     try testing.expect(std.mem.indexOf(u8, e2e_content, "connected") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "hello_ok") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "ops_started") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e_content, "high-concurrency QUIC E2E phases") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "high-concurrency QUIC E2E incomplete") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "abort_setup") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "return error.SetupFailures") != null);
     try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_EXEC_TIMEOUT_SECS\"") != null);
@@ -2585,6 +2585,35 @@ test "quic endpoint timers use indexed cancellation" {
     try testing.expect(std.mem.indexOf(u8, endpoint_content, "test \"endpoint timers keep index consistent across heap operations\"") != null);
 }
 
+test "quic high concurrency harness exposes objective gate evidence" {
+    const allocator = testing.allocator;
+
+    const maybe_e2e = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");
+    const e2e_content = maybe_e2e orelse return error.FileNotFound;
+    defer allocator.free(e2e_content);
+
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "REQ=REQ-QUIC-HC-170") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_OBJECTIVE_GATE\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "objective_worker_count: u32 = 16_384") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "objective_ops_per_worker: u32 = 8") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "objective_min_completion_ppm: u32 = 999_500") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "objective_min_mutation_ppm: u32 = 250_000") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "objective_min_qps: u32 = 10_000") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "computeLatencyPercentiles") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "high-concurrency QUIC E2E latency_percentiles") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_P50_MAX_MS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_P95_MAX_MS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_P99_MAX_MS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_P999_MAX_MS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_REQUIRE_ZERO_FIRST_RESPONSE_TIMEOUTS\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_GRAPH_ISOLATION_VERIFY\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_RESTART_VERIFY\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "\"GEODE_HC_MEMORY_GROWTH_MAX_KB\"") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "verifyGraphIsolation") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "verifyRestartRecovery") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e_content, "high-concurrency QUIC E2E gate objective={}") != null);
+}
+
 test "quic parallel facade uses bounded smp allocator pool" {
     const allocator = testing.allocator;
 
@@ -2628,15 +2657,28 @@ test "quic group commit keeps bulk create properties in shard transaction" {
     defer allocator.free(store_content);
     try testing.expect(std.mem.indexOf(u8, store_content, "REQ=REQ-QUIC-HC-022") != null);
     try testing.expect(std.mem.indexOf(u8, store_content, "pub fn setNodePropertiesBatchInMemoryOnly") != null);
+    try testing.expect(std.mem.indexOf(u8, store_content, "REQ=REQ-QUIC-HC-171") != null);
+    try testing.expect(std.mem.indexOf(u8, store_content, "adapter.checkpointAll() catch |err|") != null);
+    try testing.expect(std.mem.indexOf(u8, store_content, "checkpoint failed during adapter shutdown") != null);
 
     const maybe_adapter = try readFile(allocator, "src/storage/graph_storage_adapter.zig");
     const adapter_content = maybe_adapter orelse return error.FileNotFound;
     defer allocator.free(adapter_content);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-171") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "resolvePersistedLabelId") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "mg.engine.getOrAssignLabel(label)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-022") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "addIndexedNodeProperty(mg, label_id, slot_id, kv.key, storage_val)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "setNodePropertiesBatchInMemoryOnly") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "store.setNodePropertiesBatch(reserved_id, entries)") == null);
+
+    const maybe_group_commit_test = try readFile(allocator, "tests/perf/test_group_commit_coordinator.zig");
+    const group_commit_test_content = maybe_group_commit_test orelse return error.FileNotFound;
+    defer allocator.free(group_commit_test_content);
+    try testing.expect(std.mem.indexOf(u8, group_commit_test_content, "REQ-QUIC-HC-171: group commit inserts survive adapter reopen") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit_test_content, "RecoveredGroupCommit") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit_test_content, "reopened.countNodesByLabel") != null);
 }
 
 test "quic first stream is detached from connection admission worker" {

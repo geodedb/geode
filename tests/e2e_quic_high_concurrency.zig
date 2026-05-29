@@ -18,6 +18,17 @@ const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 els
 const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
+const objective_worker_count: u32 = 16_384;
+const objective_ops_per_worker: u32 = 8;
+const objective_mutation_stride: u32 = 4;
+const objective_min_completion_ppm: u32 = 999_500;
+const objective_min_mutation_ppm: u32 = 250_000;
+const objective_min_qps: u32 = 10_000;
+const objective_p50_max_ms: u32 = 20;
+const objective_p95_max_ms: u32 = 100;
+const objective_p99_max_ms: u32 = 250;
+const objective_p999_max_ms: u32 = 1000;
+const objective_memory_growth_max_kb: u32 = 2 * 1024 * 1024;
 const high_fanout_worker_threshold = 64;
 const high_fanout_connection_worker_cap = 64;
 // CANARY: REQ=REQ-QUIC-HC-152; FEATURE="High-Concurrency Test Harness"; ASPECT=FailureLogBackpressure; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
@@ -240,6 +251,8 @@ const WorkerCtx = struct {
     release_clients: *std.atomic.Value(bool),
     release_generation: *std.atomic.Value(u32),
     workload_start_ns: *std.atomic.Value(u64),
+    op_latency_samples_ns: []u64,
+    op_latency_sample_index: *std.atomic.Value(u32),
     expected_ops: u32,
     verify_after_workload: bool,
     client_diagnostics: bool,
@@ -286,6 +299,13 @@ fn recordMaxLatency(counters: *Counters, latency_ns: u64) void {
     recordMaxAtomic(&counters.max_latency_ns, latency_ns);
 }
 
+fn recordLatencySample(ctx: *WorkerCtx, latency_ns: u64) void {
+    const idx = ctx.op_latency_sample_index.fetchAdd(1, .acq_rel);
+    if (idx < ctx.op_latency_samples_ns.len) {
+        ctx.op_latency_samples_ns[idx] = latency_ns;
+    }
+}
+
 // CANARY: REQ=REQ-QUIC-HC-155; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ExecutePhaseAggregation; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
 //
 // Aggregate client-visible transport phases so failed ceiling probes can
@@ -323,6 +343,64 @@ fn recordExecTiming(ctx: *WorkerCtx, timing: *const util.QuicProtoClient.ExecTim
 fn nsAvgMsX100(total_ns: u64, samples: u32) u64 {
     if (samples == 0) return 0;
     return total_ns / @as(u64, samples) / (std.time.ns_per_ms / 100);
+}
+
+fn nsMsX100(ns: u64) u64 {
+    return ns / (std.time.ns_per_ms / 100);
+}
+
+const LatencyPercentiles = struct {
+    sample_count: u32 = 0,
+    p50_ns: u64 = 0,
+    p95_ns: u64 = 0,
+    p99_ns: u64 = 0,
+    p999_ns: u64 = 0,
+};
+
+fn lessThanU64(_: void, lhs: u64, rhs: u64) bool {
+    return lhs < rhs;
+}
+
+fn percentileIndex(sample_count: usize, ppm: u32) usize {
+    if (sample_count == 0) return 0;
+    const rank = (@as(u64, sample_count) * @as(u64, ppm) + 999_999) / 1_000_000;
+    const clamped = @min(@max(rank, 1), @as(u64, sample_count));
+    return @intCast(clamped - 1);
+}
+
+fn computeLatencyPercentiles(samples: []u64, sample_count_raw: u32) LatencyPercentiles {
+    const sample_count = @min(samples.len, @as(usize, sample_count_raw));
+    if (sample_count == 0) return .{};
+    const slice = samples[0..sample_count];
+    std.mem.sort(u64, slice, {}, lessThanU64);
+    return .{
+        .sample_count = @intCast(sample_count),
+        .p50_ns = slice[percentileIndex(sample_count, 500_000)],
+        .p95_ns = slice[percentileIndex(sample_count, 950_000)],
+        .p99_ns = slice[percentileIndex(sample_count, 990_000)],
+        .p999_ns = slice[percentileIndex(sample_count, 999_000)],
+    };
+}
+
+fn printLatencyPercentiles(percentiles: LatencyPercentiles) void {
+    const p50_ms_x100 = nsMsX100(percentiles.p50_ns);
+    const p95_ms_x100 = nsMsX100(percentiles.p95_ns);
+    const p99_ms_x100 = nsMsX100(percentiles.p99_ns);
+    const p999_ms_x100 = nsMsX100(percentiles.p999_ns);
+    std.debug.print(
+        "high-concurrency QUIC E2E latency_percentiles samples={d} p50_ms={d}.{d:0>2} p95_ms={d}.{d:0>2} p99_ms={d}.{d:0>2} p99_9_ms={d}.{d:0>2}\n",
+        .{
+            percentiles.sample_count,
+            p50_ms_x100 / 100,
+            p50_ms_x100 % 100,
+            p95_ms_x100 / 100,
+            p95_ms_x100 % 100,
+            p99_ms_x100 / 100,
+            p99_ms_x100 % 100,
+            p999_ms_x100 / 100,
+            p999_ms_x100 % 100,
+        },
+    );
 }
 
 fn printTimingSummary(counters: *Counters) void {
@@ -387,6 +465,191 @@ fn firstInt(res: *const util.ExecResult) !i64 {
         .int => |value| value,
         else => error.UnexpectedResultType,
     };
+}
+
+fn readServerRssKb(server: *const util.ServerHandle) u64 {
+    const pid = server.child.id orelse return 0;
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/status", .{pid}) catch return 0;
+    const rc = std.os.linux.open(path.ptr, .{ .ACCMODE = .RDONLY }, 0);
+    if (@as(isize, @bitCast(rc)) < 0) return 0;
+    const fd: i32 = @intCast(rc);
+    defer _ = std.os.linux.close(fd);
+
+    var status_buf: [8192]u8 = undefined;
+    const n_rc = std.os.linux.read(fd, &status_buf, status_buf.len);
+    const n_signed: isize = @bitCast(n_rc);
+    if (n_signed <= 0) return 0;
+    const status = status_buf[0..@as(usize, @intCast(n_signed))];
+    const key = "VmRSS:";
+    const start = std.mem.indexOf(u8, status, key) orelse return 0;
+    var idx = start + key.len;
+    while (idx < status.len and (status[idx] == ' ' or status[idx] == '\t')) : (idx += 1) {}
+    const value_start = idx;
+    while (idx < status.len and std.ascii.isDigit(status[idx])) : (idx += 1) {}
+    if (idx == value_start) return 0;
+    return std.fmt.parseUnsigned(u64, status[value_start..idx], 10) catch 0;
+}
+
+fn stopServerGracefully(server: *util.ServerHandle, timeout_ns: u64) void {
+    const pid = server.child.id orelse {
+        server.deinit();
+        return;
+    };
+    std.posix.kill(pid, .TERM) catch {};
+    const deadline_ns = monoNs() +| timeout_ns;
+    while (monoNs() < deadline_ns) {
+        var status: u32 = 0;
+        const rc = std.os.linux.waitpid(pid, &status, std.os.linux.W.NOHANG);
+        const signed: isize = @bitCast(rc);
+        if (signed == @as(isize, @intCast(pid))) {
+            server.child.id = null;
+            break;
+        }
+        if (signed < 0) break;
+        sleepNs(50 * std.time.ns_per_ms);
+    }
+    server.deinit();
+}
+
+fn executeQuery(
+    allocator: std.mem.Allocator,
+    client: *util.QuicProtoClient,
+    query: []const u8,
+    timeout_secs: u32,
+) !util.ExecResult {
+    var res = try client.executeAndCollectWithTimeout(
+        allocator,
+        query,
+        util.emptyParams(),
+        128,
+        timeout_secs,
+    );
+    errdefer res.deinit(allocator);
+    try expectNoQueryError(&res);
+    return res;
+}
+
+fn queryCountWithClient(
+    allocator: std.mem.Allocator,
+    client: *util.QuicProtoClient,
+    query: []const u8,
+    timeout_secs: u32,
+) !i64 {
+    var res = try executeQuery(allocator, client, query, timeout_secs);
+    defer res.deinit(allocator);
+    return try firstInt(&res);
+}
+
+fn queryCountWithFreshClient(
+    allocator: std.mem.Allocator,
+    addr: []const u8,
+    timeout_secs: u32,
+    query: []const u8,
+) !i64 {
+    var client = try connectAndHelloWithRetry(
+        allocator,
+        addr,
+        3,
+        default_connect_backoff_ms,
+        default_handshake_timeout_secs,
+        default_hello_timeout_ms,
+        null,
+        null,
+    );
+    defer client.deinit();
+    return try queryCountWithClient(allocator, &client, query, timeout_secs);
+}
+
+fn verifyGraphIsolation(
+    allocator: std.mem.Allocator,
+    addr: []const u8,
+    port: u16,
+    timeout_secs: u32,
+) !void {
+    var client = try connectAndHelloWithRetry(
+        allocator,
+        addr,
+        3,
+        default_connect_backoff_ms,
+        default_handshake_timeout_secs,
+        default_hello_timeout_ms,
+        null,
+        null,
+    );
+    defer client.deinit();
+
+    const graph_name = try std.fmt.allocPrint(allocator, "geode_hc_iso_{d}", .{port});
+    defer allocator.free(graph_name);
+    const create_graph = try std.fmt.allocPrint(allocator, "CREATE GRAPH IF NOT EXISTS {s} ANY", .{graph_name});
+    defer allocator.free(create_graph);
+    var create_res = try executeQuery(allocator, &client, create_graph, timeout_secs);
+    create_res.deinit(allocator);
+
+    const use_graph = try std.fmt.allocPrint(allocator, "USE GRAPH {s}", .{graph_name});
+    defer allocator.free(use_graph);
+    var use_res = try executeQuery(allocator, &client, use_graph, timeout_secs);
+    use_res.deinit(allocator);
+
+    const isolated_count = try queryCountWithClient(
+        allocator,
+        &client,
+        "MATCH (n:HCParallel) RETURN count(n) AS c",
+        timeout_secs,
+    );
+    if (isolated_count != 0) {
+        std.debug.print(
+            "high-concurrency QUIC E2E graph isolation failure graph={s} hc_parallel_count={d}\n",
+            .{ graph_name, isolated_count },
+        );
+        return error.GraphIsolationFailed;
+    }
+}
+
+fn verifyRestartRecovery(
+    allocator: std.mem.Allocator,
+    addr: []const u8,
+    port: u16,
+    data_dir: []const u8,
+    max_connections_arg: []const u8,
+    server_env: []const []const u8,
+    timeout_secs: u32,
+    expected_mutations: u32,
+) !void {
+    const restart_addr = try allocator.dupe(u8, addr);
+    var restart_addr_owned = true;
+    errdefer if (restart_addr_owned) allocator.free(restart_addr);
+
+    const restart_args = &[_][]const u8{
+        "./zig-out/bin/geode",
+        "serve",
+        "--listen",
+        restart_addr,
+        "--data-dir",
+        data_dir,
+        "--max-connections",
+        max_connections_arg,
+    };
+    var restarted = try util.spawnServer(allocator, restart_args, server_env);
+    restarted.port = port;
+    restarted.addr = restart_addr;
+    restart_addr_owned = false;
+    defer restarted.deinit();
+
+    try util.waitForServerReady(allocator, restart_addr, 60000);
+    const recovered_mutations = try queryCountWithFreshClient(
+        allocator,
+        restart_addr,
+        timeout_secs,
+        "MATCH (n:HCParallel) RETURN count(n) AS c",
+    );
+    if (recovered_mutations < @as(i64, @intCast(expected_mutations))) {
+        std.debug.print(
+            "high-concurrency QUIC E2E restart recovery failure recovered_mutations={d} expected_at_least={d}\n",
+            .{ recovered_mutations, expected_mutations },
+        );
+        return error.RestartRecoveryFailed;
+    }
 }
 
 fn waitForClientRelease(ctx: *WorkerCtx) void {
@@ -549,6 +812,7 @@ fn workerRun(ctx: *WorkerCtx) void {
         };
         const op_latency_ns = monoNs() -| op_start_ns;
         recordMaxLatency(ctx.counters, op_latency_ns);
+        recordLatencySample(ctx, op_latency_ns);
         defer res.deinit(allocator);
 
         expectNoQueryError(&res) catch |err| {
@@ -582,7 +846,7 @@ fn workerRun(ctx: *WorkerCtx) void {
         while (ctx.counters.ok.load(.acquire) + ctx.counters.failed.load(.acquire) < ctx.expected_ops) {
             sleepNs(10 * std.time.ns_per_ms);
         }
-        if (ctx.counters.failed.load(.acquire) == 0) {
+        if (ctx.counters.mutation_ok.load(.acquire) != 0) {
             var count_res = client.executeAndCollectWithTimeout(
                 allocator,
                 "MATCH (n:HCParallel) RETURN count(n) AS c",
@@ -630,7 +894,18 @@ fn workerRun(ctx: *WorkerCtx) void {
 
 pub fn main() !void {
     const allocator = std.heap.smp_allocator;
-    const worker_count = @max(@as(u32, 1), envU32("GEODE_HC_WORKERS", default_worker_count));
+    // CANARY: REQ=REQ-QUIC-HC-170; FEATURE="High-Concurrency Test Harness"; ASPECT=ObjectiveGateDefaults; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // The objective gate is deliberately opt-in so the default build step stays
+    // cheap. When enabled it turns the harness into the enterprise target
+    // runner: 16384 clients, 8 ops each, at least 25% mutations, 99.95%
+    // completion, zero first-response timeouts, 10k QPS, percentile gates,
+    // graph-isolation verification, restart recovery, and server RSS bounds.
+    const objective_gate = envBool("GEODE_HC_OBJECTIVE_GATE", false);
+    const default_worker_count_for_run = if (objective_gate) objective_worker_count else default_worker_count;
+    const default_ops_per_worker_for_run = if (objective_gate) objective_ops_per_worker else default_ops_per_worker;
+    const default_mutation_stride_for_run = if (objective_gate) objective_mutation_stride else default_mutation_stride;
+    const worker_count = @max(@as(u32, 1), envU32("GEODE_HC_WORKERS", default_worker_count_for_run));
     // CANARY: REQ=REQ-QUIC-HC-126; FEATURE="High-Concurrency Test Harness"; ASPECT=FanoutScaledServerDefaults; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
     //
     // Debug mode keeps the default 32-worker smoke run cheap and
@@ -647,8 +922,19 @@ pub fn main() !void {
     const default_connection_admission_threads_for_run = if (high_fanout_setup) @min(@max(worker_count, @as(u32, 1024)), @as(u32, 4096)) else @as(u32, 1024);
     const default_cooperative_first_stream_workers_for_run = if (high_fanout_setup) highFanoutCooperativeFirstStreamWorkerDefault(worker_count) else default_cooperative_first_stream_worker_count;
     const default_request_stagger_us_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_request_stagger_us), 1000) else default_request_stagger_us;
-    const ops_per_worker = @max(@as(u32, 1), envU32("GEODE_HC_OPS_PER_WORKER", default_ops_per_worker));
-    const mutation_stride = envU32("GEODE_HC_MUTATION_STRIDE", default_mutation_stride);
+    const ops_per_worker = @max(@as(u32, 1), envU32("GEODE_HC_OPS_PER_WORKER", default_ops_per_worker_for_run));
+    const mutation_stride = envU32("GEODE_HC_MUTATION_STRIDE", default_mutation_stride_for_run);
+    const min_completion_ppm = @min(envU32("GEODE_HC_MIN_COMPLETION_PPM", if (objective_gate) objective_min_completion_ppm else 1_000_000), 1_000_000);
+    const min_mutation_ppm = @min(envU32("GEODE_HC_MIN_MUTATION_PPM", if (objective_gate) objective_min_mutation_ppm else 0), 1_000_000);
+    const require_zero_first_response_timeouts = envBool("GEODE_HC_REQUIRE_ZERO_FIRST_RESPONSE_TIMEOUTS", objective_gate);
+    const min_qps = envU32("GEODE_HC_MIN_QPS", if (objective_gate) objective_min_qps else 0);
+    const p50_max_ms = envU32("GEODE_HC_P50_MAX_MS", if (objective_gate) objective_p50_max_ms else 0);
+    const p95_max_ms = envU32("GEODE_HC_P95_MAX_MS", if (objective_gate) objective_p95_max_ms else 0);
+    const p99_max_ms = envU32("GEODE_HC_P99_MAX_MS", if (objective_gate) objective_p99_max_ms else 0);
+    const p999_max_ms = envU32("GEODE_HC_P999_MAX_MS", if (objective_gate) objective_p999_max_ms else 0);
+    const graph_isolation_verify = envBool("GEODE_HC_GRAPH_ISOLATION_VERIFY", objective_gate);
+    const restart_verify = envBool("GEODE_HC_RESTART_VERIFY", objective_gate);
+    const memory_growth_max_kb = envU32("GEODE_HC_MEMORY_GROWTH_MAX_KB", if (objective_gate) objective_memory_growth_max_kb else 0);
     const connect_attempts = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_ATTEMPTS", default_connect_attempts_for_run));
     const connect_backoff_ms = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_BACKOFF_MS", default_connect_backoff_ms));
     const handshake_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_HANDSHAKE_TIMEOUT_SECS", default_handshake_timeout_secs));
@@ -868,7 +1154,9 @@ pub fn main() !void {
         return err;
     };
     util.progress("Server ready on {s}", .{addr});
-    defer server.deinit();
+    var server_running = true;
+    defer if (server_running) server.deinit();
+    const rss_start_kb = readServerRssKb(&server);
 
     var counters = Counters{};
     var start = std.atomic.Value(bool).init(false);
@@ -877,7 +1165,11 @@ pub fn main() !void {
     var release_clients = std.atomic.Value(bool).init(false);
     var release_generation = std.atomic.Value(u32).init(0);
     var workload_start_ns_atomic = std.atomic.Value(u64).init(0);
-    const expected_ops: u32 = worker_count * ops_per_worker;
+    const expected_ops = std.math.mul(u32, worker_count, ops_per_worker) catch return error.TooManyOperations;
+    const op_latency_samples = try allocator.alloc(u64, expected_ops);
+    defer allocator.free(op_latency_samples);
+    @memset(op_latency_samples, 0);
+    var op_latency_sample_index = std.atomic.Value(u32).init(0);
     const contexts = try allocator.alloc(WorkerCtx, worker_count);
     defer allocator.free(contexts);
     const threads = try allocator.alloc(std.Thread, worker_count);
@@ -907,6 +1199,8 @@ pub fn main() !void {
             .release_clients = &release_clients,
             .release_generation = &release_generation,
             .workload_start_ns = &workload_start_ns_atomic,
+            .op_latency_samples_ns = op_latency_samples,
+            .op_latency_sample_index = &op_latency_sample_index,
             .expected_ops = expected_ops,
             .verify_after_workload = i == 0,
             .client_diagnostics = client_diagnostics,
@@ -1041,44 +1335,15 @@ pub fn main() !void {
     }
     const workload_elapsed_ns = monoNs() -| workload_start_ns;
 
-    const failures = counters.failed.load(.acquire);
-    if (failures != 0) {
-        std.debug.print("high-concurrency QUIC E2E worker failures={d}\n", .{failures});
-        std.debug.print(
-            "high-concurrency QUIC E2E phases connected={d} hello_ok={d} ready={d} ops_started={d} ok={d} read_failed={d} mutation_failed={d}\n",
-            .{
-                counters.connected.load(.acquire),
-                counters.hello_ok.load(.acquire),
-                counters.ready.load(.acquire),
-                counters.ops_started.load(.acquire),
-                counters.ok.load(.acquire),
-                counters.read_failed.load(.acquire),
-                counters.mutation_failed.load(.acquire),
-            },
-        );
-        std.debug.print(
-            "high-concurrency QUIC E2E retry phases setup_attempts={d} setup_retries={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
-            .{
-                counters.setup_attempts.load(.acquire),
-                counters.setup_retries.load(.acquire),
-                counters.execute_attempts.load(.acquire),
-                counters.execute_retries.load(.acquire),
-                counters.execute_reconnects.load(.acquire),
-            },
-        );
-        printTimingSummary(&counters);
-        releaseAllClients(&release_clients, &release_generation);
-        for (threads) |*thread| thread.join();
-        return error.WorkerFailures;
-    }
     const observed_ops = counters.ok.load(.acquire);
-    if (observed_ops != expected_ops) {
+    var failures = counters.failed.load(.acquire);
+    if (failures != 0 or observed_ops != expected_ops) {
         std.debug.print(
-            "high-concurrency QUIC E2E ok={d} expected={d} failed={d} read_failed={d} mutation_failed={d} ops_started={d} elapsed_ms={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
+            "high-concurrency QUIC E2E incomplete ok={d} expected={d} failed={d} read_failed={d} mutation_failed={d} ops_started={d} elapsed_ms={d} execute_attempts={d} execute_retries={d} execute_reconnects={d}\n",
             .{
                 observed_ops,
                 expected_ops,
-                counters.failed.load(.acquire),
+                failures,
                 counters.read_failed.load(.acquire),
                 counters.mutation_failed.load(.acquire),
                 counters.ops_started.load(.acquire),
@@ -1088,10 +1353,6 @@ pub fn main() !void {
                 counters.execute_reconnects.load(.acquire),
             },
         );
-        printTimingSummary(&counters);
-        releaseAllClients(&release_clients, &release_generation);
-        for (threads) |*thread| thread.join();
-        return error.MissingSuccessfulOperations;
     }
     const qps_x100: u64 = if (workload_elapsed_ns == 0) 0 else (@as(u64, observed_ops) * std.time.ns_per_s * 100) / workload_elapsed_ns;
     const observed_reads = counters.read_ok.load(.acquire);
@@ -1138,6 +1399,8 @@ pub fn main() !void {
         },
     );
     printTimingSummary(&counters);
+    const percentiles = computeLatencyPercentiles(op_latency_samples, op_latency_sample_index.load(.acquire));
+    printLatencyPercentiles(percentiles);
 
     if (observed_mutations_ok != 0) {
         const verify_deadline_ns = monoNs() + (@as(u64, execute_timeout_secs) + 30) * std.time.ns_per_s;
@@ -1151,13 +1414,113 @@ pub fn main() !void {
             } };
             io.futexWaitTimeout(u32, &counters.verify_done.raw, observed, timeout) catch {};
         }
-        if (counters.verify_done.load(.acquire) == 0 or counters.verify_failed.load(.acquire) != 0 or counters.failed.load(.acquire) != 0) {
-            releaseAllClients(&release_clients, &release_generation);
-            for (threads) |*thread| thread.join();
-            return error.MutationCountMismatch;
+        if (counters.verify_done.load(.acquire) == 0 or counters.verify_failed.load(.acquire) != 0) {
+            _ = counters.failed.fetchAdd(1, .acq_rel);
         }
     }
 
     releaseAllClients(&release_clients, &release_generation);
     for (threads) |*thread| thread.join();
+    sleepNs(100 * std.time.ns_per_ms);
+    const rss_after_clients_kb = readServerRssKb(&server);
+    const rss_delta_kb = rss_after_clients_kb -| rss_start_kb;
+    std.debug.print(
+        "high-concurrency QUIC E2E memory rss_start_kb={d} rss_after_clients_kb={d} rss_delta_kb={d} rss_limit_kb={d}\n",
+        .{ rss_start_kb, rss_after_clients_kb, rss_delta_kb, memory_growth_max_kb },
+    );
+
+    if (graph_isolation_verify) {
+        try verifyGraphIsolation(allocator, server.getAddr(), port, execute_timeout_secs);
+        std.debug.print("high-concurrency QUIC E2E graph_isolation=ok\n", .{});
+    }
+
+    if (restart_verify) {
+        const restart_addr = try allocator.dupe(u8, server.getAddr());
+        defer allocator.free(restart_addr);
+        stopServerGracefully(&server, 30 * std.time.ns_per_s);
+        server_running = false;
+        sleepNs(100 * std.time.ns_per_ms);
+        try verifyRestartRecovery(
+            allocator,
+            restart_addr,
+            port,
+            data_dir,
+            max_connections_arg,
+            server_env,
+            execute_timeout_secs,
+            observed_mutations_ok,
+        );
+        std.debug.print("high-concurrency QUIC E2E restart_recovery=ok\n", .{});
+    }
+
+    failures = counters.failed.load(.acquire);
+    const completion_ppm: u64 = (@as(u64, observed_ops) * 1_000_000) / @as(u64, expected_ops);
+    const mutation_ppm: u64 = (@as(u64, observed_mutations_ok) * 1_000_000) / @as(u64, expected_ops);
+    const qps_whole = qps_x100 / 100;
+    var gate_failures: u32 = 0;
+    if (completion_ppm < min_completion_ppm) {
+        gate_failures += 1;
+        std.debug.print(
+            "high-concurrency QUIC E2E gate failure: completion_ppm={d} required_ppm={d}\n",
+            .{ completion_ppm, min_completion_ppm },
+        );
+    }
+    if (min_mutation_ppm != 0 and mutation_ppm < min_mutation_ppm) {
+        gate_failures += 1;
+        std.debug.print(
+            "high-concurrency QUIC E2E gate failure: mutation_ppm={d} required_ppm={d}\n",
+            .{ mutation_ppm, min_mutation_ppm },
+        );
+    }
+    if (require_zero_first_response_timeouts and counters.first_response_timeouts.load(.acquire) != 0) {
+        gate_failures += 1;
+        std.debug.print(
+            "high-concurrency QUIC E2E gate failure: first_response_timeouts={d} required=0\n",
+            .{counters.first_response_timeouts.load(.acquire)},
+        );
+    }
+    if (min_qps != 0 and qps_whole < min_qps) {
+        gate_failures += 1;
+        std.debug.print(
+            "high-concurrency QUIC E2E gate failure: qps={d}.{d:0>2} required_min={d}\n",
+            .{ qps_x100 / 100, qps_x100 % 100, min_qps },
+        );
+    }
+    if (p50_max_ms != 0 and percentiles.p50_ns >= @as(u64, p50_max_ms) * std.time.ns_per_ms) {
+        gate_failures += 1;
+        std.debug.print("high-concurrency QUIC E2E gate failure: p50_ms >= {d}\n", .{p50_max_ms});
+    }
+    if (p95_max_ms != 0 and percentiles.p95_ns >= @as(u64, p95_max_ms) * std.time.ns_per_ms) {
+        gate_failures += 1;
+        std.debug.print("high-concurrency QUIC E2E gate failure: p95_ms >= {d}\n", .{p95_max_ms});
+    }
+    if (p99_max_ms != 0 and percentiles.p99_ns >= @as(u64, p99_max_ms) * std.time.ns_per_ms) {
+        gate_failures += 1;
+        std.debug.print("high-concurrency QUIC E2E gate failure: p99_ms >= {d}\n", .{p99_max_ms});
+    }
+    if (p999_max_ms != 0 and percentiles.p999_ns >= @as(u64, p999_max_ms) * std.time.ns_per_ms) {
+        gate_failures += 1;
+        std.debug.print("high-concurrency QUIC E2E gate failure: p99_9_ms >= {d}\n", .{p999_max_ms});
+    }
+    if (memory_growth_max_kb != 0 and rss_delta_kb > memory_growth_max_kb) {
+        gate_failures += 1;
+        std.debug.print(
+            "high-concurrency QUIC E2E gate failure: rss_delta_kb={d} limit_kb={d}\n",
+            .{ rss_delta_kb, memory_growth_max_kb },
+        );
+    }
+    if (counters.verify_done.load(.acquire) == 0 and observed_mutations_ok != 0) {
+        gate_failures += 1;
+        std.debug.print("high-concurrency QUIC E2E gate failure: mutation verifier did not complete\n", .{});
+    }
+    if (counters.verify_failed.load(.acquire) != 0) {
+        gate_failures += 1;
+        std.debug.print("high-concurrency QUIC E2E gate failure: mutation verifier failed\n", .{});
+    }
+
+    std.debug.print(
+        "high-concurrency QUIC E2E gate objective={} completion_ppm={d} mutation_ppm={d} failures={d} gate_failures={d}\n",
+        .{ objective_gate, completion_ppm, mutation_ppm, failures, gate_failures },
+    );
+    if (gate_failures != 0) return error.HighConcurrencyGateFailed;
 }
