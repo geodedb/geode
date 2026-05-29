@@ -52,7 +52,7 @@ fn encodeTimeBasedNodeId(ms: u64, seq: u16) u64 {
 }
 
 fn realtimeMillis() u64 {
-    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
         const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
         if (rc != 0) return 0;

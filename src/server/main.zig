@@ -36,7 +36,7 @@ fn compat_microTimestamp() i64 {
 }
 
 fn monoNs() u64 {
-    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
         const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
         if (rc != 0) return 0;
