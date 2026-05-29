@@ -157,14 +157,18 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
 const first_stream_owner_stack_size = 2 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
+const first_stream_scheduler_turn_delay_per_excess_ns: u64 = 2 * std.time.ns_per_us;
+const first_stream_scheduler_turn_delay_cap_ns: u64 = std.time.ns_per_ms;
 // CANARY: REQ=REQ-QUIC-HC-150; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationWindowCap; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
 //
-// The storage mutation path already serializes on the write lock. Letting many
-// cooperative first-stream workers block behind that lock only starves the read
-// tail. Keep a small global mutation window and requeue overflow mutating
-// packets so read-heavy mixed bursts continue to drain.
-pub const default_first_stream_scheduler_mutation_limit_cap: usize = 4;
-pub const max_first_stream_scheduler_mutation_limit_cap: usize = 128;
+// The original four-wide mutation window protected reads while all mutations
+// funneled through a whole-graph writer. Keep that small serial window for
+// general mutations, but route simple multi-property MERGE through a wider
+// shard-parallel window because that path uses tuple and shard locks instead
+// of the whole-graph writer.
+const serial_first_stream_scheduler_mutation_limit_cap: usize = 4;
+pub const default_first_stream_scheduler_mutation_limit_cap: usize = 512;
+pub const max_first_stream_scheduler_mutation_limit_cap: usize = 512;
 // CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
 // The scheduler runs persistent first streams through a shared worker pool.
@@ -1915,6 +1919,12 @@ fn clearThreadLocalSessionState() void {
     audit_mod.setCurrentAuditTenantId(null);
 }
 
+const CooperativeMutationAdmissionClass = enum(u8) {
+    none = 0,
+    serial = 1,
+    shard_parallel = 2,
+};
+
 fn releaseQuotaTenant(gpa: std.mem.Allocator, quota_tenant_id: *?[]const u8) void {
     if (quota_tenant_id.*) |tid| {
         if (tenant_quota.getGlobalQuotaManager()) |qm| {
@@ -2425,6 +2435,7 @@ const FirstStreamOwnerContext = struct {
     cooperative_generation_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     cooperative_enqueued_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     cooperative_mutation_waiting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    cooperative_mutation_wait_class: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(CooperativeMutationAdmissionClass.none)),
     pending_packet: ?schema.ClientPacket = null,
     post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
@@ -2584,8 +2595,10 @@ pub const FirstStreamScheduler = struct {
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     context_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    shard_parallel_mutation_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_retry_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     mutation_limit: u32 = 1,
+    shard_parallel_mutation_limit: u32 = 1,
     workers: []std.Thread = &.{},
     next_index: usize = 0,
     last_idle_sweep_ns: u64 = 0,
@@ -2611,8 +2624,10 @@ pub const FirstStreamScheduler = struct {
             .shutdown = std.atomic.Value(bool).init(false),
             .context_count = std.atomic.Value(u32).init(0),
             .mutation_inflight = std.atomic.Value(u32).init(0),
+            .shard_parallel_mutation_inflight = std.atomic.Value(u32).init(0),
             .mutation_retry_waiters = std.atomic.Value(u32).init(0),
-            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, effective_mutation_cap))),
+            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, serial_first_stream_scheduler_mutation_limit_cap))),
+            .shard_parallel_mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1), effective_mutation_cap))),
             .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
             .next_index = 0,
             .last_idle_sweep_ns = 0,
@@ -2676,6 +2691,7 @@ pub const FirstStreamScheduler = struct {
         ctx.cooperative_force_ready.store(false, .release);
         ctx.cooperative_generation_seen.store(ctx.stream.readGeneration(), .release);
         ctx.cooperative_mutation_waiting.store(false, .release);
+        ctx.cooperative_mutation_wait_class.store(@intFromEnum(CooperativeMutationAdmissionClass.none), .release);
         ctx.pending_packet = null;
 
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -2753,7 +2769,7 @@ pub const FirstStreamScheduler = struct {
     }
 
     fn pauseAfterTurn(self: *FirstStreamScheduler) void {
-        // CANARY: REQ=REQ-QUIC-HC-147; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativePollerFairness; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+        // CANARY: REQ=REQ-QUIC-HC-147; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativePollerFairness; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
         //
         // Cooperative first-stream workers can process cheap count responses
         // faster than the QUIC poll workers can flush request/response packets
@@ -2763,28 +2779,49 @@ pub const FirstStreamScheduler = struct {
         const active_contexts = self.context_count.load(.acquire);
         if (active_contexts > 512) {
             const excess: u64 = @intCast(active_contexts - 512);
-            const delay_ns = @min(excess * 10 * std.time.ns_per_us, 3 * std.time.ns_per_ms);
+            const delay_ns = @min(excess * first_stream_scheduler_turn_delay_per_excess_ns, first_stream_scheduler_turn_delay_cap_ns);
             compat_sleepNs(delay_ns);
         } else if (self.workers.len > 64) {
             std.Thread.yield() catch {};
         }
     }
 
-    fn tryAcquireMutationPermit(self: *FirstStreamScheduler) bool {
+    fn mutationCounterForClass(self: *FirstStreamScheduler, class: CooperativeMutationAdmissionClass) ?struct { inflight: *std.atomic.Value(u32), limit: u32 } {
+        return switch (class) {
+            .none => null,
+            .serial => .{ .inflight = &self.mutation_inflight, .limit = self.mutation_limit },
+            .shard_parallel => .{ .inflight = &self.shard_parallel_mutation_inflight, .limit = self.shard_parallel_mutation_limit },
+        };
+    }
+
+    fn mutationPermitCapacityForClass(self: *FirstStreamScheduler, class: CooperativeMutationAdmissionClass) bool {
+        const counter = self.mutationCounterForClass(class) orelse return true;
+        return counter.inflight.load(.acquire) < counter.limit;
+    }
+
+    fn anyMutationPermitCapacity(self: *FirstStreamScheduler) bool {
+        return self.mutationPermitCapacityForClass(.serial) or self.mutationPermitCapacityForClass(.shard_parallel);
+    }
+
+    fn tryAcquireMutationPermit(self: *FirstStreamScheduler, class: CooperativeMutationAdmissionClass) bool {
         // CANARY: REQ=REQ-QUIC-HC-148; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationAdmission; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
         //
-        // Mutating requests can occupy scheduler workers for longer than
-        // lock-free count reads. Cap concurrent cooperative mutation turns and
-        // requeue overflow packets so read work always keeps scheduler headroom.
-        var observed = self.mutation_inflight.load(.acquire);
-        while (observed < self.mutation_limit) {
-            observed = self.mutation_inflight.cmpxchgWeak(observed, observed + 1, .acq_rel, .acquire) orelse return true;
+        // General mutating requests can occupy scheduler workers behind the
+        // graph writer, while multi-property MERGE uses shard/tuple locks.
+        // Admit each class against its own window so serial writers cannot
+        // starve reads and shard-parallel mutations are not throttled by the
+        // old four-wide writer cap.
+        const counter = self.mutationCounterForClass(class) orelse return true;
+        var observed = counter.inflight.load(.acquire);
+        while (observed < counter.limit) {
+            observed = counter.inflight.cmpxchgWeak(observed, observed + 1, .acq_rel, .acquire) orelse return true;
         }
         return false;
     }
 
-    fn releaseMutationPermit(self: *FirstStreamScheduler) void {
-        _ = self.mutation_inflight.fetchSub(1, .acq_rel);
+    fn releaseMutationPermit(self: *FirstStreamScheduler, class: CooperativeMutationAdmissionClass) void {
+        const counter = self.mutationCounterForClass(class) orelse return;
+        _ = counter.inflight.fetchSub(1, .acq_rel);
         if (self.mutation_retry_waiters.load(.acquire) != 0) {
             const io = std.Io.Threaded.global_single_threaded.io();
             _ = self.ready_generation.fetchAdd(1, .release);
@@ -2799,13 +2836,14 @@ pub const FirstStreamScheduler = struct {
         }
     }
 
-    fn markMutationRetryWaiter(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
+    fn markMutationRetryWaiter(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext, class: CooperativeMutationAdmissionClass) void {
         // CANARY: REQ=REQ-QUIC-HC-159; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=PermitGatedMutationRetry; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
         //
         // Overflow mutations must retain stream ordering, but immediately
         // requeueing them spins the cooperative ready queue while the global
         // mutation window is full. Park the packet until the next mutation
         // permit release wakes a waiter.
+        ctx.cooperative_mutation_wait_class.store(@intFromEnum(class), .release);
         if (!ctx.cooperative_mutation_waiting.swap(true, .acq_rel)) {
             _ = self.mutation_retry_waiters.fetchAdd(1, .acq_rel);
         }
@@ -2815,11 +2853,13 @@ pub const FirstStreamScheduler = struct {
         if (ctx.cooperative_mutation_waiting.swap(false, .acq_rel)) {
             self.decrementMutationRetryWaiters();
         }
+        ctx.cooperative_mutation_wait_class.store(@intFromEnum(CooperativeMutationAdmissionClass.none), .release);
     }
 
     fn forceReadyEligible(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) bool {
         if (!ctx.cooperative_mutation_waiting.load(.acquire)) return true;
-        return self.mutation_inflight.load(.acquire) < self.mutation_limit;
+        const class: CooperativeMutationAdmissionClass = @enumFromInt(ctx.cooperative_mutation_wait_class.load(.acquire));
+        return self.mutationPermitCapacityForClass(class);
     }
 
     fn dequeueReadyLocked(self: *FirstStreamScheduler) ?*FirstStreamOwnerContext {
@@ -2924,8 +2964,7 @@ pub const FirstStreamScheduler = struct {
             // per-connection RX generation with the last generation observed
             // at WouldBlock, giving long-idle connections a bounded recovery
             // path without polling every worker on every scheduler wait.
-            const scan_mutation_waiters = self.mutation_retry_waiters.load(.acquire) != 0 and
-                self.mutation_inflight.load(.acquire) < self.mutation_limit;
+            const scan_mutation_waiters = self.mutation_retry_waiters.load(.acquire) != 0 and self.anyMutationPermitCapacity();
             const sweep_idle_contexts = self.shouldSweepIdleContextsLocked();
             if (scan_mutation_waiters or sweep_idle_contexts) {
                 if (self.takeChangedContextLocked(scan_mutation_waiters, sweep_idle_contexts)) |ctx| {
@@ -3044,7 +3083,146 @@ fn skipQuotedToken(query: []const u8, start: usize, quote: u8) usize {
     return query.len;
 }
 
-fn queryLooksMutatingForCooperativeAdmission(query: []const u8) bool {
+fn skipLineComment(query: []const u8, start: usize) usize {
+    var i = start + 2;
+    while (i < query.len and query[i] != '\n') : (i += 1) {}
+    return i;
+}
+
+fn skipBlockComment(query: []const u8, start: usize) usize {
+    var i = start + 2;
+    while (i + 1 < query.len and !(query[i] == '*' and query[i + 1] == '/')) : (i += 1) {}
+    return @min(i + 2, query.len);
+}
+
+fn isCooperativeMutationKeyword(token: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(token, "CREATE") or
+        std.ascii.eqlIgnoreCase(token, "MERGE") or
+        std.ascii.eqlIgnoreCase(token, "DELETE") or
+        std.ascii.eqlIgnoreCase(token, "DETACH") or
+        std.ascii.eqlIgnoreCase(token, "SET") or
+        std.ascii.eqlIgnoreCase(token, "REMOVE") or
+        std.ascii.eqlIgnoreCase(token, "INSERT") or
+        std.ascii.eqlIgnoreCase(token, "DROP") or
+        std.ascii.eqlIgnoreCase(token, "ALTER") or
+        std.ascii.eqlIgnoreCase(token, "GRANT") or
+        std.ascii.eqlIgnoreCase(token, "DENY") or
+        std.ascii.eqlIgnoreCase(token, "REVOKE") or
+        std.ascii.eqlIgnoreCase(token, "RESTORE");
+}
+
+fn isShardParallelMergeDisqualifier(token: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(token, "MATCH") or
+        std.ascii.eqlIgnoreCase(token, "CREATE") or
+        std.ascii.eqlIgnoreCase(token, "DELETE") or
+        std.ascii.eqlIgnoreCase(token, "DETACH") or
+        std.ascii.eqlIgnoreCase(token, "SET") or
+        std.ascii.eqlIgnoreCase(token, "REMOVE") or
+        std.ascii.eqlIgnoreCase(token, "INSERT") or
+        std.ascii.eqlIgnoreCase(token, "DROP") or
+        std.ascii.eqlIgnoreCase(token, "ALTER") or
+        std.ascii.eqlIgnoreCase(token, "GRANT") or
+        std.ascii.eqlIgnoreCase(token, "DENY") or
+        std.ascii.eqlIgnoreCase(token, "REVOKE") or
+        std.ascii.eqlIgnoreCase(token, "RESTORE") or
+        std.ascii.eqlIgnoreCase(token, "RETURN") or
+        std.ascii.eqlIgnoreCase(token, "ON") or
+        std.ascii.eqlIgnoreCase(token, "CALL") or
+        std.ascii.eqlIgnoreCase(token, "UNWIND") or
+        std.ascii.eqlIgnoreCase(token, "USE") or
+        std.ascii.eqlIgnoreCase(token, "BEGIN") or
+        std.ascii.eqlIgnoreCase(token, "COMMIT") or
+        std.ascii.eqlIgnoreCase(token, "ROLLBACK");
+}
+
+fn queryLooksShardParallelSimpleMergeForCooperativeAdmission(query: []const u8) bool {
+    // CANARY: REQ=REQ-QUIC-HC-160; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=ShardParallelMutationAdmission; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // This deliberately recognizes only the storage fast path that bypasses
+    // the whole-graph writer: a single no-RETURN MERGE node pattern with at
+    // least two merge properties. Broader mutation shapes keep the small
+    // serial admission window until they have their own storage-level
+    // concurrency contract.
+    var i: usize = 0;
+    var saw_first_identifier = false;
+    var saw_merge = false;
+    var paren_depth: u32 = 0;
+    var property_depth: u32 = 0;
+    var property_key_count: usize = 0;
+    var node_pattern_closed = false;
+
+    while (i < query.len) {
+        const c = query[i];
+        if (std.ascii.isWhitespace(c) or c == ';') {
+            i += 1;
+            continue;
+        }
+        if (c == '\'' or c == '"' or c == '`') {
+            i = skipQuotedToken(query, i, c);
+            continue;
+        }
+        if (c == '/' and i + 1 < query.len and query[i + 1] == '/') {
+            i = skipLineComment(query, i);
+            continue;
+        }
+        if (c == '/' and i + 1 < query.len and query[i + 1] == '*') {
+            i = skipBlockComment(query, i);
+            continue;
+        }
+        if (node_pattern_closed) return false;
+
+        if (isGqlIdentifierByte(c)) {
+            const start = i;
+            while (i < query.len and isGqlIdentifierByte(query[i])) : (i += 1) {}
+            const token = query[start..i];
+            if (!saw_first_identifier) {
+                saw_first_identifier = true;
+                if (!std.ascii.eqlIgnoreCase(token, "MERGE")) return false;
+                saw_merge = true;
+                continue;
+            }
+            if (isShardParallelMergeDisqualifier(token)) return false;
+            continue;
+        }
+
+        if (!saw_merge) return false;
+
+        switch (c) {
+            '(' => {
+                paren_depth += 1;
+                i += 1;
+            },
+            ')' => {
+                if (paren_depth == 0 or property_depth != 0) return false;
+                paren_depth -= 1;
+                if (paren_depth == 0) node_pattern_closed = true;
+                i += 1;
+            },
+            '[' => return false,
+            '{' => {
+                if (paren_depth != 1 or property_depth != 0) return false;
+                property_depth = 1;
+                i += 1;
+            },
+            '}' => {
+                if (property_depth != 1) return false;
+                property_depth = 0;
+                i += 1;
+            },
+            ':' => {
+                if (property_depth == 1) property_key_count += 1;
+                i += 1;
+            },
+            else => {
+                i += 1;
+            },
+        }
+    }
+
+    return node_pattern_closed and property_key_count >= 2;
+}
+
+fn queryCooperativeMutationAdmissionClass(query: []const u8) CooperativeMutationAdmissionClass {
     // CANARY: REQ=REQ-QUIC-HC-148; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationClassifier; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
     //
     // This is an admission-control prefilter, not the semantic authority. The
@@ -3063,14 +3241,11 @@ fn queryLooksMutatingForCooperativeAdmission(query: []const u8) bool {
             continue;
         }
         if (c == '/' and i + 1 < query.len and query[i + 1] == '/') {
-            i += 2;
-            while (i < query.len and query[i] != '\n') : (i += 1) {}
+            i = skipLineComment(query, i);
             continue;
         }
         if (c == '/' and i + 1 < query.len and query[i + 1] == '*') {
-            i += 2;
-            while (i + 1 < query.len and !(query[i] == '*' and query[i + 1] == '/')) : (i += 1) {}
-            i = @min(i + 2, query.len);
+            i = skipBlockComment(query, i);
             continue;
         }
         if (!isGqlIdentifierByte(c)) {
@@ -3081,32 +3256,24 @@ fn queryLooksMutatingForCooperativeAdmission(query: []const u8) bool {
         const start = i;
         while (i < query.len and isGqlIdentifierByte(query[i])) : (i += 1) {}
         const token = query[start..i];
-        if (std.ascii.eqlIgnoreCase(token, "CREATE") or
-            std.ascii.eqlIgnoreCase(token, "MERGE") or
-            std.ascii.eqlIgnoreCase(token, "DELETE") or
-            std.ascii.eqlIgnoreCase(token, "DETACH") or
-            std.ascii.eqlIgnoreCase(token, "SET") or
-            std.ascii.eqlIgnoreCase(token, "REMOVE") or
-            std.ascii.eqlIgnoreCase(token, "INSERT") or
-            std.ascii.eqlIgnoreCase(token, "DROP") or
-            std.ascii.eqlIgnoreCase(token, "ALTER") or
-            std.ascii.eqlIgnoreCase(token, "GRANT") or
-            std.ascii.eqlIgnoreCase(token, "DENY") or
-            std.ascii.eqlIgnoreCase(token, "REVOKE") or
-            std.ascii.eqlIgnoreCase(token, "RESTORE"))
-        {
-            return true;
+        if (isCooperativeMutationKeyword(token)) {
+            if (std.ascii.eqlIgnoreCase(token, "MERGE") and
+                queryLooksShardParallelSimpleMergeForCooperativeAdmission(query))
+            {
+                return .shard_parallel;
+            }
+            return .serial;
         }
     }
-    return false;
+    return .none;
 }
 
-fn packetNeedsCooperativeMutationAdmission(packet: *const schema.ClientPacket) bool {
-    const msg = packet.quic orelse return false;
+fn packetCooperativeMutationAdmissionClass(packet: *const schema.ClientPacket) CooperativeMutationAdmissionClass {
+    const msg = packet.quic orelse return .none;
     return switch (msg) {
-        .execute => |execute_req| queryLooksMutatingForCooperativeAdmission(execute_req.query),
-        .commit, .rollback, .rollback_to, .restore, .upload_backup, .cdc_ctrl => true,
-        else => false,
+        .execute => |execute_req| queryCooperativeMutationAdmissionClass(execute_req.query),
+        .commit, .rollback, .rollback_to, .restore, .upload_backup, .cdc_ctrl => .serial,
+        else => .none,
     };
 }
 
@@ -3143,20 +3310,23 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
         }
 
         var mutation_scheduler: ?*FirstStreamScheduler = null;
-        if (packetNeedsCooperativeMutationAdmission(&packet)) {
+        var mutation_class: CooperativeMutationAdmissionClass = .none;
+        const admission_class = packetCooperativeMutationAdmissionClass(&packet);
+        if (admission_class != .none) {
             if (ctx.cooperative_scheduler) |scheduler| {
-                if (!scheduler.tryAcquireMutationPermit()) {
+                if (!scheduler.tryAcquireMutationPermit(admission_class)) {
                     quic_response_metrics.recordFirstStreamMutationDeferral();
                     ctx.pending_packet = packet;
-                    scheduler.markMutationRetryWaiter(ctx);
+                    scheduler.markMutationRetryWaiter(ctx, admission_class);
                     ctx.cooperative_force_ready.store(true, .release);
                     return false;
                 }
                 mutation_scheduler = scheduler;
+                mutation_class = admission_class;
             }
         }
         defer {
-            if (mutation_scheduler) |scheduler| scheduler.releaseMutationPermit();
+            if (mutation_scheduler) |scheduler| scheduler.releaseMutationPermit(mutation_class);
             packet.deinit(gpa);
         }
 

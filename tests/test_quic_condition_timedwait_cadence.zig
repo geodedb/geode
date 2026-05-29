@@ -841,7 +841,9 @@ test "cooperative first stream scheduler yields to poll workers at high fanout" 
     try testing.expect(std.mem.indexOf(u8, handler, "fn pauseAfterTurn") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "self.pauseAfterTurn();") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "active_contexts > 512") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "excess * 10 * std.time.ns_per_us") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_turn_delay_per_excess_ns: u64 = 2 * std.time.ns_per_us") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_turn_delay_cap_ns: u64 = std.time.ns_per_ms") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "excess * first_stream_scheduler_turn_delay_per_excess_ns") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "std.Thread.yield() catch {};") != null);
 }
 
@@ -856,35 +858,46 @@ test "cooperative first stream scheduler requeues mutation overflow" {
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-148") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-150") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-159") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-160") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationAdmission") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationClassifier") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "PermitGatedMutationRetry") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "ShardParallelMutationAdmission") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationAdmissionClass") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "pending_packet: ?schema.ClientPacket = null") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_inflight: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "shard_parallel_mutation_inflight: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_retry_waiters: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "cooperative_mutation_waiting: std.atomic.Value(bool)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "cooperative_mutation_wait_class: std.atomic.Value(u8)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_limit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "shard_parallel_mutation_limit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationWindowCap") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "default_first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "max_first_stream_scheduler_mutation_limit_cap: usize = 128") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "serial_first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "default_first_stream_scheduler_mutation_limit_cap: usize = 512") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "max_first_stream_scheduler_mutation_limit_cap: usize = 512") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "effective_mutation_cap") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "@max(worker_count, 1) / 4") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "@min(@max(worker_count, 1), effective_mutation_cap)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn queryLooksShardParallelSimpleMergeForCooperativeAdmission") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "property_key_count >= 2") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn packetCooperativeMutationAdmissionClass") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn tryAcquireMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn releaseMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn markMutationRetryWaiter") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn clearMutationRetryWaiter") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn forceReadyEligible") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "fn packetNeedsCooperativeMutationAdmission") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "fn queryLooksMutatingForCooperativeAdmission") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "fn queryCooperativeMutationAdmissionClass") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "ctx.pending_packet = packet;") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.markMutationRetryWaiter(ctx);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.markMutationRetryWaiter(ctx, admission_class);") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "scheduler.clearMutationRetryWaiter(ctx);") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "ctx.cooperative_force_ready.store(true, .release);") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "parked_mutation") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "self.mutation_retry_waiters.load(.acquire) != 0") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "self.mutation_inflight.load(.acquire) < self.mutation_limit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "self.anyMutationPermitCapacity()") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "io.futexWake(u32, &self.ready_generation.raw, 1)") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.tryAcquireMutationPermit()") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.releaseMutationPermit()") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.tryAcquireMutationPermit(admission_class)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "scheduler.releaseMutationPermit(mutation_class)") != null);
 }
 
 test "high concurrency harness batches workload start wake" {

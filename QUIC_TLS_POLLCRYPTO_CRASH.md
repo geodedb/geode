@@ -45,14 +45,17 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-Latest result after the 2026-05-29 empty-RLS-engine and mutation-permit follow-ups: 4096 clients
-connected and completed 4096 operations, including 1024 mutations, at 786.60 QPS with zero setup
-retries, zero execution retries, zero reconnects, zero first-response timeouts, and no
-`pollCrypto` crash.
+Latest result after the 2026-05-29 empty-RLS-engine, mutation-permit, and
+shard-parallel admission follow-ups: 4096 clients connected and completed 4096
+operations, including 1024 mutations, at 884.81 QPS with zero setup retries,
+zero execution retries, zero reconnects, zero first-response timeouts, and no
+`pollCrypto` crash. The sustained mixed gate is now 2048 workers x 8 operations
+(`16384/16384` complete, zero first-response timeouts).
 
-Known remaining throughput limit: sustained 4096 workers x 8 operations still fails within the
-10s execute timeout (`ok=17027/32768` in the latest final run). That is a separate
-post-handshake transport/scheduler ceiling and is documented in
+Known remaining throughput limit: sustained 4096 workers x 8 operations still
+fails within the 10s execute timeout (`ok=21719/32768` at 250 us request
+stagger, `ok=25800/32768` at 1000 us in the latest final runs). That is a
+separate post-handshake transport/scheduler ceiling and is documented in
 `docs/audit/quic-high-concurrency-2026-05-29.md`.
 
 ---

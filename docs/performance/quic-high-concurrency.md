@@ -23,17 +23,17 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The accepted 2026-05-29 run completed all 4096 operations with zero setup
-retries, zero execute retries, zero reconnects, zero first-response timeouts,
-and 786.60 QPS.
+The latest 2026-05-29 follow-up run completed all 4096 operations with zero
+setup retries, zero execute retries, zero reconnects, zero first-response
+timeouts, and 884.81 QPS.
 
 ## Sustained Gate
 
-The current sustained mixed read/write pass is 1024 clients x 8 operations per
+The current sustained mixed read/write pass is 2048 clients x 8 operations per
 client:
 
 ```sh
-GEODE_HC_WORKERS=1024 \
+GEODE_HC_WORKERS=2048 \
 GEODE_HC_OPS_PER_WORKER=8 \
 GEODE_HC_MUTATION_STRIDE=4 \
 GEODE_HC_READ_QUERY='MATCH (n:HCParallel) RETURN count(n) AS c' \
@@ -45,14 +45,15 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The accepted sustained run completed all 8192 operations with zero setup
+The accepted sustained run completed all 16384 operations with zero setup
 retries, zero execute retries, zero reconnects, zero first-response timeouts,
-and 3471.63 QPS.
+and 1007.96 QPS. This gate exercises 4096 mutations and 12288 reads over 2048
+live QUIC connections.
 
 ## Stress Ceiling
 
 The 4096-worker mixed workload with 8 operations per client is still the failing
-stress ceiling and the next throughput target:
+stress ceiling and the next throughput target. The low-stagger probe remains:
 
 ```sh
 GEODE_HC_WORKERS=4096 \
@@ -67,15 +68,17 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest run completed 17027/32768 operations with zero setup retries, zero
-execute retries, zero reconnects, and 15741 first-response timeouts. Keep this
-as the active ceiling probe; do not raise the 10s execute timeout to make it
-pass.
+The latest 250 us run completed 21719/32768 operations with zero setup retries,
+zero execute retries, zero reconnects, and 11049 first-response timeouts. A
+latency-friendly 1000 us run completed 25800/32768 operations with 6968
+first-response timeouts. Keep both as active ceiling probes; do not raise the
+10s execute timeout to make them pass.
 
-With server metrics enabled, permit-gated mutation overflow reduced
-`quic_first_stream_mutation_deferrals_total` from earlier multi-million requeue
-churn to thousands. The remaining tail is concentrated in first-response wait,
-cooperative packet processing, and QUIC short-header receive processing.
+With server metrics enabled, permit-gated mutation overflow and shard-parallel
+mutation admission reduced scheduler churn enough to promote the sustained gate
+from 1024 x 8 to 2048 x 8. The remaining 4096 x 8 tail is still concentrated in
+first-response wait, cooperative packet processing, and QUIC short-header
+receive processing.
 
 ## Core Knobs
 
@@ -83,8 +86,9 @@ cooperative packet processing, and QUIC short-header receive processing.
   current QUIC dependency line; higher values contend on serialized crypto
   polling.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
-  Leave unset in normal operation. The default cap is `4`; wider windows
-  still regressed mixed read/write fanout after the RLS fast-path fix.
+  Leave unset in normal operation. General writer-lock mutations keep an
+  internal serial cap of `4`; the runtime cap now controls only the
+  shard-parallel multi-property `MERGE` window, which defaults to `512`.
 - `GEODE_HC_POST_WRITE_POLL`: high-concurrency harness client flush behavior.
   Defaults to true below 1024 workers and false at 1024+ workers. Set `1` only
   for legacy immediate post-write poll comparisons.
@@ -92,7 +96,8 @@ cooperative packet processing, and QUIC short-header receive processing.
   cooperative first-stream workers. The server clamps the production value to
   512.
 - `GEODE_HC_REQUEST_STAGGER_US`: offered-load shaping across already connected
-  clients. The accepted gate is `1000`; `250` remains a ceiling probe.
+  clients. The single-op accepted gate uses `250`; sustained ceiling probes
+  should record both `250` and `1000`.
 
 ## Reading Timing Output
 
