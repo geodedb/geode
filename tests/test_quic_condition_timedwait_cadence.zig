@@ -854,11 +854,14 @@ test "cooperative first stream scheduler requeues mutation overflow" {
     defer allocator.free(handler);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-148") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-150") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationAdmission") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationClassifier") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "pending_packet: ?schema.ClientPacket = null") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_inflight: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "mutation_limit") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "CooperativeMutationWindowCap") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "first_stream_scheduler_mutation_limit_cap: usize = 4") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn tryAcquireMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn releaseMutationPermit") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "fn packetNeedsCooperativeMutationAdmission") != null);
@@ -879,7 +882,12 @@ test "high concurrency harness batches workload start wake" {
     defer allocator.free(e2e);
 
     try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-145") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-152") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "BatchedStartBarrierWake") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "FailureLogBackpressure") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "failure_log_limit: u32 = 64") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "failure_logs: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "suppressing additional per-worker failures; summary follows") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "fn wakeWorkloadStart") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "worker_count >= 1024 and request_stagger_us != 0") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const wake_count = @min(remaining, @as(u32, 256));") != null);
@@ -1801,14 +1809,19 @@ test "quic protocol clients do not impose 10ms read retry floors" {
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-005") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-041") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-043") != null);
-    try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-119") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-149") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-120") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.stream.writeAll(framed)") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.stream.writeAll(&len_buf)") == null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.client.poll(0)") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "return packet;") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.client.poll(1)") == null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "read_wait_misses: u32 = 0") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "self.read_wait_misses +|= 1") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "100 * std.time.ns_per_us") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "250 * std.time.ns_per_us") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "std.time.ns_per_ms") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "self.resetReadWaitMisses();") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "fn waitForReadProgress") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "timeout_ms / 10") == null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "compat_sleep(10 * std.time.ns_per_ms)") == null);

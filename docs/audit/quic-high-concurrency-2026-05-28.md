@@ -6,6 +6,8 @@
 **Validated high-burst gate:** 3072 parallel clients, mixed reads and mutations, zero retries.
 **Open ceiling target:** 4096 fully synchronized single-operation execution still has PTO/timeout tails and remains the next transport-admission target.
 
+> 2026-05-29 update: the 4096 mixed read/mutation single-op gate now passes with zero retries after the Geode-side request-admission fixes documented in `docs/audit/quic-high-concurrency-2026-05-29.md`.
+
 ## Summary
 
 This cycle kept dependency-library work in `~/src/devnw/zig/quic` first, then rolled the tested pins through `geode-client-zig` and Geode. That keeps Geode's server and client package on one QUIC module instance and avoids local dependency edits being overwritten by package resolution.

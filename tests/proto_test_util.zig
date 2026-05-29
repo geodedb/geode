@@ -649,6 +649,7 @@ pub const QuicProtoClient = struct {
     client: quic.QuicClient,
     stream: *quic.QuicClientStream,
     session_id: []const u8 = "",
+    read_wait_misses: u32 = 0,
 
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !QuicProtoClient {
         return connectWithHandshakeTimeout(allocator, addr, 5);
@@ -766,18 +767,32 @@ pub const QuicProtoClient = struct {
         );
     }
 
+    fn resetReadWaitMisses(self: *QuicProtoClient) void {
+        self.read_wait_misses = 0;
+    }
+
     // CANARY: REQ=REQ-QUIC-HC-005; FEATURE="QUIC High-Concurrency Client Wait"; ASPECT=ProtoReadDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
     fn waitForReadProgress(self: *QuicProtoClient, deadline_ns: u64) !void {
         if (compat_monoNs() >= deadline_ns) return error.Timeout;
-        // CANARY: REQ=REQ-QUIC-HC-119; FEATURE="High-Concurrency Test Client"; ASPECT=SubMillisecondReadPolling; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+        // CANARY: REQ=REQ-QUIC-HC-149; FEATURE="High-Concurrency Test Client"; ASPECT=AdaptiveReadPolling; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
         //
-        // In 1024+ local-client runs, a blocking 1ms poll per WouldBlock makes
-        // the driver threads, not the server, dominate tail latency. Drive any
-        // already-arrived datagrams immediately, then park briefly to yield CPU.
+        // In 1024+ local-client runs, a fixed 1ms poll per WouldBlock makes
+        // early responses wait behind the driver. At 4096+ lower-stagger runs,
+        // a fixed 100us poll turns thousands of same-process client threads
+        // into a CPU storm that can starve the child server. Poll immediately,
+        // then use a bounded adaptive park until bytes arrive and reset the
+        // miss counter.
         try self.client.poll(0);
         const now_ns = compat_monoNs();
         if (now_ns >= deadline_ns) return error.Timeout;
-        compat_sleep(@min(@as(u64, 100 * std.time.ns_per_us), deadline_ns - now_ns));
+        self.read_wait_misses +|= 1;
+        const wait_ns: u64 = if (self.read_wait_misses <= 32)
+            100 * std.time.ns_per_us
+        else if (self.read_wait_misses <= 128)
+            250 * std.time.ns_per_us
+        else
+            std.time.ns_per_ms;
+        compat_sleep(@min(wait_ns, deadline_ns - now_ns));
         if (compat_monoNs() >= deadline_ns) return error.Timeout;
     }
 
@@ -795,6 +810,7 @@ pub const QuicProtoClient = struct {
                 return err;
             };
             if (n == 0) return error.EndOfStream;
+            self.resetReadWaitMisses();
             total_read += n;
         }
 
@@ -814,6 +830,7 @@ pub const QuicProtoClient = struct {
                 return err;
             };
             if (n == 0) return error.EndOfStream;
+            self.resetReadWaitMisses();
             total_read += n;
         }
 
@@ -844,6 +861,7 @@ pub const QuicProtoClient = struct {
                 return err;
             };
             if (n == 0) return error.EndOfStream;
+            self.resetReadWaitMisses();
             remaining -= n;
         }
     }

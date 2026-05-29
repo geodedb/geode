@@ -157,6 +157,13 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
 const first_stream_owner_stack_size = 2 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
+// CANARY: REQ=REQ-QUIC-HC-150; FEATURE="QUIC High-Concurrency Mutations"; ASPECT=CooperativeMutationWindowCap; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+//
+// The storage mutation path already serializes on the write lock. Letting many
+// cooperative first-stream workers block behind that lock only starves the read
+// tail. Keep a small global mutation window and requeue overflow mutating
+// packets so read-heavy mixed bursts continue to drain.
+const first_stream_scheduler_mutation_limit_cap: usize = 4;
 // CANARY: REQ=REQ-QUIC-HC-108; FEATURE="High-Concurrency First Streams"; ASPECT=CooperativeBatchBudget; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
 // The scheduler runs persistent first streams through a shared worker pool.
@@ -2591,7 +2598,7 @@ pub const FirstStreamScheduler = struct {
             .shutdown = std.atomic.Value(bool).init(false),
             .context_count = std.atomic.Value(u32).init(0),
             .mutation_inflight = std.atomic.Value(u32).init(0),
-            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, @as(usize, 128)))),
+            .mutation_limit = @intCast(@max(@as(usize, 1), @min(@max(worker_count, 1) / 4, first_stream_scheduler_mutation_limit_cap))),
             .workers = try allocator.alloc(std.Thread, @max(worker_count, 1)),
             .next_index = 0,
             .last_idle_sweep_ns = 0,

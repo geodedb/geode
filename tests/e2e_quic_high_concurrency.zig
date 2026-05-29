@@ -20,6 +20,12 @@ const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug
 const default_connection_worker_count = 64;
 const high_fanout_worker_threshold = 64;
 const high_fanout_connection_worker_cap = 64;
+// CANARY: REQ=REQ-QUIC-HC-152; FEATURE="High-Concurrency Test Harness"; ASPECT=FailureLogBackpressure; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+//
+// A 4k failed probe can otherwise print thousands of per-worker timeout lines,
+// making the local test driver a meaningful part of failure cost. Keep exact
+// counters and summaries, but cap individual failure lines.
+const failure_log_limit: u32 = 64;
 // CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
 // The QUIC endpoint now serializes per-connection TLS crypto polling. More
@@ -193,6 +199,7 @@ const Counters = struct {
     max_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     verify_done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     verify_failed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    failure_logs: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
 const WorkerCtx = struct {
@@ -221,12 +228,22 @@ const WorkerCtx = struct {
 };
 
 fn recordFailure(counters: *Counters, comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("high-concurrency QUIC E2E failure: " ++ fmt ++ "\n", args);
+    const log_idx = counters.failure_logs.fetchAdd(1, .acq_rel);
+    if (log_idx < failure_log_limit) {
+        std.debug.print("high-concurrency QUIC E2E failure: " ++ fmt ++ "\n", args);
+    } else if (log_idx == failure_log_limit) {
+        std.debug.print("high-concurrency QUIC E2E failure: suppressing additional per-worker failures; summary follows\n", .{});
+    }
     _ = counters.failed.fetchAdd(1, .acq_rel);
 }
 
 fn recordSetupFailure(counters: *Counters, comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("high-concurrency QUIC E2E setup failure: " ++ fmt ++ "\n", args);
+    const log_idx = counters.failure_logs.fetchAdd(1, .acq_rel);
+    if (log_idx < failure_log_limit) {
+        std.debug.print("high-concurrency QUIC E2E setup failure: " ++ fmt ++ "\n", args);
+    } else if (log_idx == failure_log_limit) {
+        std.debug.print("high-concurrency QUIC E2E setup failure: suppressing additional per-worker failures; summary follows\n", .{});
+    }
     _ = counters.setup_failed.fetchAdd(1, .acq_rel);
     _ = counters.failed.fetchAdd(1, .acq_rel);
 }
