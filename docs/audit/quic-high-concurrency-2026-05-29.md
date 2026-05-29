@@ -40,6 +40,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 30. `REQ-QUIC-HC-172` adds scrapeable runtime attribution to the metrics server and high-concurrency harness. The server appends a runtime snapshot callback to `/metrics`, the harness enables a private metrics port with `GEODE_HC_METRICS_SCRAPE=1`, and the metrics server self-wakes its accept loop during shutdown so scrape-enabled lifecycle tests do not hang after a successful read.
 31. `REQ-QUIC-HC-173` splits first-stream query execution metrics into read and mutation counters. The latest 4096x8 attribution run showed read execution at about 1.3 seconds total across 22419 samples, while mutation execution consumed about 15727 seconds total across 7448 samples.
 32. `REQ-QUIC-HC-174` exposes group-commit shard coalescing through `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default remains 100 us because the 1000 us sweep increased coordinator batch size but regressed QPS and tail latency.
+33. `REQ-QUIC-HC-175` adds opt-in coordinator phase metrics for submit wait, enqueue wait, queue wait, queue depth, coalescing, batch total, begin-txn, apply loop, commit, and wake time. The timers are disabled by default because the 2048x8 diagnostic showed detailed per-mutation timing can perturb the sustained gate.
 
 ## Changed Files
 
@@ -71,6 +72,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Wakes the accept loop during shutdown so a thread blocked in `accept4()` exits after scrape-enabled tests.
 - `src/storage/group_commit.zig`
   - Adds `GEODE_GROUP_COMMIT_COALESCE_US` as a bounded runtime knob for shard worker coalescing sweeps.
+  - Adds `GEODE_GROUP_COMMIT_PHASE_METRICS` as an opt-in phase attribution switch for coordinator submit and apply timing.
 - `tests/proto_test_util.zig`
   - Adds adaptive read polling for `QuicProtoClient`.
   - Keeps immediate `poll(0)` after writes and after packet reads for normal client use.
@@ -88,7 +90,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Reports child-server RSS before/after client release and gates the delta when `GEODE_HC_MEMORY_GROWTH_MAX_KB` is nonzero.
   - Optionally verifies graph isolation and restart recovery after the workload.
   - Optionally enables the child `/metrics` endpoint with `GEODE_HC_METRICS_SCRAPE=1` and prints selected runtime counters after the workload.
-  - Passes through `GEODE_HC_GROUP_COMMIT_COALESCE_US` and `GEODE_HC_MUTATION_ADMISSION_CAP` for explicit tuning sweeps.
+  - Passes through `GEODE_HC_GROUP_COMMIT`, `GEODE_HC_GROUP_COMMIT_COALESCE_US`, `GEODE_HC_GROUP_COMMIT_PHASE_METRICS`, and `GEODE_HC_MUTATION_ADMISSION_CAP` for explicit tuning sweeps.
 - `tests/perf/test_group_commit_coordinator.zig`
   - Adds `REQ-QUIC-HC-171` coverage proving sharded coordinator inserts survive adapter teardown/reopen with labels and properties intact.
 - `tests/test_quic_condition_timedwait_cadence.zig`
@@ -142,6 +144,7 @@ All commands below were run on 2026-05-29.
 | `zig build test --summary all -Dtest-shard-total=8 -Dtest-shard-index=7` | PASS, 322/323 tests passed, 1 skipped, including graph-store unit coverage. |
 | 1024 workers x 8 ops mixed sustained E2E | PASS, 8192/8192 operations, zero retries, zero reconnects, zero first-response timeouts, 3925.76 QPS. |
 | 1024 workers x 8 ops mixed sustained E2E with runtime scrape | PASS, 8192/8192 operations, zero first-response timeouts, 3926.63 QPS, and read/mutation execution split captured through `/metrics`. |
+| 1024 workers x 8 ops mixed E2E after gating coordinator phase metrics | PASS, 8192/8192 operations, zero first-response timeouts, 3964.30 QPS with `GEODE_HC_METRICS_SCRAPE` unset. |
 | 2048 workers x 8 ops mixed sustained E2E | PASS, 16384/16384 operations, zero retries, zero reconnects, zero first-response timeouts, 1189.34 QPS after the storage/cache contention cycle. A metrics-capture run of the earlier same gate failed one mutation timeout, so capture overhead should remain diagnostic-only. |
 | 4096 mixed single-op E2E at 250 us | PASS, 4096/4096 operations, zero retries, zero reconnects, zero first-response timeouts, 664.88 QPS after the final QUIC `eeeb216` and client `533cde8` repin. |
 | 4096 workers x 8 ops read-only sustained E2E at 250 us | FAIL, 22917/32768 operations, zero setup/execute retries, 9851 first-response timeouts after shared AST/plan cache hit-path changes. This improved from 21302/32768 and 11466 first-response timeouts before the shared-cache work. |
@@ -516,6 +519,9 @@ All rows below used 4096 workers, one operation per worker, mutation stride 4, 1
 | 1000 us group-commit coalescing on 1024x8 mixed | PASS, but QPS regressed to about 1413, p95 rose to about 2078 ms, and mutation execution averaged over 1.1 seconds even though coordinator batch size improved to about 11.5 ops/batch. | Rejected. Larger batches did not compensate for added latency and storage tail; default coalescing remains 100 us. |
 | 64 shard-parallel mutation admission cap on 4096x8 mixed | FAIL, `ok=14864/32768`, `first_response_timeouts=17904`, about 213 QPS, `mutation_deferrals=519`, and `quic_poll_cycle_max_ns` reached about 26.8 seconds. | Rejected. Throttling shard-parallel mutations this tightly reduced total progress and worsened poll tail. |
 | 256 shard-parallel mutation admission cap on 4096x8 mixed | FAIL, `ok=19744/32768`, `first_response_timeouts=13024`, and about 357 QPS. | Rejected. It was better than cap 64 but still worse than the 512 default in the same 4096x8 attribution cycle. |
+| `GEODE_HC_GROUP_COMMIT=0` direct multi-property MERGE path on 1024x8 mixed | PASS, 8192/8192 operations and 4100.14 QPS, but mutation execution rose to 41.38s total, storage shared-hold time rose to 23.29s, and max mutation execution rose to 273 ms. | Rejected as a default. The small QPS gain did not justify worse storage hold time and mutation executor tail. |
+| `GEODE_HC_GROUP_COMMIT_COALESCE_US=0` on 1024x8 mixed | PASS, but regressed to 602.66 QPS, p50 1560 ms, p95 3072 ms, and 51.95s mutation execution. Commit time rose to 16.01s across 1899 batches. | Rejected. The 100 us coalescing window is still necessary for the coordinator path. |
+| Always-on coordinator phase timing on 2048x8 mixed scrape | FAIL, `ok=15238/16384`, `first_response_timeouts=1146`, 394.23 QPS. The metrics were useful, but the timing overhead perturbed the sustained gate. | Rejected as a default. Detailed coordinator phase timers now require `GEODE_GROUP_COMMIT_PHASE_METRICS=1`; the harness enables it only for scrape diagnostics unless overridden. |
 
 ## Known Unrelated Test Failure
 
@@ -532,6 +538,7 @@ The failing nodes repeatedly log `raft transport getOrCreatePeerConnection faile
 - Keep `GEODE_QUIC_POLL_WORKERS=16` for this dependency line.
 - Keep `GEODE_QUIC_MUTATION_ADMISSION_CAP` unset in normal operation. General writer-lock mutations use the fixed serial cap of 4; the default shard-parallel multi-property `MERGE` cap is 512.
 - Keep `GEODE_GROUP_COMMIT_COALESCE_US` unset in normal operation. The default is 100 us; the 1000 us sweep improved batch size but regressed QPS and tail latency.
+- Keep `GEODE_GROUP_COMMIT_PHASE_METRICS` unset in normal operation. Set `GEODE_HC_METRICS_SCRAPE=1` when a ceiling probe needs coordinator phase attribution.
 - Use the 4096 mixed single-op 250 us command above as the current no-retry high-concurrency regression gate.
 - Use the 2048 x 8 mixed command as the current sustained regression gate.
 - Keep the 4096 x 8 mixed 250 us and 1000 us commands as failing ceiling probes and the main diagnostics for remaining first-response tail.
@@ -548,11 +555,12 @@ The failing nodes repeatedly log `raft transport getOrCreatePeerConnection faile
   - `quic_stream_write_elapsed_*` runtime metrics capture server-side response `stream.writeAll` latency and should be scraped with `/metrics` when diagnosing production response stalls.
   - `quic_first_stream_read_query_execute_*` and `quic_first_stream_mutation_query_execute_*` split successful server-side executor time by query class.
   - `coord_apply_batches_total` and `coord_apply_ops_total` show the real batch-size effect of group-commit coalescing sweeps.
+  - `coord_submit_wait_*`, `coord_queue_wait_*`, `coord_apply_ops_loop_*`, and `coord_apply_commit_*` split mutation executor time inside the coordinator when phase metrics are enabled.
 
 ## Remaining Work
 
 1. Reduce mutation execution/storage tail in the 4096x8 mixed ceiling. The latest scrape shows mutation execution dominates successful server work while read execution and response writes are comparatively cheap.
-2. Add group-commit submit-wait and shard-apply subphase counters so coordinator queueing, coalescing wait, WAL apply, and storage mutation time can be separated in one scrape.
+2. Use the opt-in coordinator phase counters on an idle-host 4096x8 scrape to decide whether the next fix belongs in shard apply, WAL commit batching, submitter wake scheduling, or cooperative worker parking.
 3. Reduce multi-second QUIC poll cycles at 4096 fanout without regressing setup or the accepted 4096 single-op gate. The rejected wall-clock and one-batch receive experiments remain guardrails.
 4. Raise the sustained mixed gate from 2048 x 8 toward 4096 x 8 and then 8192+ workers without increasing the 10s execute timeout.
 5. Revisit mutation admission per graph once the storage write path can execute independent graph mutations concurrently.

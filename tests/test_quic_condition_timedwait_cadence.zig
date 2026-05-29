@@ -1556,6 +1556,10 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     try testing.expect(std.mem.indexOf(u8, e2e, "default_cooperative_first_stream_workers_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_GROUP_COMMIT_COALESCE_US={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_GROUP_COMMIT_COALESCE_US") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_GROUP_COMMIT") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_GROUP_COMMIT={s}") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_GROUP_COMMIT_PHASE_METRICS") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_GROUP_COMMIT_PHASE_METRICS={s}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_group_commit_coalesce_us: u32 = 100") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_MUTATION_ADMISSION_CAP={d}") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_MUTATION_ADMISSION_CAP") != null);
@@ -1575,9 +1579,16 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     const group_commit = maybe_group_commit orelse return error.FileNotFound;
     defer allocator.free(group_commit);
     try testing.expect(std.mem.indexOf(u8, group_commit, "REQ=REQ-QUIC-HC-174") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "REQ=REQ-QUIC-HC-175") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "GEODE_GROUP_COMMIT_COALESCE_US") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "max_shard_coalesce_wait_us: u64 = 5000") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "shardCoalesceWaitNs()") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "coord_submit_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "coord_queue_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "coord_apply_ops_loop_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "coord_apply_commit_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "GEODE_GROUP_COMMIT_PHASE_METRICS") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "phaseMetricsEnabled()") != null);
 }
 
 test "server stream WouldBlock wait is event driven with high fanout backoff" {
@@ -1800,6 +1811,10 @@ test "high concurrency harness scrapes runtime diagnostics from metrics endpoint
     try testing.expect(std.mem.indexOf(u8, harness, "mg_rwlock_shared_hold_bulk_merge_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "coord_apply_batches_total") != null);
     try testing.expect(std.mem.indexOf(u8, harness, "coord_apply_ops_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "coord_submit_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "coord_queue_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "coord_apply_ops_loop_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "coord_apply_commit_ns_total") != null);
 
     const maybe_lifecycle = try readFile(allocator, "tests/test_metrics_server_lifecycle.zig");
     const lifecycle = maybe_lifecycle orelse return error.FileNotFound;

@@ -20,6 +20,7 @@
 //! wakes submitters via the `ApplyResult.done` futex.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("graph_storage_adapter.zig");
 const graph_storage = @import("graph_storage");
@@ -33,6 +34,7 @@ const default_shard_coalesce_wait_us: u64 = 100;
 const max_shard_coalesce_wait_us: u64 = 5000;
 const unset_shard_coalesce_wait_ns = std.math.maxInt(u64);
 var cached_shard_coalesce_wait_ns = std.atomic.Value(u64).init(unset_shard_coalesce_wait_ns);
+var cached_phase_metrics_enabled: ?bool = null;
 
 // CANARY: REQ=REQ-QUIC-HC-174; FEATURE="HighConcurrencyMutations"; ASPECT=ConfigurableCoordinatorCoalescing; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-29
 //
@@ -57,6 +59,26 @@ fn shardCoalesceWaitNs() u64 {
     return wait_ns;
 }
 
+// CANARY: REQ=REQ-QUIC-HC-175; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorPhaseMetrics; STATUS=IMPL; TEST=test_group_commit_coordinator; OWNER=storage; UPDATED=2026-05-29
+//
+// Detailed coordinator phase timings are intentionally opt-in. They require
+// several monotonic-clock reads and atomics per mutation, which is useful for
+// ceiling attribution but too expensive for the default high-throughput path.
+fn phaseMetricsEnabled() bool {
+    if (cached_phase_metrics_enabled) |enabled| return enabled;
+    const val_z = std.c.getenv("GEODE_GROUP_COMMIT_PHASE_METRICS") orelse {
+        cached_phase_metrics_enabled = false;
+        return false;
+    };
+    const val = std.mem.span(val_z);
+    const enabled = std.mem.eql(u8, val, "1") or
+        std.mem.eql(u8, val, "true") or
+        std.mem.eql(u8, val, "yes") or
+        std.mem.eql(u8, val, "on");
+    cached_phase_metrics_enabled = enabled;
+    return enabled;
+}
+
 fn sleepNs(ns: u64) void {
     if (ns == 0) return;
     const req = std.os.linux.timespec{
@@ -65,6 +87,30 @@ fn sleepNs(ns: u64) void {
     };
     var rem: std.os.linux.timespec = undefined;
     _ = std.os.linux.nanosleep(&req, &rem);
+}
+
+fn monoNanosNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
+}
+
+fn recordMax(counter: *std.atomic.Value(u64), sample: u64) void {
+    var cur = counter.load(.monotonic);
+    while (sample > cur) {
+        cur = counter.cmpxchgWeak(cur, sample, .monotonic, .monotonic) orelse return;
+    }
+}
+
+fn recordDuration(total: *std.atomic.Value(u64), max: *std.atomic.Value(u64), elapsed_ns: u64) void {
+    _ = total.fetchAdd(elapsed_ns, .monotonic);
+    recordMax(max, elapsed_ns);
 }
 
 /// Tag-union of supported apply operations.  Each variant carries the
@@ -179,6 +225,8 @@ pub const ApplyOp = union(enum) {
 pub const ApplyResult = struct {
     node_or_edge_id: u64 = 0,
     err: ?anyerror = null,
+    /// CLOCK_MONOTONIC timestamp set immediately before queue insertion.
+    enqueued_ns: u64 = 0,
     /// 0 = pending, 1 = done.  Waited on by submitter via `futexWait`.
     done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
@@ -215,6 +263,31 @@ pub const ShardedCoordinator = struct {
     apply_ops_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Cumulative count of ops whose ApplyResult.err was set.
     apply_errors_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Submitter-side coordinator timings. These are counted per submitted op.
+    submit_calls_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    submit_total_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    submit_total_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    submit_enqueue_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    submit_enqueue_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    submit_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    submit_wait_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Worker-side timings. Queue wait is summed per op; other timings are per batch.
+    queue_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    queue_wait_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    queue_depth_max: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    coalesce_waits_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    coalesce_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    coalesce_wait_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_batch_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_batch_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_begin_txn_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_begin_txn_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_ops_loop_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_ops_loop_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_commit_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_commit_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_wake_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    apply_wake_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Runtime-metrics registration is per-coordinator, not per submitter.
     metrics_registered: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
@@ -297,6 +370,9 @@ pub const ShardedCoordinator = struct {
 
     pub fn submit(self: *ShardedCoordinator, op: *ApplyOp) !u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
+        const collect_phase_metrics = phaseMetricsEnabled();
+        const submit_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
+        if (collect_phase_metrics) _ = self.submit_calls_total.fetchAdd(1, .monotonic);
 
         switch (op.*) {
             .bulk_insert_node => |*p| {
@@ -327,6 +403,9 @@ pub const ShardedCoordinator = struct {
                         res.node_or_edge_id = 0;
                         res.err = null;
                         res.done.store(1, .release);
+                        if (collect_phase_metrics) {
+                            recordDuration(&self.submit_total_ns_total, &self.submit_total_max_ns, monoNanosNow() -| submit_start_ns);
+                        }
                         return 0;
                     },
                     else => return err,
@@ -337,17 +416,31 @@ pub const ShardedCoordinator = struct {
         const shard_idx = graph_storage.sharded_store.shardIndex(op.shardKey());
         const s = &self.shards[shard_idx];
 
+        const enqueue_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         s.queue_mutex.lockUncancelable(io);
         s.queue.pushBack(self.allocator, op) catch |err| {
             s.queue_mutex.unlock(io);
             return err;
         };
+        const result = op.resultPtr();
+        if (collect_phase_metrics) {
+            result.enqueued_ns = monoNanosNow();
+            recordMax(&self.queue_depth_max, @intCast(s.queue.len));
+        }
         s.queue_not_empty.signal(io);
         s.queue_mutex.unlock(io);
+        const enqueue_done_ns = if (collect_phase_metrics) monoNanosNow() else 0;
+        if (collect_phase_metrics) {
+            recordDuration(&self.submit_enqueue_ns_total, &self.submit_enqueue_max_ns, enqueue_done_ns -| enqueue_start_ns);
+        }
 
-        const result = op.resultPtr();
         while (result.done.load(.acquire) == 0) {
             std.Io.futexWaitUncancelable(io, u32, &result.done.raw, 0);
+        }
+        if (collect_phase_metrics) {
+            const submit_done_ns = monoNanosNow();
+            recordDuration(&self.submit_wait_ns_total, &self.submit_wait_max_ns, submit_done_ns -| enqueue_done_ns);
+            recordDuration(&self.submit_total_ns_total, &self.submit_total_max_ns, submit_done_ns -| submit_start_ns);
         }
         if (result.err) |e| return e;
         return result.node_or_edge_id;
@@ -371,6 +464,29 @@ pub const ShardedCoordinator = struct {
         reg.register("coord_apply_batches_total", &self.apply_batches_total) catch {};
         reg.register("coord_apply_ops_total", &self.apply_ops_total) catch {};
         reg.register("coord_apply_errors_total", &self.apply_errors_total) catch {};
+        reg.register("coord_submit_calls_total", &self.submit_calls_total) catch {};
+        reg.register("coord_submit_total_ns_total", &self.submit_total_ns_total) catch {};
+        reg.register("coord_submit_total_max_ns", &self.submit_total_max_ns) catch {};
+        reg.register("coord_submit_enqueue_ns_total", &self.submit_enqueue_ns_total) catch {};
+        reg.register("coord_submit_enqueue_max_ns", &self.submit_enqueue_max_ns) catch {};
+        reg.register("coord_submit_wait_ns_total", &self.submit_wait_ns_total) catch {};
+        reg.register("coord_submit_wait_max_ns", &self.submit_wait_max_ns) catch {};
+        reg.register("coord_queue_wait_ns_total", &self.queue_wait_ns_total) catch {};
+        reg.register("coord_queue_wait_max_ns", &self.queue_wait_max_ns) catch {};
+        reg.register("coord_queue_depth_max", &self.queue_depth_max) catch {};
+        reg.register("coord_coalesce_waits_total", &self.coalesce_waits_total) catch {};
+        reg.register("coord_coalesce_wait_ns_total", &self.coalesce_wait_ns_total) catch {};
+        reg.register("coord_coalesce_wait_max_ns", &self.coalesce_wait_max_ns) catch {};
+        reg.register("coord_apply_batch_ns_total", &self.apply_batch_ns_total) catch {};
+        reg.register("coord_apply_batch_max_ns", &self.apply_batch_max_ns) catch {};
+        reg.register("coord_apply_begin_txn_ns_total", &self.apply_begin_txn_ns_total) catch {};
+        reg.register("coord_apply_begin_txn_max_ns", &self.apply_begin_txn_max_ns) catch {};
+        reg.register("coord_apply_ops_loop_ns_total", &self.apply_ops_loop_ns_total) catch {};
+        reg.register("coord_apply_ops_loop_max_ns", &self.apply_ops_loop_max_ns) catch {};
+        reg.register("coord_apply_commit_ns_total", &self.apply_commit_ns_total) catch {};
+        reg.register("coord_apply_commit_max_ns", &self.apply_commit_max_ns) catch {};
+        reg.register("coord_apply_wake_ns_total", &self.apply_wake_ns_total) catch {};
+        reg.register("coord_apply_wake_max_ns", &self.apply_wake_max_ns) catch {};
     }
 
     const ShardLoopArg = struct {
@@ -411,7 +527,13 @@ pub const ShardedCoordinator = struct {
             // cost when a write is already queued.
             if (s.queue.len < max_batch and self.should_stop.load(.acquire) == 0) {
                 s.queue_mutex.unlock(io);
+                const collect_phase_metrics = phaseMetricsEnabled();
+                const coalesce_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
                 sleepNs(shardCoalesceWaitNs());
+                if (collect_phase_metrics) {
+                    recordDuration(&self.coalesce_wait_ns_total, &self.coalesce_wait_max_ns, monoNanosNow() -| coalesce_start_ns);
+                    _ = self.coalesce_waits_total.fetchAdd(1, .monotonic);
+                }
                 s.queue_mutex.lockUncancelable(io);
             }
             var batch_len: usize = 0;
@@ -430,6 +552,24 @@ pub const ShardedCoordinator = struct {
 
     fn applyShardBatch(self: *ShardedCoordinator, shard_idx: usize, batch: []*ApplyOp) void {
         const io = std.Io.Threaded.global_single_threaded.io();
+        const collect_phase_metrics = phaseMetricsEnabled();
+        const batch_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
+
+        if (collect_phase_metrics) {
+            var queue_wait_sum_ns: u64 = 0;
+            var queue_wait_max_ns: u64 = 0;
+            for (batch) |op| {
+                const enqueued_ns = op.resultPtr().enqueued_ns;
+                if (enqueued_ns == 0) continue;
+                const wait_ns = batch_start_ns -| enqueued_ns;
+                queue_wait_sum_ns +|= wait_ns;
+                if (wait_ns > queue_wait_max_ns) queue_wait_max_ns = wait_ns;
+            }
+            if (queue_wait_sum_ns != 0) {
+                _ = self.queue_wait_ns_total.fetchAdd(queue_wait_sum_ns, .monotonic);
+                recordMax(&self.queue_wait_max_ns, queue_wait_max_ns);
+            }
+        }
 
         _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
 
@@ -443,10 +583,15 @@ pub const ShardedCoordinator = struct {
         // amortisation that commit a6cf7af7 had to remove.
         var stmt_txn: graph_storage_adapter.StatementTxn = undefined;
         var have_txn = false;
+        const begin_txn_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         if (self.adapter.beginStatementTxnForShard(self.graph_name, shard_idx, &stmt_txn)) |_| {
             have_txn = true;
         } else |_| {}
+        if (collect_phase_metrics) {
+            recordDuration(&self.apply_begin_txn_ns_total, &self.apply_begin_txn_max_ns, monoNanosNow() -| begin_txn_start_ns);
+        }
 
+        const ops_loop_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         for (batch) |op| {
             const res = op.resultPtr();
             switch (op.*) {
@@ -537,10 +682,14 @@ pub const ShardedCoordinator = struct {
                 },
             }
         }
+        if (collect_phase_metrics) {
+            recordDuration(&self.apply_ops_loop_ns_total, &self.apply_ops_loop_max_ns, monoNanosNow() -| ops_loop_start_ns);
+        }
 
         // Commit the shard-pinned statement txn — one WAL fsync covers the
         // entire batch for this shard.  On commit failure, propagate the error
         // to any ops that did not already carry a per-op error.
+        const commit_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         if (have_txn) {
             if (stmt_txn.commit()) |_| {} else |e| {
                 for (batch) |op| {
@@ -548,6 +697,9 @@ pub const ShardedCoordinator = struct {
                     if (res.err == null) res.err = e;
                 }
             }
+        }
+        if (collect_phase_metrics) {
+            recordDuration(&self.apply_commit_ns_total, &self.apply_commit_max_ns, monoNanosNow() -| commit_start_ns);
         }
 
         // Tally per-op outcomes BEFORE waking — once a waiter is woken,
@@ -583,10 +735,15 @@ pub const ShardedCoordinator = struct {
         _ = s.batches.fetchAdd(1, .monotonic);
         _ = s.ops_applied.fetchAdd(batch_len, .monotonic);
 
+        const wake_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         for (batch) |op| {
             const res = op.resultPtr();
             res.done.store(1, .release);
             std.Io.futexWake(io, u32, &res.done.raw, 1);
+        }
+        if (collect_phase_metrics) {
+            recordDuration(&self.apply_wake_ns_total, &self.apply_wake_max_ns, monoNanosNow() -| wake_start_ns);
+            recordDuration(&self.apply_batch_ns_total, &self.apply_batch_max_ns, monoNanosNow() -| batch_start_ns);
         }
     }
 

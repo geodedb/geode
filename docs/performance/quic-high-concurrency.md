@@ -252,11 +252,19 @@ smoke proving the restart/recovery and graph-isolation gates work.
   in microseconds, clamped at 5000 us. Leave at the 100 us default unless
   running a documented sweep; 1000 us regressed the mixed workload despite
   larger average coordinator batches.
+- `GEODE_GROUP_COMMIT_PHASE_METRICS`: opt-in detailed coordinator phase
+  timers. Leave unset in normal gates; it adds multiple clock reads and atomics
+  per mutation and is intended for attribution runs only.
 - `GEODE_HC_METRICS_SCRAPE`: high-concurrency harness switch that enables the
   child metrics server on a private loopback port and prints selected runtime
-  counters after the workload.
+  counters after the workload. This enables `GEODE_GROUP_COMMIT_PHASE_METRICS`
+  by default for the child server unless explicitly overridden.
+- `GEODE_HC_GROUP_COMMIT`: harness passthrough for `GEODE_GROUP_COMMIT`, useful
+  for direct-path A/B probes. Keep it unset for normal gates.
 - `GEODE_HC_GROUP_COMMIT_COALESCE_US`: harness passthrough for
   `GEODE_GROUP_COMMIT_COALESCE_US`.
+- `GEODE_HC_GROUP_COMMIT_PHASE_METRICS`: harness passthrough for
+  `GEODE_GROUP_COMMIT_PHASE_METRICS`.
 - `GEODE_HC_MUTATION_ADMISSION_CAP`: harness passthrough for
   `GEODE_QUIC_MUTATION_ADMISSION_CAP`.
 - `GEODE_HC_POST_WRITE_POLL`: high-concurrency harness client flush behavior.
@@ -344,6 +352,21 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 - `quic_poll_overrun_total`
 - `coord_apply_batches_total`
 - `coord_apply_ops_total`
+- `coord_submit_wait_ns_total`
+- `coord_submit_wait_max_ns`
+- `coord_queue_wait_ns_total`
+- `coord_queue_wait_max_ns`
+- `coord_queue_depth_max`
+- `coord_coalesce_wait_ns_total`
+- `coord_coalesce_wait_max_ns`
+- `coord_apply_batch_ns_total`
+- `coord_apply_batch_max_ns`
+- `coord_apply_ops_loop_ns_total`
+- `coord_apply_ops_loop_max_ns`
+- `coord_apply_commit_ns_total`
+- `coord_apply_commit_max_ns`
+- `coord_apply_wake_ns_total`
+- `coord_apply_wake_max_ns`
 
 The response write metrics split server-side `stream.writeAll` latency from
 query execution and receive/admission stalls. First-stream metrics split
@@ -358,7 +381,9 @@ split shows mutation execution dominates successful server-side work while
 reads stay comparatively cheap. Poll metrics identify endpoint poll saturation
 and short-header processing stalls. Coordinator counters reveal whether longer
 coalescing waits are actually increasing batch size enough to justify the
-latency cost.
+latency cost. Coordinator phase timers are opt-in because a 2048x8 scraped run
+showed that detailed per-mutation timing can materially perturb the sustained
+gate; use them for diagnosis, not as the objective-gate default.
 `mg_rwlock_shared_hold_snapshot_ns_total` should stay at zero for the default
 high-concurrency count workload unless RLS policies or a broader query shape
 force snapshot execution.

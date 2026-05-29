@@ -180,6 +180,10 @@ test "group commit: runtime metrics register once per coordinator" {
     try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_batches_total="));
     try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_ops_total="));
     try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_errors_total="));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_submit_wait_ns_total="));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_queue_wait_ns_total="));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_ops_loop_ns_total="));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(buf.items, "coord_apply_commit_ns_total="));
 }
 
 test "REQ-QUIC-HC-016: group commit reserves shard-aligned engine slots" {

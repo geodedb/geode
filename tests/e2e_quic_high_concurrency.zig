@@ -699,11 +699,34 @@ fn printRuntimeMetricsSnapshot(allocator: std.mem.Allocator, metrics_port: u16) 
         },
     );
     std.debug.print(
-        "high-concurrency QUIC E2E runtime_metrics coordinator apply_batches={d} apply_ops={d} apply_errors={d}\n",
+        "high-concurrency QUIC E2E runtime_metrics coordinator apply_batches={d} apply_ops={d} apply_errors={d} submit_calls={d} submit_total_ns_total={d} submit_total_max_ns={d} submit_enqueue_ns_total={d} submit_enqueue_max_ns={d} submit_wait_ns_total={d} submit_wait_max_ns={d} queue_wait_ns_total={d} queue_wait_max_ns={d} queue_depth_max={d} coalesce_waits={d} coalesce_wait_ns_total={d} coalesce_wait_max_ns={d} apply_batch_ns_total={d} apply_batch_max_ns={d} apply_begin_txn_ns_total={d} apply_begin_txn_max_ns={d} apply_ops_loop_ns_total={d} apply_ops_loop_max_ns={d} apply_commit_ns_total={d} apply_commit_max_ns={d} apply_wake_ns_total={d} apply_wake_max_ns={d}\n",
         .{
             runtimeMetricSum(metrics, "coord_apply_batches_total"),
             runtimeMetricSum(metrics, "coord_apply_ops_total"),
             runtimeMetricSum(metrics, "coord_apply_errors_total"),
+            runtimeMetricSum(metrics, "coord_submit_calls_total"),
+            runtimeMetricSum(metrics, "coord_submit_total_ns_total"),
+            runtimeMetricMax(metrics, "coord_submit_total_max_ns"),
+            runtimeMetricSum(metrics, "coord_submit_enqueue_ns_total"),
+            runtimeMetricMax(metrics, "coord_submit_enqueue_max_ns"),
+            runtimeMetricSum(metrics, "coord_submit_wait_ns_total"),
+            runtimeMetricMax(metrics, "coord_submit_wait_max_ns"),
+            runtimeMetricSum(metrics, "coord_queue_wait_ns_total"),
+            runtimeMetricMax(metrics, "coord_queue_wait_max_ns"),
+            runtimeMetricMax(metrics, "coord_queue_depth_max"),
+            runtimeMetricSum(metrics, "coord_coalesce_waits_total"),
+            runtimeMetricSum(metrics, "coord_coalesce_wait_ns_total"),
+            runtimeMetricMax(metrics, "coord_coalesce_wait_max_ns"),
+            runtimeMetricSum(metrics, "coord_apply_batch_ns_total"),
+            runtimeMetricMax(metrics, "coord_apply_batch_max_ns"),
+            runtimeMetricSum(metrics, "coord_apply_begin_txn_ns_total"),
+            runtimeMetricMax(metrics, "coord_apply_begin_txn_max_ns"),
+            runtimeMetricSum(metrics, "coord_apply_ops_loop_ns_total"),
+            runtimeMetricMax(metrics, "coord_apply_ops_loop_max_ns"),
+            runtimeMetricSum(metrics, "coord_apply_commit_ns_total"),
+            runtimeMetricMax(metrics, "coord_apply_commit_max_ns"),
+            runtimeMetricSum(metrics, "coord_apply_wake_ns_total"),
+            runtimeMetricMax(metrics, "coord_apply_wake_max_ns"),
         },
     );
 }
@@ -1307,6 +1330,21 @@ pub fn main() !void {
         .{group_commit_coalesce_us},
     );
     defer allocator.free(group_commit_coalesce_env);
+    const group_commit_enabled_value = envSlice("GEODE_HC_GROUP_COMMIT", "1");
+    const group_commit_enabled_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_GROUP_COMMIT={s}",
+        .{group_commit_enabled_value},
+    );
+    defer allocator.free(group_commit_enabled_env);
+    const default_group_commit_phase_metrics = if (metrics_scrape) "1" else "0";
+    const group_commit_phase_metrics_value = envSlice("GEODE_HC_GROUP_COMMIT_PHASE_METRICS", default_group_commit_phase_metrics);
+    const group_commit_phase_metrics_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_GROUP_COMMIT_PHASE_METRICS={s}",
+        .{group_commit_phase_metrics_value},
+    );
+    defer allocator.free(group_commit_phase_metrics_env);
     const mutation_admission_cap = envU32("GEODE_HC_MUTATION_ADMISSION_CAP", default_mutation_admission_cap_for_run);
     const mutation_admission_cap_env = try std.fmt.allocPrint(
         allocator,
@@ -1361,6 +1399,8 @@ pub fn main() !void {
             cooperative_first_stream_workers_env,
             connection_workers_env,
             connection_admission_threads_env,
+            group_commit_enabled_env,
+            group_commit_phase_metrics_env,
             group_commit_coalesce_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
@@ -1381,6 +1421,8 @@ pub fn main() !void {
             cooperative_first_stream_workers_env,
             connection_workers_env,
             connection_admission_threads_env,
+            group_commit_enabled_env,
+            group_commit_phase_metrics_env,
             group_commit_coalesce_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
@@ -1400,6 +1442,8 @@ pub fn main() !void {
             cooperative_first_stream_workers_env,
             connection_workers_env,
             connection_admission_threads_env,
+            group_commit_enabled_env,
+            group_commit_phase_metrics_env,
             group_commit_coalesce_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
@@ -1419,6 +1463,8 @@ pub fn main() !void {
             cooperative_first_stream_workers_env,
             connection_workers_env,
             connection_admission_threads_env,
+            group_commit_enabled_env,
+            group_commit_phase_metrics_env,
             group_commit_coalesce_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
