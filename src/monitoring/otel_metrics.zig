@@ -48,7 +48,10 @@ const exporter_factory = otel.sdk.exporter_factory;
 const sdk_config = otel.sdk.config;
 const TracerProvider = otel.sdk.trace.TracerProvider;
 const Tracer = otel.api.trace.Tracer;
-const InMemoryRecorder = otel.exporters.in_memory.Recorder;
+/// In-memory span/metric/log recorder. Re-exported so unit tests can stage
+/// a recorder (`otel_metrics.InMemoryRecorder.init(alloc)`) and pass it to
+/// `initForTracingTest` without importing the otel exporters tree directly.
+pub const InMemoryRecorder = otel.exporters.in_memory.Recorder;
 
 pub const SCOPE_NAME = "com.geodedb.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
@@ -505,6 +508,95 @@ pub fn tracer() Tracer {
         });
     }
     return .{ .scope = .{ .name = SCOPE_NAME } };
+}
+
+// -----------------------------------------------------------------------
+// Span facade (Phase B tracing)
+// -----------------------------------------------------------------------
+
+const Span = otel.api.trace.Span;
+const Context = otel.api.context.Context;
+// Note: `attrs` (otel.internal.attributes) is aliased module-level further
+// down; module consts are order-independent, so `attrs.Entry` resolves here.
+
+/// Serializes span CREATION (id generation). The otel `id_generator` is a
+/// shared `std.Random.DefaultPrng` that is NOT safe for concurrent
+/// `nextTraceId`/`nextSpanId` from multiple QUIC query threads. Same
+/// discipline as `g_query_mu` for the metric SDK. Held only across
+/// `startSpan` (nanoseconds), never across span body execution.
+var g_span_mu: std.Io.Mutex = std.Io.Mutex.init;
+
+/// Thread-confined span wrapper that guarantees the underlying otel
+/// `Span.end()` is invoked EXACTLY ONCE, even if geode code double-ends
+/// (e.g. a `defer` plus an explicit end, or a future refactor that shares
+/// the span). This closes the otel BatchSpanProcessor span-reuse UAF at the
+/// geode boundary — that UAF requires a concurrent *double-end* of the same
+/// span, which the per-span atomic here makes impossible.
+///
+/// Spans are thread-confined: created and ended on one request thread. The
+/// atomic only guards against accidental double-end, not cross-thread use.
+pub const GeodeSpan = struct {
+    span: Span,
+    ended: std.atomic.Value(bool) = .init(false),
+
+    /// End the span exactly once. The first call records the end and drains
+    /// to the processor; any subsequent call is a no-op.
+    pub fn end(self: *GeodeSpan) void {
+        if (self.ended.swap(true, .acq_rel)) return;
+        self.span.end(null);
+    }
+
+    /// Attach a bounded integer attribute (e.g. row_count). Errors are
+    /// swallowed: instrumentation must never fail a query.
+    pub fn setIntAttr(self: *GeodeSpan, key: []const u8, value: i64) void {
+        self.span.setIntAttribute(key, value) catch {};
+    }
+
+    /// Attach a bounded string attribute. The caller MUST pass an enum-like
+    /// value (op name, graph name) — never raw query text or user values.
+    pub fn setStrAttr(self: *GeodeSpan, key: []const u8, value: []const u8) void {
+        self.span.setStringAttribute(key, value) catch {};
+    }
+
+    /// Mark the span as failed and record the bounded error type name.
+    pub fn setError(self: *GeodeSpan, err: anyerror) void {
+        self.span.setStatus(.@"error", @errorName(err));
+        self.span.setStringAttribute("error.type", @errorName(err)) catch {};
+    }
+
+    /// Mark the span as successful.
+    pub fn setOk(self: *GeodeSpan) void {
+        self.span.setStatus(.ok, "");
+    }
+};
+
+/// Start a `geode.query.execute` SERVER span (new trace; cross-process
+/// context propagation from the client traceparent is a later phase).
+///
+/// `op_name` MUST be a BOUNDED enum-like string (MATCH/CREATE/INSERT/…).
+/// `namespace` is the current graph name (bounded). `is_mutation` records
+/// whether the statement writes. NEVER pass raw query text, parameter
+/// values, or user-supplied keys — those are unbounded cardinality.
+///
+/// When `OTEL_TRACES_EXPORTER` is unset, `tracer()` returns the inert noop
+/// tracer and this collapses to a noop `GeodeSpan` at near-zero cost (the
+/// mutex is still taken, but the noop `startSpan` does no id generation).
+pub fn startQuerySpan(op_name: []const u8, namespace: []const u8, is_mutation: bool) GeodeSpan {
+    const t = tracer(); // noop tracer if OTEL_TRACES_EXPORTER unset -> zero cost
+    const io = initIo();
+    g_span_mu.lockUncancelable(io);
+    defer g_span_mu.unlock(io);
+    const attrs_buf = [_]attrs.Entry{
+        .{ .key = "db.system.name", .value = .{ .string = "codepros.geode" } },
+        .{ .key = "db.operation.name", .value = .{ .string = op_name } },
+        .{ .key = "db.namespace", .value = .{ .string = namespace } },
+        .{ .key = "geode.query.is_mutation", .value = .{ .bool = is_mutation } },
+    };
+    const span = t.startSpan(Context.empty(), "geode.query.execute", .{
+        .kind = .server,
+        .initial_attributes = &attrs_buf,
+    }) catch return .{ .span = Span.noop };
+    return .{ .span = span };
 }
 
 /// Force a flush of all pending spans through the wired processors.

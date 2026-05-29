@@ -5153,6 +5153,33 @@ pub fn build(b: *std.Build) void {
     const run_otel_tracer_tests = b.addRunArtifact(otel_tracer_tests);
     shardDep(test_step, &run_otel_tracer_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // Phase B: GeodeSpan facade unit test — startQuerySpan emits a
+    // `geode.query.execute` span and end() is exactly-once. Derives from
+    // the same otel_metrics_mod / otel_mod as the tracer-smoke test.
+    const otel_span_facade_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_span_facade.zig"), .target = target, .optimize = optimize });
+    otel_span_facade_test_mod.addImport("otel", otel_mod);
+    otel_span_facade_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_span_facade_tests = b.addTest(.{ .root_module = otel_span_facade_test_mod });
+    otel_span_facade_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_otel_span_facade_tests = b.addRunArtifact(otel_span_facade_tests);
+    shardDep(test_step, &run_otel_span_facade_tests.step, 1, test_shard_loads, test_shard_index);
+    const otel_span_facade_step = b.step("test-otel-span-facade", "Run Phase B GeodeSpan facade unit test");
+    otel_span_facade_step.dependOn(&run_otel_span_facade_tests.step);
+
+    // Phase B: GeodeSpan concurrency stress — N threads each start+end a
+    // query span through the real BSP + recorder; asserts no crash and
+    // exactly-once recording (guards the id-gen race + double-end UAF on
+    // the current otel pin).
+    const otel_span_conc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_span_concurrency.zig"), .target = target, .optimize = optimize });
+    otel_span_conc_test_mod.addImport("otel", otel_mod);
+    otel_span_conc_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_span_conc_tests = b.addTest(.{ .root_module = otel_span_conc_test_mod });
+    otel_span_conc_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_otel_span_conc_tests = b.addRunArtifact(otel_span_conc_tests);
+    shardDep(test_step, &run_otel_span_conc_tests.step, 1, test_shard_loads, test_shard_index);
+    const otel_span_conc_step = b.step("test-otel-span-concurrency", "Run Phase B GeodeSpan concurrency stress test");
+    otel_span_conc_step.dependOn(&run_otel_span_conc_tests.step);
+
     // BSP race regression: assert that no concurrent-context tracer.startSpan
     // calls live in geode hot paths until the otel pin advances past the
     // BatchSpanProcessor concurrent-producer race fix (otel@0c34ce9b). The
