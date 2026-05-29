@@ -277,3 +277,71 @@ production shape (many browser/api sessions establishing connections in bursts).
 - Crash: `docker logs geode-test` → `thread N panic: source and destination arguments have
   non-equal lengths` with the stack in §1.
 - Downstream context: divelife-argo `docs/quic-deadlock.md` (the #864 investigation this build fixes).
+
+---
+
+## ADDENDUM 2026-05-29 — residual saturation WEDGE under sustained mixed load (v0.6.7)
+
+v0.6.7 fixes the pollCrypto crash (validated: edge_create burst ramp to c=128
+survives 3/3, full 130-user seed 17s, ping 2683 QPS). But a **separate, milder
+wedge** still occurs under *sustained* mixed concurrent load — distinct from the
+crash above (no SIGSEGV; the process stays up but stops serving).
+
+### Repro
+
+Deployed geodedb/geode:0.6.7 single-pod to the divelife-qa cluster (full 130-user
+seed, healthy). Ran the divelife-ui Playwright e2e suite: 1201 tests, 4 workers,
+~44 min of mixed load (concurrent TLS handshakes + reads + writes from api/pds on
+behalf of browser sessions). Result: 1115 passed / 56 failed — but the failures
+cluster toward the *end* of the run, and afterward geode-0 was wedged:
+
+- `proto_reader_messages_delivered_total` **frozen** (15984, unchanged across an
+  8s sample) — no messages being processed
+- `quic_pending_stream_handlers` **frozen at 11** — 11 stream handlers stuck,
+  never draining
+- `quic_active_connections` **frozen at 11**
+- `quic_poll_overrun_total=50` (was 0 in local burst tests; the pollLoop overran
+  50× during the sustained run)
+- `quic_leaked_connections_reaped_total=0` (so NOT the old leak path)
+- New clients can't connect: `transport dial ... timeout: no recent network
+  activity` — the server has stopped accepting/servicing connections
+- Recovered only by `kubectl delete pod geode-0` (fresh process → metrics reset
+  to 0, api/pds reconnect cleanly)
+
+### Severity / blast radius
+
+Much milder than the 0.5.19 deadlock (11 stuck handlers vs 0.5.19's 500 leaked
+connections; api restarted 2× / pds 7× over the whole run vs 1000+). The #864
+watchdogs clearly shrank the blast radius. But the wedge still fully stops the
+server under sustained load, which is the production shape (a browser-traffic
+e2e run, or real users). So the system is NOT yet stable end-to-end under
+sustained concurrency.
+
+### What it means for the failure signal
+
+The 56 "failures" in that e2e run are largely **artifacts of this wedge**, not UI
+bugs: every data-dependent screen (calendar, feed, explore, home) renders
+perfectly when hit live against a fresh geode-0 (calendar shows 4 view tabs,
+Sun–Sat headers, days 1–31, console-clean; explore shows all 20 seeded sites).
+They only failed in the suite because geode saturated mid-run and `useXxx()`
+hooks got 503s. So this wedge is both a stability bug AND a test-signal
+poisoner — fixing it should turn the e2e suite green without UI changes.
+
+### Hypothesis for the maintainer
+
+`quic_poll_overrun_total` climbing to 50 then everything freezing suggests the
+pollLoop falls progressively behind under sustained handshake+stream churn until
+a stream-handler set (the frozen 11) deadlocks or starves, after which the poll
+thread can't make progress and new dials get no response. The per-stream and
+proto-reader stall watchdogs (#864 §10) detect frozen counters but evidently
+don't *recover* this state — consider having the watchdog force-drain or reset
+the stuck handler set, and investigate whether `pending_stream_handlers` that
+never decrement indicate handlers blocked on a lock the poll thread also needs
+(lock-order inversion between the poll thread and the per-connection mutex added
+in A6f).
+
+### Evidence trail
+
+- divelife-argo docs/quic-deadlock.md (the original #864 investigation)
+- This run's seed: 130 users/62s clean; the wedge appeared only after ~44 min of
+  4-worker e2e load.
