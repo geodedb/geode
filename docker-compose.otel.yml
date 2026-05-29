@@ -55,7 +55,11 @@ services:
       GEODE_ADMIN_PASSWORD: "geodeotel"
       GEODE_USERNAME: "geode"
       GEODE_PASSWORD: "geodeotel"
-      GEODE_METRICS_BIND: "0.0.0.0:9091"
+      # GEODE_METRICS_PORT starts the Prometheus /metrics server (main.zig:1258 —
+      # the server is only created when this env is set). GEODE_METRICS_BIND is an
+      # IP-only dotted-quad (metrics_server.zig:359 parses address only, no port).
+      GEODE_METRICS_PORT: "9091"
+      GEODE_METRICS_BIND: "0.0.0.0"
       LOG_LEVEL: "info"
     command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
     ports:
