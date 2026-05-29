@@ -91,4 +91,15 @@ otel-on vs otel-off overhead against the loadtest baseline; finalize docs and co
 - Pull all dependent libs to latest before edits (done 2026-05-29).
 
 ## Status log
-- 2026-05-29: Discovery complete; program doc created. Next: Phase A plan via `/writing-plans`.
+- 2026-05-29: Discovery complete; program doc created.
+- 2026-05-29: **Phase A COMPLETE.** docker-compose.otel.yml + config/otel-collector.yaml +
+  scripts/otel-compose-verify.sh + Makefile `otel-compose-*` + baseline doc. **Found & fixed a
+  critical foundational bug via `/bug:fix` (commit `7ce6e0d9`):** geode discarded the
+  `otel_use_devnw_tls` build option, so the otel lib's std.http.Client transport was compiled out
+  and *every* OTLP export silently no-op'd (geode opened zero sockets). Now forwarded to the otel
+  dep (default on). Proof: `/tmp/otel_repro.sh` 0→9 connections w/ `POST /v1/metrics`; compose verify
+  PASSES (geode.* metrics in collector); Prometheus `/metrics` serves 150 lines. Regression guard
+  `tests/test_otel_otlp_transport_delivery.zig`. Removed dead `src/monitoring/tracing.zig`. Review
+  fixes: no committed secret (GEODE_OTEL_PASSWORD env), real collector readiness (health_check :13133).
+  Baseline: `docs/otel-compose-baseline-2026-05-29.md`. **Confirmed empirically: geode emits 0 spans.**
+  Next: Phase B (tracing) via `/writing-plans`.
