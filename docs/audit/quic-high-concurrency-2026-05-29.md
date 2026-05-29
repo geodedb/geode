@@ -2,7 +2,7 @@
 
 **Scope:** `geode`
 **Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, backlog-aware cooperative pacing, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, and restart/recovery regression coverage. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest attribution runs show clean response writes, cheap read execution, dominant mutation execution/storage tail, and multi-second QUIC poll/scheduler cycles.
-**Dependency state:** Geode now pins QUIC `06f4aadcf045a0d6295c7e85398b94c7096accb9` and `geode-client-zig` `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd`. QUIC `06f4aad` preserves the proven `eeeb216` four-batch server receive behavior and adds `REQ-QUIC-HC-168`, routing generic/coalesced long-header dispatch through the same per-connection TLS serializer as the optimized burst receive path.
+**Dependency state:** Geode now pins QUIC `a1858c19ad91026eb412db263cb159d68de282ac` and `geode-client-zig` `942641cd1e71544560bbfe96db280fa271827a2c`. QUIC `a1858c1` preserves the proven `06f4aad` generic/coalesced long-header TLS serialization and reverts the rejected `REQ-QUIC-HC-177` server short-header busy-connection shedding experiment after it regressed the 2048x8 mixed gate.
 
 ## Summary
 
@@ -42,6 +42,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 32. `REQ-QUIC-HC-174` exposes group-commit shard coalescing through `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default is now 500 us after 2048x8 mixed probes showed 100 us still produced first-response timeouts and 2000 us regressed tail completion.
 33. `REQ-QUIC-HC-175` adds opt-in coordinator phase metrics for submit wait, enqueue wait, queue wait, queue depth, coalescing, batch total, begin-txn, apply loop, commit, and wake time. The timers are disabled by default because the 2048x8 diagnostic showed detailed per-mutation timing can perturb the sustained gate.
 34. `REQ-QUIC-HC-176` makes cooperative first-stream post-turn pacing backlog-aware. The scheduler now tracks ready-queue depth with an atomic counter and skips the 1 ms high-fanout sleep only when queued ready work exceeds the worker pool. This preserves poller fairness once the scheduler catches up while reducing ready-queue head-of-line delay during 1024/2048 sustained fanout.
+35. Upstream QUIC `REQ-QUIC-HC-177` tested server short-header busy-connection shedding before packet-number tracking. The hypothesis was valid for poll-loop protection, but the 2048x8 mixed gate rejected it: completion fell to `16359/16384`, first-response timeouts rose to `25`, and QPS dropped to `715.39`. QUIC `a1858c1`, `geode-client-zig` `942641c`, and Geode now pin the revert.
+36. Two Geode runtime tuning sweeps were also rejected after the dependency correction. Raising cooperative first-stream workers to 768 worsened the 4096x8 mixed run to `22484/32768` with `10284` first-response timeouts. Raising poll workers to 64 worsened the same shape to `22207/32768` with `10561` first-response timeouts. The accepted defaults remain 512 cooperative workers and 16 poll workers for high fanout.
 
 ## Changed Files
 
@@ -136,8 +138,11 @@ All commands below were run on 2026-05-29.
 | Upstream QUIC `zig build test -Dtest-filter=thread_safety --summary all` | PASS, 10/10 tests including `generic_long_header_dispatch_uses_serialized_tls_wrappers` after QUIC `06f4aad`. |
 | Upstream QUIC `zig build test -Dtest-filter=pending_hs_send --summary all` | PASS, 3/3 tests after QUIC `06f4aad`, preserving the earlier deferred-handshake retry serialization guard. |
 | Upstream QUIC `zig build --summary all` | PASS, 10/10 steps after QUIC `06f4aad`. |
+| Upstream QUIC revert of `REQ-QUIC-HC-177` | PASS, pre-push `zig build` and `zig build test` hooks after QUIC `a1858c1`. |
 | `geode-client-zig` `zig build --summary all` | PASS, 15/15 steps after repinning to QUIC `06f4aad`. |
 | `geode-client-zig` `zig build test --summary all` | PASS, 420/420 tests after repinning to QUIC `06f4aad`. |
+| `geode-client-zig` `zig build --summary all` after QUIC `a1858c1` revert pin | PASS, 15/15 steps. |
+| `geode-client-zig` `zig build test --summary all` after QUIC `a1858c1` revert pin | PASS, 420/420 tests. |
 | `zig build test-quic-condition-cadence --summary all` | PASS, 74/74 tests after shard-parallel mutation admission, permit-gated overflow, dependency source audits, storage/index contention audits, shared cache audits, objective gate source audits, group-commit durability source audits, and runtime metrics scrape/source audits. |
 | `zig build test-metrics-server --summary all` | PASS, 4/4 tests including the `/metrics` runtime snapshot append and shutdown wake regression. |
 | `zig build test-group-commit-coordinator --summary all` | PASS, 9/9 tests including `REQ-QUIC-HC-171: group commit inserts survive adapter reopen`. |
@@ -154,12 +159,16 @@ All commands below were run on 2026-05-29.
 | 1024 workers x 8 ops mixed E2E after backlog-aware cooperative pacing | PASS, 8192/8192 operations, zero retries, zero reconnects, zero first-response timeouts, 3867.52 QPS, p50=216.17 ms, p95=476.37 ms, p99=651.68 ms, p99.9=861.51 ms. |
 | 2048 workers x 8 ops mixed E2E after backlog-aware cooperative pacing | PASS, 16384/16384 operations, zero retries, zero reconnects, zero first-response timeouts, 848.39 QPS, p50=2154.31 ms, p95=4723.65 ms, p99=6123.36 ms, p99.9=7424.62 ms. |
 | 4096 workers x 8 ops mixed E2E after backlog-aware cooperative pacing | FAIL, 23067/32768 operations, zero setup/execute retries, zero reconnects, 9701 first-response timeouts, 432.28 QPS, p50=4991.34 ms, p95=9498.71 ms, p99=9898.76 ms, p99.9=9991.77 ms. |
+| 1024 workers x 8 ops mixed E2E after QUIC `a1858c1`/client `942641c` dependency correction | PASS, 8192/8192 operations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 3213.45 QPS, p50=255.90 ms, p95=638.41 ms, p99=826.88 ms, p99.9=1009.87 ms. |
+| 2048 workers x 8 ops mixed E2E with rejected QUIC `8bb3733` busy-connection shedding | FAIL, 16359/16384 operations, 25 first-response timeouts, 715.39 QPS. This rejected the upstream packet-shedding default. |
+| 4096 workers x 8 ops mixed E2E with `GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS=768` | FAIL, 22484/32768 operations, 10284 first-response timeouts, 460.19 QPS. This rejected raising the cooperative worker default. |
+| 4096 workers x 8 ops mixed E2E with `GEODE_HC_POLL_WORKERS=64` | FAIL, 22207/32768 operations, 10561 first-response timeouts, 447.78 QPS. This rejected raising the high-fanout poll worker default. |
 | 4096 mixed single-op E2E at 250 us | PASS, 4096/4096 operations, zero retries, zero reconnects, zero first-response timeouts, 664.88 QPS after the final QUIC `eeeb216` and client `533cde8` repin. |
 | 4096 workers x 8 ops read-only sustained E2E at 250 us | FAIL, 22917/32768 operations, zero setup/execute retries, 9851 first-response timeouts after shared AST/plan cache hit-path changes. This improved from 21302/32768 and 11466 first-response timeouts before the shared-cache work. |
 | 4096 workers x 8 ops mixed sustained E2E at 250 us | FAIL, 23723/32768 operations, zero setup/execute retries, 9045 first-response timeouts after mutation optimizer admission was disabled. This is the remaining low-stagger ceiling. |
 | 4096 workers x 8 ops mixed sustained E2E at 1000 us | FAIL, 25800/32768 operations, zero setup/execute retries, 6968 first-response timeouts. This is the current latency-friendly ceiling. |
 | 4096 workers x 8 ops mixed sustained E2E with runtime scrape at 250 us | FAIL, 26634/32768 operations, zero setup/execute retries, 6134 first-response timeouts. The scrape split the tail into clean server response writes, cheap read execution, dominant mutation execution/storage time, and multi-second QUIC poll/scheduler cycles. |
-| `zig build --summary all` after final dependency repin | PASS, 52/52 steps succeeded against QUIC `06f4aad` and `geode-client-zig` `5ae3102`. |
+| `zig build --summary all` after QUIC `a1858c1` / client `942641c` dependency correction | PASS, 52/52 steps succeeded. |
 | 1024 mixed single-op E2E after `06f4aad` repin | PASS, 1024/1024 operations, 256 mutations, zero setup/execute retries, zero reconnects, zero first-response timeouts, 3822.45 QPS. |
 | 4096 read-only 250 us low-stagger probe | PASS, 4096/4096 operations, zero retries, zero reconnects. |
 | 1024 mixed 250 us timing smoke | PASS, 1024/1024 operations at 3822.30 QPS after deferred high-fanout post-write flush, validating the split timing summary path. |
@@ -212,7 +221,7 @@ avg_first_response_read_ms=118.10 avg_response_read_ms=118.14
 avg_response_message_read_ms=59.07
 ```
 
-4096 mixed read/mutation 250 us single-op gate after the final dependency repin:
+4096 mixed read/mutation 250 us single-op gate from the accepted `06f4aad` dependency repin:
 
 ```sh
 GEODE_HC_WORKERS=4096 \

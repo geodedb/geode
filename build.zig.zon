@@ -156,7 +156,10 @@
             // 2026-05-29: pins REQ-QUIC-HC-168, which routes generic and
             // coalesced long-header dispatch through the same per-connection
             // TLS serializer as the optimized burst receive path.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#06f4aadcf045a0d6295c7e85398b94c7096accb9",
+            // 2026-05-29: pins a1858c1, reverting the rejected
+            // REQ-QUIC-HC-177 busy-connection shedding experiment after it
+            // regressed Geode's 2048x8 mixed workload.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#a1858c19ad91026eb412db263cb159d68de282ac",
             .hash = "quic-0.1.21-gBIqUTjsPADrNNiwBmGSnFPs0wIO1Go_rItY5kK-ci8K",
         },
 
@@ -291,8 +294,11 @@
             // experiment.
             // 2026-05-29: bumped to 5ae3102 so client and server share quic
             // 06f4aad's generic long-header TLS dispatch serialization.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd",
-            .hash = "geode_client_zig-0.2.9-8ysbV3ZmCQDChT1EzGFoiseqYQBcLuvkqmnKE3f80e5F",
+            // 2026-05-29: bumped to 942641c so the embedded client shares
+            // quic a1858c1's revert of the rejected short-header shedding
+            // experiment.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#942641cd1e71544560bbfe96db280fa271827a2c",
+            .hash = "geode_client_zig-0.2.9-8ysbVzNnCQAPqWrZTrXmLPr8PXTFTifuA7ImmvcidAY0",
         },
 
         // =======================================================================

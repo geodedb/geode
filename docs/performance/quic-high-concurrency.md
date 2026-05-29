@@ -53,6 +53,11 @@ same run reported p50=2154.31 ms, p95=4723.65 ms, p99=6123.36 ms, and
 p99.9=7424.62 ms, so completion is clean but latency is still above the
 enterprise objective.
 
+After the QUIC `a1858c1` and `geode-client-zig` `942641c` dependency
+correction, the 1024x8 mixed gate completed all 8192 operations with zero
+first-response timeouts at 3213.45 QPS. The corresponding latency percentiles
+were p50=255.90 ms, p95=638.41 ms, p99=826.88 ms, and p99.9=1009.87 ms.
+
 ## Stress Ceiling
 
 The 4096-worker mixed workload with 8 operations per client is still the failing
@@ -91,6 +96,28 @@ multi-second QUIC poll cycles and first-stream scheduling delay.
 A latency-friendly 1000 us run completed 25800/32768 operations with 6968
 first-response timeouts in the prior dependency-pin cycle. Keep both as active
 ceiling probes; do not raise the 10s execute timeout to make them pass.
+
+## Rejected 2026-05-29 Follow-Ups
+
+The following experiments were tested and rejected because they regressed the
+accepted sustained gates or worsened the 4096x8 stress ceiling:
+
+- QUIC `REQ-QUIC-HC-177` server short-header busy-connection shedding. It
+  reduced some receive-loop blocking but lost request packets under 2048x8
+  mixed fanout: `16359/16384` completed, `25` first-response timeouts,
+  715.39 QPS. QUIC `a1858c1`, `geode-client-zig` `942641c`, and Geode pin the
+  revert.
+- `GEODE_HC_COOPERATIVE_FIRST_STREAM_WORKERS=768`. This recreated scheduler
+  pressure at 4096x8 mixed fanout: `22484/32768` completed, `10284`
+  first-response timeouts, 460.19 QPS.
+- `GEODE_HC_POLL_WORKERS=64`. Higher poll-worker parallelism worsened the same
+  4096x8 shape: `22207/32768` completed, `10561` first-response timeouts,
+  447.78 QPS.
+
+The current high-fanout defaults remain 512 cooperative first-stream workers,
+16 poll workers, and no server short-header packet shedding. The next
+implementation target is scheduler-side mutation offload/continuation so
+group-commit waits do not occupy cooperative first-stream workers.
 
 ## Enterprise Objective Gate
 
@@ -408,8 +435,8 @@ force snapshot execution.
 
 As of this cycle, Geode pins:
 
-- QUIC: `06f4aadcf045a0d6295c7e85398b94c7096accb9`
-- `geode-client-zig`: `5ae310237f6cbdf6cc2716fe4eca9f43f4facfbd`
+- QUIC: `a1858c19ad91026eb412db263cb159d68de282ac`
+- `geode-client-zig`: `942641cd1e71544560bbfe96db280fa271827a2c`
 
 QUIC `108d06d` reverts the rejected `c2874fb`/`76b45ec` short-header
 wall-clock yield experiments and preserves the proven `a68d36e`/`9a35274`
@@ -426,6 +453,11 @@ QUIC `06f4aad` then closes the remaining `pollCrypto` race class documented in
 Handshake packets now dispatch through the same serialized wrappers as the
 optimized receive drain, so TLS `processCrypto`/`pollCrypto` remains
 single-writer per connection even outside the hot burst path.
+
+QUIC `8bb3733` then tested server short-header busy-connection shedding, but
+the 2048x8 mixed gate rejected it with 25 first-response timeouts. QUIC
+`a1858c1` reverts that experiment, and `geode-client-zig` `942641c` carries the
+same reverted QUIC pin so Geode's server and embedded client remain aligned.
 
 Dependency changes must be made in the upstream worktrees under
 `~/src/devnw/zig/*` before Geode is repinned.
