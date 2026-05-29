@@ -243,7 +243,19 @@ pub fn build(b: *std.Build) void {
     // no runtime effect today; restore wiring once Zig 0.16's module-dedup
     // quirk is fixed upstream and the conditional `@import("build_options")`
     // pattern can be reinstated in the seam.
-    _ = b.option(bool, "otel_use_devnw_tls", "(no-op while OTel seam is hardcoded off) Use devnw/zig/tls for OTLP/HTTPS") orelse false;
+    //
+    // EXCEPTION — `otel_use_devnw_tls` IS wired (default on). It is NOT a
+    // seam toggle: it gates the otel library's real `std.http.Client`
+    // OTLP/HTTP(S) transport (otel transport.zig:139 short-circuits to
+    // error.UnsupportedTransport when false). It is captured below and
+    // forwarded into the `b.dependency("otel", ...)` call so the transport
+    // is compiled into every build path; the otel module instance stays
+    // deduplicated because that single forward reaches the one otel_dep all
+    // geode otel modules derive from. Defaulting true (zero runtime cost
+    // unless an OTEL_*_EXPORTER is set at runtime) prevents the silent
+    // telemetry-loss regression where the flag was accepted but discarded.
+    // Pass `-Dotel_use_devnw_tls=false` to strip the transport.
+    const otel_use_devnw_tls = b.option(bool, "otel_use_devnw_tls", "Compile in the std.http.Client OTLP/HTTP(S) transport (default on; -Dotel_use_devnw_tls=false strips it)") orelse true;
     _ = b.option(bool, "otel_use_devnw_grpc", "(no-op while OTel seam is hardcoded off) Use devnw/zig/grpc-zig for OTLP/gRPC") orelse false;
     _ = b.option(bool, "otel_disabled", "(no-op while OTel seam is hardcoded off) Disable OTel emission") orelse false;
     _ = b.option(bool, "otel_profiles", "(no-op while OTel seam is hardcoded off) Enable profile signal") orelse false;
@@ -425,6 +437,7 @@ pub fn build(b: *std.Build) void {
     const otel_dep = b.dependency("otel", .{
         .target = target,
         .optimize = optimize,
+        .otel_use_devnw_tls = otel_use_devnw_tls,
     });
     const otel_mod = otel_dep.module("otel");
 
