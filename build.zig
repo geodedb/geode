@@ -5114,6 +5114,21 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_step = b.step("test-otel-facade-smoke", "Run OTel metrics facade smoke tests");
     otel_metrics_step.dependOn(&run_otel_metrics_tests.step);
 
+    // OTLP/HTTP transport delivery regression: guards that the real
+    // std.http.Client transport is compiled IN (i.e. the otel
+    // `use_devnw_tls` build flag is forwarded from geode's build.zig to
+    // the `otel` dependency). Derives from the same `otel_mod` instance
+    // as test-otel-facade-smoke, so it observes the otel flag exactly as
+    // production code does. See the test file header for the root cause.
+    const otel_otlp_transport_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_otlp_transport_delivery.zig"), .target = target, .optimize = optimize });
+    otel_otlp_transport_test_mod.addImport("otel", otel_mod);
+    const otel_otlp_transport_tests = b.addTest(.{ .root_module = otel_otlp_transport_test_mod });
+    otel_otlp_transport_tests.root_module.link_libc = true; // std.http.Client / net transport needs libc
+    const run_otel_otlp_transport_tests = b.addRunArtifact(otel_otlp_transport_tests);
+    shardDep(test_step, &run_otel_otlp_transport_tests.step, 1, test_shard_loads, test_shard_index);
+    const otel_otlp_transport_step = b.step("test-otel-otlp-transport", "Run OTLP/HTTP transport delivery regression test");
+    otel_otlp_transport_step.dependOn(&run_otel_otlp_transport_tests.step);
+
     // Tracer-pipeline regression test: facade tracer() emits spans through
     // a wired TracerProvider into an in-memory recorder. Reproduces and
     // gates the install-otel-no-traces gap.
