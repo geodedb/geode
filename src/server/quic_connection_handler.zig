@@ -4860,6 +4860,7 @@ fn handleClientMessage(
             const ordered = traits.ordered;
             const distinct = traits.distinct;
             const heur_index = traits.has_where_eq or traits.has_filter_eq;
+            const program_is_mutating = isMutatingProgram(&parse_result.program);
 
             const role = if (state.authenticated_role) |role_u8|
                 @as(user_mgmt.Role, @enumFromInt(role_u8))
@@ -4919,15 +4920,24 @@ fn handleClientMessage(
             var optimizer_hints_storage: query_plan_cache.OptimizerHints = .{};
             defer if (plan_handle) |*h| h.release();
 
-            if (state.query_optimizer) |shared_opt| {
-                const store = graph_store.getGlobalStore(gpa);
-                const store_stats = query_plan_cache.StoreStats{
-                    .node_count = @intCast(store.getNodeCount()),
-                    .edge_count = @intCast(store.getEdgeCount()),
-                };
-                plan_handle = shared_opt.optimizeQuery(query_text, &parse_result.program, store_stats) catch null;
-                if (plan_handle) |*h| {
-                    optimizer_hints_storage = h.toHints();
+            // CANARY: REQ=REQ-QUIC-HC-166; FEATURE="High-Concurrency Query Cache"; ASPECT=ReadOnlyPlanCacheAdmission; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=engine; UPDATED=2026-05-29
+            //
+            // Mutation traffic often embeds literal worker/sequence values, so
+            // routing it through the cross-connection plan cache creates many
+            // one-shot misses and evictions while providing no execution hint
+            // benefit to the write fast paths. Keep the shared optimizer on
+            // read/profile/explain queries only.
+            if (!program_is_mutating) {
+                if (state.query_optimizer) |shared_opt| {
+                    const store = graph_store.getGlobalStore(gpa);
+                    const store_stats = query_plan_cache.StoreStats{
+                        .node_count = @intCast(store.getNodeCount()),
+                        .edge_count = @intCast(store.getEdgeCount()),
+                    };
+                    plan_handle = shared_opt.optimizeQuery(query_text, &parse_result.program, store_stats) catch null;
+                    if (plan_handle) |*h| {
+                        optimizer_hints_storage = h.toHints();
+                    }
                 }
             }
 
@@ -5067,7 +5077,7 @@ fn handleClientMessage(
             // graph storage, so they should not contend with mutation-heavy
             // workloads on the graph read/snapshot path.
             const needs_store_lock = analysis.kind != .explain and !(analysis.kind == .rows and analysis.is_store_free);
-            const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
+            const is_mutation = needs_store_lock and program_is_mutating;
 
             // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
             // GAP-0526 was originally enforced by a direct `user_mgmt.hasPermission` call

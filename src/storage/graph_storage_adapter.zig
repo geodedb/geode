@@ -270,6 +270,23 @@ const NodePropertyExactIndex = struct {
         return null;
     }
 
+    fn postingLenIfPresent(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) !?usize {
+        var key_buf: [1024]u8 = undefined;
+        const encoded = try self.encodeKeyScratch(key_buf[0..], label_id, property_key, value_hash);
+        defer if (encoded.owned) |owned| self.allocator.free(owned);
+        const probe_key = encoded.key;
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
+        const shard = &self.shards[shard_idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+
+        if (shard.postings.get(probe_key)) |list| {
+            return list.items.len;
+        }
+        return null;
+    }
+
     fn encodeKey(self: *const NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u8 {
         const total_len = 4 + 4 + property_key.len + 8;
         const key = try self.allocator.alloc(u8, total_len);
@@ -4845,37 +4862,41 @@ fn copySmallestMergePropCandidates(
         break :blk mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
     };
 
-    var best: ?[]u64 = null;
-    errdefer if (best) |items| allocator.free(items);
-
+    // CANARY: REQ=REQ-QUIC-HC-162; FEATURE="High-Concurrency Mutations"; ASPECT=SmallestPostingPreselect; STATUS=IMPL; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-29
+    //
+    // The 4096x8 mixed workload uses MERGE (:HCParallel {worker, seq}).
+    // `worker` postings stay tiny while `seq` postings grow into thousands
+    // of ids. The old probe copied every property posting before choosing the
+    // smallest, so each mutation could copy a large `seq` list while holding
+    // the graph SHARED lock. First read posting lengths under the per-shard
+    // exact-index mutexes, then copy only the smallest candidate list.
+    var best_key: ?[]const u8 = null;
+    var best_value_hash: u64 = 0;
+    var best_len: usize = std.math.maxInt(usize);
     for (props) |kv| {
         const storage_value = try toStorageProperty(allocator, kv.value);
         defer freeTemporaryStorageProperty(allocator, storage_value);
         const value_hash = try hashStorageProperty(allocator, storage_value);
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
-        const candidates = (try mg.exact_node_property_index.copyIfPresent(allocator, label_id, kv.key, value_hash)) orelse {
-            if (best) |items| allocator.free(items);
+        const posting_len = (try mg.exact_node_property_index.postingLenIfPresent(label_id, kv.key, value_hash)) orelse {
             return try allocator.alloc(u64, 0);
         };
 
-        if (candidates.len == 0) {
-            if (best) |items| allocator.free(items);
-            return candidates;
+        if (posting_len == 0) {
+            return try allocator.alloc(u64, 0);
         }
 
-        if (best) |items| {
-            if (candidates.len < items.len) {
-                allocator.free(items);
-                best = candidates;
-            } else {
-                allocator.free(candidates);
-            }
-        } else {
-            best = candidates;
+        if (posting_len < best_len) {
+            best_key = kv.key;
+            best_value_hash = value_hash;
+            best_len = posting_len;
+            if (posting_len == 1) break;
         }
     }
 
-    return best orelse try allocator.alloc(u64, 0);
+    const key = best_key orelse return try allocator.alloc(u64, 0);
+    return (try mg.exact_node_property_index.copyIfPresent(allocator, label_id, key, best_value_hash)) orelse
+        try allocator.alloc(u64, 0);
 }
 
 fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, label: []const u8, props: []const StorageAdapter.PropKV) bool {

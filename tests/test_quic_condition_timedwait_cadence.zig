@@ -668,6 +668,10 @@ test "query cache misses singleflight by key without serializing unrelated misse
     const plan_cache = maybe_plan_cache orelse return error.FileNotFound;
     defer allocator.free(plan_cache);
 
+    const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
+    const handler = maybe_handler orelse return error.FileNotFound;
+    defer allocator.free(handler);
+
     const ast_get_or_parse = try sliceBetween(
         ast_cache,
         "pub fn getOrParse(self: *SharedAstCache",
@@ -683,6 +687,12 @@ test "query cache misses singleflight by key without serializing unrelated misse
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "AstMissSingleFlight") != null);
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "STATUS=TESTED") != null);
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "TEST=query_ast_cache_shared_singleflight") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_cache, "REQ=REQ-QUIC-HC-164") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_cache, "SharedAstConcurrentHits") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_cache, "lock: std.Io.RwLock") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_cache, "ref_count: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "lockSharedUncancelable") != null);
+    try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "hit_count.fetchAdd(1, .acq_rel)") != null);
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "inflight_misses") != null);
     try testing.expect(std.mem.indexOf(u8, ast_get_or_parse, "parse outside the lock") != null);
     {
@@ -699,11 +709,20 @@ test "query cache misses singleflight by key without serializing unrelated misse
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "PlanMissSingleFlight") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "STATUS=TESTED") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "TEST=shared_query_optimizer_plan_singleflight") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "REQ=REQ-QUIC-HC-165") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "SharedPlanConcurrentHits") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "lock: std.Io.RwLock") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "ref_count: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "plan: *CompiledPlan") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "allocator.create(CompiledPlan)") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_cache, "allocator.destroy") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_optimize, "lockSharedUncancelable") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_optimize, "hit_count.fetchAdd(1, .acq_rel)") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "inflight_misses") != null);
     try testing.expect(std.mem.indexOf(u8, plan_optimize, "generate the real plan outside the lock") != null);
     {
         const inflight_idx = std.mem.indexOf(u8, plan_optimize, "self.inflight_misses.put") orelse return error.MissingPlanInflight;
-        const unlock_idx = std.mem.indexOfPos(u8, plan_optimize, inflight_idx, "self.lock.unlock(std.Io.Threaded.global_single_threaded.io());") orelse return error.MissingPlanUnlockBeforeGenerate;
+        const unlock_idx = std.mem.indexOfPos(u8, plan_optimize, inflight_idx, "self.lock.unlock(io);") orelse return error.MissingPlanUnlockBeforeGenerate;
         const generate_idx = std.mem.indexOf(u8, plan_optimize, "generateRealPlan") orelse return error.MissingPlanGenerate;
         const put_idx = std.mem.indexOf(u8, plan_optimize, "self.plan_cache.put(key, cached_plan)") orelse return error.MissingPlanPut;
         try testing.expect(inflight_idx < unlock_idx);
@@ -715,6 +734,7 @@ test "query cache misses singleflight by key without serializing unrelated misse
     const parse_wrapper = maybe_parse_wrapper orelse return error.FileNotFound;
     defer allocator.free(parse_wrapper);
     try testing.expect(std.mem.indexOf(u8, parse_wrapper, "test \"query_ast_cache_shared_singleflight\"") != null);
+    try testing.expect(std.mem.indexOf(u8, parse_wrapper, "test \"query_ast_cache_concurrent_hits_release_without_serializing\"") != null);
     try testing.expect(std.mem.indexOf(u8, parse_wrapper, "test \"query_ast_cache_unique_misses_do_not_collapse\"") != null);
     try testing.expect(std.mem.indexOf(u8, parse_wrapper, "std.Thread.spawn") != null);
 
@@ -722,8 +742,14 @@ test "query cache misses singleflight by key without serializing unrelated misse
     const plan_hit = maybe_plan_hit orelse return error.FileNotFound;
     defer allocator.free(plan_hit);
     try testing.expect(std.mem.indexOf(u8, plan_hit, "test \"shared_query_optimizer_plan_singleflight\"") != null);
+    try testing.expect(std.mem.indexOf(u8, plan_hit, "test \"shared_query_optimizer_concurrent_hits_release_without_serializing\"") != null);
     try testing.expect(std.mem.indexOf(u8, plan_hit, "test \"shared_query_optimizer_unique_misses_do_not_collapse\"") != null);
     try testing.expect(std.mem.indexOf(u8, plan_hit, "std.Thread.spawn") != null);
+
+    try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-166") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const program_is_mutating = isMutatingProgram(&parse_result.program);") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "if (!program_is_mutating) {") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const is_mutation = needs_store_lock and program_is_mutating;") != null);
 }
 
 test "cooperative first stream clears running before consuming reschedule flags" {
@@ -1648,7 +1674,10 @@ test "multi-property merge mutations avoid whole graph writer lock" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-111") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-121") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-122") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-162") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "copySmallestMergePropCandidates") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "postingLenIfPresent") != null);
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "copy only the smallest candidate list") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "exact_node_property_index.copy") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "copyIfPresent") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "const merge_tuple_lock_count: usize = 4096") != null);
@@ -2253,8 +2282,13 @@ test "quic count fast path reuses active read store without nested ReadView" {
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "pub fn getActiveQueryReadStore()") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "REQ=REQ-QUIC-HC-032") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "REQ=REQ-QUIC-HC-120") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "REQ=REQ-QUIC-HC-163") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "label_index_mutex") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "label_counts_by_graph") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "LabelCountValue") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "label_count_rwlock") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "count.fetchAdd(1, .monotonic)") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store_content, "count.cmpxchgWeak") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "return self.countGraphLabel(graph_name, label);") != null);
     try testing.expect(std.mem.indexOf(u8, graph_store_content, "posting.lock()") != null);
 }

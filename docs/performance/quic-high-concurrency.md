@@ -45,10 +45,10 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 900s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The accepted sustained run completed all 16384 operations with zero setup
-retries, zero execute retries, zero reconnects, zero first-response timeouts,
-and 1081.10 QPS. This gate exercises 4096 mutations and 12288 reads over 2048
-live QUIC connections.
+The latest accepted sustained run completed all 16384 operations with zero
+setup retries, zero execute retries, zero reconnects, zero first-response
+timeouts, and 1189.34 QPS. This gate exercises 4096 mutations and 12288 reads
+over 2048 live QUIC connections.
 
 ## Stress Ceiling
 
@@ -68,17 +68,47 @@ GEODE_HC_POLL_WORKERS=16 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest 250 us run completed 20475/32768 operations with zero setup retries,
-zero execute retries, zero reconnects, and 12293 first-response timeouts. A
-latency-friendly 1000 us run completed 25800/32768 operations with 6968
-first-response timeouts in the prior dependency-pin cycle. Keep both as active
-ceiling probes; do not raise the 10s execute timeout to make them pass.
+The latest 250 us run completed 23723/32768 operations with zero setup retries,
+zero execute retries, zero reconnects, and 9045 first-response timeouts after
+the storage/cache contention cycle. A latency-friendly 1000 us run completed
+25800/32768 operations with 6968 first-response timeouts in the prior
+dependency-pin cycle. Keep both as active ceiling probes; do not raise the 10s
+execute timeout to make them pass.
 
 With server metrics enabled, permit-gated mutation overflow and shard-parallel
 mutation admission reduced scheduler churn enough to promote the sustained gate
 from 1024 x 8 to 2048 x 8. The remaining 4096 x 8 tail is still concentrated in
 first-response wait, cooperative packet processing, and QUIC short-header
 receive processing.
+
+## 2026-05-29 Contention Fixes
+
+The latest Geode-side cycle reduced avoidable shared-state contention before
+the next QUIC receive/scheduler pass:
+
+- `REQ-QUIC-HC-162`: multi-property `MERGE` now reads exact-property posting
+  lengths first and copies only the smallest candidate posting list. This keeps
+  `MERGE (:HCParallel {worker, seq})` from copying large `seq` lists while a
+  much smaller `worker` posting exists.
+- `REQ-QUIC-HC-163`: graph/label refcounts now use atomic counters under a
+  map-stability rwlock. Hot count reads and existing-label mutation refcount
+  bumps no longer serialize on one global label-count mutex.
+- `REQ-QUIC-HC-164`: shared AST cache hits and releases now use a shared lock
+  and atomic hit/ref counters. Same-query read fanout no longer takes the
+  exclusive AST cache mutex for every hit.
+- `REQ-QUIC-HC-165`: shared plan cache hits and releases now use the same
+  shared-lock/atomic pattern, and cached plan handles point at stable heap
+  storage instead of movable HashMap entries.
+- `REQ-QUIC-HC-166`: mutating programs skip the shared optimizer. Mutation
+  fast paths do not use optimizer hints, and literal-heavy mutation text creates
+  one-shot cache misses and evictions under mixed fanout.
+
+Post-change 4096x8 read-only low-stagger probes improved from 11466
+first-response timeouts before the shared-cache work to 9851 timeouts after
+shared AST and plan hits. The 4096x8 mixed low-stagger probe improved from the
+pre-cycle 12293-timeout ceiling to 9045 timeouts after skipping optimizer
+admission for mutations. This is still a failing stress ceiling; the passing
+sustained gate remains 2048x8 mixed.
 
 ## Core Knobs
 

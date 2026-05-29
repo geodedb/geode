@@ -225,9 +225,15 @@ pub const SharedAstCache = struct {
     allocator: std.mem.Allocator,
     cache: std.AutoHashMap(u64, SharedCachedAst),
     max_size: usize,
-    hit_count: u64 = 0,
-    miss_count: u64 = 0,
-    lock: std.Io.Mutex = std.Io.Mutex.init,
+    hit_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    miss_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // CANARY: REQ=REQ-QUIC-HC-164; FEATURE="High-Concurrency Query Cache"; ASPECT=SharedAstConcurrentHits; STATUS=IMPL; TEST=query_ast_cache_shared_singleflight; OWNER=engine; UPDATED=2026-05-29
+    //
+    // Same-query fan-out used to serialize every cache hit behind this lock's
+    // old mutex form. Hits now take the lock SHARED and bump atomic counters /
+    // refcounts; misses and eviction still take it EXCLUSIVE for HashMap
+    // structural changes.
+    lock: std.Io.RwLock = std.Io.RwLock.init,
     inflight_misses: std.AutoHashMap(u64, void),
     miss_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     lru_head: ?u64 = null,
@@ -256,17 +262,18 @@ pub const SharedAstCache = struct {
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="ParseCacheWrapper"; ASPECT=StatsAccessor; STATUS=TESTED; TEST=tests/test_gap0810_parse_cache_wrapper.zig; OWNER=performance; UPDATED=2026-04-20
-    // GAP-0810: read hit/miss counters under the cache lock so callers
-    // (benches, tests, observability endpoints) observe a consistent
-    // snapshot without racing against concurrent `getOrParse` updates.
+    // GAP-0810: hit/miss counters are atomic so callers can observe a
+    // consistent snapshot without blocking concurrent `getOrParse` hits.
     pub fn stats(self: *SharedAstCache) struct { hit_count: u64, miss_count: u64 } {
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-        return .{ .hit_count = self.hit_count, .miss_count = self.miss_count };
+        return .{
+            .hit_count = self.hit_count.load(.acquire),
+            .miss_count = self.miss_count.load(.acquire),
+        };
     }
 
     pub fn getOrParse(self: *SharedAstCache, query_text: []const u8, opts: geode.ParseOptions) !AstParseOutcome {
         const key = hashQuery(query_text, opts);
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         // CANARY: REQ=REQ-QUIC-HC-104; FEATURE="High-Concurrency Query Cache"; ASPECT=AstMissSingleFlight; STATUS=TESTED; TEST=query_ast_cache_shared_singleflight; OWNER=engine; UPDATED=2026-05-27
         // First-burst fan-out needs same-query singleflight, but holding the
@@ -274,13 +281,31 @@ pub const SharedAstCache = struct {
         // shapes. Mark only this key as in-flight, parse outside the lock, then
         // wake waiters so identical queries hit the cached AST.
         while (true) {
+            self.lock.lockSharedUncancelable(io);
+            if (self.cache.getPtr(key)) |cached| {
+                if (std.mem.eql(u8, cached.query_text, query_text)) {
+                    _ = self.hit_count.fetchAdd(1, .acq_rel);
+                    _ = cached.access_count.fetchAdd(1, .monotonic);
+                    cached.last_accessed.store(compat_timestamp(), .monotonic);
+                    _ = cached.ref_count.fetchAdd(1, .acq_rel);
+                    const handle = AstHandle{
+                        .cache = self,
+                        .key = key,
+                        .parse_result = cached.parse_result,
+                    };
+                    self.lock.unlockShared(io);
+                    return .{ .Ok = handle };
+                }
+            }
+            self.lock.unlockShared(io);
+
             self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             if (self.cache.getPtr(key)) |cached| {
                 if (std.mem.eql(u8, cached.query_text, query_text)) {
-                    self.hit_count += 1;
-                    cached.access_count += 1;
-                    cached.last_accessed = compat_timestamp();
-                    cached.ref_count += 1;
+                    _ = self.hit_count.fetchAdd(1, .acq_rel);
+                    _ = cached.access_count.fetchAdd(1, .monotonic);
+                    cached.last_accessed.store(compat_timestamp(), .monotonic);
+                    _ = cached.ref_count.fetchAdd(1, .acq_rel);
                     self.lruPromoteUnlocked(key);
                     const handle = AstHandle{
                         .cache = self,
@@ -294,7 +319,7 @@ pub const SharedAstCache = struct {
                 // Hash collision: evict existing entry if safe. If it is still
                 // referenced, wait for a release and retry rather than overwriting
                 // a live cached AST under the same hash key.
-                if (cached.ref_count == 0) {
+                if (cached.ref_count.load(.acquire) == 0) {
                     self.lruRemoveNodeUnlocked(key);
                     if (self.cache.fetchRemove(key)) |kv| {
                         kv.value.parse_result.deinit();
@@ -320,7 +345,7 @@ pub const SharedAstCache = struct {
                 self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
                 return err;
             };
-            self.miss_count += 1;
+            _ = self.miss_count.fetchAdd(1, .acq_rel);
             self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
             break;
         }
@@ -378,9 +403,9 @@ pub const SharedAstCache = struct {
                     .query_text = query_text_copy,
                     .parse_result = pr_ptr,
                     .created_at = compat_timestamp(),
-                    .last_accessed = compat_timestamp(),
-                    .access_count = 1,
-                    .ref_count = 1,
+                    .last_accessed = std.atomic.Value(i64).init(compat_timestamp()),
+                    .access_count = std.atomic.Value(u64).init(1),
+                    .ref_count = std.atomic.Value(u32).init(1),
                 };
                 errdefer {
                     cached_ast.parse_result.deinit();
@@ -408,12 +433,24 @@ pub const SharedAstCache = struct {
     }
 
     pub fn release(self: *SharedAstCache, key: u64) void {
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.lock.lockSharedUncancelable(io);
+        defer self.lock.unlockShared(io);
         if (self.cache.getPtr(key)) |entry| {
-            if (entry.ref_count > 0) {
-                entry.ref_count -= 1;
-                if (entry.ref_count == 0) {
+            var observed = entry.ref_count.load(.acquire);
+            while (observed > 0) {
+                if (entry.ref_count.cmpxchgWeak(observed, observed - 1, .acq_rel, .acquire)) |actual| {
+                    observed = actual;
+                } else {
+                    if (observed == 1) {
+                        _ = self.miss_generation.fetchAdd(1, .release);
+                        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+                    }
+                    return;
+                }
+            }
+            if (observed == 0) {
+                if (entry.ref_count.load(.acquire) == 0) {
                     _ = self.miss_generation.fetchAdd(1, .release);
                     std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
                 }
@@ -445,7 +482,7 @@ pub const SharedAstCache = struct {
         var key_opt = self.lru_tail;
         while (key_opt) |key| {
             const entry = self.cache.getPtr(key) orelse return;
-            if (entry.ref_count == 0) {
+            if (entry.ref_count.load(.acquire) == 0) {
                 self.lruRemoveNodeUnlocked(key);
                 if (self.cache.fetchRemove(key)) |kv| {
                     kv.value.parse_result.deinit();
@@ -512,9 +549,9 @@ const SharedCachedAst = struct {
     query_text: []const u8,
     parse_result: *geode.ParseResult,
     created_at: i64,
-    last_accessed: i64,
-    access_count: u64,
-    ref_count: u32,
+    last_accessed: std.atomic.Value(i64),
+    access_count: std.atomic.Value(u64),
+    ref_count: std.atomic.Value(u32),
     lru_prev: ?u64 = null,
     lru_next: ?u64 = null,
 };

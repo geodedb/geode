@@ -150,6 +150,82 @@ test "shared_query_optimizer_plan_singleflight" {
     try testing.expectEqual(@as(usize, 1), stats.cache_size);
 }
 
+test "shared_query_optimizer_concurrent_hits_release_without_serializing" {
+    const worker_count = 64;
+    const iterations = 128;
+    const allocator = testing.allocator;
+    var opt = query_plan_cache.SharedQueryOptimizer.init(allocator, 64);
+    defer opt.deinit();
+
+    const q = "MATCH (n:HCParallel) RETURN count(n) AS c";
+    var parsed = try parseFixture(allocator, q);
+    defer parsed.deinit();
+
+    const store_stats = query_plan_cache.StoreStats{
+        .node_count = 10_000,
+        .edge_count = 0,
+    };
+
+    var first = try opt.optimizeQuery(q, &parsed.program, store_stats);
+    first.release();
+
+    const WorkerCtx = struct {
+        optimizer: *query_plan_cache.SharedQueryOptimizer,
+        query: []const u8,
+        program: *const geode.ast.Program,
+        store_stats: query_plan_cache.StoreStats,
+        ready: *std.atomic.Value(u32),
+        start: *std.atomic.Value(bool),
+        successes: *std.atomic.Value(u32),
+        failures: *std.atomic.Value(u32),
+
+        fn run(ctx: *@This()) void {
+            _ = ctx.ready.fetchAdd(1, .release);
+            while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
+
+            for (0..iterations) |_| {
+                var handle = ctx.optimizer.optimizeQuery(ctx.query, ctx.program, ctx.store_stats) catch {
+                    _ = ctx.failures.fetchAdd(1, .monotonic);
+                    return;
+                };
+                handle.release();
+                _ = ctx.successes.fetchAdd(1, .monotonic);
+            }
+        }
+    };
+
+    var ready = std.atomic.Value(u32).init(0);
+    var start = std.atomic.Value(bool).init(false);
+    var successes = std.atomic.Value(u32).init(0);
+    var failures = std.atomic.Value(u32).init(0);
+    var ctx = WorkerCtx{
+        .optimizer = &opt,
+        .query = q,
+        .program = &parsed.program,
+        .store_stats = store_stats,
+        .ready = &ready,
+        .start = &start,
+        .successes = &successes,
+        .failures = &failures,
+    };
+
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, WorkerCtx.run, .{&ctx});
+    }
+    while (ready.load(.acquire) < worker_count) std.atomic.spinLoopHint();
+    start.store(true, .release);
+    for (&threads) |thread| thread.join();
+
+    try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
+    try testing.expectEqual(@as(u32, worker_count * iterations), successes.load(.acquire));
+
+    const stats = opt.getStats();
+    try testing.expectEqual(@as(u64, 1), stats.misses);
+    try testing.expectEqual(@as(u64, worker_count * iterations), stats.hits);
+    try testing.expectEqual(@as(usize, 1), stats.cache_size);
+}
+
 test "shared_query_optimizer_unique_misses_do_not_collapse" {
     const worker_count = 32;
     const allocator = testing.allocator;

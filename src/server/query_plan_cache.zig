@@ -446,9 +446,15 @@ pub const SharedQueryOptimizer = struct {
     allocator: std.mem.Allocator,
     plan_cache: std.AutoHashMap(u64, SharedCachedPlan),
     max_size: usize,
-    hit_count: u64 = 0,
-    miss_count: u64 = 0,
-    lock: std.Io.Mutex = std.Io.Mutex.init,
+    hit_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    miss_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // CANARY: REQ=REQ-QUIC-HC-165; FEATURE="High-Concurrency Query Cache"; ASPECT=SharedPlanConcurrentHits; STATUS=IMPL; TEST=shared_query_optimizer_concurrent_hits; OWNER=engine; UPDATED=2026-05-29
+    //
+    // Same-query fan-out used to serialize every cached plan hit and release
+    // behind this lock's old mutex form. Hits now take the lock SHARED and
+    // mutate only atomic counters/refcounts; misses, eviction, and schema epoch
+    // changes still take it EXCLUSIVE.
+    lock: std.Io.RwLock = std.Io.RwLock.init,
     inflight_misses: std.AutoHashMap(u64, void),
     miss_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     schema_epoch: u64 = 0,
@@ -473,6 +479,7 @@ pub const SharedQueryOptimizer = struct {
         while (iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.query_text);
             self.allocator.free(entry.value_ptr.plan.operators);
+            self.allocator.destroy(entry.value_ptr.plan);
         }
         self.inflight_misses.deinit();
         self.plan_cache.deinit();
@@ -487,6 +494,7 @@ pub const SharedQueryOptimizer = struct {
         stats: StoreStats,
     ) !SharedPlanHandle {
         const key = hashQueryText(query_text);
+        const io = std.Io.Threaded.global_single_threaded.io();
         var generation_epoch: u64 = 0;
         var cost_model = CostModel.init();
 
@@ -496,37 +504,59 @@ pub const SharedQueryOptimizer = struct {
         // the missed key as in-flight, generate the real plan outside the lock,
         // then publish it and wake same-key waiters.
         while (true) {
-            self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            self.lock.lockSharedUncancelable(io);
+            const shared_epoch = self.schema_epoch;
+            if (self.plan_cache.getPtr(key)) |cached| {
+                if (std.mem.eql(u8, cached.query_text, query_text) and
+                    cached.schema_epoch >= shared_epoch)
+                {
+                    _ = self.hit_count.fetchAdd(1, .acq_rel);
+                    _ = cached.access_count.fetchAdd(1, .monotonic);
+                    cached.last_accessed.store(compat_timestamp(), .monotonic);
+                    _ = cached.ref_count.fetchAdd(1, .acq_rel);
+                    const handle = SharedPlanHandle{
+                        .cache = self,
+                        .key = key,
+                        .plan = cached.plan,
+                    };
+                    self.lock.unlockShared(io);
+                    return handle;
+                }
+            }
+            self.lock.unlockShared(io);
+
+            self.lock.lockUncancelable(io);
             const current_epoch = self.schema_epoch;
 
             if (self.plan_cache.getPtr(key)) |cached| {
                 if (std.mem.eql(u8, cached.query_text, query_text) and
                     cached.schema_epoch >= current_epoch)
                 {
-                    self.hit_count += 1;
-                    cached.access_count += 1;
-                    cached.last_accessed = compat_timestamp();
-                    cached.ref_count += 1;
+                    _ = self.hit_count.fetchAdd(1, .acq_rel);
+                    _ = cached.access_count.fetchAdd(1, .monotonic);
+                    cached.last_accessed.store(compat_timestamp(), .monotonic);
+                    _ = cached.ref_count.fetchAdd(1, .acq_rel);
                     self.lruPromoteUnlocked(key);
                     const handle = SharedPlanHandle{
                         .cache = self,
                         .key = key,
-                        .plan = &cached.plan,
+                        .plan = cached.plan,
                     };
-                    self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                    self.lock.unlock(io);
                     return handle;
                 }
 
                 // Stale entry (schema epoch mismatch) or hash collision.
-                if (cached.ref_count == 0) {
+                if (cached.ref_count.load(.acquire) == 0) {
                     self.lruRemoveNodeUnlocked(key);
                     if (self.plan_cache.fetchRemove(key)) |kv| {
                         self.allocator.free(kv.value.query_text);
                         self.allocator.free(kv.value.plan.operators);
+                        self.allocator.destroy(kv.value.plan);
                     }
                 } else {
                     const observed_generation = self.miss_generation.load(.acquire);
-                    self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                    self.lock.unlock(io);
                     self.waitForMissGeneration(observed_generation);
                     continue;
                 }
@@ -534,19 +564,19 @@ pub const SharedQueryOptimizer = struct {
 
             if (self.inflight_misses.contains(key)) {
                 const observed_generation = self.miss_generation.load(.acquire);
-                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                self.lock.unlock(io);
                 self.waitForMissGeneration(observed_generation);
                 continue;
             }
 
             self.inflight_misses.put(key, {}) catch |err| {
-                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+                self.lock.unlock(io);
                 return err;
             };
-            self.miss_count += 1;
+            _ = self.miss_count.fetchAdd(1, .acq_rel);
             generation_epoch = current_epoch;
             cost_model = self.cost_model;
-            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.lock.unlock(io);
             break;
         }
 
@@ -560,15 +590,15 @@ pub const SharedQueryOptimizer = struct {
             return err;
         };
 
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        self.lock.lockUncancelable(io);
 
         if (self.schema_epoch != generation_epoch) {
             self.allocator.free(plan.operators);
             self.allocator.free(query_text_copy);
             _ = self.inflight_misses.remove(key);
             _ = self.miss_generation.fetchAdd(1, .release);
-            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-            std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+            self.lock.unlock(io);
+            io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
             return self.optimizeQuery(query_text, program, stats);
         }
 
@@ -576,50 +606,74 @@ pub const SharedQueryOptimizer = struct {
             self.evictLeastUsedUnlocked();
         }
 
+        const plan_ptr = self.allocator.create(CompiledPlan) catch |err| {
+            self.allocator.free(plan.operators);
+            self.allocator.free(query_text_copy);
+            _ = self.inflight_misses.remove(key);
+            _ = self.miss_generation.fetchAdd(1, .release);
+            self.lock.unlock(io);
+            io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+            return err;
+        };
+        plan_ptr.* = plan;
+
         const cached_plan = SharedCachedPlan{
             .query_text = query_text_copy,
-            .plan = plan,
+            .plan = plan_ptr,
             .created_at = compat_timestamp(),
-            .last_accessed = compat_timestamp(),
-            .access_count = 1,
-            .ref_count = 1,
+            .last_accessed = std.atomic.Value(i64).init(compat_timestamp()),
+            .access_count = std.atomic.Value(u64).init(1),
+            .ref_count = std.atomic.Value(u32).init(1),
             .schema_epoch = generation_epoch,
         };
         errdefer {
             self.allocator.free(cached_plan.query_text);
             self.allocator.free(cached_plan.plan.operators);
+            self.allocator.destroy(cached_plan.plan);
         }
 
         self.plan_cache.put(key, cached_plan) catch |err| {
             _ = self.inflight_misses.remove(key);
             _ = self.miss_generation.fetchAdd(1, .release);
-            self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-            std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+            self.lock.unlock(io);
+            io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
             return err;
         };
         self.lruInsertHeadUnlocked(key);
         _ = self.inflight_misses.remove(key);
         _ = self.miss_generation.fetchAdd(1, .release);
         const cached_ptr = self.plan_cache.getPtr(key).?;
-        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+        self.lock.unlock(io);
+        io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
         return SharedPlanHandle{
             .cache = self,
             .key = key,
-            .plan = &cached_ptr.plan,
+            .plan = cached_ptr.plan,
         };
     }
 
     /// Decrement ref_count for a cached entry (called by SharedPlanHandle.release)
     pub fn release(self: *SharedQueryOptimizer, key: u64) void {
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.lock.lockSharedUncancelable(io);
+        defer self.lock.unlockShared(io);
         if (self.plan_cache.getPtr(key)) |entry| {
-            if (entry.ref_count > 0) {
-                entry.ref_count -= 1;
-                if (entry.ref_count == 0) {
+            var observed = entry.ref_count.load(.acquire);
+            while (observed > 0) {
+                if (entry.ref_count.cmpxchgWeak(observed, observed - 1, .acq_rel, .acquire)) |actual| {
+                    observed = actual;
+                } else {
+                    if (observed == 1) {
+                        _ = self.miss_generation.fetchAdd(1, .release);
+                        io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+                    }
+                    return;
+                }
+            }
+            if (observed == 0) {
+                if (entry.ref_count.load(.acquire) == 0) {
                     _ = self.miss_generation.fetchAdd(1, .release);
-                    std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
+                    io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
                 }
             }
         }
@@ -661,16 +715,19 @@ pub const SharedQueryOptimizer = struct {
 
     /// Get cache statistics
     pub fn getStats(self: *SharedQueryOptimizer) CacheStats {
-        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
-        const total_requests = self.hit_count + self.miss_count;
+        const hits = self.hit_count.load(.acquire);
+        const misses = self.miss_count.load(.acquire);
+        const total_requests = hits + misses;
         const hit_rate = if (total_requests > 0)
-            @as(f64, @floatFromInt(self.hit_count)) / @as(f64, @floatFromInt(total_requests)) * 100.0
+            @as(f64, @floatFromInt(hits)) / @as(f64, @floatFromInt(total_requests)) * 100.0
         else
             0.0;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.lock.lockSharedUncancelable(io);
+        defer self.lock.unlockShared(io);
         return .{
-            .hits = self.hit_count,
-            .misses = self.miss_count,
+            .hits = hits,
+            .misses = misses,
             .hit_rate = hit_rate,
             .cache_size = self.plan_cache.count(),
             .max_size = self.max_size,
@@ -683,11 +740,12 @@ pub const SharedQueryOptimizer = struct {
         var key_opt = self.lru_tail;
         while (key_opt) |key| {
             const entry = self.plan_cache.getPtr(key) orelse return;
-            if (entry.ref_count == 0) {
+            if (entry.ref_count.load(.acquire) == 0) {
                 self.lruRemoveNodeUnlocked(key);
                 if (self.plan_cache.fetchRemove(key)) |kv| {
                     self.allocator.free(kv.value.query_text);
                     self.allocator.free(kv.value.plan.operators);
+                    self.allocator.destroy(kv.value.plan);
                 }
                 return;
             }
@@ -758,11 +816,11 @@ pub const SharedPlanHandle = struct {
 
 pub const SharedCachedPlan = struct {
     query_text: []const u8,
-    plan: CompiledPlan,
+    plan: *CompiledPlan,
     created_at: i64,
-    last_accessed: i64,
-    access_count: u64,
-    ref_count: u32,
+    last_accessed: std.atomic.Value(i64),
+    access_count: std.atomic.Value(u64),
+    ref_count: std.atomic.Value(u32),
     schema_epoch: u64,
     lru_prev: ?u64 = null,
     lru_next: ?u64 = null,

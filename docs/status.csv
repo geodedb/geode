@@ -4057,6 +4057,11 @@ REQ-QUIC-HC-158,QUIC High-Concurrency Reads,EmptyRlsEngineFastPath,TESTED,,,perf
 REQ-QUIC-HC-159,QUIC High-Concurrency Mutations,PermitGatedMutationRetry,TESTED,,,transport,2026-05-29,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-160,QUIC High-Concurrency Mutations,ShardParallelMutationAdmission,TESTED,,,transport,2026-05-29,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-161,High-Concurrency Diagnostics,ShortHeaderTimingHarness,IMPL,,,transport,2026-05-29,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-162,High-Concurrency Mutations,SmallestPostingPreselect,IMPL,,,storage,2026-05-29,src/storage/graph_storage_adapter.zig
+REQ-QUIC-HC-163,High-Concurrency Label Counts,AtomicLabelCountRefcounts,IMPL,,,storage,2026-05-29,src/graph_store.zig
+REQ-QUIC-HC-164,High-Concurrency Query Cache,SharedAstConcurrentHits,IMPL,,,engine,2026-05-29,src/server/query_ast_cache.zig
+REQ-QUIC-HC-165,High-Concurrency Query Cache,SharedPlanConcurrentHits,IMPL,,,engine,2026-05-29,src/server/query_plan_cache.zig
+REQ-QUIC-HC-166,High-Concurrency Query Cache,ReadOnlyPlanCacheAdmission,IMPL,,,engine,2026-05-29,src/server/quic_connection_handler.zig
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
