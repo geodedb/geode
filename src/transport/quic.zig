@@ -1201,6 +1201,7 @@ pub const QuicStream = struct {
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
         quic_response_metrics.recordStreamWriteStart(data.len);
+        const write_start_ns = monoNsRaw();
         var written: usize = 0;
         var blocked_retries: usize = 0;
         var blocked_start_ns: u64 = 0;
@@ -1244,7 +1245,7 @@ pub const QuicStream = struct {
             blocked_retries = 0;
             blocked_start_ns = 0;
         }
-        quic_response_metrics.recordStreamWriteSuccess(written);
+        quic_response_metrics.recordStreamWriteSuccess(written, monoNsRaw() -| write_start_ns);
     }
 
     pub fn read(self: *QuicStream, buffer: []u8) !usize {

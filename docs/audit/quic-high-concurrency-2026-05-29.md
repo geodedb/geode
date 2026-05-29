@@ -1,7 +1,7 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gate passes with zero setup retries, zero execute retries, and zero reconnects. Follow-up diagnostics split read and mutation failures for ceiling probes, expose the cooperative mutation-admission cap as a server runtime knob, and now pin the upstream QUIC server STREAM ACK fanout fix.
+**Status:** 4096 mixed read/mutation single-op gate passes with zero setup retries, zero execute retries, and zero reconnects. Follow-up diagnostics split read and mutation failures for ceiling probes, expose the cooperative mutation-admission cap as a server runtime knob, pin the upstream QUIC server STREAM ACK fanout fix, and now emit request/response phase timing for the remaining 250 us ceiling tail.
 **Dependency state:** Geode now pins QUIC `a68d36e06dc9a0815a7a02d5e18b9d8d06e9ad6b` and `geode-client-zig` `e96ca352c11b36c55c3df517a0d9a3b0112145ab`.
 
 ## Summary
@@ -14,6 +14,9 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 4. The cooperative mutation-admission cap is now tunable through `GEODE_QUIC_MUTATION_ADMISSION_CAP` while keeping the default at 4. This lets ceiling probes validate alternate write-admission windows without editing source or changing the established regression gate.
 5. The high-concurrency E2E summary now reports `read_failed` and `mutation_failed`, making overloaded probes distinguish read-tail transport/scheduler stalls from mutation-specific write pressure.
 6. The next 250 us mixed ceiling probe localized the remaining tail to upstream QUIC short-header ACK/frame processing. QUIC `a68d36e` now defers the first server-side STREAM-only standalone ACK so request/response traffic can piggyback ACKs on response packets, while an `AppAckDelay` timer preserves max-ACK-delay behavior for quiet/upload-only peers.
+7. `REQ-QUIC-HC-153` adds runtime metrics for server-side QUIC `stream.writeAll` elapsed time (`quic_stream_write_elapsed_ns_total` and `quic_stream_write_elapsed_max_ns`), so operators can split query execution from response delivery.
+8. `REQ-QUIC-HC-154` and `REQ-QUIC-HC-155` add high-concurrency harness timing for ready-to-first-EXECUTE lag, EXECUTE write/flush time, first-response wait/read time, response message read time, and first-response timeouts. The 4096/250 us ceiling now shows a measurable client-side wake/write storm in addition to server response tail.
+9. The local test-driver start barrier now wakes 64 workers per tick instead of 256 at 1024+ workers. This preserves the configured per-worker request stagger while reducing same-process scheduler contention before the server becomes the bottleneck.
 
 ## Changed Files
 
@@ -25,11 +28,17 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 - `tests/proto_test_util.zig`
   - Adds adaptive read polling for `QuicProtoClient`.
   - Keeps immediate `poll(0)` after writes and after packet reads.
+  - Adds optional `ExecTiming` collection around `executeAndCollectWithTimeoutTiming`.
 - `tests/e2e_quic_high_concurrency.zig`
   - Caps individual failure log lines without changing counters.
   - Adds read/mutation failure split counters to failed workload summaries.
+  - Adds request/response phase timing summaries and reduces high-fanout start-barrier wake batches to 64.
 - `tests/test_quic_condition_timedwait_cadence.zig`
-  - Source-audits the mutation window cap, runtime override, adaptive polling shape, failure-log backpressure, and failure split counters.
+  - Source-audits the mutation window cap, runtime override, adaptive polling shape, failure-log backpressure, failure split counters, response write latency metrics, and timing summaries.
+- `src/transport/quic.zig`
+  - Records elapsed server-side QUIC stream write time for every response write.
+- `src/transport/quic_response_metrics.zig`
+  - Exposes cumulative and max response stream-write elapsed counters through runtime metrics.
 - `build.zig.zon`
   - Pins both direct QUIC and embedded `geode-client-zig` to the upstream server STREAM ACK fanout fix.
 
@@ -39,10 +48,11 @@ All commands below were run on 2026-05-29.
 
 | Command | Result |
 |---------|--------|
-| `zig build test-quic-condition-cadence --summary all` | PASS, 70/70 tests. |
+| `zig build test-quic-condition-cadence --summary all` | PASS, 71/71 tests after timing/metric source audits. |
 | `zig build --summary all` after dependency repin | PASS, debug binaries rebuilt against QUIC `a68d36e` and `geode-client-zig` `e96ca35`. |
-| 4096 mixed single-op E2E gate below | PASS, 4096/4096 operations, zero retries, zero reconnects. Re-run after upstream ACK fanout repin: PASS at 984.71 QPS. |
+| 4096 mixed single-op E2E gate below | PASS, 4096/4096 operations, zero retries, zero reconnects. Latest run after timing instrumentation and 64-worker start wake batches: PASS at 985.96 QPS. |
 | 4096 read-only 250 us low-stagger probe | PASS, 4096/4096 operations, zero retries, zero reconnects. |
+| 1024 mixed 250 us timing smoke | PASS, 1024/1024 operations at 3809.44 QPS after 64-worker start wake batches, validating the timing summary path. |
 
 4096 mixed read/mutation gate:
 
@@ -63,10 +73,33 @@ Result:
 
 ```text
 workers=4096 ops_per_worker=1 mutation_stride=4 ops=4096 reads=3072 mutations=1024
-setup_ms=5531 elapsed_ms=4159 qps=984.71
-avg_read_ms=128.29 avg_mut_ms=125.85 avg_first_op_ms=127.68 max_ms=454.87
+setup_ms=5641 elapsed_ms=4154 qps=985.96
+avg_read_ms=120.13 avg_mut_ms=117.94 avg_first_op_ms=119.59 max_ms=402.88
 setup_attempts=4096 setup_retries=0
 execute_attempts=4096 execute_retries=0 execute_reconnects=0
+```
+
+Timing summary from the same accepted run:
+
+```text
+timing samples=4096 response_messages=8192 first_response_timeouts=0
+avg_ready_to_first_execute_ms=14.19 max_ready_to_first_execute_ms=28.27
+avg_execute_write_ms=1.07
+avg_first_response_wait_ms=118.46 max_first_response_wait_ms=400.76
+avg_first_response_read_ms=118.45 avg_response_read_ms=118.49
+avg_response_message_read_ms=59.24
+```
+
+1024 mixed 250 us timing smoke:
+
+```text
+workers=1024 ops_per_worker=1 mutation_stride=4 ops=1024 reads=768 mutations=256
+setup_ms=1370 elapsed_ms=268 qps=3809.44
+avg_read_ms=18.63 avg_mut_ms=24.12 avg_first_op_ms=20.00 max_ms=104.36
+timing samples=1024 response_messages=2048 first_response_timeouts=0
+avg_ready_to_first_execute_ms=3.32 max_ready_to_first_execute_ms=7.44
+avg_execute_write_ms=0.48
+avg_first_response_wait_ms=19.47 max_first_response_wait_ms=103.24
 ```
 
 4096 read-only low-stagger probe:
@@ -110,6 +143,8 @@ All rows below used 4096 workers, one operation per worker, mutation stride 4, 1
 | Parked mutation-overflow wait queue | `ok=2287/4096` | Worse than immediate overflow requeue; it delayed mixed progress instead of reducing contention. |
 | Cooperative first-stream worker ceiling 1024 | `ok=780/4096`, `read_failed=2487`, `mutation_failed=829` | Rejected. Extra scheduler lanes starved transport/poller work and worsened both reads and mutations. |
 | QUIC `a68d36e` server STREAM ACK fanout fix at 250 us mixed | `ok=2445/4096`, `read_failed=1160`, `mutation_failed=491` | Improved over the prior instrumented ceiling probe (`ok=1705/4096`) but still not promoted. The 1000 us gate remains the accepted regression threshold. |
+| Timing instrumentation before wake-batch tuning at 250 us mixed | `ok=1605/4096`, `read_failed=1891`, `mutation_failed=600`, `first_response_timeouts=2491`, `avg_ready_to_first_execute_ms=93.56`, `avg_execute_write_ms=544.80`, `avg_first_response_wait_ms=8749.34` | Rejected as a passing gate, but accepted as a diagnostic: the ceiling includes local client wake/write contention before server response tail. |
+| 64-worker start wake batches at 250 us mixed | `ok=2465/4096`, `read_failed=1118`, `mutation_failed=513`, `first_response_timeouts=1631`, `avg_ready_to_first_execute_ms=16.76`, `avg_execute_write_ms=187.68`, `avg_first_response_wait_ms=7415.52` | Improvement over the corrected 256-worker timing run, but still not promoted because 1631 first-response timeouts remain. |
 
 ## Known Unrelated Test Failure
 
@@ -128,9 +163,15 @@ The failing nodes repeatedly log `raft transport getOrCreatePeerConnection faile
 - Use the 4096 mixed command above as the current no-retry high-concurrency regression gate.
 - Keep the 250 us mixed probe as a diagnostic ceiling probe until it clears without raising the execute timeout.
 - Do not promote the parked mutation-overflow queue without a better fairness design; the measured result regressed the workload.
+- Read `high-concurrency QUIC E2E timing` lines as follows:
+  - `avg_ready_to_first_execute_ms` captures local harness wake/scheduling lag after the configured request stagger.
+  - `avg_execute_write_ms` captures client-side EXECUTE encode/write/post-write QUIC poll time.
+  - `avg_first_response_wait_ms` and `first_response_timeouts` capture the first-response tail seen by clients.
+  - `quic_stream_write_elapsed_*` runtime metrics capture server-side response `stream.writeAll` latency and should be scraped with `/metrics` when diagnosing production response stalls.
 
 ## Remaining Work
 
-1. Add transport counters for ready-to-first-EXECUTE latency and response write latency so the 250 us mixed tail can be split between request admission, mutation execution, and response delivery.
-2. Add a passing 250 us mixed regression gate once the remaining read/mutation timeout tail from the latest `ok=2445/4096` probe is closed.
-3. Revisit mutation admission per graph once the storage write path can execute independent graph mutations concurrently.
+1. Split `avg_execute_write_ms` into client stream-write and post-write poll components if the 250 us ceiling remains dominated by client-side request flush time.
+2. Scrape `quic_stream_write_elapsed_*` during the next 250 us mixed run to separate server response write stalls from query execution and QUIC receive/admission stalls.
+3. Add a passing 250 us mixed regression gate once the remaining read/mutation timeout tail from the latest `ok=2465/4096` probe is closed.
+4. Revisit mutation admission per graph once the storage write path can execute independent graph mutations concurrently.

@@ -192,6 +192,17 @@ const Counters = struct {
     execute_attempts: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     execute_retries: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     execute_reconnects: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    exec_timing_samples: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    response_messages: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    first_response_timeouts: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    execute_write_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    first_response_wait_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    first_response_read_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    response_read_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    max_first_response_wait_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    first_execute_lag_samples: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    first_execute_lag_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    max_first_execute_lag_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     read_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     mutation_latency_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     first_op_ok: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -224,6 +235,7 @@ const WorkerCtx = struct {
     abort_setup: *std.atomic.Value(bool),
     release_clients: *std.atomic.Value(bool),
     release_generation: *std.atomic.Value(u32),
+    workload_start_ns: *std.atomic.Value(u64),
     expected_ops: u32,
     verify_after_workload: bool,
     client_diagnostics: bool,
@@ -259,11 +271,89 @@ fn recordSetupFailure(counters: *Counters, comptime fmt: []const u8, args: anyty
     _ = counters.failed.fetchAdd(1, .acq_rel);
 }
 
-fn recordMaxLatency(counters: *Counters, latency_ns: u64) void {
-    var observed = counters.max_latency_ns.load(.acquire);
-    while (latency_ns > observed) {
-        observed = counters.max_latency_ns.cmpxchgWeak(observed, latency_ns, .acq_rel, .acquire) orelse break;
+fn recordMaxAtomic(atom: *std.atomic.Value(u64), value: u64) void {
+    var observed = atom.load(.acquire);
+    while (value > observed) {
+        observed = atom.cmpxchgWeak(observed, value, .acq_rel, .acquire) orelse break;
     }
+}
+
+fn recordMaxLatency(counters: *Counters, latency_ns: u64) void {
+    recordMaxAtomic(&counters.max_latency_ns, latency_ns);
+}
+
+// CANARY: REQ=REQ-QUIC-HC-155; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ExecutePhaseAggregation; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+//
+// Aggregate client-visible transport phases so failed ceiling probes can
+// distinguish local start-barrier/scheduler lag, request write cost, first
+// response wait, and response read/parse time.
+fn recordExecTiming(ctx: *WorkerCtx, timing: *const util.QuicProtoClient.ExecTiming, op: usize) void {
+    if (timing.total_ns == 0 and timing.execute_write_start_ns == 0 and timing.response_read_ns == 0) return;
+
+    _ = ctx.counters.exec_timing_samples.fetchAdd(1, .acq_rel);
+    _ = ctx.counters.execute_write_ns.fetchAdd(timing.execute_write_ns, .acq_rel);
+    _ = ctx.counters.first_response_wait_ns.fetchAdd(timing.first_response_wait_ns, .acq_rel);
+    _ = ctx.counters.first_response_read_ns.fetchAdd(timing.first_response_read_ns, .acq_rel);
+    _ = ctx.counters.response_read_ns.fetchAdd(timing.response_read_ns, .acq_rel);
+    _ = ctx.counters.response_messages.fetchAdd(timing.response_messages, .acq_rel);
+    recordMaxAtomic(&ctx.counters.max_first_response_wait_ns, timing.first_response_wait_ns);
+    if (timing.timed_out_before_first_response) {
+        _ = ctx.counters.first_response_timeouts.fetchAdd(1, .acq_rel);
+    }
+
+    if (op == 0 and timing.execute_write_start_ns != 0) {
+        const workload_start_ns = ctx.workload_start_ns.load(.acquire);
+        if (workload_start_ns != 0) {
+            const scheduled_start_ns = workload_start_ns +| (@as(u64, ctx.request_stagger_us) * @as(u64, ctx.worker_id) * std.time.ns_per_us);
+            const lag_ns = timing.execute_write_start_ns -| scheduled_start_ns;
+            _ = ctx.counters.first_execute_lag_samples.fetchAdd(1, .acq_rel);
+            _ = ctx.counters.first_execute_lag_ns.fetchAdd(lag_ns, .acq_rel);
+            recordMaxAtomic(&ctx.counters.max_first_execute_lag_ns, lag_ns);
+        }
+    }
+}
+
+fn nsAvgMsX100(total_ns: u64, samples: u32) u64 {
+    if (samples == 0) return 0;
+    return total_ns / @as(u64, samples) / (std.time.ns_per_ms / 100);
+}
+
+fn printTimingSummary(counters: *Counters) void {
+    const timing_samples = counters.exec_timing_samples.load(.acquire);
+    const first_execute_samples = counters.first_execute_lag_samples.load(.acquire);
+    const response_messages = counters.response_messages.load(.acquire);
+    const avg_first_execute_lag_ms_x100 = nsAvgMsX100(counters.first_execute_lag_ns.load(.acquire), first_execute_samples);
+    const avg_execute_write_ms_x100 = nsAvgMsX100(counters.execute_write_ns.load(.acquire), timing_samples);
+    const avg_first_response_wait_ms_x100 = nsAvgMsX100(counters.first_response_wait_ns.load(.acquire), timing_samples);
+    const avg_first_response_read_ms_x100 = nsAvgMsX100(counters.first_response_read_ns.load(.acquire), timing_samples);
+    const avg_response_read_ms_x100 = nsAvgMsX100(counters.response_read_ns.load(.acquire), timing_samples);
+    const avg_response_msg_read_ms_x100 = nsAvgMsX100(counters.response_read_ns.load(.acquire), response_messages);
+    const max_first_execute_lag_ms_x100 = counters.max_first_execute_lag_ns.load(.acquire) / (std.time.ns_per_ms / 100);
+    const max_first_response_wait_ms_x100 = counters.max_first_response_wait_ns.load(.acquire) / (std.time.ns_per_ms / 100);
+    std.debug.print(
+        "high-concurrency QUIC E2E timing samples={d} response_messages={d} first_response_timeouts={d} avg_ready_to_first_execute_ms={d}.{d:0>2} max_ready_to_first_execute_ms={d}.{d:0>2} avg_execute_write_ms={d}.{d:0>2} avg_first_response_wait_ms={d}.{d:0>2} max_first_response_wait_ms={d}.{d:0>2} avg_first_response_read_ms={d}.{d:0>2} avg_response_read_ms={d}.{d:0>2} avg_response_message_read_ms={d}.{d:0>2}\n",
+        .{
+            timing_samples,
+            response_messages,
+            counters.first_response_timeouts.load(.acquire),
+            avg_first_execute_lag_ms_x100 / 100,
+            avg_first_execute_lag_ms_x100 % 100,
+            max_first_execute_lag_ms_x100 / 100,
+            max_first_execute_lag_ms_x100 % 100,
+            avg_execute_write_ms_x100 / 100,
+            avg_execute_write_ms_x100 % 100,
+            avg_first_response_wait_ms_x100 / 100,
+            avg_first_response_wait_ms_x100 % 100,
+            max_first_response_wait_ms_x100 / 100,
+            max_first_response_wait_ms_x100 % 100,
+            avg_first_response_read_ms_x100 / 100,
+            avg_first_response_read_ms_x100 % 100,
+            avg_response_read_ms_x100 / 100,
+            avg_response_read_ms_x100 % 100,
+            avg_response_msg_read_ms_x100 / 100,
+            avg_response_msg_read_ms_x100 % 100,
+        },
+    );
 }
 
 fn expectNoQueryError(res: *const util.ExecResult) !void {
@@ -322,7 +412,7 @@ fn wakeWorkloadStart(
     if (worker_count >= 1024 and request_stagger_us != 0) {
         var remaining = worker_count;
         while (remaining > 0) {
-            const wake_count = @min(remaining, @as(u32, 256));
+            const wake_count = @min(remaining, @as(u32, 64));
             io.futexWake(u32, &start_generation.raw, wake_count);
             remaining -= wake_count;
             if (remaining != 0) sleepNs(250 * std.time.ns_per_us);
@@ -398,13 +488,18 @@ fn workerRun(ctx: *WorkerCtx) void {
         var res_opt: ?util.ExecResult = null;
         while (exec_attempt <= ctx.execute_retries) : (exec_attempt += 1) {
             _ = ctx.counters.execute_attempts.fetchAdd(1, .acq_rel);
-            res_opt = client.executeAndCollectWithTimeout(
+            var timing = util.QuicProtoClient.ExecTiming{};
+            var timing_recorded = false;
+            res_opt = client.executeAndCollectWithTimeoutTiming(
                 allocator,
                 query,
                 util.emptyParams(),
                 128,
                 ctx.execute_timeout_secs,
+                &timing,
             ) catch |err| retry_blk: {
+                recordExecTiming(ctx, &timing, op);
+                timing_recorded = true;
                 last_err = err;
                 if (exec_attempt >= ctx.execute_retries) break :retry_blk null;
                 _ = ctx.counters.execute_retries.fetchAdd(1, .acq_rel);
@@ -426,6 +521,7 @@ fn workerRun(ctx: *WorkerCtx) void {
                 _ = ctx.counters.execute_reconnects.fetchAdd(1, .acq_rel);
                 continue;
             };
+            if (!timing_recorded) recordExecTiming(ctx, &timing, op);
             if (res_opt != null) break;
         }
         var res = res_opt orelse {
@@ -741,6 +837,7 @@ pub fn main() !void {
     var abort_setup = std.atomic.Value(bool).init(false);
     var release_clients = std.atomic.Value(bool).init(false);
     var release_generation = std.atomic.Value(u32).init(0);
+    var workload_start_ns_atomic = std.atomic.Value(u64).init(0);
     const expected_ops: u32 = worker_count * ops_per_worker;
     const contexts = try allocator.alloc(WorkerCtx, worker_count);
     defer allocator.free(contexts);
@@ -769,6 +866,7 @@ pub fn main() !void {
             .abort_setup = &abort_setup,
             .release_clients = &release_clients,
             .release_generation = &release_generation,
+            .workload_start_ns = &workload_start_ns_atomic,
             .expected_ops = expected_ops,
             .verify_after_workload = i == 0,
             .client_diagnostics = client_diagnostics,
@@ -894,6 +992,7 @@ pub fn main() !void {
     }
 
     const workload_start_ns = monoNs();
+    workload_start_ns_atomic.store(workload_start_ns, .release);
     wakeWorkloadStart(&start, &start_generation, worker_count, request_stagger_us);
 
     const workload_deadline_ns = workload_start_ns + (@as(u64, execute_timeout_secs) + 30) * @as(u64, @max(ops_per_worker, 1)) * std.time.ns_per_s;
@@ -927,6 +1026,7 @@ pub fn main() !void {
                 counters.execute_reconnects.load(.acquire),
             },
         );
+        printTimingSummary(&counters);
         releaseAllClients(&release_clients, &release_generation);
         for (threads) |*thread| thread.join();
         return error.WorkerFailures;
@@ -948,6 +1048,7 @@ pub fn main() !void {
                 counters.execute_reconnects.load(.acquire),
             },
         );
+        printTimingSummary(&counters);
         releaseAllClients(&release_clients, &release_generation);
         for (threads) |*thread| thread.join();
         return error.MissingSuccessfulOperations;
@@ -996,6 +1097,7 @@ pub fn main() !void {
             counters.execute_reconnects.load(.acquire),
         },
     );
+    printTimingSummary(&counters);
 
     if (observed_mutations_ok != 0) {
         const verify_deadline_ns = monoNs() + (@as(u64, execute_timeout_secs) + 30) * std.time.ns_per_s;

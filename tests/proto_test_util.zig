@@ -651,6 +651,23 @@ pub const QuicProtoClient = struct {
     session_id: []const u8 = "",
     read_wait_misses: u32 = 0,
 
+    // CANARY: REQ=REQ-QUIC-HC-154; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ClientExecutePhaseTiming; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // E2E ceiling probes need phase timing without changing the wire protocol:
+    // request write cost, first-response wait/read cost, and total response
+    // read time. The harness aggregates these counters across thousands of
+    // clients to localize timeout tails.
+    pub const ExecTiming = struct {
+        execute_write_start_ns: u64 = 0,
+        execute_write_ns: u64 = 0,
+        first_response_wait_ns: u64 = 0,
+        first_response_read_ns: u64 = 0,
+        response_read_ns: u64 = 0,
+        response_messages: u32 = 0,
+        timed_out_before_first_response: bool = false,
+        total_ns: u64 = 0,
+    };
+
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !QuicProtoClient {
         return connectWithHandshakeTimeout(allocator, addr, 5);
     }
@@ -1141,9 +1158,26 @@ pub const QuicProtoClient = struct {
         page_size: u32,
         query_timeout_secs: u32,
     ) !ExecResult {
+        return self.executeAndCollectWithTimeoutTiming(allocator, query, params, page_size, query_timeout_secs, null);
+    }
+
+    pub fn executeAndCollectWithTimeoutTiming(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        query: []const u8,
+        params: std.ArrayList(schema.Param),
+        page_size: u32,
+        query_timeout_secs: u32,
+        timing: ?*ExecTiming,
+    ) !ExecResult {
+        if (timing) |stats| stats.* = .{};
+        const total_start_ns = compat_monoNs();
         try self.ensureHello(allocator);
         const QuicProtocolAdapter = struct {
             client: *QuicProtoClient,
+            timing: ?*ExecTiming = null,
+            execute_write_done_ns: u64 = 0,
+            response_messages: u32 = 0,
 
             fn sendClientMessage(
                 proto: *query_runner.ProtocolClient,
@@ -1152,7 +1186,19 @@ pub const QuicProtoClient = struct {
             ) !void {
                 _ = alloc;
                 const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
+                const write_start_ns = compat_monoNs();
                 try adapter_self.client.writeMessage(msg);
+                const write_end_ns = compat_monoNs();
+                if (adapter_self.timing) |stats| {
+                    switch (msg) {
+                        .execute => {
+                            stats.execute_write_start_ns = write_start_ns;
+                            stats.execute_write_ns +|= write_end_ns -| write_start_ns;
+                            adapter_self.execute_write_done_ns = write_end_ns;
+                        },
+                        else => {},
+                    }
+                }
             }
 
             fn readServerMessage(
@@ -1163,10 +1209,30 @@ pub const QuicProtoClient = struct {
                 const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
                 const timeout_ms = @as(u32, @intCast(@max(read_timeout_secs, 1) * 1000));
                 while (true) {
+                    const read_start_ns = compat_monoNs();
                     const packet = adapter_self.client.readPacket(alloc, timeout_ms) catch |err| {
+                        const read_end_ns = compat_monoNs();
+                        if (adapter_self.timing) |stats| {
+                            stats.response_read_ns +|= read_end_ns -| read_start_ns;
+                            if (adapter_self.response_messages == 0 and adapter_self.execute_write_done_ns != 0) {
+                                stats.first_response_wait_ns = read_end_ns -| adapter_self.execute_write_done_ns;
+                                stats.first_response_read_ns = read_end_ns -| read_start_ns;
+                                if (err == error.Timeout) stats.timed_out_before_first_response = true;
+                            }
+                        }
                         if (err == error.EndOfStream) return error.EndOfStream;
                         return err;
                     };
+                    const read_end_ns = compat_monoNs();
+                    if (adapter_self.timing) |stats| {
+                        stats.response_read_ns +|= read_end_ns -| read_start_ns;
+                        if (adapter_self.response_messages == 0 and adapter_self.execute_write_done_ns != 0) {
+                            stats.first_response_wait_ns = read_end_ns -| adapter_self.execute_write_done_ns;
+                            stats.first_response_read_ns = read_end_ns -| read_start_ns;
+                        }
+                        stats.response_messages +|= 1;
+                    }
+                    adapter_self.response_messages +|= 1;
                     const msg = packet.quic orelse return error.InvalidMessage;
                     switch (msg) {
                         .execute, .pull, .hello => return msg,
@@ -1177,22 +1243,26 @@ pub const QuicProtoClient = struct {
             }
         };
 
-        var adapter = QuicProtocolAdapter{ .client = self };
+        var adapter = QuicProtocolAdapter{ .client = self, .timing = timing };
         var protocol_client = query_runner.ProtocolClient{
             .context = &adapter,
             .sendClientMessageFn = QuicProtocolAdapter.sendClientMessage,
             .readServerMessageFn = QuicProtocolAdapter.readServerMessage,
         };
 
-        var result = try query_runner.collectQuery(allocator, &protocol_client, .{
+        var result = query_runner.collectQuery(allocator, &protocol_client, .{
             .session_id = self.session_id,
             .query_text = query,
             .format = "json",
             .timeout_secs = query_timeout_secs,
             .page_size = page_size,
             .params = params,
-        });
+        }) catch |err| {
+            if (timing) |stats| stats.total_ns = compat_monoNs() -| total_start_ns;
+            return err;
+        };
         defer result.deinit();
+        if (timing) |stats| stats.total_ns = compat_monoNs() -| total_start_ns;
 
         return try execResultFromAccumulator(allocator, &result);
     }

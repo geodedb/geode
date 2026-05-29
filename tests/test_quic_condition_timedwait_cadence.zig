@@ -891,11 +891,21 @@ test "high concurrency harness batches workload start wake" {
     try testing.expect(std.mem.indexOf(u8, e2e, "failure_logs: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "read_failed: std.atomic.Value(u32)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "mutation_failed: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-155") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "ExecutePhaseAggregation") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "exec_timing_samples: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "first_execute_lag_ns: std.atomic.Value(u64)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "max_first_response_wait_ns: std.atomic.Value(u64)") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "fn recordExecTiming") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "fn printTimingSummary") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "high-concurrency QUIC E2E timing") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "avg_ready_to_first_execute_ms") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "avg_first_response_wait_ms") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "fn recordOperationFailure") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "suppressing additional per-worker failures; summary follows") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "fn wakeWorkloadStart") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "worker_count >= 1024 and request_stagger_us != 0") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e, "const wake_count = @min(remaining, @as(u32, 256));") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "const wake_count = @min(remaining, @as(u32, 64));") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "sleepNs(250 * std.time.ns_per_us);") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "wakeWorkloadStart(&start, &start_generation, worker_count, request_stagger_us);") != null);
 }
@@ -1815,7 +1825,12 @@ test "quic protocol clients do not impose 10ms read retry floors" {
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-041") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-043") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-149") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-154") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "REQ=REQ-QUIC-HC-120") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "pub const ExecTiming = struct") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "executeAndCollectWithTimeoutTiming") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "first_response_wait_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, proto_content, "timed_out_before_first_response") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.stream.writeAll(framed)") != null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.stream.writeAll(&len_buf)") == null);
     try testing.expect(std.mem.indexOf(u8, proto_content, "try self.client.poll(0)") != null);
@@ -1835,6 +1850,7 @@ test "quic protocol clients do not impose 10ms read retry floors" {
     const transport_content = maybe_transport orelse return error.FileNotFound;
     defer allocator.free(transport_content);
     try testing.expect(std.mem.indexOf(u8, transport_content, "REQ=REQ-QUIC-HC-005") != null);
+    try testing.expect(std.mem.indexOf(u8, transport_content, "recordStreamWriteSuccess(written, monoNsRaw() -| write_start_ns)") != null);
     try testing.expect(countOccurrences(transport_content, "err == error.FlowControlBlocked or err == error.WouldBlock") >= 2);
     try testing.expect(std.mem.indexOf(u8, transport_content, "api.poll(self.endpoint, 10) catch {}; // Best-effort poll for incoming data") == null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "api.poll(self.endpoint, 5) catch {}; // Best-effort poll for flow control") == null);
@@ -1843,6 +1859,23 @@ test "quic protocol clients do not impose 10ms read retry floors" {
     try testing.expect(std.mem.indexOf(u8, transport_content, "client_writer_max_blocked_ns: u64 = 60 * std.time.ns_per_s") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "const max_blocked_ns: u64 = client_writer_max_blocked_ns") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "const max_blocked_ns: u64 = 10 * std.time.ns_per_s") == null);
+}
+
+test "quic response metrics expose stream write latency counters" {
+    const allocator = testing.allocator;
+
+    const maybe_metrics = try readFile(allocator, "src/transport/quic_response_metrics.zig");
+    const metrics = maybe_metrics orelse return error.FileNotFound;
+    defer allocator.free(metrics);
+
+    try testing.expect(std.mem.indexOf(u8, metrics, "REQ=REQ-QUIC-HC-153") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "ResponseWriteLatency") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "stream_write_elapsed_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "stream_write_elapsed_max_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "fn recordMax") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "pub fn recordStreamWriteSuccess(bytes: usize, elapsed_ns: u64)") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_stream_write_elapsed_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_stream_write_elapsed_max_ns") != null);
 }
 
 test "quic ack packets are tracked only after successful sends" {
