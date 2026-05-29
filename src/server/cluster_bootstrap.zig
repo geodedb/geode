@@ -207,12 +207,21 @@ pub fn maybeStart(
     // replicationLoop) now that A4b removed the union-as-submessage compile
     // error in raft_schema.RaftCommand.  Any failure in start() must roll
     // back the heap-allocated coordinator we already created above.
+    //
+    // BUG FIX (2026-05-28): the previous version called coord.deinit() AND
+    // allocator.destroy(coord) AND freed owned_addresses/owned_peer_configs
+    // manually before returning. That double-fired with the outer errdefer
+    // chain (lines 170-175 and 193), producing an Invalid free under the
+    // DebugAllocator -- crashing every test that drove a real coordinator.
+    // Now we only call coord.deinit() to release the coord's internal state
+    // and let the outer errdefers run on the return path. coord.deinit is
+    // necessary because the errdefer for line 193 only does
+    // allocator.destroy(coord) (the struct slot), not coord.deinit().
+    var coord_inited: bool = true;
+    errdefer if (coord_inited) coord.deinit();
     coord.start() catch |err| {
         coord.deinit();
-        allocator.destroy(coord);
-        for (owned_addresses) |a| allocator.free(a);
-        allocator.free(owned_addresses);
-        allocator.free(owned_peer_configs);
+        coord_inited = false;
         return switch (err) {
             error.OutOfMemory => Error.OutOfMemory,
             else => Error.InvalidNodeId,
