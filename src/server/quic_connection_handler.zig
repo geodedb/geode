@@ -1038,6 +1038,7 @@ fn executeBulkSimpleMerge(
         mut_sample.markExecuteDone();
     }
 
+    quic_response_metrics.recordFirstStreamQueryExecute(mut_sample.execute_done_ns -| mut_sample.lock_acquire_start_ns);
     try sendEmptySuccessResult(gpa, stream);
 
     mut_sample.record("bulk_simple_merge");
@@ -1324,6 +1325,9 @@ const BufferedProtoReader = struct {
 };
 
 fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, msg: schema.QuicServerMessage) !void {
+    const first_stream_response_start_ns = monoNsFromHandler();
+    defer quic_response_metrics.recordFirstStreamResponseSend(monoNsFromHandler() -| first_stream_response_start_ns);
+
     var msg_copy = msg;
     defer msg_copy.deinit(allocator);
     try writeServerPacket(allocator, stream, .{ .quic = msg_copy });
@@ -1335,6 +1339,9 @@ fn sendQuicMessagesBatched(
     stream: *quic_transport.QuicStream,
     messages: []const schema.QuicServerMessage,
 ) !void {
+    const first_stream_response_start_ns = monoNsFromHandler();
+    defer quic_response_metrics.recordFirstStreamResponseSend(monoNsFromHandler() -| first_stream_response_start_ns);
+
     _ = quic_response_metrics.response_batches_started_total.fetchAdd(1, .monotonic);
     var framed: std.ArrayList(u8) = .empty;
     defer framed.deinit(allocator);
@@ -3337,19 +3344,23 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) bool {
         // separates scheduler queue tail from execution/write tail.
         quic_response_metrics.recordFirstStreamPacketStart();
         const packet_process_start_ns = monoNsFromHandler();
-        const packet_processed = processFirstStreamPacket(
-            gpa,
-            ctx.transport,
-            ctx.stream,
-            &ctx.reader,
-            &ctx.state,
-            &ctx.conn_state,
-            ctx.conn_state.disable_estimates,
-            ctx.conn_state.compact_profile,
-            ctx.conn_state.memcurve_profile,
-            ctx.peer_ip,
-            &packet,
-        );
+        const packet_processed = blk: {
+            quic_response_metrics.beginFirstStreamPhaseSample();
+            defer quic_response_metrics.endFirstStreamPhaseSample();
+            break :blk processFirstStreamPacket(
+                gpa,
+                ctx.transport,
+                ctx.stream,
+                &ctx.reader,
+                &ctx.state,
+                &ctx.conn_state,
+                ctx.conn_state.disable_estimates,
+                ctx.conn_state.compact_profile,
+                ctx.conn_state.memcurve_profile,
+                ctx.peer_ip,
+                &packet,
+            );
+        };
         quic_response_metrics.recordFirstStreamPacketComplete(monoNsFromHandler() -| packet_process_start_ns);
         if (!packet_processed) return true;
     }
@@ -4708,6 +4719,7 @@ fn handleClientMessage(
             log.debug("PROTOBUF .execute received", &.{
                 Attr.int("query_len", @intCast(exec_req.query.len)),
             });
+            const first_stream_prepare_start_ns = monoNsFromHandler();
 
             state.resetResult();
 
@@ -5109,6 +5121,7 @@ fn handleClientMessage(
             }
 
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
 
             // CANARY: REQ=REQ-QUIC-HC-008; FEATURE="QUIC High-Concurrency Reads"; ASPECT=CountReadSnapshotBypass; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
             //
@@ -5140,7 +5153,10 @@ fn handleClientMessage(
                 {
                     const prev_ctx = execution.pushActiveContext(&exec_context);
                     defer execution.popActiveContext(prev_ctx);
-                    if (try execution.countNodesLabelRefcountFastPath(gpa, target.Query, query_graph_name, fast_count_tenant)) |fast_result| {
+                    const first_stream_execute_start_ns = monoNsFromHandler();
+                    const fast_result_opt = try execution.countNodesLabelRefcountFastPath(gpa, target.Query, query_graph_name, fast_count_tenant);
+                    quic_response_metrics.recordFirstStreamQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
+                    if (fast_result_opt) |fast_result| {
                         var exec_result = fast_result;
                         defer exec_result.deinit(gpa);
 
@@ -5167,7 +5183,10 @@ fn handleClientMessage(
                 const prev_ctx = execution.pushActiveContext(&exec_context);
                 defer execution.popActiveContext(prev_ctx);
 
-                if (try execution.countNodesFastPath(gpa, target.Query, query_graph_name, fast_count_tenant)) |fast_result| {
+                const first_stream_execute_start_ns = monoNsFromHandler();
+                const fast_result_opt = try execution.countNodesFastPath(gpa, target.Query, query_graph_name, fast_count_tenant);
+                quic_response_metrics.recordFirstStreamQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
+                if (fast_result_opt) |fast_result| {
                     var exec_result = fast_result;
                     defer exec_result.deinit(gpa);
 
@@ -5684,11 +5703,13 @@ fn handleClientMessage(
                         }
                     }
 
+                    const first_stream_execute_start_ns = monoNsFromHandler();
                     var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
+                    quic_response_metrics.recordFirstStreamQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
                     // Task 1: mark execute phase complete (before lock release).
                     if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);

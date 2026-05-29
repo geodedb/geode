@@ -1973,6 +1973,19 @@ test "quic response metrics expose stream write latency counters" {
     try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_mutation_deferrals_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_ready_queue_wait_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_packet_process_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "REQ=REQ-QUIC-HC-169") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "FirstStreamPhaseLatency") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_query_prepare_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_response_send_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "beginFirstStreamPhaseSample") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "endFirstStreamPhaseSample") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamQueryPrepare") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamQueryExecute") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamResponseSend") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_query_prepare_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_response_send_ns_total") != null);
 
     const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
     const handler = maybe_handler orelse return error.FileNotFound;
@@ -1984,6 +1997,13 @@ test "quic response metrics expose stream write latency counters" {
     try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamPacketComplete") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamMutationDeferral") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "const packet_process_start_ns = monoNsFromHandler();") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "beginFirstStreamPhaseSample") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "endFirstStreamPhaseSample") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamResponseSend") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamQueryPrepare") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamQueryExecute") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const first_stream_prepare_start_ns = monoNsFromHandler();") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const first_stream_execute_start_ns = monoNsFromHandler();") != null);
 }
 
 test "quic ack packets are tracked only after successful sends" {

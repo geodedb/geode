@@ -200,10 +200,15 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 The response write metrics split server-side `stream.writeAll` latency from
 query execution and receive/admission stalls. First-stream metrics split
 scheduler queueing, application packet processing, and mutation-admission
-requeue churn. Poll metrics identify endpoint poll saturation and short-header
-processing stalls. `mg_rwlock_shared_hold_snapshot_ns_total` should stay at
-zero for the default high-concurrency count workload unless RLS policies or a
-broader query shape force snapshot execution.
+requeue churn. `REQ-QUIC-HC-169` further splits first-stream packet processing
+into query prepare, query execution, and response-send phase timings through
+`quic_first_stream_query_prepare_ns_total`,
+`quic_first_stream_query_execute_ns_total`, and
+`quic_first_stream_response_send_ns_total`. Poll metrics identify endpoint poll
+saturation and short-header processing stalls.
+`mg_rwlock_shared_hold_snapshot_ns_total` should stay at zero for the default
+high-concurrency count workload unless RLS policies or a broader query shape
+force snapshot execution.
 
 ## Dependency State
 
