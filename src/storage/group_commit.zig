@@ -29,7 +29,33 @@ const StorageAdapter = graph_storage_adapter.StorageAdapter;
 const PropKV = StorageAdapter.PropKV;
 const PropertyValue = graph_store.PropertyValue;
 
-const shard_coalesce_wait_ns: u64 = 100 * std.time.ns_per_us;
+const default_shard_coalesce_wait_us: u64 = 100;
+const max_shard_coalesce_wait_us: u64 = 5000;
+const unset_shard_coalesce_wait_ns = std.math.maxInt(u64);
+var cached_shard_coalesce_wait_ns = std.atomic.Value(u64).init(unset_shard_coalesce_wait_ns);
+
+// CANARY: REQ=REQ-QUIC-HC-174; FEATURE="HighConcurrencyMutations"; ASPECT=ConfigurableCoordinatorCoalescing; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-29
+//
+// High-fanout QUIC mutation probes can otherwise drive the coordinator into
+// mostly single-op shard batches, paying one WAL commit per mutation. Keep the
+// legacy 100us default, but allow the server/harness to choose a slightly wider
+// bounded window for throughput gates.
+fn shardCoalesceWaitNs() u64 {
+    const cached = cached_shard_coalesce_wait_ns.load(.acquire);
+    if (cached != unset_shard_coalesce_wait_ns) return cached;
+
+    var wait_us = default_shard_coalesce_wait_us;
+    if (std.c.getenv("GEODE_GROUP_COMMIT_COALESCE_US")) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        if (raw.len > 0) {
+            wait_us = std.fmt.parseUnsigned(u64, raw, 10) catch default_shard_coalesce_wait_us;
+        }
+    }
+    wait_us = @min(wait_us, max_shard_coalesce_wait_us);
+    const wait_ns = wait_us * std.time.ns_per_us;
+    cached_shard_coalesce_wait_ns.store(wait_ns, .release);
+    return wait_ns;
+}
 
 fn sleepNs(ns: u64) void {
     if (ns == 0) return;
@@ -385,7 +411,7 @@ pub const ShardedCoordinator = struct {
             // cost when a write is already queued.
             if (s.queue.len < max_batch and self.should_stop.load(.acquire) == 0) {
                 s.queue_mutex.unlock(io);
-                sleepNs(shard_coalesce_wait_ns);
+                sleepNs(shardCoalesceWaitNs());
                 s.queue_mutex.lockUncancelable(io);
             }
             var batch_len: usize = 0;

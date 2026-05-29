@@ -113,6 +113,7 @@ const audit = geode.security.audit;
 // CANARY: REQ=REQ-PROMETHEUS-WIRE-003; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerImport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0166: Import metrics server for Prometheus endpoint
 const metrics_server = @import("../monitoring/metrics_server.zig");
+const runtime_metrics_mod = geode.runtime_metrics;
 // Import backup manager (M3.1 Phase 3 modularization)
 const backup_manager = geode.backup_manager;
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
@@ -137,6 +138,36 @@ const quic_response_metrics = @import("quic_response_metrics");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
+
+fn runtimeMetricsPrometheusSnapshot(allocator: std.mem.Allocator, ctx: *anyopaque) anyerror![]u8 {
+    const registry: *runtime_metrics_mod.Registry = @ptrCast(@alignCast(ctx));
+
+    var raw: std.ArrayList(u8) = .empty;
+    defer raw.deinit(allocator);
+    try registry.snapshotInto(allocator, &raw);
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var entries = std.mem.splitScalar(u8, raw.items, ' ');
+    while (entries.next()) |entry| {
+        if (entry.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
+        const name = entry[0..eq];
+        const value = entry[eq + 1 ..];
+        if (name.len == 0 or value.len == 0) continue;
+
+        try out.appendSlice(allocator, "# TYPE ");
+        try out.appendSlice(allocator, name);
+        try out.appendSlice(allocator, " gauge\n");
+        try out.appendSlice(allocator, name);
+        try out.append(allocator, ' ');
+        try out.appendSlice(allocator, value);
+        try out.append(allocator, '\n');
+    }
+
+    return try out.toOwnedSlice(allocator);
+}
 
 // Task 28 (Phase 9 of docs/superpowers/plans/2026-05-14-lsp-permission-aware-completion.md):
 // Embedded LSP listener — co-host an LSP JSON-RPC TCP endpoint inside
@@ -1653,17 +1684,18 @@ pub fn main() !void {
         // bursts do not stall behind one endpoint poll loop. Debug keeps a
         // single worker to make local traces deterministic.
         //
-        // CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
-        // Per-connection TLS crypto polling is serialized in the QUIC library;
-        // more than 16 endpoint poll workers contends on that serialization
-        // point and regresses high-fanout setup and mixed read/write request
-        // fan-out.
+        // CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-29
+        // QUIC v0.1.21 removed the old generic long-header TLS dispatch
+        // contention point, so high-fanout mixed read/write probes can use
+        // more endpoint poll workers without all threads stacking on one
+        // crypto path. Keep the cap bounded to avoid a poll-thread CPU storm
+        // in same-process harnesses, but no longer clamp production to 16.
         const quic_poll_worker_count = envUsize(
             gpa,
             "GEODE_QUIC_POLL_WORKERS",
             default_quic_poll_worker_count,
             1,
-            16,
+            64,
         );
         const poll_contexts = gpa.alloc(PollLoopContext, quic_poll_worker_count) catch |err| {
             log.err("Failed to allocate poll loop contexts", &.{Attr.string("error", @errorName(err))});
@@ -1923,9 +1955,9 @@ pub fn main() !void {
         // the periodic-emit task onto the existing connection thread pool.
         // Access via geode module to avoid duplicate-module conflict (runtime_metrics.zig
         // is owned by the 'geode' module via lib.zig; main.zig is in 'root').
-        const runtime_metrics_mod = geode.runtime_metrics;
         const metrics_registry = try runtime_metrics_mod.Registry.init(gpa);
         runtime_metrics_mod.setGlobalRegistry(metrics_registry);
+        metrics_server.setRuntimeSnapshotCallback(runtimeMetricsPrometheusSnapshot, metrics_registry);
 
         // Allocate the QUIC metrics context. Lives until server shutdown
         // so the gauge callbacks can dereference it from the emit loop.
@@ -1937,6 +1969,7 @@ pub fn main() !void {
         quic_metrics_ctx.* = .{ .transport = &transport };
 
         defer {
+            metrics_server.setRuntimeSnapshotCallback(null, null);
             runtime_metrics_mod.setGlobalRegistry(null);
             metrics_registry.deinit();
         }

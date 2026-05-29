@@ -51,6 +51,18 @@ pub var first_stream_query_prepare_max_ns = std.atomic.Value(u64).init(0);
 pub var first_stream_query_execute_samples_total = std.atomic.Value(u64).init(0);
 pub var first_stream_query_execute_ns_total = std.atomic.Value(u64).init(0);
 pub var first_stream_query_execute_max_ns = std.atomic.Value(u64).init(0);
+// CANARY: REQ=REQ-QUIC-HC-173; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ReadMutationExecuteSplit; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+//
+// Mixed high-fanout probes need to know whether server-side execute time is
+// dominated by lock-free count reads or mutation apply paths. Keep the
+// aggregate execute metric for dashboards, and add disjoint read/mutation
+// counters for attribution.
+pub var first_stream_read_query_execute_samples_total = std.atomic.Value(u64).init(0);
+pub var first_stream_read_query_execute_ns_total = std.atomic.Value(u64).init(0);
+pub var first_stream_read_query_execute_max_ns = std.atomic.Value(u64).init(0);
+pub var first_stream_mutation_query_execute_samples_total = std.atomic.Value(u64).init(0);
+pub var first_stream_mutation_query_execute_ns_total = std.atomic.Value(u64).init(0);
+pub var first_stream_mutation_query_execute_max_ns = std.atomic.Value(u64).init(0);
 pub var first_stream_response_send_samples_total = std.atomic.Value(u64).init(0);
 pub var first_stream_response_send_ns_total = std.atomic.Value(u64).init(0);
 pub var first_stream_response_send_max_ns = std.atomic.Value(u64).init(0);
@@ -140,6 +152,26 @@ pub fn recordFirstStreamQueryExecute(elapsed_ns: u64) void {
     recordMax(&first_stream_query_execute_max_ns, elapsed_ns);
 }
 
+pub fn recordFirstStreamReadQueryExecute(elapsed_ns: u64) void {
+    if (!firstStreamPhaseSampleActive()) return;
+    _ = first_stream_query_execute_samples_total.fetchAdd(1, .monotonic);
+    _ = first_stream_query_execute_ns_total.fetchAdd(elapsed_ns, .monotonic);
+    recordMax(&first_stream_query_execute_max_ns, elapsed_ns);
+    _ = first_stream_read_query_execute_samples_total.fetchAdd(1, .monotonic);
+    _ = first_stream_read_query_execute_ns_total.fetchAdd(elapsed_ns, .monotonic);
+    recordMax(&first_stream_read_query_execute_max_ns, elapsed_ns);
+}
+
+pub fn recordFirstStreamMutationQueryExecute(elapsed_ns: u64) void {
+    if (!firstStreamPhaseSampleActive()) return;
+    _ = first_stream_query_execute_samples_total.fetchAdd(1, .monotonic);
+    _ = first_stream_query_execute_ns_total.fetchAdd(elapsed_ns, .monotonic);
+    recordMax(&first_stream_query_execute_max_ns, elapsed_ns);
+    _ = first_stream_mutation_query_execute_samples_total.fetchAdd(1, .monotonic);
+    _ = first_stream_mutation_query_execute_ns_total.fetchAdd(elapsed_ns, .monotonic);
+    recordMax(&first_stream_mutation_query_execute_max_ns, elapsed_ns);
+}
+
 pub fn recordFirstStreamResponseSend(elapsed_ns: u64) void {
     if (!firstStreamPhaseSampleActive()) return;
     _ = first_stream_response_send_samples_total.fetchAdd(1, .monotonic);
@@ -180,6 +212,12 @@ pub fn registerAll(registry: anytype) !void {
     try registry.register("quic_first_stream_query_execute_samples_total", &first_stream_query_execute_samples_total);
     try registry.register("quic_first_stream_query_execute_ns_total", &first_stream_query_execute_ns_total);
     try registry.register("quic_first_stream_query_execute_max_ns", &first_stream_query_execute_max_ns);
+    try registry.register("quic_first_stream_read_query_execute_samples_total", &first_stream_read_query_execute_samples_total);
+    try registry.register("quic_first_stream_read_query_execute_ns_total", &first_stream_read_query_execute_ns_total);
+    try registry.register("quic_first_stream_read_query_execute_max_ns", &first_stream_read_query_execute_max_ns);
+    try registry.register("quic_first_stream_mutation_query_execute_samples_total", &first_stream_mutation_query_execute_samples_total);
+    try registry.register("quic_first_stream_mutation_query_execute_ns_total", &first_stream_mutation_query_execute_ns_total);
+    try registry.register("quic_first_stream_mutation_query_execute_max_ns", &first_stream_mutation_query_execute_max_ns);
     try registry.register("quic_first_stream_response_send_samples_total", &first_stream_response_send_samples_total);
     try registry.register("quic_first_stream_response_send_ns_total", &first_stream_response_send_ns_total);
     try registry.register("quic_first_stream_response_send_max_ns", &first_stream_response_send_max_ns);

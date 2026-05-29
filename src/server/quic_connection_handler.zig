@@ -1038,7 +1038,7 @@ fn executeBulkSimpleMerge(
         mut_sample.markExecuteDone();
     }
 
-    quic_response_metrics.recordFirstStreamQueryExecute(mut_sample.execute_done_ns -| mut_sample.lock_acquire_start_ns);
+    quic_response_metrics.recordFirstStreamMutationQueryExecute(mut_sample.execute_done_ns -| mut_sample.lock_acquire_start_ns);
     try sendEmptySuccessResult(gpa, stream);
 
     mut_sample.record("bulk_simple_merge");
@@ -5155,7 +5155,7 @@ fn handleClientMessage(
                     defer execution.popActiveContext(prev_ctx);
                     const first_stream_execute_start_ns = monoNsFromHandler();
                     const fast_result_opt = try execution.countNodesLabelRefcountFastPath(gpa, target.Query, query_graph_name, fast_count_tenant);
-                    quic_response_metrics.recordFirstStreamQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
+                    quic_response_metrics.recordFirstStreamReadQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
                     if (fast_result_opt) |fast_result| {
                         var exec_result = fast_result;
                         defer exec_result.deinit(gpa);
@@ -5185,7 +5185,7 @@ fn handleClientMessage(
 
                 const first_stream_execute_start_ns = monoNsFromHandler();
                 const fast_result_opt = try execution.countNodesFastPath(gpa, target.Query, query_graph_name, fast_count_tenant);
-                quic_response_metrics.recordFirstStreamQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
+                quic_response_metrics.recordFirstStreamReadQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
                 if (fast_result_opt) |fast_result| {
                     var exec_result = fast_result;
                     defer exec_result.deinit(gpa);
@@ -5709,7 +5709,12 @@ fn handleClientMessage(
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
-                    quic_response_metrics.recordFirstStreamQueryExecute(monoNsFromHandler() -| first_stream_execute_start_ns);
+                    const first_stream_execute_elapsed_ns = monoNsFromHandler() -| first_stream_execute_start_ns;
+                    if (is_mutation) {
+                        quic_response_metrics.recordFirstStreamMutationQueryExecute(first_stream_execute_elapsed_ns);
+                    } else {
+                        quic_response_metrics.recordFirstStreamReadQueryExecute(first_stream_execute_elapsed_ns);
+                    }
                     // Task 1: mark execute phase complete (before lock release).
                     if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);

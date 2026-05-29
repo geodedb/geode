@@ -65,21 +65,25 @@ GEODE_HC_REQUEST_STAGGER_US=250 \
 GEODE_HC_EXEC_TIMEOUT_SECS=10 \
 GEODE_HC_EXEC_RETRIES=0 \
 GEODE_HC_POLL_WORKERS=16 \
+GEODE_HC_METRICS_SCRAPE=1 \
 timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --summary all
 ```
 
-The latest 250 us run completed 23723/32768 operations with zero setup retries,
-zero execute retries, zero reconnects, and 9045 first-response timeouts after
-the storage/cache contention cycle. A latency-friendly 1000 us run completed
-25800/32768 operations with 6968 first-response timeouts in the prior
-dependency-pin cycle. Keep both as active ceiling probes; do not raise the 10s
-execute timeout to make them pass.
+The latest metrics-enabled 250 us attribution run completed 26634/32768
+operations with zero setup retries, zero execute retries, zero reconnects, and
+6134 first-response timeouts after the runtime scrape and read/mutation
+execution split. It ran at 570.08 QPS with p50=3968 ms, p95=9114 ms, and
+p99=9977 ms. The scrape showed reads were no longer the dominant executor
+cost: read execution accounted for about 1.3 seconds across 22419 samples,
+while mutation execution accounted for about 15727 seconds across 7448 samples.
+Server response writes were clean (`quic_stream_write_success_total=33963`,
+`quic_stream_write_errors_total=0`, `quic_stream_write_timeouts_total=0`), so
+the remaining 4096 x 8 tail is mutation execution/storage pressure plus
+multi-second QUIC poll cycles and first-stream scheduling delay.
 
-With server metrics enabled, permit-gated mutation overflow and shard-parallel
-mutation admission reduced scheduler churn enough to promote the sustained gate
-from 1024 x 8 to 2048 x 8. The remaining 4096 x 8 tail is still concentrated in
-first-response wait, cooperative packet processing, and QUIC short-header
-receive processing.
+A latency-friendly 1000 us run completed 25800/32768 operations with 6968
+first-response timeouts in the prior dependency-pin cycle. Keep both as active
+ceiling probes; do not raise the 10s execute timeout to make them pass.
 
 ## Enterprise Objective Gate
 
@@ -171,6 +175,19 @@ the next QUIC receive/scheduler pass:
   through the sharded engine API. This broadcasts and dirties label
   dictionaries, preventing nodes from reloading without label names after
   high-concurrency mutation batches.
+- `REQ-QUIC-HC-172`: the metrics server can append a runtime snapshot callback
+  to `/metrics`, and the high-concurrency harness can enable and scrape it with
+  `GEODE_HC_METRICS_SCRAPE=1`. The metrics server also self-wakes its accept
+  loop during shutdown so scrape-enabled regression tests do not hang after a
+  successful metrics read.
+- `REQ-QUIC-HC-173`: first-stream query execution metrics now split read and
+  mutation samples into separate cumulative and max counters. This makes a
+  failing mixed ceiling distinguish cheap count reads from mutation/storage
+  execution tail without inferring from client latency alone.
+- `REQ-QUIC-HC-174`: group-commit shard coalescing is tunable through
+  `GEODE_GROUP_COMMIT_COALESCE_US` for controlled sweeps. The default remains
+  100 us because a 1000 us sweep increased batch size but regressed throughput
+  and tail latency.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
@@ -223,13 +240,25 @@ smoke proving the restart/recovery and graph-isolation gates work.
 
 ## Core Knobs
 
-- `GEODE_QUIC_POLL_WORKERS`: server endpoint poll workers. Keep at `16` for the
-  current QUIC dependency line; higher values contend on serialized crypto
-  polling.
+- `GEODE_QUIC_POLL_WORKERS`: server endpoint poll workers. Keep the harness
+  default at `16`. The server accepts explicit sweeps up to `64` on the
+  v0.1.21+ QUIC dependency line, but the measured 1024x8 mixed A/B did not
+  improve throughput and increased poll overruns, so `64` is diagnostic-only.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
   Leave unset in normal operation. General writer-lock mutations keep an
   internal serial cap of `4`; the runtime cap now controls only the
   shard-parallel multi-property `MERGE` window, which defaults to `512`.
+- `GEODE_GROUP_COMMIT_COALESCE_US`: group-commit shard worker coalescing wait
+  in microseconds, clamped at 5000 us. Leave at the 100 us default unless
+  running a documented sweep; 1000 us regressed the mixed workload despite
+  larger average coordinator batches.
+- `GEODE_HC_METRICS_SCRAPE`: high-concurrency harness switch that enables the
+  child metrics server on a private loopback port and prints selected runtime
+  counters after the workload.
+- `GEODE_HC_GROUP_COMMIT_COALESCE_US`: harness passthrough for
+  `GEODE_GROUP_COMMIT_COALESCE_US`.
+- `GEODE_HC_MUTATION_ADMISSION_CAP`: harness passthrough for
+  `GEODE_QUIC_MUTATION_ADMISSION_CAP`.
 - `GEODE_HC_POST_WRITE_POLL`: high-concurrency harness client flush behavior.
   Defaults to true below 1024 workers and false at 1024+ workers. Set `1` only
   for legacy immediate post-write poll comparisons.
@@ -292,6 +321,12 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 - `quic_first_stream_packet_process_ns_total`
 - `quic_first_stream_packet_process_max_ns`
 - `quic_first_stream_mutation_deferrals_total`
+- `quic_first_stream_read_query_execute_samples_total`
+- `quic_first_stream_read_query_execute_ns_total`
+- `quic_first_stream_read_query_execute_max_ns`
+- `quic_first_stream_mutation_query_execute_samples_total`
+- `quic_first_stream_mutation_query_execute_ns_total`
+- `quic_first_stream_mutation_query_execute_max_ns`
 - `mg_rwlock_shared_hold_snapshot_ns_total`
 - `mg_merge_tuple_lock_acquired_total`
 - `mg_merge_tuple_lock_wait_ns_total`
@@ -307,6 +342,8 @@ Scrape these runtime metrics when a ceiling probe has high first-response tail:
 - `quic_poll_recv_short_frame_process_max_ns`
 - `quic_poll_recv_short_ack_send_max_ns`
 - `quic_poll_overrun_total`
+- `coord_apply_batches_total`
+- `coord_apply_ops_total`
 
 The response write metrics split server-side `stream.writeAll` latency from
 query execution and receive/admission stalls. First-stream metrics split
@@ -315,8 +352,13 @@ requeue churn. `REQ-QUIC-HC-169` further splits first-stream packet processing
 into query prepare, query execution, and response-send phase timings through
 `quic_first_stream_query_prepare_ns_total`,
 `quic_first_stream_query_execute_ns_total`, and
-`quic_first_stream_response_send_ns_total`. Poll metrics identify endpoint poll
-saturation and short-header processing stalls.
+`quic_first_stream_response_send_ns_total`. `REQ-QUIC-HC-173` then splits query
+execution into read and mutation counters; in the current 4096x8 ceiling, that
+split shows mutation execution dominates successful server-side work while
+reads stay comparatively cheap. Poll metrics identify endpoint poll saturation
+and short-header processing stalls. Coordinator counters reveal whether longer
+coalescing waits are actually increasing batch size enough to justify the
+latency cost.
 `mg_rwlock_shared_hold_snapshot_ns_total` should stay at zero for the default
 high-concurrency count workload unless RLS policies or a broader query shape
 force snapshot execution.

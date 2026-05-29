@@ -12,6 +12,27 @@ const Allocator = std.mem.Allocator;
 const prometheus = @import("prometheus.zig");
 const pooled = @import("transport/thread_pool");
 
+pub const RuntimeSnapshotCallback = *const fn (allocator: Allocator, ctx: *anyopaque) anyerror![]u8;
+
+var g_runtime_snapshot_mu: std.Io.Mutex = std.Io.Mutex.init;
+var g_runtime_snapshot_callback: ?RuntimeSnapshotCallback = null;
+var g_runtime_snapshot_ctx: ?*anyopaque = null;
+
+// CANARY: REQ=REQ-QUIC-HC-172; FEATURE="High-Concurrency Diagnostics"; ASPECT=RuntimeMetricsScrape; STATUS=IMPL; TEST=test_metrics_server_lifecycle; OWNER=monitoring; UPDATED=2026-05-29
+//
+// The QUIC high-concurrency ceiling work uses the lightweight
+// runtime_metrics registry for transport and storage counters. Expose an
+// optional append hook so /metrics can include those counters without making
+// this monitoring module depend on the server module or duplicating the
+// registry singleton.
+pub fn setRuntimeSnapshotCallback(callback: ?RuntimeSnapshotCallback, ctx: ?*anyopaque) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_runtime_snapshot_mu.lockUncancelable(io);
+    defer g_runtime_snapshot_mu.unlock(io);
+    g_runtime_snapshot_callback = callback;
+    g_runtime_snapshot_ctx = ctx;
+}
+
 // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=HTTPServer; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-04-16
 // GAP-0166 / GitLab #749: Wire Prometheus metrics exporter to a real HTTP
 // listener at /metrics, with a /health probe and a catch-all 404. This file
@@ -101,7 +122,9 @@ pub const MetricsServer = struct {
     /// Stop the metrics HTTP server. Closes the listen fd so the accept loop
     /// unblocks with `error.SocketNotListening`, then joins the thread.
     pub fn stop(self: *MetricsServer) void {
+        const should_wake_accept = self.server != null;
         self.running.store(false, .release);
+        if (should_wake_accept) wakeAcceptLoop(self.port);
 
         // Close the listener first so accept() returns with SocketNotListening
         // on whatever thread is currently blocked inside it.
@@ -221,6 +244,23 @@ pub const MetricsServer = struct {
         } else {
             try self.collector.exportMetrics(&body.writer);
         }
+        g_runtime_snapshot_mu.lockUncancelable(io);
+        defer g_runtime_snapshot_mu.unlock(io);
+        if (g_runtime_snapshot_callback) |callback| {
+            if (g_runtime_snapshot_ctx) |ctx| {
+                const runtime_body_opt: ?[]u8 = callback(self.allocator, ctx) catch |err| blk: {
+                    std.log.warn("runtime /metrics snapshot failed: {s}", .{@errorName(err)});
+                    break :blk null;
+                };
+                if (runtime_body_opt) |runtime_body| {
+                    defer self.allocator.free(runtime_body);
+                    if (runtime_body.len != 0) {
+                        try body.writer.writeByte('\n');
+                        try body.writer.writeAll(runtime_body);
+                    }
+                }
+            }
+        }
         const body_bytes = body.written();
 
         var header_buf: [256]u8 = undefined;
@@ -291,6 +331,28 @@ pub const MetricsServer = struct {
         self.acceptLoop();
     }
 };
+
+fn wakeAcceptLoop(port: u16) void {
+    // CANARY: REQ=REQ-QUIC-HC-172; FEATURE="High-Concurrency Diagnostics"; ASPECT=MetricsAcceptWake; STATUS=IMPL; TEST=test_metrics_server_lifecycle; OWNER=monitoring; UPDATED=2026-05-29
+    //
+    // Closing a listening socket from another thread does not reliably
+    // interrupt a blocking accept4 on Linux after the endpoint has handled a
+    // real scrape. A best-effort self-connect wakes acceptLoop so it observes
+    // running=false and exits before stop() joins the thread.
+    const linux = std.os.linux;
+    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
+    if (linux.errno(fd_raw) != .SUCCESS) return;
+    const fd: i32 = @intCast(fd_raw);
+    defer _ = linux.close(fd);
+
+    const sa = linux.sockaddr.in{
+        .family = linux.AF.INET,
+        .port = std.mem.nativeToBig(u16, port),
+        .addr = std.mem.nativeToBig(u32, 0x7F000001),
+        .zero = .{0} ** 8,
+    };
+    _ = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+}
 
 /// Resolve the metrics bind address from GEODE_METRICS_BIND env var,
 /// defaulting to 127.0.0.1 (localhost only).

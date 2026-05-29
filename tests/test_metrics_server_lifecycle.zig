@@ -128,6 +128,85 @@ fn tryConnect(port: u16, timeout_ms: i32) !void {
     }
 }
 
+fn linuxWriteAll(fd: i32, bytes: []const u8) !void {
+    const linux = std.os.linux;
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const rc = linux.write(fd, bytes[offset..].ptr, bytes.len - offset);
+        const signed: isize = @bitCast(rc);
+        if (signed < 0) return error.WriteFailed;
+        if (signed == 0) return error.WriteFailed;
+        offset += @intCast(signed);
+    }
+}
+
+fn httpResponseComplete(data: []const u8) bool {
+    const header_end = std.mem.indexOf(u8, data, "\r\n\r\n") orelse return false;
+    const headers = data[0..header_end];
+    const key = "Content-Length:";
+    const key_start = std.mem.indexOf(u8, headers, key) orelse return false;
+    var idx = key_start + key.len;
+    while (idx < headers.len and (headers[idx] == ' ' or headers[idx] == '\t')) : (idx += 1) {}
+    const value_start = idx;
+    while (idx < headers.len and std.ascii.isDigit(headers[idx])) : (idx += 1) {}
+    if (idx == value_start) return false;
+    const content_len = std.fmt.parseUnsigned(usize, headers[value_start..idx], 10) catch return false;
+    return data.len >= header_end + 4 + content_len;
+}
+
+fn httpGet(allocator: std.mem.Allocator, port: u16, path: []const u8) ![]u8 {
+    const linux = std.os.linux;
+
+    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
+    const fd_err = linux.errno(fd_raw);
+    if (fd_err != .SUCCESS) return error.SocketCreateFailed;
+    const fd: i32 = @intCast(fd_raw);
+    defer _ = linux.close(fd);
+
+    const sa = linux.sockaddr.in{
+        .family = linux.AF.INET,
+        .port = std.mem.nativeToBig(u16, port),
+        .addr = std.mem.nativeToBig(u32, 0x7F000001),
+        .zero = .{0} ** 8,
+    };
+    const conn_raw = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+    const conn_signed: isize = @bitCast(conn_raw);
+    if (conn_signed < 0) return error.ConnectFailed;
+
+    const request = try std.fmt.allocPrint(
+        allocator,
+        "GET {s} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nConnection: close\r\n\r\n",
+        .{ path, port },
+    );
+    defer allocator.free(request);
+    try linuxWriteAll(fd, request);
+
+    var response: std.ArrayList(u8) = .empty;
+    errdefer response.deinit(allocator);
+    var chunk: [4096]u8 = undefined;
+    while (response.items.len < 1024 * 1024) {
+        const n_rc = linux.read(fd, &chunk, chunk.len);
+        const n_signed: isize = @bitCast(n_rc);
+        if (n_signed < 0) return error.ReadFailed;
+        if (n_signed == 0) break;
+        try response.appendSlice(allocator, chunk[0..@intCast(n_signed)]);
+        if (httpResponseComplete(response.items)) break;
+    }
+
+    return try response.toOwnedSlice(allocator);
+}
+
+fn runtimeSnapshotForTest(allocator: std.mem.Allocator, ctx: *anyopaque) anyerror![]u8 {
+    _ = ctx;
+    return try allocator.dupe(
+        u8,
+        "# TYPE quic_stream_write_elapsed_ns_total gauge\n" ++
+            "quic_stream_write_elapsed_ns_total 42\n" ++
+            "# TYPE mg_merge_tuple_lock_wait_ns_total gauge\n" ++
+            "mg_merge_tuple_lock_wait_ns_total 99\n",
+    );
+}
+
 test "MetricsServer.start binds a TCP listener (regression #749)" {
     // Use page_allocator instead of testing.allocator: PrometheusExporter
     // has a known production leak of the dup'd `name`/`help` strings in its
@@ -253,4 +332,27 @@ test "MetricsServer start/stop/start is idempotent (regression #749)" {
     };
 
     server.stop();
+}
+
+test "MetricsServer /metrics appends runtime high-concurrency counters" {
+    const allocator = std.heap.page_allocator;
+
+    var collector = try prometheus.MetricsCollector.init(allocator);
+    defer collector.deinit();
+
+    const port = pickTestPort() + 3;
+
+    var server = metrics_server.MetricsServer.init(allocator, &collector, port);
+    defer server.deinit();
+    metrics_server.setRuntimeSnapshotCallback(runtimeSnapshotForTest, @ptrCast(&server));
+    defer metrics_server.setRuntimeSnapshotCallback(null, null);
+
+    try server.start();
+    try tryConnect(port, 1000);
+
+    const response = try httpGet(allocator, port, "/metrics");
+    defer allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "quic_stream_write_elapsed_ns_total 42") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "mg_merge_tuple_lock_wait_ns_total 99") != null);
 }

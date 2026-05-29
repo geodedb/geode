@@ -1544,7 +1544,8 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_SHORT_HEADER_TIMING=0") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "REQ=REQ-QUIC-HC-141") != null);
-    try testing.expect(std.mem.indexOf(u8, e2e, "const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 16") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 64") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "highFanoutPollWorkerDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "default_poll_workers_for_run") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "envU32(\"GEODE_HC_POLL_WORKERS\", default_poll_workers_for_run)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_poll_worker_cap") != null);
@@ -1553,14 +1554,30 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     try testing.expect(std.mem.indexOf(u8, e2e, "const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "highFanoutCooperativeFirstStreamWorkerDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, e2e, "default_cooperative_first_stream_workers_for_run") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_GROUP_COMMIT_COALESCE_US={d}") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_GROUP_COMMIT_COALESCE_US") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_group_commit_coalesce_us: u32 = 100") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_QUIC_MUTATION_ADMISSION_CAP={d}") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_MUTATION_ADMISSION_CAP") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "high_fanout_mutation_admission_cap: u32 = 512") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "highFanoutMutationAdmissionCapDefault(worker_count)") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "REQ=REQ-QUIC-HC-053") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "REQ=REQ-QUIC-HC-141") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_POLL_WORKERS\"") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_poll_worker_count") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "const default_quic_poll_worker_count = if (builtin.mode == .Debug) 1 else 16") != null);
-    try testing.expect(std.mem.indexOf(u8, main_content, "more than 16 endpoint poll workers") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "QUIC v0.1.21") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "64,") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, ".blocking_workers = 0") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "poll_pool.submitDefault") != null);
+
+    const maybe_group_commit = try readFile(allocator, "src/storage/group_commit.zig");
+    const group_commit = maybe_group_commit orelse return error.FileNotFound;
+    defer allocator.free(group_commit);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "REQ=REQ-QUIC-HC-174") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "GEODE_GROUP_COMMIT_COALESCE_US") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "max_shard_coalesce_wait_us: u64 = 5000") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "shardCoalesceWaitNs()") != null);
 }
 
 test "server stream WouldBlock wait is event driven with high fanout backoff" {
@@ -1740,6 +1757,56 @@ test "quic response write metrics expose downstream stalls" {
     const main_content = maybe_main orelse return error.FileNotFound;
     defer allocator.free(main_content);
     try testing.expect(std.mem.indexOf(u8, main_content, "try quic_response_metrics.registerAll(metrics_registry)") != null);
+}
+
+test "high concurrency harness scrapes runtime diagnostics from metrics endpoint" {
+    const allocator = testing.allocator;
+
+    const maybe_metrics_server = try readFile(allocator, "src/monitoring/metrics_server.zig");
+    const metrics_server = maybe_metrics_server orelse return error.FileNotFound;
+    defer allocator.free(metrics_server);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "REQ=REQ-QUIC-HC-172") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "RuntimeMetricsScrape") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "pub const RuntimeSnapshotCallback") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "setRuntimeSnapshotCallback") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "g_runtime_snapshot_mu") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "g_runtime_snapshot_mu.lockUncancelable") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "runtime_body") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "MetricsAcceptWake") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "fn wakeAcceptLoop") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics_server, "wakeAcceptLoop(self.port)") != null);
+
+    const maybe_main = try readFile(allocator, "src/server/main.zig");
+    const main_content = maybe_main orelse return error.FileNotFound;
+    defer allocator.free(main_content);
+    try testing.expect(std.mem.indexOf(u8, main_content, "runtimeMetricsPrometheusSnapshot") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "registry.snapshotInto") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "metrics_server.setRuntimeSnapshotCallback(runtimeMetricsPrometheusSnapshot, metrics_registry)") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "metrics_server.setRuntimeSnapshotCallback(null, null)") != null);
+
+    const maybe_harness = try readFile(allocator, "tests/e2e_quic_high_concurrency.zig");
+    const harness = maybe_harness orelse return error.FileNotFound;
+    defer allocator.free(harness);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_HC_METRICS_SCRAPE") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "GEODE_METRICS_PORT={d}") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "printRuntimeMetricsSnapshot") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "quic_stream_write_elapsed_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "quic_first_stream_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "quic_first_stream_read_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "quic_first_stream_mutation_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "quic_poll_cycle_max_ns") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "quic_poll_overrun_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "mg_merge_tuple_lock_wait_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "mg_rwlock_shared_hold_bulk_merge_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "coord_apply_batches_total") != null);
+    try testing.expect(std.mem.indexOf(u8, harness, "coord_apply_ops_total") != null);
+
+    const maybe_lifecycle = try readFile(allocator, "tests/test_metrics_server_lifecycle.zig");
+    const lifecycle = maybe_lifecycle orelse return error.FileNotFound;
+    defer allocator.free(lifecycle);
+    try testing.expect(std.mem.indexOf(u8, lifecycle, "MetricsServer /metrics appends runtime high-concurrency counters") != null);
+    try testing.expect(std.mem.indexOf(u8, lifecycle, "quic_stream_write_elapsed_ns_total 42") != null);
+    try testing.expect(std.mem.indexOf(u8, lifecycle, "mg_merge_tuple_lock_wait_ns_total 99") != null);
 }
 
 test "quic app ack path sends normal ack packet once" {
@@ -1978,13 +2045,21 @@ test "quic response metrics expose stream write latency counters" {
     try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_query_prepare_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_query_execute_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_response_send_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "REQ=REQ-QUIC-HC-173") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "ReadMutationExecuteSplit") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_read_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "first_stream_mutation_query_execute_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "beginFirstStreamPhaseSample") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "endFirstStreamPhaseSample") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamQueryPrepare") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamQueryExecute") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamReadQueryExecute") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamMutationQueryExecute") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "recordFirstStreamResponseSend") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_query_prepare_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_read_query_execute_ns_total") != null);
+    try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_mutation_query_execute_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, metrics, "quic_first_stream_response_send_ns_total") != null);
 
     const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
@@ -2001,7 +2076,8 @@ test "quic response metrics expose stream write latency counters" {
     try testing.expect(std.mem.indexOf(u8, handler, "endFirstStreamPhaseSample") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamResponseSend") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamQueryPrepare") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamQueryExecute") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamReadQueryExecute") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "recordFirstStreamMutationQueryExecute") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "const first_stream_prepare_start_ns = monoNsFromHandler();") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "const first_stream_execute_start_ns = monoNsFromHandler();") != null);
 }

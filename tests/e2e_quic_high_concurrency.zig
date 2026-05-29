@@ -18,6 +18,10 @@ const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 els
 const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
+const default_group_commit_coalesce_us: u32 = 100;
+const high_fanout_group_commit_coalesce_us: u32 = 100;
+const default_mutation_admission_cap: u32 = 512;
+const high_fanout_mutation_admission_cap: u32 = 512;
 const objective_worker_count: u32 = 16_384;
 const objective_ops_per_worker: u32 = 8;
 const objective_mutation_stride: u32 = 4;
@@ -37,12 +41,12 @@ const high_fanout_connection_worker_cap = 64;
 // making the local test driver a meaningful part of failure cost. Keep exact
 // counters and summaries, but cap individual failure lines.
 const failure_log_limit: u32 = 64;
-// CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+// CANARY: REQ=REQ-QUIC-HC-141; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PollWorkerContentionCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-29
 //
-// The QUIC endpoint now serializes per-connection TLS crypto polling. More
-// than 16 poll workers on one endpoint loses high-fanout mixed read/write runs
-// to endpoint mutex contention instead of increasing packet throughput.
-const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 16;
+// QUIC v0.1.21 removes the old long-header TLS dispatch choke point. Keep the
+// proven 16-worker high-fanout default, but allow explicit 64-worker A/B probes
+// without patching the server/harness.
+const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 64;
 // CANARY: REQ=REQ-QUIC-HC-138; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
 //
 // Keep the cooperative owner pool bounded; raising it to match 1024 clients
@@ -174,6 +178,15 @@ fn envSlice(name: [*:0]const u8, default_value: []const u8) []const u8 {
 fn highFanoutConnectionWorkerDefault(worker_count: u32) u32 {
     const doubled = std.math.mul(u32, worker_count, 2) catch std.math.maxInt(u32);
     return @min(@max(doubled, default_connection_worker_count), high_fanout_connection_worker_cap);
+}
+
+fn highFanoutPollWorkerDefault(worker_count: u32) u32 {
+    _ = worker_count;
+    return @min(@as(u32, 16), high_fanout_poll_worker_cap);
+}
+
+fn highFanoutMutationAdmissionCapDefault(worker_count: u32) u32 {
+    return if (worker_count >= 2048) high_fanout_mutation_admission_cap else default_mutation_admission_cap;
 }
 
 // CANARY: REQ=REQ-QUIC-HC-128; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
@@ -489,6 +502,210 @@ fn readServerRssKb(server: *const util.ServerHandle) u64 {
     while (idx < status.len and std.ascii.isDigit(status[idx])) : (idx += 1) {}
     if (idx == value_start) return 0;
     return std.fmt.parseUnsigned(u64, status[value_start..idx], 10) catch 0;
+}
+
+fn linuxWriteAll(fd: i32, bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const rc = std.os.linux.write(fd, bytes[offset..].ptr, bytes.len - offset);
+        const signed: isize = @bitCast(rc);
+        if (signed <= 0) return error.WriteFailed;
+        offset += @intCast(signed);
+    }
+}
+
+fn httpResponseComplete(data: []const u8) bool {
+    const header_end = std.mem.indexOf(u8, data, "\r\n\r\n") orelse return false;
+    const headers = data[0..header_end];
+    const key = "Content-Length:";
+    const key_start = std.mem.indexOf(u8, headers, key) orelse return false;
+    var idx = key_start + key.len;
+    while (idx < headers.len and (headers[idx] == ' ' or headers[idx] == '\t')) : (idx += 1) {}
+    const value_start = idx;
+    while (idx < headers.len and std.ascii.isDigit(headers[idx])) : (idx += 1) {}
+    if (idx == value_start) return false;
+    const content_len = std.fmt.parseUnsigned(usize, headers[value_start..idx], 10) catch return false;
+    return data.len >= header_end + 4 + content_len;
+}
+
+fn httpGetLoopback(allocator: std.mem.Allocator, port: u16, path: []const u8, max_bytes: usize) ![]u8 {
+    const linux = std.os.linux;
+    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
+    const fd_err = linux.errno(fd_raw);
+    if (fd_err != .SUCCESS) return error.SocketCreateFailed;
+    const fd: i32 = @intCast(fd_raw);
+    defer _ = linux.close(fd);
+
+    const sa = linux.sockaddr.in{
+        .family = linux.AF.INET,
+        .port = std.mem.nativeToBig(u16, port),
+        .addr = std.mem.nativeToBig(u32, 0x7F000001),
+        .zero = .{0} ** 8,
+    };
+    const conn_rc = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+    if (@as(isize, @bitCast(conn_rc)) < 0) return error.ConnectFailed;
+
+    const request = try std.fmt.allocPrint(
+        allocator,
+        "GET {s} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nConnection: close\r\n\r\n",
+        .{ path, port },
+    );
+    defer allocator.free(request);
+    try linuxWriteAll(fd, request);
+
+    var response: std.ArrayList(u8) = .empty;
+    errdefer response.deinit(allocator);
+    var chunk: [8192]u8 = undefined;
+    while (response.items.len < max_bytes) {
+        const n_rc = linux.read(fd, &chunk, chunk.len);
+        const signed: isize = @bitCast(n_rc);
+        if (signed < 0) return error.ReadFailed;
+        if (signed == 0) break;
+        try response.appendSlice(allocator, chunk[0..@intCast(signed)]);
+        if (httpResponseComplete(response.items)) break;
+    }
+
+    const header_end = std.mem.indexOf(u8, response.items, "\r\n\r\n") orelse return try response.toOwnedSlice(allocator);
+    const body = response.items[header_end + 4 ..];
+    const owned = try allocator.dupe(u8, body);
+    response.deinit(allocator);
+    return owned;
+}
+
+const MetricAggregateMode = enum { sum, max };
+
+fn runtimeMetricAggregate(metrics: []const u8, name: []const u8, mode: MetricAggregateMode) u64 {
+    var value: u64 = 0;
+    var lines = std.mem.splitScalar(u8, metrics, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        if (!std.mem.startsWith(u8, line, name)) continue;
+        if (line.len <= name.len or !std.ascii.isWhitespace(line[name.len])) continue;
+        var rest = std.mem.trim(u8, line[name.len..], " \t");
+        const end = std.mem.indexOfAny(u8, rest, " \t\r") orelse rest.len;
+        rest = rest[0..end];
+        const parsed = std.fmt.parseUnsigned(u64, rest, 10) catch continue;
+        switch (mode) {
+            .sum => value +|= parsed,
+            .max => {
+                if (parsed > value) value = parsed;
+            },
+        }
+    }
+    return value;
+}
+
+fn runtimeMetricSum(metrics: []const u8, name: []const u8) u64 {
+    return runtimeMetricAggregate(metrics, name, .sum);
+}
+
+fn runtimeMetricMax(metrics: []const u8, name: []const u8) u64 {
+    return runtimeMetricAggregate(metrics, name, .max);
+}
+
+fn printRuntimeMetricsSnapshot(allocator: std.mem.Allocator, metrics_port: u16) void {
+    // CANARY: REQ=REQ-QUIC-HC-172; FEATURE="High-Concurrency Diagnostics"; ASPECT=HarnessRuntimeMetricsScrape; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    //
+    // The 4096x8+ ceiling is dominated by first-response tail. Scrape the
+    // server-side runtime metrics while the child is still alive so failed
+    // probes split QUIC response-write, first-stream scheduler, execution, and
+    // storage tuple-lock costs without relying on periodic stderr timing.
+    const metrics = httpGetLoopback(allocator, metrics_port, "/metrics", 2 * 1024 * 1024) catch |err| {
+        std.debug.print("high-concurrency QUIC E2E runtime_metrics scrape_failed={s} port={d}\n", .{ @errorName(err), metrics_port });
+        return;
+    };
+    defer allocator.free(metrics);
+
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics stream_write_calls={d} stream_write_success={d} stream_write_errors={d} stream_write_timeouts={d} stream_write_blocked_retries={d} stream_write_elapsed_ns_total={d} stream_write_elapsed_max_ns={d}\n",
+        .{
+            runtimeMetricSum(metrics, "quic_stream_write_calls_total"),
+            runtimeMetricSum(metrics, "quic_stream_write_success_total"),
+            runtimeMetricSum(metrics, "quic_stream_write_errors_total"),
+            runtimeMetricSum(metrics, "quic_stream_write_timeouts_total"),
+            runtimeMetricSum(metrics, "quic_stream_write_blocked_retries_total"),
+            runtimeMetricSum(metrics, "quic_stream_write_elapsed_ns_total"),
+            runtimeMetricMax(metrics, "quic_stream_write_elapsed_max_ns"),
+        },
+    );
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics first_stream_ready_enqueued={d} first_stream_ready_dequeued={d} first_stream_ready_wait_ns_total={d} first_stream_ready_wait_max_ns={d} first_stream_packets_started={d} first_stream_packets_completed={d} first_stream_packet_process_ns_total={d} first_stream_packet_process_max_ns={d} first_stream_mutation_deferrals={d}\n",
+        .{
+            runtimeMetricSum(metrics, "quic_first_stream_ready_enqueued_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_ready_dequeued_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_ready_queue_wait_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_ready_queue_wait_max_ns"),
+            runtimeMetricSum(metrics, "quic_first_stream_packets_started_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_packets_completed_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_packet_process_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_packet_process_max_ns"),
+            runtimeMetricSum(metrics, "quic_first_stream_mutation_deferrals_total"),
+        },
+    );
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics first_stream_prepare_samples={d} first_stream_prepare_ns_total={d} first_stream_prepare_max_ns={d} first_stream_execute_samples={d} first_stream_execute_ns_total={d} first_stream_execute_max_ns={d} first_stream_response_send_samples={d} first_stream_response_send_ns_total={d} first_stream_response_send_max_ns={d}\n",
+        .{
+            runtimeMetricSum(metrics, "quic_first_stream_query_prepare_samples_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_query_prepare_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_query_prepare_max_ns"),
+            runtimeMetricSum(metrics, "quic_first_stream_query_execute_samples_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_query_execute_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_query_execute_max_ns"),
+            runtimeMetricSum(metrics, "quic_first_stream_response_send_samples_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_response_send_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_response_send_max_ns"),
+        },
+    );
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics first_stream_read_execute_samples={d} first_stream_read_execute_ns_total={d} first_stream_read_execute_max_ns={d} first_stream_mutation_execute_samples={d} first_stream_mutation_execute_ns_total={d} first_stream_mutation_execute_max_ns={d}\n",
+        .{
+            runtimeMetricSum(metrics, "quic_first_stream_read_query_execute_samples_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_read_query_execute_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_read_query_execute_max_ns"),
+            runtimeMetricSum(metrics, "quic_first_stream_mutation_query_execute_samples_total"),
+            runtimeMetricSum(metrics, "quic_first_stream_mutation_query_execute_ns_total"),
+            runtimeMetricMax(metrics, "quic_first_stream_mutation_query_execute_max_ns"),
+        },
+    );
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics poll_cycle_max_ns={d} poll_transport_max_ns={d} poll_recv_process_max_ns={d} poll_recv_short_header_max_ns={d} poll_recv_short_endpoint_map_max_ns={d} poll_recv_short_rx_serial_wait_max_ns={d} poll_recv_short_conn_lock_wait_max_ns={d} poll_recv_short_decrypt_max_ns={d} poll_recv_short_frame_process_max_ns={d} poll_recv_short_ack_send_max_ns={d} poll_overrun_total={d}\n",
+        .{
+            runtimeMetricMax(metrics, "quic_poll_cycle_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_transport_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_process_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_header_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_endpoint_map_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_rx_serial_wait_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_conn_lock_wait_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_decrypt_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_frame_process_max_ns"),
+            runtimeMetricMax(metrics, "quic_poll_recv_short_ack_send_max_ns"),
+            runtimeMetricSum(metrics, "quic_poll_overrun_total"),
+        },
+    );
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics storage merge_tuple_acquired={d} merge_tuple_wait_ns_total={d} merge_tuple_hold_ns_total={d} merge_tuple_max_wait_ns={d} merge_tuple_max_hold_ns={d} rwlock_shared_wait_ns_total={d} rwlock_shared_hold_ns_total={d} rwlock_shared_hold_snapshot_ns_total={d} rwlock_shared_hold_bulk_merge_ns_total={d}\n",
+        .{
+            runtimeMetricSum(metrics, "mg_merge_tuple_lock_acquired_total"),
+            runtimeMetricSum(metrics, "mg_merge_tuple_lock_wait_ns_total"),
+            runtimeMetricSum(metrics, "mg_merge_tuple_lock_hold_ns_total"),
+            runtimeMetricMax(metrics, "mg_merge_tuple_lock_max_wait_ns_observed"),
+            runtimeMetricMax(metrics, "mg_merge_tuple_lock_max_hold_ns_observed"),
+            runtimeMetricSum(metrics, "mg_rwlock_shared_wait_ns_total"),
+            runtimeMetricSum(metrics, "mg_rwlock_shared_hold_ns_total"),
+            runtimeMetricSum(metrics, "mg_rwlock_shared_hold_snapshot_ns_total"),
+            runtimeMetricSum(metrics, "mg_rwlock_shared_hold_bulk_merge_ns_total"),
+        },
+    );
+    std.debug.print(
+        "high-concurrency QUIC E2E runtime_metrics coordinator apply_batches={d} apply_ops={d} apply_errors={d}\n",
+        .{
+            runtimeMetricSum(metrics, "coord_apply_batches_total"),
+            runtimeMetricSum(metrics, "coord_apply_ops_total"),
+            runtimeMetricSum(metrics, "coord_apply_errors_total"),
+        },
+    );
 }
 
 fn stopServerGracefully(server: *util.ServerHandle, timeout_ns: u64) void {
@@ -917,10 +1134,12 @@ pub fn main() !void {
     const default_connect_attempts_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_connect_attempts), 16) else default_connect_attempts;
     const default_hello_timeout_ms_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_hello_timeout_ms), 15_000) else default_hello_timeout_ms;
     const default_setup_timeout_secs_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_setup_timeout_secs), 90) else default_setup_timeout_secs;
-    const default_poll_workers_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_poll_worker_count), 16) else default_poll_worker_count;
+    const default_poll_workers_for_run: u32 = if (high_fanout_setup) highFanoutPollWorkerDefault(worker_count) else default_poll_worker_count;
     const default_connection_workers_for_run = if (high_fanout_setup) highFanoutConnectionWorkerDefault(worker_count) else default_connection_worker_count;
     const default_connection_admission_threads_for_run = if (high_fanout_setup) @min(@max(worker_count, @as(u32, 1024)), @as(u32, 4096)) else @as(u32, 1024);
     const default_cooperative_first_stream_workers_for_run = if (high_fanout_setup) highFanoutCooperativeFirstStreamWorkerDefault(worker_count) else default_cooperative_first_stream_worker_count;
+    const default_group_commit_coalesce_us_for_run = if (high_fanout_setup) high_fanout_group_commit_coalesce_us else default_group_commit_coalesce_us;
+    const default_mutation_admission_cap_for_run = if (high_fanout_setup) highFanoutMutationAdmissionCapDefault(worker_count) else default_mutation_admission_cap;
     const default_request_stagger_us_for_run: u32 = if (high_fanout_setup) @max(@as(u32, default_request_stagger_us), 1000) else default_request_stagger_us;
     const ops_per_worker = @max(@as(u32, 1), envU32("GEODE_HC_OPS_PER_WORKER", default_ops_per_worker_for_run));
     const mutation_stride = envU32("GEODE_HC_MUTATION_STRIDE", default_mutation_stride_for_run);
@@ -976,6 +1195,7 @@ pub fn main() !void {
         envU32("GEODE_HC_MAX_CONNECTIONS", default_max_connections),
     );
     const capture_server_logs = envBool("GEODE_HC_CAPTURE_SERVER_LOGS", false);
+    const metrics_scrape = envBool("GEODE_HC_METRICS_SCRAPE", false);
     const client_diagnostics = envBool("GEODE_HC_CLIENT_DIAGNOSTICS", false);
     const cooperative_first_streams = envBool("GEODE_HC_COOPERATIVE_FIRST_STREAMS", true);
     // CANARY: REQ=REQ-QUIC-HC-161; FEATURE="High-Concurrency Diagnostics"; ASPECT=ShortHeaderTimingHarness; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
@@ -996,6 +1216,7 @@ pub fn main() !void {
     const read_query = envSlice("GEODE_HC_READ_QUERY", "MATCH (n:HCParallel) RETURN count(n) AS c");
 
     const port = try util.getRandomPort();
+    const metrics_port = try util.getRandomPort();
     const addr = try util.formatAddr(allocator, port);
     var addr_owned = true;
     defer if (addr_owned) allocator.free(addr);
@@ -1079,12 +1300,32 @@ pub fn main() !void {
         .{connection_admission_threads},
     );
     defer allocator.free(connection_admission_threads_env);
+    const group_commit_coalesce_us = envU32("GEODE_HC_GROUP_COMMIT_COALESCE_US", default_group_commit_coalesce_us_for_run);
+    const group_commit_coalesce_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_GROUP_COMMIT_COALESCE_US={d}",
+        .{group_commit_coalesce_us},
+    );
+    defer allocator.free(group_commit_coalesce_env);
+    const mutation_admission_cap = envU32("GEODE_HC_MUTATION_ADMISSION_CAP", default_mutation_admission_cap_for_run);
+    const mutation_admission_cap_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_QUIC_MUTATION_ADMISSION_CAP={d}",
+        .{mutation_admission_cap},
+    );
+    defer allocator.free(mutation_admission_cap_env);
     const server_hello_timeout_env = try std.fmt.allocPrint(
         allocator,
         "GEODE_QUIC_HELLO_READ_TIMEOUT_MS={d}",
         .{hello_timeout_ms},
     );
     defer allocator.free(server_hello_timeout_env);
+    const metrics_port_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_METRICS_PORT={d}",
+        .{metrics_port},
+    );
+    defer allocator.free(metrics_port_env);
     const cooperative_first_streams_env: []const u8 = if (cooperative_first_streams)
         "GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=1"
     else
@@ -1108,7 +1349,7 @@ pub fn main() !void {
     // This test opens one stream per connection. Disabling the multiplexed
     // stream acceptor keeps setup pressure focused on real connection/query
     // work instead of hundreds of idle acceptor loops.
-    const server_env: []const []const u8 = if (capture_server_logs)
+    const server_env: []const []const u8 = if (capture_server_logs and metrics_scrape)
         &.{
             "GEODE_QUIC_PASSIVE_TEARDOWN=1",
             "GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0",
@@ -1120,10 +1361,51 @@ pub fn main() !void {
             cooperative_first_stream_workers_env,
             connection_workers_env,
             connection_admission_threads_env,
+            group_commit_coalesce_env,
+            mutation_admission_cap_env,
+            "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
+            server_hello_timeout_env,
+            "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
+            metrics_port_env,
+            "GEODE_TEST_INHERIT_SERVER_STDERR=1",
+        }
+    else if (capture_server_logs)
+        &.{
+            "GEODE_QUIC_PASSIVE_TEARDOWN=1",
+            "GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0",
+            cooperative_first_streams_env,
+            short_header_timing_env,
+            detached_first_stream_env,
+            max_global_stream_env,
+            poll_workers_env,
+            cooperative_first_stream_workers_env,
+            connection_workers_env,
+            connection_admission_threads_env,
+            group_commit_coalesce_env,
+            mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
             "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
             "GEODE_TEST_INHERIT_SERVER_STDERR=1",
+        }
+    else if (metrics_scrape)
+        &.{
+            "GEODE_QUIC_PASSIVE_TEARDOWN=1",
+            "GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0",
+            cooperative_first_streams_env,
+            short_header_timing_env,
+            detached_first_stream_env,
+            max_global_stream_env,
+            poll_workers_env,
+            cooperative_first_stream_workers_env,
+            connection_workers_env,
+            connection_admission_threads_env,
+            group_commit_coalesce_env,
+            mutation_admission_cap_env,
+            "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
+            server_hello_timeout_env,
+            "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
+            metrics_port_env,
         }
     else
         &.{
@@ -1137,6 +1419,8 @@ pub fn main() !void {
             cooperative_first_stream_workers_env,
             connection_workers_env,
             connection_admission_threads_env,
+            group_commit_coalesce_env,
+            mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
             "GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192",
@@ -1428,6 +1712,9 @@ pub fn main() !void {
         "high-concurrency QUIC E2E memory rss_start_kb={d} rss_after_clients_kb={d} rss_delta_kb={d} rss_limit_kb={d}\n",
         .{ rss_start_kb, rss_after_clients_kb, rss_delta_kb, memory_growth_max_kb },
     );
+    if (metrics_scrape) {
+        printRuntimeMetricsSnapshot(allocator, metrics_port);
+    }
 
     if (graph_isolation_verify) {
         try verifyGraphIsolation(allocator, server.getAddr(), port, execute_timeout_secs);
