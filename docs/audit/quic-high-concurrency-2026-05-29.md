@@ -1,8 +1,8 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gate passes with zero setup retries, zero execute retries, and zero reconnects. Follow-up diagnostics now split read and mutation failures for ceiling probes and expose the cooperative mutation-admission cap as a server runtime knob.
-**Dependency state:** No new upstream QUIC or `geode-client-zig` commits were required in this cycle. Geode remains pinned to QUIC `fc7efc2d98a435a82598c2a34f697bde1c7532e2` and `geode-client-zig` `959a43a7f6981a87131561bb6cb99605272c8ce8`.
+**Status:** 4096 mixed read/mutation single-op gate passes with zero setup retries, zero execute retries, and zero reconnects. Follow-up diagnostics split read and mutation failures for ceiling probes, expose the cooperative mutation-admission cap as a server runtime knob, and now pin the upstream QUIC server STREAM ACK fanout fix.
+**Dependency state:** Geode now pins QUIC `a68d36e06dc9a0815a7a02d5e18b9d8d06e9ad6b` and `geode-client-zig` `e96ca352c11b36c55c3df517a0d9a3b0112145ab`.
 
 ## Summary
 
@@ -13,6 +13,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 3. Failed 4k probes printed thousands of duplicate worker timeout lines. `REQ-QUIC-HC-152` caps per-worker failure logs at 64 while preserving exact counters and final phase summaries.
 4. The cooperative mutation-admission cap is now tunable through `GEODE_QUIC_MUTATION_ADMISSION_CAP` while keeping the default at 4. This lets ceiling probes validate alternate write-admission windows without editing source or changing the established regression gate.
 5. The high-concurrency E2E summary now reports `read_failed` and `mutation_failed`, making overloaded probes distinguish read-tail transport/scheduler stalls from mutation-specific write pressure.
+6. The next 250 us mixed ceiling probe localized the remaining tail to upstream QUIC short-header ACK/frame processing. QUIC `a68d36e` now defers the first server-side STREAM-only standalone ACK so request/response traffic can piggyback ACKs on response packets, while an `AppAckDelay` timer preserves max-ACK-delay behavior for quiet/upload-only peers.
 
 ## Changed Files
 
@@ -29,6 +30,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Adds read/mutation failure split counters to failed workload summaries.
 - `tests/test_quic_condition_timedwait_cadence.zig`
   - Source-audits the mutation window cap, runtime override, adaptive polling shape, failure-log backpressure, and failure split counters.
+- `build.zig.zon`
+  - Pins both direct QUIC and embedded `geode-client-zig` to the upstream server STREAM ACK fanout fix.
 
 ## Accepted Verification
 
@@ -37,9 +40,9 @@ All commands below were run on 2026-05-29.
 | Command | Result |
 |---------|--------|
 | `zig build test-quic-condition-cadence --summary all` | PASS, 70/70 tests. |
-| 4096 mixed single-op E2E gate below | PASS, 4096/4096 operations, zero retries, zero reconnects. Re-run after follow-up diagnostics: PASS at 995.00 QPS. |
+| `zig build --summary all` after dependency repin | PASS, debug binaries rebuilt against QUIC `a68d36e` and `geode-client-zig` `e96ca35`. |
+| 4096 mixed single-op E2E gate below | PASS, 4096/4096 operations, zero retries, zero reconnects. Re-run after upstream ACK fanout repin: PASS at 984.71 QPS. |
 | 4096 read-only 250 us low-stagger probe | PASS, 4096/4096 operations, zero retries, zero reconnects. |
-| `zig build --summary all` | PASS, debug binary rebuilt after ReleaseFast E2E runs. |
 
 4096 mixed read/mutation gate:
 
@@ -60,8 +63,8 @@ Result:
 
 ```text
 workers=4096 ops_per_worker=1 mutation_stride=4 ops=4096 reads=3072 mutations=1024
-setup_ms=5136 elapsed_ms=4116 qps=995.00
-avg_read_ms=119.67 avg_mut_ms=117.81 avg_first_op_ms=119.20 max_ms=446.96
+setup_ms=5531 elapsed_ms=4159 qps=984.71
+avg_read_ms=128.29 avg_mut_ms=125.85 avg_first_op_ms=127.68 max_ms=454.87
 setup_attempts=4096 setup_retries=0
 execute_attempts=4096 execute_retries=0 execute_reconnects=0
 ```
@@ -106,6 +109,7 @@ All rows below used 4096 workers, one operation per worker, mutation stride 4, 1
 | Mutation cap 8 via `GEODE_QUIC_MUTATION_ADMISSION_CAP=8` | `ok=278/4096`, `read_failed=2863`, `mutation_failed=955` | Rejected. A wider mutation window starves read progress and confirms the default cap must stay small for mixed workloads. |
 | Parked mutation-overflow wait queue | `ok=2287/4096` | Worse than immediate overflow requeue; it delayed mixed progress instead of reducing contention. |
 | Cooperative first-stream worker ceiling 1024 | `ok=780/4096`, `read_failed=2487`, `mutation_failed=829` | Rejected. Extra scheduler lanes starved transport/poller work and worsened both reads and mutations. |
+| QUIC `a68d36e` server STREAM ACK fanout fix at 250 us mixed | `ok=2445/4096`, `read_failed=1160`, `mutation_failed=491` | Improved over the prior instrumented ceiling probe (`ok=1705/4096`) but still not promoted. The 1000 us gate remains the accepted regression threshold. |
 
 ## Known Unrelated Test Failure
 
@@ -128,5 +132,5 @@ The failing nodes repeatedly log `raft transport getOrCreatePeerConnection faile
 ## Remaining Work
 
 1. Add transport counters for ready-to-first-EXECUTE latency and response write latency so the 250 us mixed tail can be split between request admission, mutation execution, and response delivery.
-2. Add a passing 250 us mixed regression gate once the remaining 186-operation tail from the cap-4 probe is closed.
+2. Add a passing 250 us mixed regression gate once the remaining read/mutation timeout tail from the latest `ok=2445/4096` probe is closed.
 3. Revisit mutation admission per graph once the storage write path can execute independent graph mutations concurrently.

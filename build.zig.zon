@@ -143,8 +143,11 @@
             // immediate app-stream flow-control feedback.
             // 2026-05-28: restores the proven wider server short-header drain
             // after rejecting one-batch, two-batch, and packet-shedding variants.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#fc7efc2d98a435a82598c2a34f697bde1c7532e2",
-            .hash = "quic-0.1.21-gBIqUefHPABsz6Q34xvxSzYfE-3_3OLHarBTmhFRiI3g",
+            // 2026-05-29: defers the first server-side STREAM-only standalone
+            // ACK so request/response traffic can piggyback ACKs on response
+            // packets, with AppAckDelay preserving max_ack_delay for quiet peers.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#a68d36e06dc9a0815a7a02d5e18b9d8d06e9ad6b",
+            .hash = "quic-0.1.21-gBIqUeHmPADddO39D62L-gMpkIq0hQYX0-BpsXL20uX3",
         },
 
         // =======================================================================
@@ -264,8 +267,10 @@
             // quic b8d331d's server short-header contention shedding.
             // 2026-05-28: bumped to 959a43a so client and server share
             // quic fc7efc2's restored server short-header drain.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#959a43a7f6981a87131561bb6cb99605272c8ce8",
-            .hash = "geode_client_zig-0.2.9-8ysbV69iCQAuR0fpo0_YS0-1K_u6XxSKcW6NxcexTs6G",
+            // 2026-05-29: bumped to e96ca35 so client and server share
+            // quic a68d36e's server STREAM ACK fanout reduction.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#e96ca352c11b36c55c3df517a0d9a3b0112145ab",
+            .hash = "geode_client_zig-0.2.9-8ysbV5xjCQCP_h_C2ebEvTjwXEJB4rDaKOaabGKBNexE",
         },
 
         // =======================================================================

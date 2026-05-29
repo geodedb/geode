@@ -205,6 +205,13 @@ ownership transfer.
    dependency and `geode_client_zig` to the same upstream commit so client and server code do not
    pull different QUIC module instances into the build.
 
+4. **Reduce server STREAM ACK fanout in the upstream QUIC receive path.** Upstream QUIC commit
+   `a68d36e06dc9a0815a7a02d5e18b9d8d06e9ad6b` defers the first server-side STREAM-only standalone
+   Application ACK. Geode request/response packets can then use the library's existing ACK+STREAM
+   piggyback path on the response packet, while ECN/control packets and every second STREAM packet
+   still ACK immediately. A new `AppAckDelay` timer preserves the RFC 9000 max-ACK-delay fallback
+   for quiet or upload-only peers.
+
 The original defense-in-depth guidance still applies for future TLS work: ownership transfer
 from TLS outbound buffers must stay inside a single-writer critical section, and debug-only owner
 assertions would catch any future regression earlier than a downstream `@memcpy` panic.
