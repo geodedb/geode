@@ -154,7 +154,17 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
 // Detached first-stream owners run the full request loop, including GQL parse
 // and execution. 1 MiB is enough for lightweight protocol handling but can
 // overflow in the parser on ordinary client queries such as `RETURN 1 AS x`.
-const first_stream_owner_stack_size = 2 * 1024 * 1024;
+//
+// GAP-0333: the recursive-descent GQL parser climbs ~6 precedence frames per
+// nested parenthesis (parseOrExpr → … → parsePrimaryExpr → parseOrExpr). The
+// parser enforces a hard nesting limit of 128 (Parser.enterRecursion), so the
+// owner stack must hold ~130 levels of that chain or a legal 128-deep query
+// segfaults before the depth guard can return a clean error. At 2 MiB the
+// stack overflowed around ~60–90 levels (release) / ~45 (debug); 8 MiB leaves
+// comfortable headroom for the full 128-deep limit in both build modes. This
+// is virtual reservation only — pages fault in solely for genuinely deep
+// queries (bounded by the 128 guard), so normal-load RSS is unchanged.
+const first_stream_owner_stack_size = 8 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
 const first_stream_scheduler_turn_delay_per_excess_ns: u64 = 2 * std.time.ns_per_us;

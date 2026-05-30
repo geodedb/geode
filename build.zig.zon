@@ -337,8 +337,8 @@
         // See docs/superpowers/specs/2026-04-24-sharded-graph-engine-design.md
         // in the graph-storage repo.
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#5eb4602dce66c0d767a16ba0178b68b108ed4b9c",
-            .hash = "graph_storage-0.1.4-9UyJS-G0DQBtVSCLY5Xusyb5DP8XbzlCTlR23rf6ZggP",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#5105e962a0949eda8e6936c85ff22300716ae7af",
+            .hash = "graph_storage-0.1.4-9UyJS0LHDQA_DQ3TdA_zejT9qD8v8NkSFDn-Vd64vMsi",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

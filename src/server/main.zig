@@ -185,14 +185,25 @@ const authn_mod = geode.security.authn;
 // CANARY: REQ=REQ-QUIC-HC-009; FEATURE="High-Concurrency Allocator"; ASPECT=ServerAllocator; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
 //
 // Debug builds keep DebugAllocator leak detection. Optimized server builds use
-// the SMP allocator so high-concurrency request parsing/protobuf work does not
-// serialize on debug-allocation bookkeeping.
+// the libc allocator (glibc malloc).
+//
+// GAP-0343 (RSS): the SMP allocator caches freed memory in per-thread,
+// per-size-class free lists and never returns it to the OS. Under connection
+// churn each of the ~hundreds of pooled stream/worker threads accumulates the
+// per-connection buffers it has handled (the multi-MB stream reassembly
+// buffer sized by max_stream_data dominates), so RSS climbed ~19 MB per
+// connection without bound — a single-tenant 5-minute load reached >9 GB. The
+// libc allocator munmaps large allocations on free and trims its arenas, so
+// freed per-connection memory is returned to the OS (release now tracks the
+// flat RSS profile already observed under the debug page-backed allocator).
+// glibc's per-thread-arena design keeps the hot parse/protobuf path lock-light,
+// so this does not reintroduce the serialization the SMP allocator avoided.
 const ServerAllocator = if (builtin.mode == .Debug)
     std.heap.DebugAllocator(.{})
 else
     struct {
         pub fn allocator(_: *@This()) std.mem.Allocator {
-            return std.heap.smp_allocator;
+            return std.heap.c_allocator;
         }
     };
 
@@ -808,7 +819,32 @@ fn bindLib(comptime LibObservability: type, comptime scope_name: []const u8) voi
     };
 }
 
+// GAP-0343 (RSS): pin glibc's mmap/trim thresholds so large per-connection
+// buffers (e.g. the multi-MB stream reassembly buffer sized by max_stream_data)
+// are mmap'd and munmap'd on free instead of being retained in malloc arenas.
+// glibc dynamically RAISES M_MMAP_THRESHOLD (up to 32 MiB) after freeing mmap'd
+// chunks, which lets those buffers fall back into sbrk arenas that are never
+// returned to the OS — under connection churn RSS climbed ~17 MB per connection
+// and a single 5-minute load exceeded 9 GB. Setting M_MMAP_THRESHOLD also
+// disables that dynamic adjustment, so freed per-connection memory is returned
+// and RSS stays flat (matching the page-backed debug allocator profile).
+// No-op on non-Linux / non-glibc targets.
+fn tuneServerMalloc() void {
+    if (comptime builtin.os.tag != .linux) return;
+    const c = struct {
+        extern "c" fn mallopt(param: c_int, value: c_int) c_int;
+    };
+    const M_TRIM_THRESHOLD: c_int = -1;
+    const M_MMAP_THRESHOLD: c_int = -3;
+    _ = c.mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+    _ = c.mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+}
+
 pub fn main() !void {
+    // Return freed large per-connection allocations to the OS (see notes on
+    // tuneServerMalloc). Must run before the first glibc allocation.
+    tuneServerMalloc();
+
     // Raise RLIMIT_NOFILE soft to hard before anything opens an FD. Shells
     // that don't bump the systemd default (LimitNOFILESoft=1024) would
     // otherwise cap us at 1024 FDs, and the sharded storage engine opens
@@ -1831,7 +1867,14 @@ pub fn main() !void {
             .num_threads = quic_connection_worker_count,
             .queue_capacity = quic_connection_queue_capacity,
             .blocking_workers = 0,
-            .stack_size = 2 * 1024 * 1024, // 2MB per thread (default 16MB causes ~19MB RSS growth per faulted stack)
+            // GAP-0333: connection workers also run the recursive-descent GQL
+            // parser, which needs ~6 stack frames per nested paren up to the
+            // 128-deep hard limit. 2 MiB overflowed (segfault) well before 128;
+            // 8 MiB holds the full limit so an over-deep query returns a clean
+            // parse error instead of crashing. Virtual reservation only — pages
+            // fault in solely for genuinely deep queries, so normal-load RSS is
+            // unchanged (16 MiB default caused ~19 MiB RSS growth per faulted stack).
+            .stack_size = 8 * 1024 * 1024,
         }) catch |err| {
             log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
                 Attr.string("error", @errorName(err)),
