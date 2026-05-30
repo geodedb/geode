@@ -107,7 +107,7 @@ test "16-worker concurrent bulkInsertNodeWithReservedId: 1600 distinct ids, no d
     // Wait for every worker. The direct test usually finishes in a few seconds,
     // but CI runs 8 parallel shards on the same host — use a generous 120 s
     // deadline to avoid spurious timeouts under resource contention.
-    const deadline_ns = nowNs() + 120 * std.time.ns_per_s;
+    const deadline_ns = deadlockDeadlineNs(120);
     outer: while (true) {
         var all_done = true;
         for (&ctxs) |*c| {
@@ -156,6 +156,26 @@ fn nowNs() u64 {
         _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     }
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+/// Absolute deadline for the no-deadlock detector loops in this file.
+///
+/// The deadline is a *deadlock detector*, not a perf gate: on a quiet host
+/// these batches finish in well under a second. Under the pre-push gate the
+/// box is heavily oversubscribed — 4 sharded test suites run in parallel
+/// (`zig build test -Dtest-shard-total=4` x4), so dozens of 16-worker
+/// coordinators contend for cores and WAL fsyncs on one disk. Wall-clock then
+/// stretches far past the quiet-host budget without any actual deadlock
+/// (measured: a 16-worker coordinator run that takes <1 s in isolation takes
+/// ~12 s under heavy local oversubscription, and more under the real 4x suite),
+/// which made these tests flake at the 120 s / 9 s budgets. When CI is set
+/// (the pre-push and CI both export it) use a large flat backstop so
+/// contention-induced slowness cannot false-fire, while still bounding a
+/// genuine permanent hang well within CI's per-shard timeout.
+fn deadlockDeadlineNs(local_secs: u64) u64 {
+    const in_ci = std.c.getenv("CI") != null or std.c.getenv("GITLAB_CI") != null;
+    const secs: u64 = if (in_ci) 1800 else local_secs;
+    return nowNs() + secs * std.time.ns_per_s;
 }
 
 const EdgeCtx = struct {
@@ -242,7 +262,7 @@ test "8-worker concurrent bulkInsertEdgeWithIdsShardLocked: 800 distinct edges, 
         });
     }
 
-    const deadline_ns = nowNs() + 9 * std.time.ns_per_s;
+    const deadline_ns = deadlockDeadlineNs(9);
     outer: while (true) {
         var all_done = true;
         for (&ctxs) |*c| {

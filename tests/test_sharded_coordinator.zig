@@ -43,6 +43,25 @@ fn monoNanosNow() u64 {
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
+/// Absolute deadline for the `waitForAllDone` no-deadlock detector.
+///
+/// The deadline is a *deadlock detector*, not a perf gate. Under the pre-push
+/// gate the box is heavily oversubscribed — 4 sharded test suites run in
+/// parallel (`zig build test -Dtest-shard-total=4` x4), so dozens of
+/// 16-submitter coordinators contend for cores and WAL fsyncs on one disk and
+/// wall-clock stretches far past the quiet-host budget without any actual
+/// deadlock (a run that takes <1 s in isolation takes ~12 s under heavy local
+/// oversubscription, more under the real 4x suite). That made this test flake
+/// at the 120 s budget. When CI is set (the pre-push and CI both export it)
+/// use a large flat backstop so contention-induced slowness cannot false-fire,
+/// while still bounding a genuine permanent hang well within CI's per-shard
+/// timeout.
+fn deadlockDeadlineNs(base_ns: u64, local_secs: u64) u64 {
+    const in_ci = std.c.getenv("CI") != null or std.c.getenv("GITLAB_CI") != null;
+    const secs: u64 = if (in_ci) 1800 else local_secs;
+    return base_ns + secs * std.time.ns_per_s;
+}
+
 const WorkerCtx = struct {
     coord: *group_commit.ShardedCoordinator,
     per_worker: usize,
@@ -139,7 +158,7 @@ test "ShardedCoordinator: 16 submitters x 100 ops land in distinct ids" {
     // background container workers) wall-clock can stretch well past
     // 30 s without any actual deadlock. The budget is generous enough
     // to absorb that while still catching genuine hangs.
-    try waitForAllDone(&ctxs, start_ns + 120 * std.time.ns_per_s);
+    try waitForAllDone(&ctxs, deadlockDeadlineNs(start_ns, 120));
 
     for (&ctxs, 0..) |*c, i| {
         if (c.err.load(.acquire) != 0) {
@@ -219,8 +238,8 @@ test "ShardedCoordinator: per-graph isolation — two graphs run independently" 
 
     // 120 s deadlock detector — small workload (200 ops per graph) but
     // same flake risk as the 16-submitter test under heavy CPU load.
-    try waitForAllDone(&ctxs_g1, start_ns + 120 * std.time.ns_per_s);
-    try waitForAllDone(&ctxs_g2, start_ns + 120 * std.time.ns_per_s);
+    try waitForAllDone(&ctxs_g1, deadlockDeadlineNs(start_ns, 120));
+    try waitForAllDone(&ctxs_g2, deadlockDeadlineNs(start_ns, 120));
 
     for (&ctxs_g1) |*c| try std.testing.expect(c.err.load(.acquire) == 0);
     for (&ctxs_g2) |*c| try std.testing.expect(c.err.load(.acquire) == 0);
