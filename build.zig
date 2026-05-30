@@ -581,6 +581,17 @@ pub fn build(b: *std.Build) void {
 
     const timeseries_storage_dep = b.dependency("timeseries_storage", .{ .target = target, .optimize = optimize });
     const timeseries_storage_ext_mod = timeseries_storage_dep.module("timeseries_storage");
+    const fts_storage_dep = b.dependency("fts_storage", .{ .target = target, .optimize = optimize });
+    const fts_storage_ext_mod = fts_storage_dep.module("fts_storage");
+    const fts_smoke_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_fts_storage_smoke.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    fts_smoke_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
+    const run_fts_smoke = b.addRunArtifact(fts_smoke_tests);
+    const fts_smoke_step = b.step("test-fts-storage-smoke", "Smoke test: fts-storage library wired + roundtrip");
+    fts_smoke_step.dependOn(&run_fts_smoke.step);
 
     const auth_dep = b.dependency("auth", .{ .target = target, .optimize = optimize });
     const auth_ext_mod = auth_dep.module("auth");
@@ -744,6 +755,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("gql_lib", gql_ext_mod);
     root_mod.addImport("timeseries_lib", timeseries_ext_mod);
     root_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    root_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
     root_mod.addImport("auth_lib", auth_ext_mod);
     root_mod.addImport("geode_client_zig", zig_client_real_mod);
 
@@ -805,6 +817,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("gql_lib", gql_ext_mod);
     geode_exe.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     geode_exe.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    geode_exe.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
     geode_exe.root_module.addImport("auth_lib", auth_ext_mod);
 
     // Add centralized logging module for CLI
@@ -962,6 +975,7 @@ pub fn build(b: *std.Build) void {
     gql_exe.root_module.addImport("geode", root_mod);
     gql_exe.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     gql_exe.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    gql_exe.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
     if (target.result.os.tag == .windows) {
         gql_exe.root_module.link_libc = true;
     }
@@ -1027,6 +1041,7 @@ pub fn build(b: *std.Build) void {
     exe_unit_tests.root_module.addImport("build_options", build_options_mod);
     exe_unit_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     exe_unit_tests.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    exe_unit_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
 
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
     gql_unit_tests.root_module.addImport("geode", root_mod);
@@ -1034,6 +1049,7 @@ pub fn build(b: *std.Build) void {
     gql_unit_tests.root_module.addImport("build_options", build_options_mod);
     gql_unit_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     gql_unit_tests.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    gql_unit_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
     // Don't add gql module import here to avoid duplicate module ownership
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -1520,6 +1536,7 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("advanced_types_lib", advanced_types_ext_mod);
     graph_store_unit_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     graph_store_unit_tests.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    graph_store_unit_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
     graph_store_unit_tests.root_module.addImport("schema", schema_mod);
     graph_store_unit_tests.root_module.addImport("rtree_lib", rtree_ext_mod);
     graph_store_unit_tests.root_module.addImport("hnsw_lib", hnsw_ext_mod);
@@ -1933,10 +1950,12 @@ pub fn build(b: *std.Build) void {
     const ts_gql_mod = b.createModule(.{ .root_source_file = b.path("src/timeseries/gql_functions.zig"), .target = target, .optimize = optimize });
     ts_gql_mod.addImport("timeseries_lib", timeseries_ext_mod);
     ts_gql_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    ts_gql_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
 
     const timeseries_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/timeseries/timeseries.zig"), .target = target, .optimize = optimize });
     timeseries_wrapper_mod.addImport("timeseries_lib", timeseries_ext_mod);
     timeseries_wrapper_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    timeseries_wrapper_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
     timeseries_wrapper_mod.addImport("thread_pool", thread_pool_ext_mod);
     ts_gql_mod.addImport("timeseries.zig", timeseries_wrapper_mod);
 
@@ -1946,6 +1965,7 @@ pub fn build(b: *std.Build) void {
     const e2e_ts_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_timeseries.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
     e2e_ts_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     e2e_ts_tests.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    e2e_ts_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
     e2e_ts_tests.root_module.addImport("gql_functions", ts_gql_mod);
     e2e_ts_tests.root_module.addImport("timeseries_wrapper", timeseries_wrapper_mod);
     const run_e2e_ts_tests = b.addRunArtifact(e2e_ts_tests);
@@ -1954,6 +1974,7 @@ pub fn build(b: *std.Build) void {
     const ts_store_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/ts_store_integration.zig"), .target = target, .optimize = optimize }) });
     ts_store_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     ts_store_tests.root_module.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    ts_store_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
     ts_store_tests.root_module.addImport("timeseries_wrapper", timeseries_wrapper_mod);
     const run_ts_store_tests = b.addRunArtifact(ts_store_tests);
 
@@ -3076,6 +3097,7 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
     merge_bench_gs_mod.addImport("timeseries_lib", timeseries_ext_mod);
     merge_bench_gs_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    merge_bench_gs_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
     merge_bench_gs_mod.addImport("schema", schema_mod);
     merge_bench_gs_mod.addImport("rtree_lib", rtree_ext_mod);
     merge_bench_gs_mod.addImport("hnsw_lib", hnsw_ext_mod);
