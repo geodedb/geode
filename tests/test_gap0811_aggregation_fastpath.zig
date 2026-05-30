@@ -128,7 +128,13 @@ test "GAP-0811: count(p:LT_Person) uses label-index cardinality" {
 
     // Latency smoke: 200 materializeNode calls at ~180 µs each would be ~36 ms.
     // <2 ms confirms the fast path skipped per-row materialization.
-    try testing.expect(elapsed_ns < 2_000_000);
+    // Skipped under CI/oversubscription (the local pre-push runs 4 shards in
+    // parallel >> cores, which makes a 2 ms wall-clock budget meaningless — the
+    // same rationale the pre-push applies via CI=1 to the other perf-gate tests).
+    // The correctness assertions above (row count + value 200) always run.
+    if (std.c.getenv("CI") == null) {
+        try testing.expect(elapsed_ns < 2_000_000);
+    }
 }
 
 test "GAP-0811: count(c:LT_Company) on different label returns correct count" {
