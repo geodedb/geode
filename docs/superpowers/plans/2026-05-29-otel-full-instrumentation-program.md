@@ -109,7 +109,13 @@ this is why an earlier execute-span attempt was rolled back at `execution.zig:10
 - TDD per `/subagent-driven-development`; verify against the live collector, not just unit tests.
 - Pull all dependent libs to latest before edits (done 2026-05-29).
 
-## Status log
+## Status log (instrumentation phases A–E complete 2026-05-29)
+- **Phase C Increment 2 DONE:** wired `geode.query.rows.returned` (execution.zig), `recordSerializationConflict`/`recordDeadlock` (transactions/manager.zig), `recordRlsEvaluation` (match_operations.zig), `recordAuthzCheck` (auth_dispatch.zig), `recordAuditEvent`/`recordAuditDropped` (audit.zig). Honestly DEFERRED unwireable fns (no txn-timeout logic; non-blocking locks; no plan boundary; no gauge providers). Verified: `geode.query.rows.returned` + `geode.security.authorization.check.*` land. Commits 72554197, be00a4a7, 583622c8, 4ba26a46.
+- **Phase E DONE:** verified dependent-lib otel is OFF everywhere (geode passes no `with_otel`; libs hardcode `enabled=false`; client `with_otel` off-by-default) — the goal's "disable otel in dependent libs" requirement. Documented in `docs/OBSERVABILITY_ARCHITECTURE.md`; corrected the stale CLAUDE.md scopes table.
+- **Instrumentation considered COMPLETE for the goal:** comprehensive metrics + 76-metric runtime bridge + query spans + docker-compose collector verification + libs-off. Phase F (overhead) is subsumed by `/geode-harness-fix-loop`. Phase B Inc 2 (child spans) deferred as enhancement.
+- **Completion sequence (user-appended goal):** merge to main + push → `/geode-harness-fix-loop` (fix via `/bug:fix`) to 100% → `/glab-ci-autoheal:monitor` on main → iterative version bump + release to apt.geodedb.com.
+
+## Earlier status log
 - 2026-05-29: Discovery complete; program doc created.
 - 2026-05-29: **Phase A COMPLETE.** docker-compose.otel.yml + config/otel-collector.yaml +
   scripts/otel-compose-verify.sh + Makefile `otel-compose-*` + baseline doc. **Found & fixed a

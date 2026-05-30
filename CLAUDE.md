@@ -221,18 +221,18 @@ make otel-stop                       # tear down
 - `reports/otel-collector.log` — drained collector stdout.
 - `reports/.otel-env` — exact `OTEL_*` env vars sourced into the test run.
 
-**InstrumentationScopes that fire** (after merge commit `5609bc79`):
+**InstrumentationScopes that fire** (updated 2026-05-29 — see [docs/OBSERVABILITY_ARCHITECTURE.md](docs/OBSERVABILITY_ARCHITECTURE.md)):
 
-| Scope | Useful for |
+> **IMPORTANT:** dependent-library otel seams (wal, gql, dns, vulkan, thread_pool, repl, slog,
+> protobuf) are **OFF** — every lib hardcodes `observability.enabled = false` and geode passes no
+> `-Dwith_otel`. So those lib scopes do **NOT** fire (zero overhead). geode emits its OWN telemetry
+> under `com.geodedb.geode`, and bridges lib-internal QUIC stats into `geode.runtime.*`.
+
+| Scope | What geode emits |
 |---|---|
-| `com.geodedb.geode` | `geode.transport.request`, `geode.query.execute`, `geode.graph_store.{create_node,get_nodes_by_label}`, `gql.execute.PARSE`, `wal.{create,update,delete}_*` |
-| `wal` | `wal.{replay,append,append_batch,commit,checkpoint,truncate}` |
-| `gql` | `gql.execute.query` (parser entry inside the lib) |
-| `dns` | DNS lookups (`client.zig`, `recursive.zig`, `stub.zig`) |
-| `vulkan` | GPU compute ops (when present in the workload) |
-| `thread_pool` | task lifecycle |
-| `repl` | REPL command execution |
-| `protobuf` / `slog` | bound for forward-compat; no internal spans today |
+| `com.geodedb.geode` (metrics) | `geode.query.*` (count/active/execution.duration/parse.duration/rows.returned), `geode.transport.*` (connection/request.duration/inflight/bytes), `geode.storage.*`, `geode.wal.*`, `geode.index.*`, `geode.transaction.*`, `geode.security.authorization.check.*`, `geode.security.rls.evaluation.*` (when an RLS policy is active), `geode.audit.*`, `geode.server.*` |
+| `com.geodedb.geode` (`geode.runtime.*`) | 76 observable gauges bridging the runtime registry: QUIC RTT/cwnd/bytes-in-flight (`geode.runtime.quic_*`), 20 poll-phase timings, 13 stream-write counters, 24 first-stream phase metrics, `geode.runtime.proto_reader_*`, leaked-conn reaper |
+| `com.geodedb.geode` (traces) | `geode.query.execute` SERVER span per statement (bounded attrs only). geode-side periodic flush drains the BSP (no-pool BSP has no timer) |
 
 **Common debugging recipes**:
 
