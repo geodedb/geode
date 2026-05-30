@@ -88,3 +88,26 @@ test "init copies cluster_name and max_connections from Config" {
     try std.testing.expectEqualStrings("prod-east", coord.cluster_name);
     try std.testing.expectEqual(@as(u32, 1024), coord.max_connections);
 }
+
+test "init rejects node_id 0 as InvalidId and leaks nothing" {
+    // The bundled raft library reserves id 0 as the invalid sentinel
+    // (raft node.zig: `if (self.id == 0) return ConfigError.InvalidId`).
+    // ClusterCoordinator.init must surface that as error.InvalidId AND free
+    // everything it allocated before the failure: the resolvePeers slice, the
+    // duped peer endpoints, and the RaftNode wrapper. Before the errdefer
+    // fixes in cluster.zig/raft_consensus.zig these leaked on every rejected
+    // cluster config, which the DebugAllocator reported and which aborted
+    // geodetestlab cluster startup ("Server exited unexpectedly with code 1").
+    //
+    // Using std.testing.allocator (not an arena) is the whole point: it fails
+    // the test if any of those allocations are not reclaimed on the error path.
+    const a = std.testing.allocator;
+    const peers = [_]ClusterCoordinator.PeerConfig{
+        .{ .id = 1, .address = "127.0.0.1", .port = 5000 },
+    };
+    const cfg = ClusterCoordinator.Config{
+        .peers = &peers,
+        .cluster_token = "test",
+    };
+    try std.testing.expectError(error.InvalidId, ClusterCoordinator.init(a, 0, cfg));
+}

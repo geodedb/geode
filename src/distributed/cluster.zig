@@ -671,6 +671,20 @@ pub const ClusterCoordinator = struct {
         config: Config,
     ) !ClusterCoordinator {
         const peers = try resolvePeers(allocator, config.peers);
+        // resolvePeers duped each peer.endpoint and allocated the slice; the
+        // coordinator only takes ownership once it is fully constructed and
+        // returned (deinit frees peers + endpoints). If any `try` below fails
+        // before that return — e.g. RaftNode.init rejecting node_id==0 as
+        // InvalidId, or initNetworkTransport/initHealthMonitor failing — these
+        // would otherwise leak (observed as DebugAllocator leaks aborting
+        // geodetestlab cluster startup). This errdefer mirrors deinit's free
+        // ordering; it does NOT fire on the success return.
+        errdefer {
+            for (peers) |peer| {
+                if (peer.endpoint.len > 0) allocator.free(peer.endpoint);
+            }
+            allocator.free(peers);
+        }
         // RaftNode.init() already returns a heap-owned *RaftNode (it does the
         // create() inside).  The previous code double-allocated by calling
         // allocator.create(RaftNode) and then assigning raft.* = init(...),
@@ -683,6 +697,14 @@ pub const ClusterCoordinator = struct {
             peers,
             config.election_timeout_ms,
         );
+        // raft.deinit() does not touch raft.peers (see deinit above, which
+        // frees peers separately), so this unwind composes with the peers
+        // errdefer without double-freeing. Fires only on an error return from
+        // a later `try` in this function, never on the success return.
+        errdefer {
+            raft.deinit();
+            allocator.destroy(raft);
+        }
 
         const store = graph_store.getGlobalStore(allocator);
 

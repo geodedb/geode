@@ -1611,6 +1611,12 @@ pub const RaftNode = struct {
         _: *const Clock,
     ) !*RaftNode {
         const node = try allocator.create(RaftNode);
+        // If any subsequent init step fails (most notably raft_lib.RaftNode.init
+        // rejecting an invalid config such as id==0 -> InvalidId), the wrapper
+        // we just allocated would leak. The node's fields aren't populated until
+        // the `node.* = ...` at the end, so a bare destroy is the correct unwind
+        // here (no deinit of partial state required).
+        errdefer allocator.destroy(node);
 
         // Map Peer IDs to u64 array for external raft library
         const peer_ids = try allocator.alloc(u64, peers.len);
