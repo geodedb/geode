@@ -39,6 +39,10 @@ const otel = @import("otel");
 // declared as a named module root and otel_resource.zig is simultaneously
 // the root of a peer module.
 const otel_resource = @import("otel_resource");
+// Phase C1: the process-global runtime metrics registry (quic_* / proto_reader_*
+// / quic_stream_write_* / poll-phase counters). `registerRuntimeMetricsOtel`
+// bridges every entry into OTLP as a `geode.runtime.<name>` observable gauge.
+const runtime_metrics = @import("runtime_metrics");
 
 const Resource = otel.sdk.resource.Resource;
 const MeterProvider = otel.sdk.metrics.MeterProvider;
@@ -305,6 +309,17 @@ pub fn shutdown() void {
     g_runtime_rss_gauge = null;
     g_runtime_threads_gauge = null;
     g_db_client = null;
+    // Phase C1: free the runtime-metrics OTLP bridge ctxs + name strings. Safe
+    // here because the provider (and its observable callbacks) was already torn
+    // down above, so nothing can dereference these after this point.
+    if (g_allocator) |a| {
+        for (g_runtime_bridges.items) |rb| {
+            a.destroy(rb.bridge);
+            a.free(rb.name);
+        }
+        g_runtime_bridges.deinit(a);
+    }
+    g_runtime_bridges = .empty;
     g_allocator = null;
 }
 
@@ -1069,6 +1084,101 @@ pub fn registerTransportConnectionGauge(provider_fn: *const fn () i64) !void {
 fn observeActiveConnections(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
     if (g_active_connections_provider) |fnp| {
         observer.observeInt(fnp(), &.{.{ .key = "geode.transport.protocol", .value = .{ .string = "quic" } }});
+    }
+}
+
+// -------------------------------------------------------------------------
+// Runtime-metrics registry → OTLP bridge (Phase C1).
+//
+// geode computes a rich set of runtime counters/gauges (quic_*, proto_reader_*,
+// quic_stream_write_*, poll-phase ns) in a process-global
+// `runtime_metrics.Registry`. They render to Prometheus /metrics but did not
+// reach OTLP. `registerRuntimeMetricsOtel` creates one OTel observable gauge
+// per registry entry, named `geode.runtime.<original_name>`, backed by a heap
+// bridge that reads the source atomic/callback at OTel collection time.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-RUNTIME-BRIDGE-001; FEATURE="OTel Instrumentation"; ASPECT=RuntimeCounterBridge; STATUS=TESTED; TEST=tests/test_otel_runtime_bridge.zig; OWNER=monitoring; UPDATED=2026-05-29
+
+// Heap bridge so an OTel observable callback (single ?*anyopaque ctx) can carry
+// either a counter atomic ptr or a runtime Gauge{callback,ctx}. The read path is
+// bounded + safe: an atomic load for counters, or the registry gauge callback
+// (cheap field reads / a brief connection-mutex at collection cadence; no
+// unbounded labels).
+const RuntimeBridge = struct {
+    counter_ptr: ?*std.atomic.Value(u64) = null,
+    gauge_cb: ?*const fn (*anyopaque) u64 = null,
+    gauge_ctx: ?*anyopaque = null,
+
+    fn read(self: *const RuntimeBridge) i64 {
+        if (self.counter_ptr) |p| return @intCast(p.load(.acquire));
+        if (self.gauge_cb) |cb| return @intCast(cb(self.gauge_ctx.?));
+        return 0;
+    }
+};
+
+fn observeRuntimeBridge(ctx: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    const b: *const RuntimeBridge = @ptrCast(@alignCast(ctx.?));
+    observer.observeInt(b.read(), &.{});
+}
+
+// Process-lifetime storage for the bridge ctxs + their `geode.runtime.<name>`
+// strings. These outlive `registerRuntimeMetricsOtel` (the meter holds the
+// callback ctx + descriptor name for the life of the provider) and are freed
+// ONLY in `shutdown()`, after the provider is torn down. Same ownership idiom
+// as `g_lib_handles`.
+const RuntimeBridgeAlloc = struct {
+    bridge: *RuntimeBridge,
+    name: []const u8,
+};
+var g_runtime_bridges: std.ArrayListUnmanaged(RuntimeBridgeAlloc) = .empty;
+
+/// Export every entry of the runtime metrics Registry as a `geode.runtime.<name>`
+/// OTel observable gauge. Call ONCE at startup AFTER the registry is fully
+/// populated. No-op when the OTLP meter provider is not active.
+///
+/// Lifetime: the `geode.runtime.<name>` name strings and the per-entry
+/// `RuntimeBridge` structs are allocated on `g_allocator` and registered as the
+/// instrument descriptor / callback ctx for the LIFE OF THE PROVIDER. They are
+/// intentionally NOT freed here — the meter holds them until `shutdown()` tears
+/// the whole provider down and then frees them via `g_runtime_bridges` (the
+/// same owned-handle idiom as `g_lib_handles`). Freeing them while the provider
+/// lives would dangle the observable callbacks. (Bounded, one-shot allocation
+/// at startup.)
+pub fn registerRuntimeMetricsOtel(registry: *runtime_metrics.Registry) !void {
+    if (g_provider == null) return; // metrics pipeline not active -> nothing to do
+    const alloc = g_allocator orelse return;
+    const m = meter();
+    const io = initIo();
+
+    registry.mutex.lockUncancelable(io);
+    defer registry.mutex.unlock(io);
+
+    for (registry.counters.items) |c| {
+        const name = try std.fmt.allocPrint(alloc, "geode.runtime.{s}", .{c.name});
+        errdefer alloc.free(name);
+        const b = try alloc.create(RuntimeBridge);
+        errdefer alloc.destroy(b);
+        b.* = .{ .counter_ptr = c.ptr };
+        try g_runtime_bridges.append(alloc, .{ .bridge = b, .name = name });
+        _ = try m.createObservableGauge(
+            .{ .name = name, .unit = "", .kind = .observable_gauge, .description = c.name },
+            observeRuntimeBridge,
+            b,
+        );
+    }
+    for (registry.gauges.items) |g| {
+        const name = try std.fmt.allocPrint(alloc, "geode.runtime.{s}", .{g.name});
+        errdefer alloc.free(name);
+        const b = try alloc.create(RuntimeBridge);
+        errdefer alloc.destroy(b);
+        b.* = .{ .gauge_cb = g.callback, .gauge_ctx = g.ctx };
+        try g_runtime_bridges.append(alloc, .{ .bridge = b, .name = name });
+        _ = try m.createObservableGauge(
+            .{ .name = name, .unit = "", .kind = .observable_gauge, .description = g.name },
+            observeRuntimeBridge,
+            b,
+        );
     }
 }
 

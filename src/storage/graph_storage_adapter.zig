@@ -3980,7 +3980,7 @@ pub const StorageAdapter = struct {
 
         try self.engines.put(owned_name, mg);
         {
-            const runtime_metrics = @import("../server/runtime_metrics.zig");
+            const runtime_metrics = @import("runtime_metrics");
             if (runtime_metrics.globalRegistry()) |reg| {
                 reg.register("mg_rwlock_shared_acquired_total", &mg.rwlock_shared_acquired_total) catch {};
                 reg.register("mg_rwlock_shared_wait_ns_total", &mg.rwlock_shared_wait_ns_total) catch {};

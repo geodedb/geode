@@ -652,6 +652,20 @@ pub fn build(b: *std.Build) void {
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
 
+    // Phase C1: `server/runtime_metrics.zig` must be reachable from both the
+    // public `geode` module (lib.zig re-export, plus group_commit.zig /
+    // graph_storage_adapter.zig hot paths) AND from the OTLP bridge in
+    // otel_metrics.zig (a separate named module). Zig forbids a file from
+    // belonging to two modules' file sets, so promote it to its own named
+    // module that everyone imports via `@import("runtime_metrics")`. It depends
+    // only on std, so no back-wiring is needed. Same idiom as query_ast_cache.
+    const runtime_metrics_module = b.createModule(.{
+        .root_source_file = b.path("src/server/runtime_metrics.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    root_mod.addImport("runtime_metrics", runtime_metrics_module);
+
     // GAP-0810: `server/query_ast_cache.zig` must be reachable from both the
     // public `geode` module (for `parseGqlCached`/`SharedAstCache` re-exports)
     // AND from the server files that already use it. Zig forbids a file from
@@ -1270,6 +1284,9 @@ pub fn build(b: *std.Build) void {
     const graph_store_mod = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = optimize });
     graph_store_mod.addImport("logging", logging_mod);
     graph_store_mod.addImport("uuid", uuid_ext_mod);
+    // Phase C1: group_commit.zig / graph_storage_adapter.zig (transitively
+    // compiled here) now @import("runtime_metrics") — wire the canonical module.
+    graph_store_mod.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_mod.addImport("graph_storage", graph_storage_mod);
     graph_store_mod.addImport("fle_aead", fle_aead_mod);
     graph_store_mod.addImport("fle_key_manager", fle_key_manager_mod);
@@ -1299,6 +1316,8 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod_for_graph_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod_for_graph_tests.addImport("otel", otel_mod);
     otel_metrics_mod_for_graph_tests.addImport("otel_resource", otel_resource_mod_for_graph_tests);
+    // Phase C1: runtime-metrics OTLP bridge dependency of otel_metrics.zig.
+    otel_metrics_mod_for_graph_tests.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_mod.addImport("otel", otel_mod);
     graph_store_mod.addImport("otel_metrics", otel_metrics_mod_for_graph_tests);
 
@@ -1513,6 +1532,8 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod_for_gs_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod_for_gs_tests.addImport("otel", otel_mod);
     otel_metrics_mod_for_gs_tests.addImport("otel_resource", otel_resource_mod_for_gs_tests);
+    // Phase C1: runtime-metrics OTLP bridge dependency of otel_metrics.zig.
+    otel_metrics_mod_for_gs_tests.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_unit_tests.root_module.addImport("otel", otel_mod);
     graph_store_unit_tests.root_module.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
     graph_store_unit_tests.root_module.link_libc = true;
@@ -2629,6 +2650,8 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod_for_txn_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod_for_txn_tests.addImport("otel", otel_mod);
     otel_metrics_mod_for_txn_tests.addImport("otel_resource", otel_resource_mod_for_txn_tests);
+    // Phase C1: runtime-metrics OTLP bridge dependency of otel_metrics.zig.
+    otel_metrics_mod_for_txn_tests.addImport("runtime_metrics", runtime_metrics_module);
 
     if (!is_windows) {
         const parser_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/parser_fuzz.zig"), .target = target, .optimize = .Debug }) });
@@ -2981,6 +3004,8 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod_for_ms_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod_for_ms_tests.addImport("otel", otel_mod);
     otel_metrics_mod_for_ms_tests.addImport("otel_resource", otel_resource_mod_for_ms_tests);
+    // Phase C1: runtime-metrics OTLP bridge dependency of otel_metrics.zig.
+    otel_metrics_mod_for_ms_tests.addImport("runtime_metrics", runtime_metrics_module);
     const otel_resp_mod_for_ms_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_prometheus_responder.zig"), .target = target, .optimize = optimize });
     otel_resp_mod_for_ms_tests.addImport("otel", otel_mod);
     otel_resp_mod_for_ms_tests.addImport("otel_metrics", otel_metrics_mod_for_ms_tests);
@@ -3053,6 +3078,9 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("hnsw_lib", hnsw_ext_mod);
     merge_bench_gs_mod.addImport("transport/thread_pool", thread_pool_mod);
     merge_bench_gs_mod.addImport("thread_pool", thread_pool_ext_mod);
+    // Phase C1: group_commit.zig / graph_storage_adapter.zig (transitively
+    // compiled here) now @import("runtime_metrics") — wire the canonical module.
+    merge_bench_gs_mod.addImport("runtime_metrics", runtime_metrics_module);
     // 2026-05-24: graph_storage_adapter.zig uses @import("otel_metrics") /
     // @import("otel") on its write paths (createNode et al — see lines
     // 1237, 2215, 2256, 2326, 2598).  Wire the same instances the main
@@ -3063,6 +3091,8 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod_for_merge_bench = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = .ReleaseFast });
     otel_metrics_mod_for_merge_bench.addImport("otel", otel_mod);
     otel_metrics_mod_for_merge_bench.addImport("otel_resource", otel_resource_mod_for_merge_bench);
+    // Phase C1: runtime-metrics OTLP bridge dependency of otel_metrics.zig.
+    otel_metrics_mod_for_merge_bench.addImport("runtime_metrics", runtime_metrics_module);
     merge_bench_gs_mod.addImport("otel", otel_mod);
     merge_bench_gs_mod.addImport("otel_metrics", otel_metrics_mod_for_merge_bench);
     const merge_throughput_bench = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_merge_throughput.zig"), .target = target, .optimize = .ReleaseFast }) });
@@ -3151,6 +3181,11 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod_for_exe = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod_for_exe.addImport("otel", otel_mod);
     otel_metrics_mod_for_exe.addImport("otel_resource", otel_resource_mod_for_exe);
+    // Phase C1: otel_metrics.zig now @import("runtime_metrics") for the
+    // runtime-metrics OTLP bridge (registerRuntimeMetricsOtel). Use the single
+    // canonical module the 'geode' module also imports, so the file belongs to
+    // exactly one module (no "file exists in two modules").
+    otel_metrics_mod_for_exe.addImport("runtime_metrics", runtime_metrics_module);
     const otel_prom_resp_mod_for_exe = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_prometheus_responder.zig"), .target = target, .optimize = optimize });
     otel_prom_resp_mod_for_exe.addImport("otel", otel_mod);
     otel_prom_resp_mod_for_exe.addImport("otel_metrics", otel_metrics_mod_for_exe);
@@ -5117,6 +5152,8 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod.addImport("otel", otel_mod);
     otel_metrics_mod.addImport("otel_resource", otel_resource_mod);
+    // Phase C1: runtime-metrics OTLP bridge dependency of otel_metrics.zig.
+    otel_metrics_mod.addImport("runtime_metrics", runtime_metrics_module);
     const otel_metrics_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_facade_smoke.zig"), .target = target, .optimize = optimize });
     otel_metrics_test_mod.addImport("otel", otel_mod);
     otel_metrics_test_mod.addImport("otel_metrics", otel_metrics_mod);
@@ -5126,6 +5163,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_otel_metrics_tests.step, 1, test_shard_loads, test_shard_index);
     const otel_metrics_step = b.step("test-otel-facade-smoke", "Run OTel metrics facade smoke tests");
     otel_metrics_step.dependOn(&run_otel_metrics_tests.step);
+
+    // Phase C1: runtime-metrics → OTLP bridge unit test. Registers a counter +
+    // gauge in a runtime_metrics.Registry, bridges them via
+    // registerRuntimeMetricsOtel, and asserts the geode.runtime.* observable
+    // gauges surface with the source values through the real collect path.
+    const otel_runtime_bridge_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_runtime_bridge.zig"), .target = target, .optimize = optimize });
+    otel_runtime_bridge_test_mod.addImport("otel", otel_mod);
+    otel_runtime_bridge_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    otel_runtime_bridge_test_mod.addImport("runtime_metrics", runtime_metrics_module);
+    const otel_runtime_bridge_tests = b.addTest(.{ .root_module = otel_runtime_bridge_test_mod });
+    otel_runtime_bridge_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_otel_runtime_bridge_tests = b.addRunArtifact(otel_runtime_bridge_tests);
+    shardDep(test_step, &run_otel_runtime_bridge_tests.step, 1, test_shard_loads, test_shard_index);
+    const otel_runtime_bridge_step = b.step("test-otel-runtime-bridge", "Run Phase C1 runtime-metrics OTLP bridge unit test");
+    otel_runtime_bridge_step.dependOn(&run_otel_runtime_bridge_tests.step);
 
     // OTLP/HTTP transport delivery regression: guards that the real
     // std.http.Client transport is compiled IN (i.e. the otel
