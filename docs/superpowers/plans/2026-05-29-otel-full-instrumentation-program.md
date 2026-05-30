@@ -120,5 +120,19 @@ this is why an earlier execute-span attempt was rolled back at `execution.zig:10
   PASSES (geode.* metrics in collector); Prometheus `/metrics` serves 150 lines. Regression guard
   `tests/test_otel_otlp_transport_delivery.zig`. Removed dead `src/monitoring/tracing.zig`. Review
   fixes: no committed secret (GEODE_OTEL_PASSWORD env), real collector readiness (health_check :13133).
-  Baseline: `docs/otel-compose-baseline-2026-05-29.md`. **Confirmed empirically: geode emits 0 spans.**
-  Next: Phase B (tracing) via `/writing-plans`.
+  Baseline: `docs/otel-compose-baseline-2026-05-29.md`.
+- 2026-05-29: **Phase B Increment 1 COMPLETE.** geode now emits a `geode.query.execute` SERVER span
+  per statement via a thread-safe `GeodeSpan` facade (exactly-once `end()` atomic + `g_span_mu`
+  guarding the non-thread-safe otel id-generator). Re-added the previously-rolled-back execute span
+  (the producer race it feared, otel 0c34ce9, is already in pin 455ad2b8; the residual UAF is closed
+  at the geode boundary). Added a geode-side **periodic span-flush loop** (the no-pool BSP has no
+  timer). Verified: `REQUIRE_SPANS=1` collector verify PASSES (9 spans); 240-concurrent-query
+  real-server smoke = no SIGABRT (the original crash scenario, now safe); unit concurrency test =
+  4000 spans / 8 threads / exactly-once. Review fix: bounded `error.type` (specific error name is a
+  documented follow-up — `errdefer |err|` won't compile vs the fn's inferred error set). Tests:
+  `test-otel-span-facade`, `test-otel-span-concurrency`. **Note:** no otel pin bump (convergence
+  cascade avoided); the otel BSP atomic-end fix stays on branch `fix/bsp-span-reuse-uaf` for the next
+  ecosystem convergence.
+  Next: Phase C (wire unwired P1 metrics + pull lib-internal stats — pure geode-side, no cascade) and
+  Phase B Increment 2 (child spans). Phase D (otel-lib gaps like PR-4 keepalive) is deferred — it
+  also needs a pin bump, and HTTP export already works.
