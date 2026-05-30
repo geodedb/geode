@@ -126,3 +126,73 @@ build option instead of forwarding it. Fixed (commit `7ce6e0d9`) by forwarding t
 to the otel dependency. Proof: `/tmp/otel_repro.sh` went from `total_connections=0` to `total_connections=9`
 with `POST /v1/metrics`. Regression guard: `tests/test_otel_otlp_transport_delivery.zig`
 (`zig build test-otel-otlp-transport`).
+
+## Phase C2 update (2026-05-29) — wire unwired `record*` facade functions
+
+Phase C2 wired previously-dead `otel_metrics.record*` facade functions to their REAL
+production call sites. Each is recorded at the genuine subsystem code path with real
+values; ambiguous ones were DEFERRED rather than guessed (NO MOCK DATA discipline).
+Build GREEN (`zig build -Doptimize=ReleaseSafe`) before every commit;
+`scripts/otel-compose-verify.sh` still PASSES.
+
+### WIRED (with file + the real value used)
+
+| Function | Call site | Real value(s) | Bounded attrs |
+|---|---|---|---|
+| `recordQueryRowsReturned` | `src/execution.zig` `executeStatementWithContext` (`.Query` arm, post window/limit; `.Union` arm) | `result.rows.len` | `db.operation.name` = derived `op_name` (MATCH/UNION) |
+| `recordSerializationConflict` | `src/transactions/manager.zig` `commit()` (write-write), `commit()` SSI early-conflict, `detectPhantoms()` predicate + range | n/a (event) | `geode.conflict.type` ∈ {`write_write`,`rw_antidependency`,`phantom_predicate`,`phantom_range`} |
+| `recordDeadlock` | `src/transactions/manager.zig` `acquireLock()` (wait-for-graph cycle → `error.Deadlock`) | n/a (event) | `geode.deadlock.victim_policy` = `requester_aborts` |
+| `recordRlsEvaluation` | `src/execution/match_operations.zig` `passesRLSExprFilter` (compiled expr-RLS VM) | decision = `checkRowAccessByUsername` bool (fail-closed→deny); duration measured around the VM call | `decision` (allow/deny), `policy_type` = `rls` |
+| `recordAuthzCheck` | `src/execution/auth_dispatch.zig` `execute()` RBAC role gate for `geode.auth.*` | decision: deny on no-role / non-admin-write, allow otherwise; duration measured | `decision`, `policy_type` = `rbac` |
+| `recordAuditEvent` | `src/security/audit.zig` `appendEventLocked()` (single write funnel, post hash-chain+file write) | `@tagName(ev.event_type)` (13-value enum), outcome mapped from `Result` enum | `event_type`, `geode.result.outcome` |
+| `recordAuditDropped` | `src/security/audit.zig` `logSecurityGraphEvent()` catch block (swallowed append error) | n/a (event) | `geode.audit.drop_reason` = `append_error` |
+
+### Metric names that LANDED in the collector (this run)
+
+Exercised paths: `RETURN`/`CREATE GRAPH`/`USE…CREATE`/`MATCH`/`MATCH…UNION` (rows) and
+`CALL geode.auth.user_create/user_list/user_delete` as admin (authz + audit attempt).
+Confirmed in both the OTLP collector debug dump (`service.name=geode`) and the Prometheus
+`/metrics` endpoint:
+
+- **`geode.query.rows.returned`** — histogram, real values: `{op=MATCH} count=4 sum=5`,
+  `{op=UNION} count=1 sum=3` (exactly the rows the queries returned).
+- **`geode.security.authorization.check.count`** / **`…check.duration`** —
+  `{decision=allow,policy_type=rbac} = 3` (the three `geode.auth.*` admin procedures).
+
+### Wired-but-NOT-observed this run (reachable; needs specific runtime setup, not a defect)
+
+- **`geode.security.rls.evaluation.*`** — requires an installed compiled expr-RLS policy.
+  Per the project Known Limitations, the GQL→bytecode policy-compilation pipeline is still
+  manual (policies must be pinned as a pre-compiled `CompiledExpression`), so no policy was
+  active during this run and `passesRLSExprFilter` took the no-engine fast path
+  (`getGlobalExprRLSEngine() orelse return true`) without evaluating. Wiring verified by build
+  - `test-otel-facade-smoke`; live emission pending a configured policy.
+- **`geode.audit.event.count`** / **`…dropped`** — the audit logger initialised (it generated
+  signing keys) but the CLI auth-DDL path in the default single-tenant config did not route an
+  append through `appendEventLocked` (audit is graph-scoped to `__geode_security` via
+  `resolveAuditLogger`; the auth-DDL handlers did not attach an emitting logger in this config).
+  The instrumentation sits on the single append funnel and is exercised (compiled, no-op meter)
+  by `test-audit-actor-key`; live emission needs an operation that appends to an active audit
+  graph logger.
+- **`geode.transaction.serialization_conflict.count`** / **`…deadlock.count`** — require
+  concurrent conflicting transactions / a lock-wait cycle, not produced by the single-session
+  smoke queries. Logic verified by build + the existing phantom/write-skew/deadlock unit tests
+  that drive those exact `error.SerializationFailure` / `error.Deadlock` paths.
+
+### DEFERRED in C2 (reported, not silently skipped)
+
+- **`recordTransactionTimeout`** — the active single-tenant `manager.zig` has **no
+  transaction-level timeout/deadline logic**. The only timeout code is the 2PC participant
+  *simulation* in `two_phase_commit.zig` (distributed scaffolding, not an isolation-level txn
+  timeout). No genuine detection point ⇒ deferred (wiring it anywhere would be a guess).
+- **`recordLockWait`** — `acquireLock()` is **non-blocking**: it returns
+  `error.LockConflict`/`error.Deadlock` immediately and never measures a wait duration. There is
+  no real `duration_s` to pass; fabricating one is forbidden mock data ⇒ deferred.
+- **`recordQueryPlan`** — no clean separable plan-phase boundary in the current execution path
+  (parse/plan/execute are interleaved inside the statement dispatch) ⇒ deferred per plan.
+- **`recordTdeOperation` / `recordTdeBytes`** — the KMS/crypto call site was not unambiguous
+  from the read; deferred per plan rather than instrument the wrong layer.
+- **`register*Gauge` resource gauges** — the `*const fn () i64` providers do not exist as clean
+  no-arg functions ⇒ deferred per plan.
+- **backup / distributed / CDC / analytics** — inactive/absent in the single-tenant default
+  config ⇒ deferred per plan.
