@@ -39,6 +39,10 @@ const otel = @import("otel");
 // declared as a named module root and otel_resource.zig is simultaneously
 // the root of a peer module.
 const otel_resource = @import("otel_resource");
+// Phase C1: the process-global runtime metrics registry (quic_* / proto_reader_*
+// / quic_stream_write_* / poll-phase counters). `registerRuntimeMetricsOtel`
+// bridges every entry into OTLP as a `geode.runtime.<name>` observable gauge.
+const runtime_metrics = @import("runtime_metrics");
 
 const Resource = otel.sdk.resource.Resource;
 const MeterProvider = otel.sdk.metrics.MeterProvider;
@@ -48,7 +52,10 @@ const exporter_factory = otel.sdk.exporter_factory;
 const sdk_config = otel.sdk.config;
 const TracerProvider = otel.sdk.trace.TracerProvider;
 const Tracer = otel.api.trace.Tracer;
-const InMemoryRecorder = otel.exporters.in_memory.Recorder;
+/// In-memory span/metric/log recorder. Re-exported so unit tests can stage
+/// a recorder (`otel_metrics.InMemoryRecorder.init(alloc)`) and pass it to
+/// `initForTracingTest` without importing the otel exporters tree directly.
+pub const InMemoryRecorder = otel.exporters.in_memory.Recorder;
 
 pub const SCOPE_NAME = "com.geodedb.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
@@ -70,6 +77,44 @@ var g_otlp_exporter: ?exporter_factory.OwnedMetricExporter = null;
 // running unit tests against an in-memory recorder.
 var g_tracer_provider: ?*TracerProvider = null;
 var g_tracer_owned_exporter: ?exporter_factory.OwnedSpanExporter = null;
+
+// Periodic span flush. The otel BatchSpanProcessor only spawns its own drain
+// timer when built with `-Dotel_use_devnw_pool=true` (export.zig:241,271);
+// geode builds otel with the pool OFF (avoids the otel<->thread-pool diamond),
+// so without this loop a long-running, low-span-volume server never exports
+// spans until the queue hits max_export_batch_size (512) or shutdown. This
+// background thread drains the BSP on the BSP-schedule cadence — the trace
+// analogue of the PeriodicMetricReader on the metrics side. forceFlush is
+// mutex-serialized against producers inside the SDK, so this is concurrency-safe.
+var g_tracer_flush_thread: ?std.Thread = null;
+var g_tracer_flush_stop: std.atomic.Value(bool) = .init(false);
+var g_tracer_flush_interval_ms: u64 = 5_000;
+
+// Same nanosleep idiom as src/server/leaked_conn_reaper.zig. Linux-only; the
+// flush thread only runs in the server (never the CLI), and the std.os.linux
+// namespace still compiles for cross-target builds.
+fn tracerFlushSleep(ms: u64) void {
+    const ns = ms * std.time.ns_per_ms;
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
+fn tracerFlushLoop() void {
+    while (!g_tracer_flush_stop.load(.acquire)) {
+        // Chunked wait so shutdown latency is bounded (~100ms) regardless of
+        // the configured interval.
+        var slept: u64 = 0;
+        while (slept < g_tracer_flush_interval_ms) : (slept += 100) {
+            if (g_tracer_flush_stop.load(.acquire)) return;
+            tracerFlushSleep(@min(@as(u64, 100), g_tracer_flush_interval_ms - slept));
+        }
+        forceFlushTraces(g_tracer_flush_interval_ms) catch {};
+    }
+}
 
 // Library binding handles. Each call to `bindLibraryGlobals` allocates a
 // stable Tracer / Meter handle on the heap (the lib's `global.tracer`
@@ -180,6 +225,14 @@ pub fn shutdown() void {
     }
     g_lib_handles = .empty;
 
+    // Stop the periodic span-flush thread before tearing down the provider it
+    // touches. Join guarantees no in-flight forceFlush races the deinit below.
+    if (g_tracer_flush_thread) |t| {
+        g_tracer_flush_stop.store(true, .release);
+        t.join();
+        g_tracer_flush_thread = null;
+    }
+
     // Tear down the tracer pipeline before the resource is freed below.
     // TracerProvider.deinit shuts down processors, which flushes the
     // OTLP/HTTP exporter; the owned exporter is freed afterwards. The
@@ -256,6 +309,17 @@ pub fn shutdown() void {
     g_runtime_rss_gauge = null;
     g_runtime_threads_gauge = null;
     g_db_client = null;
+    // Phase C1: free the runtime-metrics OTLP bridge ctxs + name strings. Safe
+    // here because the provider (and its observable callbacks) was already torn
+    // down above, so nothing can dereference these after this point.
+    if (g_allocator) |a| {
+        for (g_runtime_bridges.items) |rb| {
+            a.destroy(rb.bridge);
+            a.free(rb.name);
+        }
+        g_runtime_bridges.deinit(a);
+    }
+    g_runtime_bridges = .empty;
     g_allocator = null;
 }
 
@@ -450,6 +514,12 @@ fn tryWireOtlpTracer(allocator: std.mem.Allocator, resource: *Resource) !void {
 
     g_tracer_provider = provider;
     g_tracer_owned_exporter = owned;
+
+    // Start the geode-side periodic span flush (the no-pool BSP has no timer).
+    // Flush on the BSP schedule delay so spans reach the collector promptly.
+    g_tracer_flush_interval_ms = schedule_delay_ms;
+    g_tracer_flush_stop.store(false, .release);
+    g_tracer_flush_thread = std.Thread.spawn(.{}, tracerFlushLoop, .{}) catch null;
 }
 
 /// Test-only: wire a `TracerProvider` against a caller-supplied in-memory
@@ -505,6 +575,102 @@ pub fn tracer() Tracer {
         });
     }
     return .{ .scope = .{ .name = SCOPE_NAME } };
+}
+
+// -----------------------------------------------------------------------
+// Span facade (Phase B tracing)
+// -----------------------------------------------------------------------
+
+const Span = otel.api.trace.Span;
+const Context = otel.api.context.Context;
+// Note: `attrs` (otel.internal.attributes) is aliased module-level further
+// down; module consts are order-independent, so `attrs.Entry` resolves here.
+
+/// Serializes span CREATION (id generation). The otel `id_generator` is a
+/// shared `std.Random.DefaultPrng` that is NOT safe for concurrent
+/// `nextTraceId`/`nextSpanId` from multiple QUIC query threads. Same
+/// discipline as `g_query_mu` for the metric SDK. Held only across
+/// `startSpan` (nanoseconds), never across span body execution.
+var g_span_mu: std.Io.Mutex = std.Io.Mutex.init;
+
+/// Thread-confined span wrapper that guarantees the underlying otel
+/// `Span.end()` is invoked EXACTLY ONCE, even if geode code double-ends
+/// (e.g. a `defer` plus an explicit end, or a future refactor that shares
+/// the span). This closes the otel BatchSpanProcessor span-reuse UAF at the
+/// geode boundary — that UAF requires a concurrent *double-end* of the same
+/// span, which the per-span atomic here makes impossible.
+///
+/// Spans are thread-confined: created and ended on one request thread. The
+/// atomic only guards against accidental double-end, not cross-thread use.
+pub const GeodeSpan = struct {
+    span: Span,
+    ended: std.atomic.Value(bool) = .init(false),
+
+    /// End the span exactly once. The first call records the end and drains
+    /// to the processor; any subsequent call is a no-op.
+    pub fn end(self: *GeodeSpan) void {
+        if (self.ended.swap(true, .acq_rel)) return;
+        self.span.end(null);
+    }
+
+    /// Attach a bounded integer attribute (e.g. row_count). Errors are
+    /// swallowed: instrumentation must never fail a query.
+    pub fn setIntAttr(self: *GeodeSpan, key: []const u8, value: i64) void {
+        self.span.setIntAttribute(key, value) catch {};
+    }
+
+    /// Attach a bounded string attribute. The caller MUST pass an enum-like
+    /// value (op name, graph name) — never raw query text or user values.
+    pub fn setStrAttr(self: *GeodeSpan, key: []const u8, value: []const u8) void {
+        self.span.setStringAttribute(key, value) catch {};
+    }
+
+    /// Mark the span as failed and record the bounded error type name.
+    pub fn setError(self: *GeodeSpan, err: anyerror) void {
+        self.setErrorName(@errorName(err));
+    }
+
+    /// Mark error with an already-resolved error name (bounded — pass an
+    /// @errorName, never user content). Used where the concrete error value
+    /// is not capturable (inferred-error-set functions).
+    pub fn setErrorName(self: *GeodeSpan, name: []const u8) void {
+        self.span.setStatus(.@"error", name);
+        self.span.setStringAttribute("error.type", name) catch {};
+    }
+
+    /// Mark the span as successful.
+    pub fn setOk(self: *GeodeSpan) void {
+        self.span.setStatus(.ok, "");
+    }
+};
+
+/// Start a `geode.query.execute` SERVER span (new trace; cross-process
+/// context propagation from the client traceparent is a later phase).
+///
+/// `op_name` MUST be a BOUNDED enum-like string (MATCH/CREATE/INSERT/…).
+/// `namespace` is the current graph name (bounded). `is_mutation` records
+/// whether the statement writes. NEVER pass raw query text, parameter
+/// values, or user-supplied keys — those are unbounded cardinality.
+///
+/// When `OTEL_TRACES_EXPORTER` is unset, `tracer()` returns the inert noop
+/// tracer and this collapses to a noop `GeodeSpan` at near-zero cost (the
+/// mutex is still taken, but the noop `startSpan` does no id generation).
+pub fn startQuerySpan(op_name: []const u8, namespace: []const u8, is_mutation: bool) GeodeSpan {
+    const t = tracer(); // noop tracer if OTEL_TRACES_EXPORTER unset -> zero cost
+    const io = initIo();
+    g_span_mu.lockUncancelable(io);
+    defer g_span_mu.unlock(io);
+    const attrs_buf = [_]attrs.Entry{
+        .{ .key = "db.system.name", .value = .{ .string = "codepros.geode" } },
+        .{ .key = "db.operation.name", .value = .{ .string = op_name } },
+        .{ .key = "db.namespace", .value = .{ .string = namespace } },
+        .{ .key = "geode.query.is_mutation", .value = .{ .bool = is_mutation } },
+    };
+    const span = t.startSpan(Context.empty(), "geode.query.execute", .{
+        .kind = .server,
+        .initial_attributes = &attrs_buf,
+    }) catch return .{ .span = Span.noop };
+    return .{ .span = span };
 }
 
 /// Force a flush of all pending spans through the wired processors.
@@ -918,6 +1084,101 @@ pub fn registerTransportConnectionGauge(provider_fn: *const fn () i64) !void {
 fn observeActiveConnections(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
     if (g_active_connections_provider) |fnp| {
         observer.observeInt(fnp(), &.{.{ .key = "geode.transport.protocol", .value = .{ .string = "quic" } }});
+    }
+}
+
+// -------------------------------------------------------------------------
+// Runtime-metrics registry → OTLP bridge (Phase C1).
+//
+// geode computes a rich set of runtime counters/gauges (quic_*, proto_reader_*,
+// quic_stream_write_*, poll-phase ns) in a process-global
+// `runtime_metrics.Registry`. They render to Prometheus /metrics but did not
+// reach OTLP. `registerRuntimeMetricsOtel` creates one OTel observable gauge
+// per registry entry, named `geode.runtime.<original_name>`, backed by a heap
+// bridge that reads the source atomic/callback at OTel collection time.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-RUNTIME-BRIDGE-001; FEATURE="OTel Instrumentation"; ASPECT=RuntimeCounterBridge; STATUS=TESTED; TEST=tests/test_otel_runtime_bridge.zig; OWNER=monitoring; UPDATED=2026-05-29
+
+// Heap bridge so an OTel observable callback (single ?*anyopaque ctx) can carry
+// either a counter atomic ptr or a runtime Gauge{callback,ctx}. The read path is
+// bounded + safe: an atomic load for counters, or the registry gauge callback
+// (cheap field reads / a brief connection-mutex at collection cadence; no
+// unbounded labels).
+const RuntimeBridge = struct {
+    counter_ptr: ?*std.atomic.Value(u64) = null,
+    gauge_cb: ?*const fn (*anyopaque) u64 = null,
+    gauge_ctx: ?*anyopaque = null,
+
+    fn read(self: *const RuntimeBridge) i64 {
+        if (self.counter_ptr) |p| return @intCast(p.load(.acquire));
+        if (self.gauge_cb) |cb| return @intCast(cb(self.gauge_ctx.?));
+        return 0;
+    }
+};
+
+fn observeRuntimeBridge(ctx: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    const b: *const RuntimeBridge = @ptrCast(@alignCast(ctx.?));
+    observer.observeInt(b.read(), &.{});
+}
+
+// Process-lifetime storage for the bridge ctxs + their `geode.runtime.<name>`
+// strings. These outlive `registerRuntimeMetricsOtel` (the meter holds the
+// callback ctx + descriptor name for the life of the provider) and are freed
+// ONLY in `shutdown()`, after the provider is torn down. Same ownership idiom
+// as `g_lib_handles`.
+const RuntimeBridgeAlloc = struct {
+    bridge: *RuntimeBridge,
+    name: []const u8,
+};
+var g_runtime_bridges: std.ArrayListUnmanaged(RuntimeBridgeAlloc) = .empty;
+
+/// Export every entry of the runtime metrics Registry as a `geode.runtime.<name>`
+/// OTel observable gauge. Call ONCE at startup AFTER the registry is fully
+/// populated. No-op when the OTLP meter provider is not active.
+///
+/// Lifetime: the `geode.runtime.<name>` name strings and the per-entry
+/// `RuntimeBridge` structs are allocated on `g_allocator` and registered as the
+/// instrument descriptor / callback ctx for the LIFE OF THE PROVIDER. They are
+/// intentionally NOT freed here — the meter holds them until `shutdown()` tears
+/// the whole provider down and then frees them via `g_runtime_bridges` (the
+/// same owned-handle idiom as `g_lib_handles`). Freeing them while the provider
+/// lives would dangle the observable callbacks. (Bounded, one-shot allocation
+/// at startup.)
+pub fn registerRuntimeMetricsOtel(registry: *runtime_metrics.Registry) !void {
+    if (g_provider == null) return; // metrics pipeline not active -> nothing to do
+    const alloc = g_allocator orelse return;
+    const m = meter();
+    const io = initIo();
+
+    registry.mutex.lockUncancelable(io);
+    defer registry.mutex.unlock(io);
+
+    for (registry.counters.items) |c| {
+        const name = try std.fmt.allocPrint(alloc, "geode.runtime.{s}", .{c.name});
+        errdefer alloc.free(name);
+        const b = try alloc.create(RuntimeBridge);
+        errdefer alloc.destroy(b);
+        b.* = .{ .counter_ptr = c.ptr };
+        try g_runtime_bridges.append(alloc, .{ .bridge = b, .name = name });
+        _ = try m.createObservableGauge(
+            .{ .name = name, .unit = "", .kind = .observable_gauge, .description = c.name },
+            observeRuntimeBridge,
+            b,
+        );
+    }
+    for (registry.gauges.items) |g| {
+        const name = try std.fmt.allocPrint(alloc, "geode.runtime.{s}", .{g.name});
+        errdefer alloc.free(name);
+        const b = try alloc.create(RuntimeBridge);
+        errdefer alloc.destroy(b);
+        b.* = .{ .gauge_cb = g.callback, .gauge_ctx = g.ctx };
+        try g_runtime_bridges.append(alloc, .{ .bridge = b, .name = name });
+        _ = try m.createObservableGauge(
+            .{ .name = name, .unit = "", .kind = .observable_gauge, .description = g.name },
+            observeRuntimeBridge,
+            b,
+        );
     }
 }
 

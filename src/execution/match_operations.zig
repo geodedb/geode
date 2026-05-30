@@ -180,14 +180,26 @@ fn passesRLSExprFilter(
     // Use first label as the table name for policy lookup.
     const table = if (node.labels.len > 0) node.labels[0] else "default";
 
+    // Phase C2: this is the REAL expression-RLS evaluation point — the
+    // compiled-policy VM decides per-row allow/deny. Measure the VM call and
+    // emit geode.security.rls.evaluation.* with the bounded decision + policy
+    // type (rls). Reached only when an expr engine is active and the session
+    // is non-admin (admins bypass above without evaluating a policy, so no
+    // sample is recorded for them — that would be a false "allow").
     // GAP-0524: Fail closed on evaluation errors.
-    return expr_engine.checkRowAccessByUsername(
+    const om = @import("otel_metrics");
+    const otel_lib = @import("otel");
+    const t0 = otel_lib.internal.clock.unixNanoNow();
+    const allowed = expr_engine.checkRowAccessByUsername(
         reusable_row,
         .select,
         username,
         node.graph_name,
         table,
     ) catch false;
+    const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+    om.recordRlsEvaluation(if (allowed) .allow else .deny, .rls, dur_s);
+    return allowed;
 }
 
 fn activeRlsPoliciesConfigured() bool {

@@ -259,7 +259,10 @@ pub const profile_payload = @import("server/profile_payload.zig");
 // Per-mutation wall-clock timing instrumentation (opt-in via GEODE_MUTATION_TIMING_LOG=1).
 pub const mutation_timing = @import("server/mutation_timing.zig");
 // Runtime metrics registry: named atomic counters for throughput, lock-wait, and allocator diagnostics.
-pub const runtime_metrics = @import("server/runtime_metrics.zig");
+// Phase C1: imported as a named module (single canonical instance) so the OTLP
+// bridge in otel_metrics.zig can share the SAME `runtime_metrics.Registry` type
+// without the file belonging to two modules ("file exists in two modules").
+pub const runtime_metrics = @import("runtime_metrics");
 // Bulk-ingest pattern detection for the msft-graph hot-path CREATE / MATCH+CREATE
 // forms (Task 10 + Task 11 of the enterprise-ingest-throughput plan).
 pub const bulk_ingest = @import("execution/bulk_ingest.zig");

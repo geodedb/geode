@@ -1553,3 +1553,23 @@ docker-integration-smoke: docker-integration-build
 test-mermaid-integration:
 	@echo "Running external mermaid integration tests..."
 	@./tests/integration/test_mermaid_external.sh
+
+# ====================================================================================
+# OTel docker-compose stack (geode + collector)
+# ====================================================================================
+# Self-contained stack defined in docker-compose.otel.yml + config/otel-collector.yaml.
+# Builds geode on the host (otel transport compiled in by default), runs it next to an
+# OpenTelemetry collector, and verifies metrics/spans land. See
+# docs/otel-compose-baseline-2026-05-29.md.
+.PHONY: otel-compose-up otel-compose-verify otel-compose-down
+
+otel-compose-up: ## Build geode + bring up the geode/collector otel stack
+	zig build -Doptimize=ReleaseSafe
+	GEODE_OTEL_PASSWORD="$${GEODE_OTEL_PASSWORD:-$$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}" \
+		docker compose -f docker-compose.otel.yml up --build -d
+
+otel-compose-verify: ## Run the end-to-end telemetry verification (metrics land in collector)
+	scripts/otel-compose-verify.sh
+
+otel-compose-down: ## Tear down the otel stack and its volumes
+	docker compose -f docker-compose.otel.yml down -v

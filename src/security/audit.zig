@@ -58,6 +58,21 @@ const Attr = logging.Attr;
 // External JSON library for RFC 8259 compliant encoding in security audit reports
 const json_lib = @import("json");
 
+// Phase C2: OTel audit instrumentation. recordAuditEvent fires on the single
+// write funnel (appendEventLocked); recordAuditDropped fires where a producer
+// swallows an append error. Both take only bounded enum tag names.
+const otel_metrics = @import("otel_metrics");
+
+/// Map the audit Result enum onto the OTel Outcome enum. Both are bounded.
+fn auditResultToOutcome(r: AuditEvent.Result) otel_metrics.Outcome {
+    return switch (r) {
+        .success => .success,
+        .failure => .error_,
+        .partial => .partial_success,
+        .error_ => .error_,
+    };
+}
+
 /// JSON structure for compliance reports
 const ComplianceReportJson = struct {
     report_date: i64,
@@ -178,6 +193,10 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
             Attr.string("action", event.action),
             Attr.string("error", @errorName(err)),
         });
+        // Phase C2: a security-graph audit event was produced but its append
+        // failed and is being swallowed here — a genuine drop. The reason is a
+        // bounded constant (the append error type, not user content).
+        otel_metrics.recordAuditDropped("append_error");
     };
 }
 
@@ -507,6 +526,13 @@ pub const AuditLogger = struct {
                 };
             }
         }
+
+        // Phase C2: this is the single funnel through which every audit event is
+        // actually written. Reached only after the hash-chain + file write
+        // succeed (the `try`s above propagate failures before this point), so a
+        // sample here means the event was genuinely emitted. Both attributes are
+        // bounded enum tag names — @tagName(EventType) and the mapped Result.
+        otel_metrics.recordAuditEvent(@tagName(ev.event_type), auditResultToOutcome(ev.result));
     }
 
     /// Emit a Merkle digest event — MUST be called with self.mutex already held.

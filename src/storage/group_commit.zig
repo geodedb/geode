@@ -489,7 +489,7 @@ pub const ShardedCoordinator = struct {
     /// `runtime_metrics.setGlobalRegistry` has run; if the global
     /// registry is null at call time, this is a no-op.
     pub fn registerWithRuntimeMetrics(self: *ShardedCoordinator) void {
-        const runtime_metrics = @import("../server/runtime_metrics.zig");
+        const runtime_metrics = @import("runtime_metrics");
         const reg = runtime_metrics.globalRegistry() orelse return;
         // CANARY: REQ=REQ-QUIC-HC-133; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorMetricsHotPath; STATUS=TESTED; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-28
         //

@@ -401,13 +401,27 @@ pub fn execute(
 ) !?ExecutionResult {
     if (std.mem.startsWith(u8, proc_name, "geode.auth.")) {
         if (user_mgmt.isAuthEnabled()) {
+            // Phase C2: this is the REAL RBAC decision point for geode.auth.*
+            // admin procedures — the role check below grants or denies access.
+            // Emit geode.security.authorization.check.* with the bounded
+            // decision (allow/deny) + policy_type (rbac) + measured latency.
+            // Only reached when auth is enabled (a genuine decision is made).
+            const om = @import("otel_metrics");
+            const otel_lib = @import("otel");
+            const t0 = otel_lib.internal.clock.unixNanoNow();
             if (context.role == null) {
+                const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+                om.recordAuthzCheck(.deny, .rbac, d);
                 return error.Unauthenticated;
             }
             const is_read_only = read_only_set.has(proc_name);
             if (!is_read_only and context.role.? != .Admin) {
+                const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+                om.recordAuthzCheck(.deny, .rbac, d);
                 return error.Unauthorized;
             }
+            const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+            om.recordAuthzCheck(.allow, .rbac, d);
         }
 
         if (dispatch_table.get(proc_name)) |handler| {

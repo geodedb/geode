@@ -2153,6 +2153,14 @@ pub fn main() !void {
         try proto_reader_metrics.registerAll(metrics_registry);
         try quic_response_metrics.registerAll(metrics_registry);
 
+        // Phase C1: bridge the now-fully-populated runtime metrics registry into
+        // OTLP as geode.runtime.* observable gauges. MUST run after every
+        // runtime-metric registration above so all entries are exported. Cheap
+        // no-op when the OTLP meter provider is inactive (early return inside).
+        otel_metrics_facade.registerRuntimeMetricsOtel(metrics_registry) catch |err| {
+            log.warn("otel_metrics: runtime bridge registration failed", &.{Attr.string("error", @errorName(err))});
+        };
+
         var metrics_should_stop = std.atomic.Value(u32).init(0);
         const MetricsCtx = struct {
             registry: *runtime_metrics_mod.Registry,

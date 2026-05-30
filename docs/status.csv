@@ -3582,10 +3582,15 @@ REQ-OTEL-METRICS-014,OTel Instrumentation,DbClientMetrics,IMPL,,,monitoring,2026
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,IMPL,,,monitoring,2026-04-28,src/server/main.zig
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics+DbClient,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig
+REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TESTED,,,monitoring,2026-05-29,src/monitoring/otel_metrics.zig
+REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TESTED,,,monitoring,2026-05-29,tests/test_otel_runtime_bridge.zig
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig
+REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPTransportCompiledIn,TESTED,,,monitoring,2026-05-29,tests/test_otel_otlp_transport_delivery.zig
 REQ-OTEL-PRIV-001,OTel Instrumentation,CardinalityPrivacyGuard,TESTED,,,monitoring,2026-04-28,tests/test_otel_cardinality_guard.zig
 REQ-OTEL-PROMETHEUS-RESPONDER-001,OTel Instrumentation,PrometheusBridge,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_prometheus_responder.zig
+REQ-OTEL-TRACE-001,Geode Emitted Spans,QueryExecuteSpan,TESTED,,,monitoring,2026-05-29,tests/test_otel_span_facade.zig
+REQ-OTEL-TRACE-002,Geode Emitted Spans,ConcurrencySafety,TESTED,,,monitoring,2026-05-29,tests/test_otel_span_concurrency.zig
 REQ-OVERFLOW-SAFE-SUM-005,OverflowSafeSum,IntOverflow,TESTED,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-OVERFLOW-SAFE-SUM-006,OverflowSafeSum,ExtIntOverflow,TESTED,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-PARSER-001,ParserSupport,SyntaxValidation,TESTED,,,parser,2026-01-15,tests/test_gap_0193_final_batch.zig

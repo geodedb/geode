@@ -1069,21 +1069,60 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     defer om.decQueryActive(qt);
     const t0_exec = otel_lib.internal.clock.unixNanoNow();
     var exec_outcome: om.Outcome = .success;
+    // NOTE: the concrete error VALUE is not capturable here — `errdefer |err|`
+    // does not compile against this function's large inferred error set, and
+    // extracting the whole body into an inner fn for a catch boundary is too
+    // invasive. The span carries status=error + a bounded generic error.type;
+    // the precise error name is a follow-up (give the fn an explicit error set,
+    // or move span creation to the caller that already `catch |err|`s).
     errdefer exec_outcome = .error_;
 
-    // The `geode.query.execute` trace span was rolled back here pending a
-    // coordinated otel pin bump to 0c34ce9b+ — the upstream
-    // BatchSpanProcessor concurrent-producer race (panic at
-    // otel/src/sdk/export.zig:330) otherwise crashes drainLocked under
-    // load. The op-name switch that fed the `db.operation.name` attribute
-    // went with it; recordQueryExecution still publishes the latency
-    // histogram + outcome counter for non-trace monitoring. See the note
-    // at src/storage/graph_storage_adapter.zig:2237 and the regression
-    // guard at tests/test_bsp_race_regression.zig.
+    // geode.query.execute span — re-enabled on the current otel pin
+    // (455ad2b8). The concurrent-producer race (otel 0c34ce9) is fixed
+    // upstream; the span-reuse UAF is closed at the geode boundary by
+    // GeodeSpan's exactly-once end() + g_span_mu-guarded creation
+    // (proven crash-free + exactly-once under 8 threads in
+    // tests/test_otel_span_concurrency.zig). Thread-confined: created and
+    // ended on this request's worker thread. Only bounded attributes are
+    // attached (op_name, namespace, is_mutation, row_count, error.type) —
+    // never raw query text or parameter values.
+    const op_name: []const u8 = switch (stmt) {
+        .Query => "MATCH",
+        .Create => "CREATE",
+        .Insert, .InsertValue => "INSERT",
+        .Delete => "DELETE",
+        .Merge => "MERGE",
+        .Call => "CALL",
+        .Union => "UNION",
+        .Intersect => "INTERSECT",
+        .Except => "EXCEPT",
+        // @tagName is bounded: one of the fixed, finite Statement tag
+        // names, so attribute cardinality stays low.
+        else => @tagName(stmt),
+    };
+    const is_mutation: bool = switch (stmt) {
+        .Create, .Insert, .InsertValue, .Delete, .Merge, .CreateIndex, .DropIndex, .CreateConstraint, .DropConstraint, .CreateSchema, .DropSchema, .CreateGraph, .DropGraph, .CreateGraphType, .DropGraphType, .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke, .CreatePolicy, .DropPolicy, .AlterPolicy => true,
+        else => false,
+    };
+    const ns: []const u8 = if (context.session_state) |ss| (ss.graph orelse "") else "";
+    var qspan = om.startQuerySpan(op_name, ns, is_mutation);
+    // Declared BEFORE the outcome defer so it runs LAST (Zig defers are
+    // LIFO): the span is ended only after setError/setOk has been applied.
+    defer qspan.end();
+
+    // Phase C2: row count returned to the client, recorded only for the
+    // statement kinds that produce a genuine queryable result set (read MATCH
+    // and the set-operation UNION). Set on the success path in those arms with
+    // the REAL final row count (post window/limit). Mutations and DDL return
+    // status messages, not row sets, so they leave this null and emit no
+    // geode.query.rows.returned sample (avoids misleading histogram values).
+    var rows_returned: ?u64 = null;
 
     defer {
         const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
-        om.recordQueryExecution("STATEMENT", "STATEMENT", qt, dur_s, exec_outcome, null);
+        om.recordQueryExecution(op_name, op_name, qt, dur_s, exec_outcome, null);
+        if (rows_returned) |rc| om.recordQueryRowsReturned(op_name, op_name, rc);
+        if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();
     }
     switch (stmt) {
         .Query => |q| {
@@ -1108,10 +1147,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 try applyRowWindow(allocator, &result, start, end);
             }
 
+            rows_returned = @intCast(result.rows.len);
             return result;
         },
         .Union => |u| {
-            return executeUnionWithContext(allocator, u, context);
+            const result = try executeUnionWithContext(allocator, u, context);
+            rows_returned = @intCast(result.rows.len);
+            return result;
         },
         .Create => |c| {
             const create_graph = if (context.session_state) |session| session.graph else null;

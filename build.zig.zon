@@ -178,7 +178,20 @@
         // and transitive consumers resolve a single otel module instance.
         // Build flags `use_devnw_grpc`, `use_devnw_protobuf`, `use_devnw_pool`
         // remain default-off unless the whole telemetry stack is verified
-        // together.
+        // together. `otel_use_devnw_tls` IS enabled by geode (build.zig) so the
+        // std.http.Client OTLP transport is compiled in.
+        //
+        // NOTE (2026-05-29): a BatchSpanProcessor span-reuse UAF (non-atomic
+        // SpanState.ended → double-enqueue/double-recycle under concurrent
+        // double-end) is fixed on otel branch `fix/bsp-span-reuse-uaf`
+        // (9fa2e97af5f9ee527db20dcf09847a0589cdd6df, atomic end-claim). It is
+        // NOT pinned here: bumping otel forces a ~18-lib ecosystem convergence
+        // (all sibling libs declare otel@455ad2b8 for their hardcoded-off
+        // observability seam — see detect_diamond_deps). Geode instead enforces
+        // exactly-once span end() at its own facade (src/monitoring/otel_metrics
+        // span wrapper), which prevents the double-end that triggers the UAF.
+        // Pin to 9fa2e97 (or descendant) at the next ecosystem-wide otel
+        // convergence. See docs/superpowers/plans/2026-05-29-otel-full-instrumentation-program.md.
         .otel = .{
             .url = "git+https://gitlab.com/devnw/zig/otel.git#455ad2b8fb6888d5dab48a0a5bdcc81fd225f635",
             .hash = "otel-0.1.5-B0v3lvEMNAC40_D5FfUJgpR3hR8nP5R4IKg31uJmpk-y",

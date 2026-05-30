@@ -255,3 +255,6 @@ harness-reports/
 scratch_*.zig
 .worktrees/
 .superpowers/
+
+# OTel docker-compose local artifacts
+otel-output/
