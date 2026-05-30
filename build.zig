@@ -3409,6 +3409,17 @@ pub fn build(b: *std.Build) void {
     audit_security_mod.addImport("logging", logging_mod);
     audit_security_mod.addImport("json", json_mod);
     audit_security_mod.addImport("transport/thread_pool", thread_pool_mod);
+    // Phase C2: audit.zig now emits geode.audit.* metrics via @import("otel_metrics").
+    // The standalone audit test module must wire otel + otel_metrics (mirrors the
+    // root_mod named imports) so the audit unit tests still compile.
+    const otel_resource_mod_for_audit_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod_for_audit_tests.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_audit_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod_for_audit_tests.addImport("otel", otel_mod);
+    otel_metrics_mod_for_audit_tests.addImport("otel_resource", otel_resource_mod_for_audit_tests);
+    otel_metrics_mod_for_audit_tests.addImport("runtime_metrics", runtime_metrics_module);
+    audit_security_mod.addImport("otel", otel_mod);
+    audit_security_mod.addImport("otel_metrics", otel_metrics_mod_for_audit_tests);
 
     // Create user storage module (GraphStore-backed)
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
