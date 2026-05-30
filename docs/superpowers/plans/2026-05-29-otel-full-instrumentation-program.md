@@ -133,6 +133,17 @@ this is why an earlier execute-span attempt was rolled back at `execution.zig:10
   `test-otel-span-facade`, `test-otel-span-concurrency`. **Note:** no otel pin bump (convergence
   cascade avoided); the otel BSP atomic-end fix stays on branch `fix/bsp-span-reuse-uaf` for the next
   ecosystem convergence.
-  Next: Phase C (wire unwired P1 metrics + pull lib-internal stats — pure geode-side, no cascade) and
-  Phase B Increment 2 (child spans). Phase D (otel-lib gaps like PR-4 keepalive) is deferred — it
-  also needs a pin bump, and HTTP export already works.
+- 2026-05-29: **Phase C Increment 1 COMPLETE.** Runtime-metrics registry → OTLP bridge
+  (`otel_metrics.registerRuntimeMetricsOtel`): every entry of the process-global
+  `runtime_metrics.Registry` is now exported as a `geode.runtime.<name>` OTel observable gauge, wired
+  at startup after the registry is populated. **76 `geode.runtime.*` metric names land in the
+  collector** — the rich `quic_*` RTT/cwnd/bytes-in-flight, 20 poll-phase timings, 13 stream-write
+  counters, 24 first-stream phase metrics, proto-reader, leaked-conn reaper — previously log/
+  Prometheus-only. This is the core "all metrics that can be tracked" win + covers the QUIC-internal
+  blind spots. `runtime_metrics` promoted to a canonical build module. TDD: `test-otel-runtime-bridge`
+  (counter=7/gauge=42 through the real collect path). Commits a69174b1, e9478dca, 8006c2c9.
+  Next: Phase C Increment 2 (wire the remaining unwired `record*` facade fns: query plan/rows, txn
+  lock-wait/conflict/deadlock/timeout, auth/RLS/audit/TDE, + node/edge/index/storage/wal count
+  gauges). Then Phase B Inc 2 (child spans), Phase E (lib-off hardening + docs), Phase F (overhead).
+  Deferred: Phase D otel-lib gaps (need pin bump); distributed/CDC/analytics metrics (subsystems
+  inactive/absent); QUIC handshake/timeout (vendor lib limitation).
