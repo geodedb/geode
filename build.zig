@@ -1536,6 +1536,9 @@ pub fn build(b: *std.Build) void {
     otel_metrics_mod_for_gs_tests.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_unit_tests.root_module.addImport("otel", otel_mod);
     graph_store_unit_tests.root_module.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
+    // Phase C1: graph_storage_adapter.zig / group_commit.zig (in this root module)
+    // now `@import("runtime_metrics")` directly, so the root needs it too.
+    graph_store_unit_tests.root_module.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
