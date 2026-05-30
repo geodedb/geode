@@ -203,6 +203,8 @@ pub const Manager = struct {
                 if (other.id == txn.id) continue;
                 if (adv.predictOverlap(txn.id, other.id)) {
                     if (txn.id > other.id and other.state == .Active) {
+                        // Phase C2: SSI dangerous-structure early abort (rw-antidependency).
+                        otel_metrics.recordSerializationConflict("rw_antidependency");
                         return error.EarlyConflict;
                     }
                 }
@@ -222,6 +224,8 @@ pub const Manager = struct {
                     );
                 }
             }
+            // Phase C2: real SSI write-write serialization conflict at commit.
+            otel_metrics.recordSerializationConflict("write_write");
             return error.SerializationFailure;
         }
 
@@ -376,6 +380,10 @@ pub const Manager = struct {
 
                     // Check for deadlock
                     if (try self.detectDeadlock(txn.id)) {
+                        // Phase C2: real wait-for-graph cycle detected. The
+                        // requesting (waiting) txn is the victim — it receives
+                        // error.Deadlock and must abort.
+                        otel_metrics.recordDeadlock("requester_aborts");
                         return error.Deadlock;
                     }
 
@@ -419,6 +427,8 @@ pub const Manager = struct {
                     if (w.commit_ts == 0) continue;
                     if (w.commit_ts <= txn.start_ts) continue;
                     if (std.mem.startsWith(u8, w.key, prefix)) {
+                        // Phase C2: phantom write under a tracked predicate prefix.
+                        otel_metrics.recordSerializationConflict("phantom_predicate");
                         return error.SerializationFailure;
                     }
                 }
@@ -430,6 +440,8 @@ pub const Manager = struct {
                 if (w.commit_ts == 0) continue;
                 if (w.commit_ts <= txn.start_ts) continue;
                 if (rt.keyInRanges(txn.id, w.key)) {
+                    // Phase C2: phantom write inside a tracked range scan.
+                    otel_metrics.recordSerializationConflict("phantom_range");
                     return error.SerializationFailure;
                 }
             }
