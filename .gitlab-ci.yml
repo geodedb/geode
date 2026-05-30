@@ -1115,10 +1115,24 @@ test-harness-integration:
       cp -r reports/ "${CI_PROJECT_DIR}/harness-reports/" 2>/dev/null || true
 
       echo "=== Test Harness Results ==="
+      # The geodetestlab runner writes the post-retry verdict to
+      # reports/results.json as {"summary": {total,passed,failed,skipped}, ...}.
+      # A previous gate read top-level d['total']/d['failed'] (always absent ->
+      # 0), so `sys.exit(1) if f>0` NEVER fired and the job was permanently
+      # green regardless of real failures. It also could not tell a clean
+      # all-pass run from a crash that left an empty/zero verdict. The gate
+      # below reads the nested summary and fails closed on: any failed spec,
+      # zero specs run (harness aborted), or counts that don't add up.
+      # HARNESS_EXIT is shown for diagnostics only: `make test` exits non-zero
+      # even when specs only failed on the first attempt and passed on retry,
+      # so the results.json verdict (not the exit code) is authoritative.
       if [ -f reports/results.json ]; then
-        python3 -c "import json,sys; d=json.load(open('reports/results.json')); t,p,f=d.get('total',0),d.get('passed',0),d.get('failed',0); print(f'Total: {t}, Passed: {p}, Failed: {f}'); sys.exit(1) if f>0 else print('All test harness specs passed')"
+        HARNESS_EXIT="${HARNESS_EXIT:-0}" python3 "${CI_PROJECT_DIR}/scripts/ci/check_harness_results.py" reports/results.json
       elif [ "${HARNESS_EXIT:-0}" != "0" ]; then
         echo "FATAL: make test failed (exit ${HARNESS_EXIT}) and no results.json found"
+        exit 1
+      else
+        echo "FATAL: make test exited 0 but produced no reports/results.json — cannot verify the suite ran"
         exit 1
       fi
   artifacts:
