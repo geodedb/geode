@@ -73,15 +73,47 @@ prior concurrent-span crash is resolved at the geode boundary. Bounded attribute
 `error.type`). Child spans (parse/plan/storage/wal) + cross-process propagation are Phase B
 Increment 2 / later.
 
+### Phase C1 update (2026-05-29): runtime-metrics registry → OTLP (`geode.runtime.*`)
+
+The rich runtime counters that were previously **log-only / Prometheus-only** (gap #2 below) now
+reach the collector via OTLP. `otel_metrics.registerRuntimeMetricsOtel(registry)` bridges every entry
+of the process-global `runtime_metrics.Registry` into a `geode.runtime.<original_name>` OTel
+observable gauge, wired at server startup right after the registry is fully populated
+(`src/server/main.zig`, after `quic_response_metrics.registerAll`). Each gauge is backed by a heap
+`RuntimeBridge` that reads the source atomic / registry callback at OTel collection time. No
+per-connection/user labels (cardinality-safe).
+
+`scripts/otel-compose-verify.sh` → `PASS: geode metrics reached the collector (spans required=0,
+seen=9)`. **76 distinct `geode.runtime.*` metric names** landed in the collector debug exporter
+(`service.name=geode`). Captured families and sample names:
+
+| Family | Count | Sample names |
+|---|---|---|
+| `geode.runtime.proto_reader_*` | 5 | `proto_reader_idle_ns`, `proto_reader_messages_delivered_total`, `proto_reader_bytes_read_total`, `proto_reader_eof_total`, `proto_reader_would_block_loop_iterations_total` |
+| `geode.runtime.quic_*` connection/cwnd/RTT | — | `quic_active_connections`, `quic_total_bytes_in_flight`, `quic_total_cwnd_bytes`, `quic_min_smoothed_rtt_ns`, `quic_max_smoothed_rtt_ns`, `quic_min_flow_control_headroom` |
+| `geode.runtime.quic_poll_*` poll-phase ns | 20 | `quic_poll_cycle_max_ns`, `quic_poll_transport_max_ns`, `quic_poll_recv_process_max_ns`, `quic_poll_recv_short_*_max_ns`, `quic_poll_timer_process_max_ns`, `quic_poll_pto_dirty_max_ns`, `quic_poll_overrun_total` |
+| `geode.runtime.quic_stream_write_*` | 13 | `quic_stream_write_calls_total`, `quic_stream_write_success_total`, `quic_stream_write_bytes_written_total`, `quic_stream_write_elapsed_max_ns`, `quic_stream_write_would_block_total`, `quic_stream_write_flow_blocked_total` |
+| `geode.runtime.quic_first_stream_*` | 24 | `quic_first_stream_query_execute_ns_total`, `quic_first_stream_ready_queue_wait_max_ns`, `quic_first_stream_response_send_ns_total`, `quic_first_stream_packets_completed_total` |
+| `geode.runtime.quic_response_*` | 5 | `quic_response_messages_completed_total`, `quic_response_batches_completed_total`, `quic_response_encode_bytes_total` |
+| `geode.runtime.quic_leaked_connections_*` / stream-handler / idle | — | `quic_leaked_connections_pending`, `quic_leaked_connections_reaped_total`, `quic_pending_stream_handlers`, `quic_max_stream_handlers`, `quic_stream_admission_rejections_total`, `quic_max_stream_idle_ns` |
+
+Sample raw emit (from the geode `info: metrics:` line that backs these gauges, one collection):
+`quic_response_messages_completed_total=3 quic_stream_write_calls_total=3 quic_stream_write_bytes_written_total=159 quic_poll_cycle_max_ns=17485912 quic_total_cwnd_bytes=0 quic_min_smoothed_rtt_ns=0 quic_max_stream_handlers=1024 proto_reader_idle_ns=14885451447`.
+
+Bridge ctxs + name strings are process-lifetime (allocated on the provider allocator, tracked in
+`g_runtime_bridges`, freed only in `shutdown()` after the provider is torn down). Regression cover:
+`tests/test_otel_runtime_bridge.zig` (`zig build test-otel-runtime-bridge`) asserts a counter=7 and a
+gauge=42 surface as `geode_runtime_*` with those values through the real Prometheus collect path, plus
+a no-op-when-inactive case. This closes gap #2 below for the QUIC/proto-reader runtime counter set.
+
 ## Known gaps surfaced (feed later phases)
 
 1. **No geode-emitted spans (Phase B).** Tracing pipeline live but unused; add lifecycle spans
    (transport.request → query.parse/plan/execute → storage/wal, transactions).
-2. **Rich runtime counters are log-only / Prometheus-only, not in OTLP (Phase C).** geode logs a
-   large `info: metrics: quic_* proto_reader_* ...` set (cwnd, RTT, poll-phase ns, stream-write
-   stats, flow control). These are NOT exported via the OTLP facade. Phase C should wire the
-   decision-useful subset into geode-scoped OTLP metrics (covers the "lib internals geode is blind
-   to" — QUIC RTT/cwnd/loss in particular).
+2. ~~**Rich runtime counters are log-only / Prometheus-only, not in OTLP (Phase C).**~~ **CLOSED by
+   Phase C1 (2026-05-29)** — see the Phase C1 update above. The full `quic_* proto_reader_*` registry
+   (cwnd, RTT, poll-phase ns, stream-write stats, flow control; 76 series) now exports via OTLP as
+   `geode.runtime.*` observable gauges.
 3. **Unwired P1 facade metrics (Phase C).** planner/optimizer, auth/RLS decisions, query/path cache,
    MVCC/deadlock, group-commit, vector/GPU, materialized views, shard-level, distributed/raft.
 
