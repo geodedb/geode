@@ -1,8 +1,8 @@
 # QUIC High-Concurrency Request Admission - 2026-05-29
 
 **Scope:** `geode`
-**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, backlog-aware cooperative pacing, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, cooperative mutation offload, restart/recovery regression coverage, and a default-neutral active-write-shard diagnostic knob. The best accepted 2048x8/1000 us sustained run is 5037.52 QPS with zero first-response timeouts on the all-shard default path. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest attribution runs show clean response writes, cheap read execution, dominant mutation execution/storage tail, coordinator submit wait, and multi-second QUIC short-header receive/frame-processing cycles.
-**Dependency state:** Geode now pins QUIC `a1858c19ad91026eb412db263cb159d68de282ac` and `geode-client-zig` `942641cd1e71544560bbfe96db280fa271827a2c`. QUIC `a1858c1` preserves the proven `06f4aad` generic/coalesced long-header TLS serialization and reverts the rejected `REQ-QUIC-HC-177` server short-header busy-connection shedding experiment after it regressed the 2048x8 mixed gate.
+**Status:** 4096 mixed read/mutation single-op gates pass with zero setup retries, zero execute retries, zero reconnects, and zero first-response timeouts. Sustained mixed read/write load passes at 2048 workers x 8 operations with zero retries/timeouts after shard-parallel mutation admission, tighter cooperative scheduler backoff, backlog-aware cooperative pacing, storage/index contention fixes, shared query-cache hit-path fixes, tuple-lock collision instrumentation, cooperative mutation offload, restart/recovery regression coverage, and a default-neutral active-write-shard diagnostic knob. The best accepted 2048x8/1000 us sustained run is 5037.52 QPS with zero first-response timeouts on the all-shard default path. Geode's release defaults now match the accepted single-stream/cooperative high-fanout profile instead of requiring the harness to provide those env overrides. The 4096 workers x 8 operations ceiling still fails and remains the next throughput target; the latest attribution runs show clean response writes, cheap read execution, dominant mutation execution/storage tail, coordinator submit wait, and multi-second QUIC short-header receive/frame-processing cycles.
+**Dependency state:** Geode now pins QUIC `a1858c19ad91026eb412db263cb159d68de282ac` and `geode-client-zig` `942641cd1e71544560bbfe96db280fa271827a2c`. QUIC `a1858c1` preserves the proven `06f4aad` generic/coalesced long-header TLS serialization and reverts the rejected `REQ-QUIC-HC-177` server short-header busy-connection shedding experiment after it regressed the 2048x8 mixed gate. A final dependency refresh pass confirmed the upstream Zig sibling checkouts, QUIC, and `geode-client-zig` were already aligned with their remotes; no downstream dependency pin changes were required in this stop cycle.
 
 ## Summary
 
@@ -47,6 +47,8 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 37. The final 2048x8 sustained retune kept group-commit coalescing at 500 us and narrowed shard-parallel mutation admission to 80. This restored zero-timeout 1024x8 and 2048x8 gates after cap 128 began producing rare first-response timeouts on the final dependency line. Wider coalescing waits, immediate high-fanout post-write polling, 640 cooperative workers, and cap 96/192 variants were all rejected before promotion.
 38. `REQ-QUIC-HC-178` moves shard-parallel mutation packet execution and group-commit waits out of cooperative scheduler workers into a bounded offload pool after mutation admission succeeds. The stream owner remains marked running for ordering, the offload task releases the mutation permit and completes or finishes the cooperative context, and shutdown waits for outstanding offload tasks before reclaiming contexts. The best accepted 2048x8/1000 us sustained gate improved to 1895.40 QPS with zero first-response timeouts, and the final pre-push rerun of that gate also completed cleanly at 948.72 QPS; 2048x8/250 us and 4096x8 remain failing ceilings.
 39. `REQ-QUIC-HC-179` adds a default-neutral group-commit active-write-shard diagnostic knob. The coordinator can reserve new node IDs from only the first `GEODE_GROUP_COMMIT_ACTIVE_SHARDS` write shards, and the E2E harness exposes this through `GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS`. The default remains all 16 shards. A default-path 2048x8/1000 us rerun completed cleanly at 5037.52 QPS, while 8-shard and 4-shard narrowing were rejected and not promoted.
+40. The accepted performance profile is now promoted to Geode server defaults: stream multiplexing defaults off, cooperative first-stream scheduling defaults on, optimized builds default to 512 cooperative first-stream workers, detached HELLO admission defaults to 4096 threads, and the stream queue defaults to 8192 entries. Existing env vars still restore compatibility mode (`GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1`, `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0`) or run diagnostic sweeps.
+41. Two follow-up implementation hypotheses were tested and rejected before this stop point. A batch-shared graph-lock path for consecutive multi-property `MERGE` kept 2048x8 completion clean but regressed the 4096x8 ceiling to `22598/32768` with `10170` first-response timeouts, so it was reverted. Raising the cooperative mutation offload pool from 64 to 80 workers failed the 2048x8 readiness gate with `ServerStartupTimeout`, matching the earlier 128-worker rejection, so the internal cap remains 64.
 
 ## Changed Files
 
@@ -60,6 +62,10 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
   - Skips the shared optimizer for mutating programs, reusing the same mutation classification later for lock selection.
   - Adds a bounded cooperative mutation offload pool for shard-parallel first-stream packets after mutation admission succeeds, so cooperative scheduler workers no longer sit inside group-commit waits.
   - Keeps the stream owner marked running while an offloaded mutation packet executes, releases the mutation permit in the offload task, and waits for outstanding offload tasks during scheduler shutdown.
+- `src/server/main.zig`
+  - Promotes the measured high-fanout queue and admission defaults: 8192 stream queue entries, 512 optimized cooperative first-stream workers, and 4096 optimized detached connection-admission threads.
+- `src/server/server_init.zig`
+  - Defaults QUIC serving to the single-stream/cooperative profile used by the accepted gates. Multiplexing remains available via `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1`; cooperative scheduling can be disabled with `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0`.
 - `src/storage/graph_storage_adapter.zig`
   - Adds exact-property posting-length probing and copies only the smallest available candidate posting for multi-property `MERGE`.
   - Raises multi-property `MERGE` tuple-lock striping to 16k heap-allocated mutexes per graph.
@@ -190,6 +196,10 @@ All commands below were run on 2026-05-29.
 | 4096 workers x 8 ops mixed E2E after active-write-shard diagnostic wiring at 1000 us request stagger | FAIL, 25133/32768 operations, 7635 first-response timeouts, 532.53 QPS, p50=2766.89 ms, p95=9315.13 ms, p99=9858.44 ms, p99.9=9985.95 ms. |
 | 4096 workers x 8 ops mixed E2E after active-write-shard diagnostic wiring at 1000 us request stagger with runtime scrape | FAIL, 19467/32768 operations, 13301 first-response timeouts, 343.49 QPS, p50=3516.23 ms, p95=8935.78 ms, p99=9763.55 ms, p99.9=9978.00 ms. The scrape showed clean response writes, cheap read execution, dominant mutation/coordinator submit wait, and a multi-second short-header receive tail. |
 | 2048 workers x 8 ops mixed E2E with cooperative mutation offload pool cap raised to 128 | FAIL, child server did not reach readiness before the harness startup timeout. This rejected raising the internal offload cap above 64 workers. |
+| 2048 workers x 8 ops mixed E2E with batch-shared graph-lock multi-property MERGE experiment | PASS for completion, 16384/16384 operations, zero first-response timeouts, but only 1103.77 QPS with p50=1440.79 ms and p99=5723.91 ms. Rejected because it did not improve the accepted sustained profile. |
+| 4096 workers x 8 ops mixed E2E with batch-shared graph-lock multi-property MERGE experiment | FAIL, 22598/32768 operations, 10170 first-response timeouts, 437.67 QPS, p50=2624.91 ms, p95=9360.15 ms, p99=9877.80 ms. Rejected and reverted because it worsened the ceiling versus the previous all-shard default path. |
+| 2048 workers x 8 ops mixed E2E with cooperative mutation offload pool cap raised to 80 | FAIL, child server did not reach readiness before the harness startup timeout. This rejected aligning the offload worker count with the 80-wide mutation admission window. |
+| `zig build test-quic-condition-cadence --summary all` after server default promotion | PASS, 75/75 source-audit tests including the promoted default assertions. |
 | 2048 workers x 8 ops mixed E2E with `GEODE_HC_POLL_WORKERS=4` at 250 us request stagger | FAIL, 16341/16384 operations, 43 first-response timeouts, 589.37 QPS. |
 | 2048 workers x 8 ops mixed E2E with `GEODE_HC_MUTATION_ADMISSION_CAP=40` at 250 us request stagger | FAIL, 16372/16384 operations, 12 first-response timeouts, 659.79 QPS. |
 | 2048 workers x 8 ops mixed E2E with rejected QUIC `8bb3733` busy-connection shedding | FAIL, 16359/16384 operations, 25 first-response timeouts, 715.39 QPS. This rejected the upstream packet-shedding default. |
@@ -591,19 +601,48 @@ All rows below used 4096 workers, one operation per worker, mutation stride 4, 1
 | `GEODE_HC_GROUP_COMMIT_COALESCE_US=0` on 1024x8 mixed | PASS, but regressed to 602.66 QPS, p50 1560 ms, p95 3072 ms, and 51.95s mutation execution. Commit time rose to 16.01s across 1899 batches. | Rejected. The 100 us coalescing window is still necessary for the coordinator path. |
 | Always-on coordinator phase timing on 2048x8 mixed scrape | FAIL, `ok=15238/16384`, `first_response_timeouts=1146`, 394.23 QPS. The metrics were useful, but the timing overhead perturbed the sustained gate. | Rejected as a default. Detailed coordinator phase timers now require `GEODE_GROUP_COMMIT_PHASE_METRICS=1`; the harness enables it only for scrape diagnostics unless overridden. |
 
-## Known Unrelated Test Failure
+## Cluster Subprocess Shutdown Fix
 
-`zig build test --summary all` still fails in the existing subprocess cluster smoke:
+The push hook exposed a separate subprocess-cluster teardown hang after the
+high-fanout defaults were promoted. The 3-node smoke reached child cleanup, but
+`std.process.Child.kill()` sends SIGTERM and then waits indefinitely. The last
+child had already entered server shutdown and was blocked joining long-lived
+background work.
+
+Two shutdown paths were fixed:
+
+- Raft outbox drain now treats shutdown as a cancellation boundary. Once
+  `ClusterCoordinator.stop()` sets the outbox shutdown flag, queued
+  heartbeats/votes are freed instead of attempting fresh QUIC handshakes to
+  peers that the test harness may have already killed.
+- Graph-store persistence now parks on a futex-backed shutdown word instead of
+  uninterruptible `nanosleep`. `stopPersistenceThread()` stores shutdown,
+  wakes the futex, and only then joins the pool, so the default 30s persist
+  interval no longer becomes SIGTERM teardown latency.
+
+Regression coverage added in this cycle:
 
 ```text
-test_cluster_3node_subprocess.test.three geode subprocesses on loopback form a 3-node Raft cluster
+zig build test-drainready-dispatch --summary all
+zig build test-quic-condition-cadence --summary all
+timeout --kill-after=10s 180s zig build test-cluster-3node-subprocess --summary all
 ```
 
-The failing nodes repeatedly log `raft transport getOrCreatePeerConnection failed error=HandshakeError` and do not elect a leader. Rebuilding the default debug binary with `zig build --summary all` succeeds, but a direct `timeout 300s zig build test-cluster-3node-subprocess --summary all` run still times out. That failure is in the distributed cluster subprocess path and is not part of the QUIC high-concurrency request-admission changes in this cycle.
+The isolated subprocess cluster target now passes in about 21 seconds instead
+of hanging in the pre-push hook.
 
 ## Operational Guidance
 
 - Keep `GEODE_QUIC_POLL_WORKERS=16` for this dependency line.
+- The optimized server default is now the accepted high-fanout profile:
+  `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0`,
+  `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=1`,
+  `GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS=512`,
+  `GEODE_QUIC_CONNECTION_ADMISSION_THREADS=4096`, and
+  `GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192`.
+- Set `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1` only for multi-stream
+  compatibility workloads that need additional peer-initiated streams on an
+  authenticated connection.
 - Keep `GEODE_QUIC_MUTATION_ADMISSION_CAP` unset in normal operation. General writer-lock mutations use the fixed serial cap of 4; the default shard-parallel multi-property `MERGE` cap is 80.
 - Keep `GEODE_GROUP_COMMIT_COALESCE_US` unset in normal operation. The default is 500 us; 100 us timed out at 2048x8 and 2000 us regressed tail completion.
 - Keep `GEODE_GROUP_COMMIT_PHASE_METRICS` unset in normal operation. Set `GEODE_HC_METRICS_SCRAPE=1` when a ceiling probe needs coordinator phase attribution.
@@ -613,6 +652,9 @@ The failing nodes repeatedly log `raft transport getOrCreatePeerConnection faile
 - Set `GEODE_HC_METRICS_SCRAPE=1` on ceiling probes when collecting attribution. It enables a private child metrics port and prints the high-concurrency runtime counters without requiring an external scraper.
 - Keep `GEODE_HC_POST_WRITE_POLL` unset for high-fanout harness runs. The default remains true below 1024 workers and false at 1024+ workers. Set it to `1` only when comparing against the legacy immediate-flush behavior.
 - Do not promote the parked mutation-overflow queue without a better fairness design; the measured result regressed the workload.
+- Do not promote the reverted batch-shared graph-lock path or raise the
+  cooperative mutation offload pool above 64 without a new passing 2048x8 and
+  non-regressing 4096x8 result.
 - Read `high-concurrency QUIC E2E timing` lines as follows:
   - `avg_ready_to_first_execute_ms` captures local harness wake/scheduling lag after the configured request stagger.
   - `avg_execute_write_ms` captures client-side EXECUTE encode/write/post-write QUIC poll time.

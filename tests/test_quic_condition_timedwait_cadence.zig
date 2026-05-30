@@ -1503,7 +1503,7 @@ test "quic high fanout defaults avoid setup admission collapse" {
     const maybe_main = try readFile(allocator, "src/server/main.zig");
     const main_content = maybe_main orelse return error.FileNotFound;
     defer allocator.free(main_content);
-    try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 1024") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "quic_connection_admission_stack_size = 1024 * 1024") != null);
 
     const maybe_registry = try readFile(allocator, "src/server/active_stream_registry.zig");
@@ -2025,6 +2025,23 @@ test "quic shutdown signals handlers before stopping poll loop" {
     try testing.expect(std.mem.indexOf(u8, transport_content, "REQ=REQ-QUIC-HC-004") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "pub fn requestShutdown(self: *QuicTransport)") != null);
     try testing.expect(std.mem.indexOf(u8, transport_content, "shutdown_requested") != null);
+}
+
+test "persistence thread shutdown wakes interval sleeper before pool join" {
+    // Subprocess cluster smoke kills real server children. The graph-store
+    // persistence loop must wake on SIGTERM instead of sleeping until the
+    // configured persist interval and leaving ThreadPool.deinit stuck joining
+    // an active task.
+    const allocator = testing.allocator;
+
+    const maybe_graph_store = try readFile(allocator, "src/graph_store.zig");
+    const graph_store = maybe_graph_store orelse return error.FileNotFound;
+    defer allocator.free(graph_store);
+
+    try testing.expect(std.mem.indexOf(u8, graph_store, "var g_persist_shutdown: std.atomic.Value(u32)") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store, "g_persist_shutdown.store(1, .release)") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store, "io.futexWake(u32, &g_persist_shutdown.raw") != null);
+    try testing.expect(std.mem.indexOf(u8, graph_store, "io.futexWaitTimeout(u32, &g_persist_shutdown.raw, 0, timeout)") != null);
 }
 
 test "quic protocol clients do not impose 10ms read retry floors" {
@@ -2641,10 +2658,10 @@ test "quic high fanout e2e runs in single stream stress mode" {
     const init_content = maybe_init orelse return error.FileNotFound;
     defer allocator.free(init_content);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-030") != null);
-    try testing.expect(std.mem.indexOf(u8, init_content, "quic_stream_multiplexing_enabled: bool = true") != null);
+    try testing.expect(std.mem.indexOf(u8, init_content, "quic_stream_multiplexing_enabled: bool = false") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "\"GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING\"") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-054") != null);
-    try testing.expect(std.mem.indexOf(u8, init_content, "quic_cooperative_first_streams_enabled: bool = false") != null);
+    try testing.expect(std.mem.indexOf(u8, init_content, "quic_cooperative_first_streams_enabled: bool = true") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "\"GEODE_QUIC_COOPERATIVE_FIRST_STREAMS\"") != null);
 
     const maybe_handler = try readFile(allocator, "src/server/quic_connection_handler.zig");
@@ -2703,7 +2720,7 @@ test "quic high fanout e2e runs in single stream stress mode" {
     try testing.expect(std.mem.indexOf(u8, main_content, "setMaxDetachedFirstStreamOwners") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_cooperative_first_stream_worker_count") != null);
-    try testing.expect(std.mem.indexOf(u8, main_content, "const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 512") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS\"") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_MUTATION_ADMISSION_CAP\"") != null);
     try testing.expect(std.mem.indexOf(u8, main_content, "default_first_stream_scheduler_mutation_limit_cap") != null);

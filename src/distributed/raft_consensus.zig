@@ -475,9 +475,11 @@ pub const Transport = struct {
     /// Cheap — just a hashmap-free vec append under `outbox_mutex`.
     /// The actual QUIC write happens later on the dispatch thread.
     pub fn enqueueOutbound(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
+        if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
         const io = std.Io.Threaded.global_single_threaded.io();
         self.outbox_mutex.lockUncancelable(io);
         defer self.outbox_mutex.unlock(io);
+        if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
         try self.outbox.append(self.allocator, .{ .peer = peer, .from = from, .term = term, .msg = msg });
         // Dispatch thread polls every 1 ms so we don't need a condvar
         // signal here; the wakeup latency floor (1 ms) is still 10×
@@ -509,6 +511,14 @@ pub const Transport = struct {
     /// retry on its next tick if the send failed.
     pub fn dispatchOutbox(self: *Transport, snap: *std.ArrayList(OutboundEntry)) void {
         for (snap.items) |entry| {
+            // Shutdown is a cancellation boundary.  Once SIGTERM has reached
+            // ClusterCoordinator.stop(), peers may already be gone; continuing
+            // to drain a stale snapshot can pay the QUIC handshake timeout for
+            // every queued heartbeat/vote and make subprocess cleanup hang.
+            if (self.outbox_shutdown.load(.acquire)) {
+                freeOutboundMessage(self.allocator, entry.msg);
+                continue;
+            }
             // CANARY: REQ=REQ-DIST-RAFT-A6E-OUTBOX-DISPATCH; FEATURE="Raft Outbox Async Dispatch"; ASPECT=Send; STATUS=TESTED; OWNER=distributed; UPDATED=2026-05-26
             self.send(entry.peer, entry.from, entry.term, entry.msg) catch |err| {
                 log.debug("raft outbox dispatch failed", &.{
@@ -680,6 +690,7 @@ pub const Transport = struct {
     // SEC-D011: TLS-aware Raft transport matching cluster.zig:sendToNode pattern.
     // CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=TransportSend; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
     pub fn send(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
+        if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
         if (self.send_override) |override| {
             try override(self, peer, from, term, msg);
             return;

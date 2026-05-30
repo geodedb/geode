@@ -198,20 +198,20 @@ else
 
 // CANARY: REQ=REQ-QUIC-HC-018; FEATURE="QUIC High-Concurrency Worker Fanout"; ASPECT=StreamPoolSizing; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
 //
-// Stream handlers are long-lived per-client query loops. A fixed, non-tunable
-// 64-worker pool serialized 128+ client fan-out even after connection
-// admission became detached. Keep the startup-safe default unchanged and expose
-// env overrides for benchmark/production high-fanout tuning.
+// Stream handlers are long-lived per-client query loops. The current
+// high-throughput default runs single-stream clients through the cooperative
+// first-stream scheduler, but the shared stream pool still needs enough queue
+// headroom for compatibility-mode multiplexed streams and fallback owners.
 const default_quic_stream_worker_count = 64;
-const default_quic_stream_queue_capacity = 4096;
+const default_quic_stream_queue_capacity = 8192;
 const default_quic_acceptor_worker_count = 64;
 const default_quic_acceptor_queue_capacity = 4096;
 const default_quic_connection_worker_count = 64;
 const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
-const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
+const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 512;
 const default_quic_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
 const quic_connection_queue_capacity = 1024;
-const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 1024;
+const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096;
 const quic_connection_admission_stack_size = 1024 * 1024;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to

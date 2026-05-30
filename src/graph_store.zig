@@ -7342,23 +7342,19 @@ pub fn global_allocator() std.mem.Allocator {
 
 /// Start a background thread that periodically flushes dirty data to disk.
 /// Needed for cross-process visibility (CLI user commands → server).
-var g_persist_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var g_persist_shutdown: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var g_persist_pool: ?*pooled.ThreadPool = null;
 var g_persist_interval_ms: u64 = 5000;
 
 pub fn startPersistenceThread(interval_ms: u64) void {
     g_persist_interval_ms = interval_ms;
-    g_persist_shutdown.store(false, .release);
+    g_persist_shutdown.store(0, .release);
     const pool = pooled.ThreadPool.init(global_allocator(), .{
         .num_threads = 1,
         .queue_capacity = 4,
-        // 2026-04-27: cap deinit at 2s.  The persistence loop polls
-        // every `g_persist_interval_ms` (default 5s) and only exits
-        // between sleeps, so without a tight cap the upstream 30s
-        // default dominates server shutdown — measured 29s empty-server
-        // SIGTERM latency before the harness force-killed mid-flush
-        // (`regression_issue_539_wal_recovery_checkpoint`,
-        // `fle_large_data_stress_verification`).
+        // 2026-05-29: the loop parks on g_persist_shutdown via futex and
+        // stopPersistenceThread wakes it before deinit, so the timeout is a
+        // hard safety net rather than the normal SIGTERM path.
         .deinit_timeout_ns = 2 * std.time.ns_per_s,
     }) catch return;
     errdefer pool.deinit();
@@ -7374,7 +7370,9 @@ pub fn startPersistenceThread(interval_ms: u64) void {
 
 pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     _ = allocator;
-    g_persist_shutdown.store(true, .release);
+    g_persist_shutdown.store(1, .release);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    io.futexWake(u32, &g_persist_shutdown.raw, std.math.maxInt(u32));
     if (g_persist_pool) |pool| {
         pool.deinit();
         g_persist_pool = null;
@@ -7411,17 +7409,16 @@ fn persistenceLoop() void {
     // doesn't burn CPU). See
     // docs/performance/2026-04-25-edges-contains/diagnosis.md.
     const poll_ms: u64 = @max(g_persist_interval_ms, 100);
-    while (!g_persist_shutdown.load(.acquire)) {
-        {
-            const ns: u64 = poll_ms * std.time.ns_per_ms;
-            const req = std.os.linux.timespec{
-                .sec = @intCast(ns / std.time.ns_per_s),
-                .nsec = @intCast(ns % std.time.ns_per_s),
-            };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
-        }
-        if (g_persist_shutdown.load(.acquire)) break;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    while (g_persist_shutdown.load(.acquire) == 0) {
+        const timeout: std.Io.Timeout = .{ .duration = .{
+            .raw = std.Io.Duration.fromNanoseconds(poll_ms * std.time.ns_per_ms),
+            .clock = .awake,
+        } };
+        io.futexWaitTimeout(u32, &g_persist_shutdown.raw, 0, timeout) catch |err| switch (err) {
+            error.Canceled => return,
+        };
+        if (g_persist_shutdown.load(.acquire) != 0) break;
         if (global_store != null) {
             const store_ptr: *GraphStore = &(global_store.?);
 

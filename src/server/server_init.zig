@@ -48,15 +48,16 @@ pub const EnvironmentConfig = struct {
     inline_results_max_rows: usize = 1000,
     telemetry_paging: bool = false,
     // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
-    // Keep stream multiplexing enabled for CLI batch compatibility. High-fanout
-    // single-stream deployments can disable the per-connection acceptor with
-    // GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0.
-    quic_stream_multiplexing_enabled: bool = true,
+    // Default to the measured high-throughput single-stream profile: no idle
+    // per-connection acceptor loop unless an operator explicitly enables
+    // multiplexed streams with GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1.
+    quic_stream_multiplexing_enabled: bool = false,
     // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
     // In single-stream high-fanout deployments, service first streams with a
     // bounded cooperative scheduler instead of one persistent worker per live
-    // connection.
-    quic_cooperative_first_streams_enabled: bool = false,
+    // connection. This is now the production default; set
+    // GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0 only for compatibility triage.
+    quic_cooperative_first_streams_enabled: bool = true,
     // R2 (2026-04-22): per-request budget for acquiring the per-graph
     // exclusive write lock.
     //

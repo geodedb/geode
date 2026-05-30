@@ -148,6 +148,41 @@ test "drainReady-and-bridge: wrapper transport receives RequestVoteResponse from
     try std.testing.expect(saw_response);
 }
 
+test "raft outbox dispatch drops queued sends after shutdown is requested" {
+    const a = std.testing.allocator;
+
+    var sink = Sink{ .allocator = a };
+    defer sink.deinit();
+
+    var transport = Transport.init(a);
+    defer transport.deinit();
+    transport.send_override = Sink.captureSend;
+    transport.send_override_ctx = @ptrCast(&sink);
+
+    const peer = Peer{
+        .id = 2,
+        .endpoint = "127.0.0.1",
+        .port = 21001,
+        .alive = true,
+        .last_contact = 0,
+        .rpc_client = null,
+    };
+    const msg = Message{ .request_vote_response = .{
+        .term = 7,
+        .vote_granted = true,
+        .voter_id = 1,
+        .pre_vote = false,
+    } };
+
+    try transport.enqueueOutbound(peer, 1, 7, msg);
+    var snap = transport.snapshotOutbox();
+
+    transport.outbox_shutdown.store(true, .release);
+    transport.dispatchOutbox(&snap);
+
+    try std.testing.expectEqual(@as(usize, 0), sink.items.items.len);
+}
+
 test "drainReady fallback: empty rd.messages with no transport is a no-op" {
     const a = std.testing.allocator;
 

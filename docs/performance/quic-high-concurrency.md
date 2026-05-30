@@ -75,6 +75,33 @@ operations with zero first-response timeouts at 3523.77 QPS. The corresponding
 latency percentiles were p50=244.83 ms, p95=552.59 ms, p99=732.43 ms, and
 p99.9=1037.43 ms.
 
+## Promoted Server Defaults
+
+The accepted high-fanout profile is now reflected in Geode's release defaults
+instead of living only in the E2E harness environment:
+
+- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING` defaults to off. This avoids one idle
+  multiplexed acceptor loop per high-fanout single-stream connection. Operators
+  that need multi-stream compatibility can set it to `1`.
+- `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS` defaults to on. First streams rotate
+  through the bounded cooperative scheduler instead of pinning one persistent
+  worker or detached owner per live client.
+- `GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS` defaults to `512` in optimized
+  builds, matching the accepted 2048x8/4096 diagnostic harness profile.
+- `GEODE_QUIC_CONNECTION_ADMISSION_THREADS` defaults to `4096` in optimized
+  builds so rapid HELLO fanout does not collapse behind the old 1024 detached
+  admission cap.
+- `GEODE_QUIC_STREAM_QUEUE_CAPACITY` defaults to `8192`, matching the queue
+  headroom used by the high-concurrency harness.
+- Existing accepted defaults remain in place: `GEODE_QUIC_POLL_WORKERS=16`,
+  shard-parallel mutation admission cap `80`, group-commit coalescing `500 us`,
+  all 16 group-commit write shards active, and group-commit phase metrics off.
+
+These defaults preserve explicit env overrides for compatibility and
+diagnostics. They intentionally do not promote the rejected 64-poll-worker,
+80/128 mutation-offload-worker, narrower active-shard, or wider coalescing
+experiments.
+
 ## Stress Ceiling
 
 The 4096-worker mixed workload with 8 operations per client is still the failing
@@ -173,14 +200,24 @@ accepted sustained gates or worsened the 4096x8 stress ceiling:
 - `GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS=4` at 2048x8/1000 us. This failed with
   one first-response timeout and one missed mutation, so active shard narrowing
   is retained only as a diagnostic sweep knob.
+- A batch-shared graph-lock adapter path for consecutive multi-property MERGE
+  mutations. It kept 2048x8 completion clean but did not improve throughput
+  (`1103.77 QPS`, p50 `1440.79 ms`, p99 `5723.91 ms`) and worsened the 4096x8
+  ceiling to `22598/32768` operations with `10170` first-response timeouts and
+  `437.67 QPS`, so it was reverted.
+- Raising the cooperative mutation offload pool cap from 64 to 80 to match the
+  mutation admission window. The 2048x8 sustained gate failed before server
+  readiness with `ServerStartupTimeout`, the same failure mode seen by the
+  earlier 128-worker variant, so the offload pool stays capped at 64.
 
-The current high-fanout defaults remain 512 cooperative first-stream workers,
-16 poll workers, 500 us group-commit coalescing, an 80-request shard-parallel
+The current high-fanout defaults are 512 cooperative first-stream workers, 16
+poll workers, 500 us group-commit coalescing, an 80-request shard-parallel
 mutation cap, a 64-worker cooperative mutation offload pool for shard-parallel
-mutations, all 16 group-commit write shards active, and no server short-header
-packet shedding. The next implementation target is reducing the mutation
-storage/WAL commit tail and the upstream QUIC short-header receive/frame-
-processing tail exposed by the 2048/4096 ceiling metrics.
+mutations, all 16 group-commit write shards active, single-stream cooperative
+handling by default, and no server short-header packet shedding. The next
+implementation target is reducing the mutation storage/WAL commit tail and the
+upstream QUIC short-header receive/frame-processing tail exposed by the
+2048/4096 ceiling metrics.
 
 ## Enterprise Objective Gate
 
@@ -366,9 +403,19 @@ smoke proving the restart/recovery and graph-isolation gates work.
 ## Core Knobs
 
 - `GEODE_QUIC_POLL_WORKERS`: server endpoint poll workers. Keep the harness
-  default at `16`. The server accepts explicit sweeps up to `64` on the
+  and server default at `16`. The server accepts explicit sweeps up to `64` on the
   v0.1.21+ QUIC dependency line, but the measured 1024x8 mixed A/B did not
   improve throughput and increased poll overruns, so `64` is diagnostic-only.
+- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING`: defaults to `0` for the high-fanout
+  single-stream profile. Set `1` for clients that need additional peer-initiated
+  streams on the same authenticated connection.
+- `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS`: defaults to `1`. Set `0` only when
+  triaging compatibility against the detached-owner or shared-stream-pool paths.
+- `GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS`: defaults to `512` in optimized
+  builds and remains clamped at `512`.
+- `GEODE_QUIC_CONNECTION_ADMISSION_THREADS`: defaults to `4096` in optimized
+  builds so high-fanout HELLO admission does not collapse under rapid setup.
+- `GEODE_QUIC_STREAM_QUEUE_CAPACITY`: defaults to `8192`.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
   Leave unset in normal operation. General writer-lock mutations keep an
   internal serial cap of `4`; the runtime cap now controls only the
@@ -519,6 +566,25 @@ shard-parallel mutation admission cap.
 `mg_rwlock_shared_hold_snapshot_ns_total` should stay at zero for the default
 high-concurrency count workload unless RLS policies or a broader query shape
 force snapshot execution.
+
+## Shutdown Regression Coverage
+
+The high-fanout server defaults also exercise long-lived background workers in
+subprocess tests. The current regression set includes the 3-node real-process
+cluster smoke because it caught two SIGTERM teardown stalls that the normal
+query benchmarks did not cover:
+
+- Raft outbox shutdown drops stale queued peer sends instead of spending the
+  QUIC handshake timeout on every heartbeat/vote after peers are gone.
+- Graph-store persistence sleeps through a futex wait on the shutdown word, so
+  `stopPersistenceThread()` can wake it before joining the pool.
+
+Use this target after touching server shutdown, cluster transport, persistence,
+or thread-pool drain behavior:
+
+```bash
+timeout --kill-after=10s 180s zig build test-cluster-3node-subprocess --summary all
+```
 
 ## Dependency State
 
