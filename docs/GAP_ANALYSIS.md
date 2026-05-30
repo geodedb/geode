@@ -66,6 +66,62 @@ distinct IPs, and it does not work.
 - **Acceptance criteria:** A 3-node cluster on three distinct IPs (e.g., 3 containers/netns) with cert-manager-style CA-issued certs elects a leader, replicates a write to all nodes, and serves a consistent read from a follower — verified in CI, not just on loopback.
 - **Consumer reference:** `gitlab.com/devnw/sealife/divelife-argo` `manifests/base/geode.yaml` (3-node StatefulSet + entrypoint ordinal→`GEODE_NODE_ID`), `geode-tls.yaml` (CA chain + pod-DNS SANs), `networkpolicies.yaml` (`allow-geode-cluster-mesh`), commits `a506322…f3b76d1` on `main`.
 
+#### GAP-0838 root-cause analysis — CONFIRMED 2026-05-30 (Partial fix landed)
+
+Reproduced the handshake failure deterministically at the TLS layer (no
+Kubernetes needed) with a tls-repo unit test that drives `x509.validateChain`
+against a cert-manager-style CA chain. Three **distinct** root causes were
+isolated; the earlier "loopback-specific verification bypass" hypothesis was
+the symptom, not the cause:
+
+1. **iPAddress SANs were dropped during parsing → IP-literal peers fail.**
+   `tls/src/x509.zig parseExtSan` only collected dNSName general names and
+   `matchDnsName` only checked `san.dns`/CN, so a peer dialed by IP literal
+   failed `validateChain` with `NameMismatch` even with a correct iPAddress
+   SAN. **FIXED** in `gitlab.com/devnw/zig/tls` branch
+   `fix/x509-ip-san-matching` (commit `d56e6f6`): parse iPAddress SANs and
+   match IP-literal reference identities against them per RFC 6125 §6.4 /
+   RFC 2818 (additive — CN fallback preserved). Regression test in
+   `tests/rfc5280/section_6_path_validation.zig` (FQDN+IP verify; unlisted
+   IP/host rejected). Repro test result: `FQDN+fullchain PASS`,
+   `IP+fullchain` was `NameMismatch` → now `PASS`.
+
+2. **The configured cluster CA is never wired into the api-client trust
+   store.** geode reaches the peer-dial path via `quic.QuicClient.connectEx`
+   → `api.endpointInit`/`api.connect` (NOT the vendor `QuicTransport`
+   wrapper). That path's `VendorQuicConfig.ca_path` is **never consumed**:
+   `quic/src/quic/endpoint.zig` builds the client TLS context via
+   `handshake_integration.createTlsContext(...)`, whose signature has **no
+   CA / trust-store parameter** — and geode never calls `x509.setTrustStore`.
+   So `GEODE_CLUSTER_CA_CERT` is silently ignored and the cluster TLS client
+   has **no trust anchor**; `validateChain` (`.secure`) rejects any
+   CA-issued peer cert. **OPEN.**
+
+3. **The QUIC server presents only its leaf cert (no chain).**
+   `quic/src/quic/transport.zig:284` uses `api.pem.parseCertificate`
+   (singular) and the TLS server config carries a single `server_cert_der`
+   (`tls/src/tls13/context.zig` Certificate message = one entry), so even a
+   bundle `cert_path` presents leaf-only. Combined with the vendor's
+   SPKI-match-on-presented-cert trust model, the client gets `[leaf]` and
+   cannot build a path to the trusted root → `BadSignature`. Repro:
+   `FQDN+leaf-only` → `BadSignature`. **OPEN.**
+
+**Why loopback always worked:** geode auto-generates a *single self-signed*
+cert for the cluster listener; `x509.runChainChecks` accepts a lone
+self-signed cert without a trust store, and its CN/SAN matches `127.0.0.1`.
+The harness only ever exercised that path, so #2 and #3 were never hit.
+
+**Remaining fix plan (keystone, deliberate — security-critical, not rushed):**
+Wire `cfg.ca_path` through `createTlsContext` into a **per-connection** trust
+store (NOT the process-global one — that would affect the :3141 client TLS),
+and complete the presented chain client-side by appending the configured CA
+DER before `validateChain` (handles leaf-only presentation), OR have the
+server present the full PEM chain via a multi-entry Certificate message. Then
+re-pin `tls → quic → geode`, add a geode cross-IP cluster integration test
+and a `../geode-test-harness` spec that forms a 3-node cluster across distinct
+IPs with CA-issued certs (per the acceptance criteria above). The IP-SAN fix
+(#1) is necessary but not sufficient on its own — #2 is the keystone.
+
 ## 2026-05-15 Audit Phase 4
 
 Phase 4 gap sync for the 2026-05-15 audit pipeline. 5 new gaps opened **and all 5 closed in this session** (3 fix, 2 won't-do/delist). Existing GAP-0818 / #754 reconfirmed with refreshed evidence (still partial). Items previously believed regressed (GAP-0282, GAP-0509 residual, GAP-0281, GAP-0539) were verified to be correctly closed in `GAP_ANALYSIS_RESOLVED.md` — no action.
