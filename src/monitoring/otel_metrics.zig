@@ -652,11 +652,15 @@ pub const GeodeSpan = struct {
 /// whether the statement writes. NEVER pass raw query text, parameter
 /// values, or user-supplied keys — those are unbounded cardinality.
 ///
-/// When `OTEL_TRACES_EXPORTER` is unset, `tracer()` returns the inert noop
-/// tracer and this collapses to a noop `GeodeSpan` at near-zero cost (the
-/// mutex is still taken, but the noop `startSpan` does no id generation).
+/// When no TracerProvider is wired (`OTEL_TRACES_EXPORTER` unset, or otel never
+/// initialised), this returns a noop `GeodeSpan` LOCK-FREE — `g_span_mu` is only
+/// taken when a real tracer exists (the mutex exists solely to serialise the
+/// non-thread-safe otel id-generator). This keeps the per-query span path at
+/// zero cost (no mutex, no allocation) when tracing is off, so instrumentation
+/// never serialises concurrent queries on the disabled default path.
 pub fn startQuerySpan(op_name: []const u8, namespace: []const u8, is_mutation: bool) GeodeSpan {
-    const t = tracer(); // noop tracer if OTEL_TRACES_EXPORTER unset -> zero cost
+    if (g_tracer_provider == null) return .{ .span = Span.noop };
+    const t = tracer();
     const io = initIo();
     g_span_mu.lockUncancelable(io);
     defer g_span_mu.unlock(io);
@@ -1270,6 +1274,7 @@ fn ensureQueryLocked() !*QueryMetrics {
 }
 
 pub fn incQueryActive(qt: QueryType) void {
+    if (g_provider == null) return; // lock-free when metrics off (no mutex contention)
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1278,6 +1283,7 @@ pub fn incQueryActive(qt: QueryType) void {
 }
 
 pub fn decQueryActive(qt: QueryType) void {
+    if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1289,6 +1295,7 @@ pub fn decQueryActive(qt: QueryType) void {
 /// count and duration sample are always correlated (per spec §4.3).
 pub fn recordQueryExecution(op: []const u8, summary: []const u8, qt: QueryType, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
     _ = summary;
+    if (g_provider == null) return; // lock-free when metrics off
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1310,6 +1317,7 @@ pub fn recordQueryExecution(op: []const u8, summary: []const u8, qt: QueryType, 
 }
 
 pub fn recordQueryParse(duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1326,6 +1334,7 @@ pub fn recordQueryParse(duration_s: f64, outcome: Outcome, error_type: ?[]const 
 }
 
 pub fn recordQueryParseError(error_type: []const u8) void {
+    if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1334,6 +1343,7 @@ pub fn recordQueryParseError(error_type: []const u8) void {
 }
 
 pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []const u8) void {
+    if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1346,6 +1356,7 @@ pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []cons
 
 pub fn recordQueryRowsReturned(op: []const u8, summary: []const u8, rows: u64) void {
     _ = summary;
+    if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
@@ -1354,6 +1365,7 @@ pub fn recordQueryRowsReturned(op: []const u8, summary: []const u8, rows: u64) v
 }
 
 pub fn recordQueryTimeout(op: []const u8, kind: TimeoutKind) void {
+    if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
     defer g_query_mu.unlock(io);
