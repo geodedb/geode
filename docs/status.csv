@@ -4472,6 +4472,7 @@ REQ-STORAGE-ENGINE-PHASE2-006,EngineBackedPersistence,PersistSplitPhase,IMPL,,,s
 REQ-STORAGE-ENGINE-PHASE2-006,EngineBackedPersistence,StartupMetadataRepair,TESTED,,,storage,2026-04-10,tests/test_gap_0511_regression.zig
 REQ-STORAGE-ENGINE-PHASE2-007,EngineBackedPersistence,ServerInit,IMPL,,,storage,2026-03-28,src/server/server_init.zig
 REQ-STORAGE-FLUSH-001,Storage,FlushStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-STORAGE-FTS-ADAPTER-001,FTS storage adapter,Wrapper,TESTED,,,core,2026-05-30,src/storage/fts_storage_adapter.zig
 REQ-STORAGE-GRAPHSTORE-001,Storage,GraphStore,TESTED,,,storage,2026-02-04,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-STORAGE-INDEX-001,Storage,IndexStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-STORAGE-MVCC-001,Storage,MVCCStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig

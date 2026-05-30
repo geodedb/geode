@@ -593,6 +593,22 @@ pub fn build(b: *std.Build) void {
     const fts_smoke_step = b.step("test-fts-storage-smoke", "Smoke test: fts-storage library wired + roundtrip");
     fts_smoke_step.dependOn(&run_fts_smoke.step);
 
+    // Cheap isolated unit test for the fts_storage adapter. Compiles ONLY the
+    // adapter + fts_storage_lib + std so it runs in ~1-2 min instead of pulling
+    // the adapter into the 30-min main build (that wiring lands in a later task).
+    const fts_adapter_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_fts_storage_adapter.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const fts_adapter_mod = b.createModule(.{ .root_source_file = b.path("src/storage/fts_storage_adapter.zig"), .target = target, .optimize = optimize });
+    fts_adapter_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+    fts_adapter_tests.root_module.addImport("fts_storage_adapter", fts_adapter_mod);
+    fts_adapter_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
+    const run_fts_adapter = b.addRunArtifact(fts_adapter_tests);
+    const fts_adapter_step = b.step("test-fts-storage-adapter", "Unit test the fts_storage adapter in isolation");
+    fts_adapter_step.dependOn(&run_fts_adapter.step);
+
     const auth_dep = b.dependency("auth", .{ .target = target, .optimize = optimize });
     const auth_ext_mod = auth_dep.module("auth");
 
