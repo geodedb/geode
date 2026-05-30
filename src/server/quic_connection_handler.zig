@@ -565,6 +565,13 @@ fn executeBulkSimpleCreate(
     // Keep txn / audit / session state tracking consistent with the
     // regular mutation path so downstream handlers don't observe drift.
     auditQueryExecution(state, "bulk_simple_create", true);
+    // Auto-index the node label(s) — mirrors the regular-executor hook at
+    // `src/execution/crud_operations.zig:696` and the edge fast-path at
+    // `executeBulkMatchCreateEdge` above.  The bulk fast path bypasses
+    // `executeProgramWithContext`, so without this call the spec
+    // `auto_index_id.yml` (and `auto_index_lifecycle.yml`) fails: a single
+    // `CREATE (n:L {...})` never lists `auto_idx_<label>_id` in SHOW INDEXES.
+    execution.ensureAutoIndexes(gpa, node_pattern.labels);
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program);
 }
@@ -1054,6 +1061,13 @@ fn executeBulkSimpleMerge(
     mut_sample.record("bulk_simple_merge");
 
     auditQueryExecution(state, "bulk_simple_merge", true);
+    // Auto-index the merge label — mirrors the regular-executor MERGE hook at
+    // `src/execution/crud_operations.zig:2293`, which runs unconditionally
+    // regardless of create-vs-match (`ensureAutoIndexes` is idempotent).  The
+    // bulk fast path bypasses `executeProgramWithContext`, so without this a
+    // single `MERGE (n:L {...})` fails `auto_index_id_advanced.yml`: SHOW
+    // INDEXES never lists `auto_idx_<label>_id`.
+    execution.ensureAutoIndexes(gpa, &.{spec.label});
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program);
 }
