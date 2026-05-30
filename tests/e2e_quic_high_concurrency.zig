@@ -20,6 +20,7 @@ const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug
 const default_connection_worker_count = 64;
 const default_group_commit_coalesce_us: u32 = 500;
 const high_fanout_group_commit_coalesce_us: u32 = 500;
+const default_group_commit_active_shards: u32 = 16;
 const default_mutation_admission_cap: u32 = 80;
 const high_fanout_mutation_admission_cap: u32 = 80;
 const objective_worker_count: u32 = 16_384;
@@ -1331,6 +1332,13 @@ pub fn main() !void {
         .{group_commit_coalesce_us},
     );
     defer allocator.free(group_commit_coalesce_env);
+    const group_commit_active_shards = envU32("GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS", default_group_commit_active_shards);
+    const group_commit_active_shards_env = try std.fmt.allocPrint(
+        allocator,
+        "GEODE_GROUP_COMMIT_ACTIVE_SHARDS={d}",
+        .{group_commit_active_shards},
+    );
+    defer allocator.free(group_commit_active_shards_env);
     const group_commit_enabled_value = envSlice("GEODE_HC_GROUP_COMMIT", "1");
     const group_commit_enabled_env = try std.fmt.allocPrint(
         allocator,
@@ -1403,6 +1411,7 @@ pub fn main() !void {
             group_commit_enabled_env,
             group_commit_phase_metrics_env,
             group_commit_coalesce_env,
+            group_commit_active_shards_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
@@ -1425,6 +1434,7 @@ pub fn main() !void {
             group_commit_enabled_env,
             group_commit_phase_metrics_env,
             group_commit_coalesce_env,
+            group_commit_active_shards_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
@@ -1446,6 +1456,7 @@ pub fn main() !void {
             group_commit_enabled_env,
             group_commit_phase_metrics_env,
             group_commit_coalesce_env,
+            group_commit_active_shards_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,
@@ -1467,6 +1478,7 @@ pub fn main() !void {
             group_commit_enabled_env,
             group_commit_phase_metrics_env,
             group_commit_coalesce_env,
+            group_commit_active_shards_env,
             mutation_admission_cap_env,
             "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1",
             server_hello_timeout_env,

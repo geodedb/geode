@@ -231,6 +231,36 @@ test "REQ-QUIC-HC-016: group commit reserves shard-aligned engine slots" {
     }
 }
 
+test "REQ-QUIC-HC-179: group commit can restrict active write shards" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    group_commit.setActiveWriteShardsForTest(4);
+    defer group_commit.setActiveWriteShardsForTest(geode.sharded_store.SHARD_COUNT);
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
+    _ = try adapter.getOrCreateGraph("default");
+
+    const coord = try group_commit.getOrStartCoordinator(testing.allocator, adapter, "default");
+    defer group_commit.shutdownAllCoordinators();
+
+    const labels = [_][]const u8{"ActiveShard"};
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "seq", .value = .{ .Int = @intCast(i) } },
+        };
+        const node_id = try submitInsertNode(coord, &labels, &props);
+        const public_shard = geode.sharded_store.shardIndex(node_id);
+        try testing.expect(public_shard < 4);
+
+        const im = store.getIdMap("default") orelse return error.IdMapMissing;
+        const slot_id = im.nodeSlot(@as(u128, node_id)) orelse return error.NodeSlotMappingMissing;
+        const slot_shard = @as(usize, @intCast(slot_id % @as(u64, @intCast(geode.sharded_store.SHARD_COUNT))));
+        try testing.expectEqual(public_shard, slot_shard);
+    }
+}
+
 test "REQ-QUIC-HC-171: group commit inserts survive adapter reopen" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();

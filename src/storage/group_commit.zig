@@ -32,8 +32,11 @@ const PropertyValue = graph_store.PropertyValue;
 
 const default_shard_coalesce_wait_us: u64 = 500;
 const max_shard_coalesce_wait_us: u64 = 5000;
+const default_active_write_shards: u64 = graph_storage.sharded_store.SHARD_COUNT;
 const unset_shard_coalesce_wait_ns = std.math.maxInt(u64);
+const unset_active_write_shards = std.math.maxInt(u64);
 var cached_shard_coalesce_wait_ns = std.atomic.Value(u64).init(unset_shard_coalesce_wait_ns);
+var cached_active_write_shards = std.atomic.Value(u64).init(unset_active_write_shards);
 var cached_phase_metrics_enabled: ?bool = null;
 
 // CANARY: REQ=REQ-QUIC-HC-174; FEATURE="HighConcurrencyMutations"; ASPECT=ConfigurableCoordinatorCoalescing; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-29
@@ -57,6 +60,42 @@ fn shardCoalesceWaitNs() u64 {
     const wait_ns = wait_us * std.time.ns_per_us;
     cached_shard_coalesce_wait_ns.store(wait_ns, .release);
     return wait_ns;
+}
+
+// CANARY: REQ=REQ-QUIC-HC-179; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorActiveShardTuning; STATUS=TESTED; TEST=test_group_commit_coordinator; OWNER=storage; UPDATED=2026-05-29
+//
+// The sustained QUIC mutation ceiling is dominated by synchronous
+// submit-and-wait time in the group-commit coordinator. With 16 storage
+// shards and synchronous submitters, many shard workers still commit one-op
+// batches. This bounded knob lets high-fanout probes reserve new node ids from
+// only the first N write shards, increasing per-shard batch density without
+// changing MERGE correctness or recovery semantics. The production default
+// remains all shards until a measured sweep promotes a narrower value.
+fn activeWriteShardCount() u64 {
+    const cached = cached_active_write_shards.load(.acquire);
+    if (cached != unset_active_write_shards) return cached;
+
+    var active = default_active_write_shards;
+    if (std.c.getenv("GEODE_GROUP_COMMIT_ACTIVE_SHARDS")) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        if (raw.len > 0) {
+            active = std.fmt.parseUnsigned(u64, raw, 10) catch default_active_write_shards;
+        }
+    }
+    active = std.math.clamp(active, 1, @as(u64, @intCast(graph_storage.sharded_store.SHARD_COUNT)));
+    cached_active_write_shards.store(active, .release);
+    return active;
+}
+
+fn reserveNodeIdForActiveWriteShard() u64 {
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    const active = activeWriteShardCount();
+    if (active >= graph_storage.sharded_store.SHARD_COUNT) return store.reserveNodeId();
+
+    while (true) {
+        const id = store.reserveNodeId();
+        if (@as(u64, @intCast(graph_storage.sharded_store.shardIndex(id))) < active) return id;
+    }
 }
 
 // CANARY: REQ=REQ-QUIC-HC-175; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorPhaseMetrics; STATUS=IMPL; TEST=test_group_commit_coordinator; OWNER=storage; UPDATED=2026-05-29
@@ -376,16 +415,13 @@ pub const ShardedCoordinator = struct {
 
         switch (op.*) {
             .bulk_insert_node => |*p| {
-                const store = graph_store.getGlobalStore(graph_store.global_allocator());
-                p.assigned_id = store.reserveNodeId();
+                p.assigned_id = reserveNodeIdForActiveWriteShard();
             },
             .bulk_merge_node => |*p| {
-                const store = graph_store.getGlobalStore(graph_store.global_allocator());
-                p.assigned_id = store.reserveNodeId();
+                p.assigned_id = reserveNodeIdForActiveWriteShard();
             },
             .bulk_merge_node_props => |*p| {
-                const store = graph_store.getGlobalStore(graph_store.global_allocator());
-                p.assigned_id = store.reserveNodeId();
+                p.assigned_id = reserveNodeIdForActiveWriteShard();
             },
             .bulk_insert_edge => {},
             .bulk_match_create_edge => |*p| {
@@ -866,6 +902,12 @@ pub fn isEnabled() bool {
 /// Test / bench hook: force the feature on/off regardless of the env var.
 pub fn setEnabledForTest(on: bool) void {
     cached_enabled = on;
+}
+
+pub fn setActiveWriteShardsForTest(count: u64) void {
+    if (!builtin.is_test) @compileError("test-only hook");
+    const active = std.math.clamp(count, 1, @as(u64, @intCast(graph_storage.sharded_store.SHARD_COUNT)));
+    cached_active_write_shards.store(active, .release);
 }
 
 var cached_enabled: ?bool = null;

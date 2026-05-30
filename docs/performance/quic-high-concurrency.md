@@ -61,6 +61,14 @@ p99.9=6906.88 ms. Treat the lower rerun as host/runtime variance in the
 accepted completion gate; it reinforces that the enterprise latency and QPS
 objective remains open.
 
+The next default-path rerun after adding the active-shard diagnostic knob kept
+all 16 write shards active and completed the same 2048x8/1000 us sustained
+shape with zero setup retries, zero execute retries, zero reconnects, zero
+first-response timeouts, and 5037.52 QPS. It reported p50=146.41 ms,
+p95=409.98 ms, p99=655.79 ms, and p99.9=976.90 ms. This is the best observed
+default-path throughput for the 2048x8 mixed gate, but p50/p95/p99 and the
+formal 10k QPS objective still remain open.
+
 After the QUIC `a1858c1` and `geode-client-zig` `942641c` dependency
 correction and the cap-80 retune, the 1024x8 mixed gate completed all 8192
 operations with zero first-response timeouts at 3523.77 QPS. The corresponding
@@ -88,14 +96,17 @@ timeout 1200s zig build -Doptimize=ReleaseFast test-quic-high-concurrency-e2e --
 
 With `GEODE_HC_REQUEST_STAGGER_US=1000` on the same 4096x8 shape after
 cooperative mutation offload, the latest scrape-enabled run completed
-22709/32768 operations with zero setup retries, zero execute retries, zero
-reconnects, and 10059 first-response timeouts. It ran at 458.00 QPS with
-p50=2824.89 ms, p95=9060.05 ms, p99=9800.29 ms, and p99.9=9973.57 ms. The
-runtime scrape recorded `quic_first_stream_ready_queue_wait_max_ns=1494813161`,
-`quic_first_stream_packet_process_max_ns=923593378`,
-`quic_first_stream_mutation_query_execute_ns_total=601068709357`,
-`coord_submit_wait_ns_total=600697108110`, and
-`quic_poll_recv_short_header_max_ns=9833966036`, so the next work remains split
+19467/32768 operations with zero setup retries, zero execute retries, zero
+reconnects, and 13301 first-response timeouts. It ran at 343.49 QPS with
+p50=3516.23 ms, p95=8935.78 ms, p99=9763.55 ms, and p99.9=9978.00 ms. The
+runtime scrape recorded clean response writes (`quic_stream_write_errors=0`,
+`quic_stream_write_timeouts=0`, max write 58.3 ms), cheap read execution
+(`quic_first_stream_read_query_execute_ns_total=1595085597` across 19226
+samples), dominant mutation execution
+(`quic_first_stream_mutation_query_execute_ns_total=379504191452` across 6413
+samples), dominant coordinator wait (`coord_submit_wait_ns_total=379250098853`),
+and a multi-second upstream receive tail
+(`quic_poll_recv_short_header_max_ns=9869079842`). The next work remains split
 between mutation storage/WAL commit pressure and upstream QUIC short-header
 receive/frame processing.
 
@@ -155,14 +166,21 @@ accepted sustained gates or worsened the 4096x8 stress ceiling:
 - `GEODE_HC_MUTATION_ADMISSION_CAP=40` at the aggressive 2048x8/250 us profile.
   Narrowing the mutation window still failed with 12 first-response timeouts
   and lower throughput than the default cap 80 path.
+- `GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS=8`. The 2048x8/1000 us shape completed
+  cleanly but only reached 1218.17 QPS, well below the all-shard default-path
+  rerun. At the aggressive 2048x8/250 us profile it failed with 102
+  first-response timeouts.
+- `GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS=4` at 2048x8/1000 us. This failed with
+  one first-response timeout and one missed mutation, so active shard narrowing
+  is retained only as a diagnostic sweep knob.
 
 The current high-fanout defaults remain 512 cooperative first-stream workers,
 16 poll workers, 500 us group-commit coalescing, an 80-request shard-parallel
 mutation cap, a 64-worker cooperative mutation offload pool for shard-parallel
-mutations, and no server short-header packet shedding. The next implementation
-target is reducing the mutation storage/WAL commit tail and the upstream QUIC
-short-header receive/frame-processing tail exposed by the 2048/4096 ceiling
-metrics.
+mutations, all 16 group-commit write shards active, and no server short-header
+packet shedding. The next implementation target is reducing the mutation
+storage/WAL commit tail and the upstream QUIC short-header receive/frame-
+processing tail exposed by the 2048/4096 ceiling metrics.
 
 ## Enterprise Objective Gate
 
@@ -280,6 +298,10 @@ the next QUIC receive/scheduler pass:
   marked running, preserving per-stream ordering, and shutdown waits for
   offloaded packets before reclaiming contexts. If the offload queue is full or
   unavailable, the scheduler falls back to the synchronous path.
+- `REQ-QUIC-HC-179`: the group-commit coordinator can reserve new node IDs from
+  only the first `GEODE_GROUP_COMMIT_ACTIVE_SHARDS` write shards for diagnostic
+  sweeps. The production and harness defaults keep all 16 shards active; 4- and
+  8-shard sweeps were rejected and not promoted.
 
 Post-change 4096x8 read-only low-stagger probes improved from 11466
 first-response timeouts before the shared-cache work to 9851 timeouts after
@@ -297,7 +319,10 @@ clean 2048x8 sustained pass at 1111.06 QPS. The cooperative mutation offload
 cycle then raised the best accepted 2048x8/1000 us sustained pass to 1895.40
 QPS with zero first-response timeouts. A final pre-push rerun of the same gate
 also passed with zero first-response timeouts at 948.72 QPS. The offload work
-still does not promote the 4096x8 stress ceiling.
+still does not promote the 4096x8 stress ceiling. The active-write-shard
+diagnostic cycle recorded one all-shard 2048x8/1000 us pass at 5037.52 QPS, but
+4- and 8-shard narrowing did not improve the accepted defaults and is not
+promoted.
 
 ## Restart And Durability Checks
 

@@ -65,12 +65,16 @@ first-response timeouts, and no `pollCrypto` crash. The sustained mixed gate is
 now 2048 workers x 8 operations after Geode-side cooperative mutation offload:
 the best run completed `16384/16384` with zero first-response timeouts at
 1895.40 QPS, and the final pre-push rerun completed the same gate cleanly at
-948.72 QPS.
+948.72 QPS. A later default-path rerun with all 16 group-commit write shards
+active completed the same gate at 5037.52 QPS with zero first-response
+timeouts; the active-write-shard narrowing sweeps were rejected and are retained
+only as diagnostics.
 
 Known remaining throughput limit: the aggressive 2048x8/250 us diagnostic
 ceiling and sustained 4096 workers x 8 operations still fail within the 10s
 execute timeout (`ok=16376/16384` at 2048x8/250 us, and `ok=22709/32768` at
-4096x8/1000 us in the latest scrape-enabled run). That is a separate
+4096x8/1000 us in an earlier scrape-enabled run; the latest scrape-enabled
+4096x8/1000 us run completed `19467/32768`). That is a separate
 post-handshake transport/scheduler/storage ceiling and is documented in
 `docs/audit/quic-high-concurrency-2026-05-29.md`.
 

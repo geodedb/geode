@@ -1625,16 +1625,24 @@ test "quic high concurrency e2e configures endpoint poll workers" {
     defer allocator.free(group_commit);
     try testing.expect(std.mem.indexOf(u8, group_commit, "REQ=REQ-QUIC-HC-174") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "REQ=REQ-QUIC-HC-175") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "REQ=REQ-QUIC-HC-179") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "GEODE_GROUP_COMMIT_COALESCE_US") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "GEODE_GROUP_COMMIT_ACTIVE_SHARDS") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "default_shard_coalesce_wait_us: u64 = 500") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "default_active_write_shards: u64 = graph_storage.sharded_store.SHARD_COUNT") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "max_shard_coalesce_wait_us: u64 = 5000") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "shardCoalesceWaitNs()") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "activeWriteShardCount()") != null);
+    try testing.expect(std.mem.indexOf(u8, group_commit, "reserveNodeIdForActiveWriteShard()") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "coord_submit_wait_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "coord_queue_wait_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "coord_apply_ops_loop_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "coord_apply_commit_ns_total") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "GEODE_GROUP_COMMIT_PHASE_METRICS") != null);
     try testing.expect(std.mem.indexOf(u8, group_commit, "phaseMetricsEnabled()") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "default_group_commit_active_shards: u32 = 16") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS") != null);
+    try testing.expect(std.mem.indexOf(u8, e2e, "GEODE_GROUP_COMMIT_ACTIVE_SHARDS={d}") != null);
 }
 
 test "server stream WouldBlock wait is event driven with high fanout backoff" {
