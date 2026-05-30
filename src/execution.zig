@@ -1110,9 +1110,18 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     // LIFO): the span is ended only after setError/setOk has been applied.
     defer qspan.end();
 
+    // Phase C2: row count returned to the client, recorded only for the
+    // statement kinds that produce a genuine queryable result set (read MATCH
+    // and the set-operation UNION). Set on the success path in those arms with
+    // the REAL final row count (post window/limit). Mutations and DDL return
+    // status messages, not row sets, so they leave this null and emit no
+    // geode.query.rows.returned sample (avoids misleading histogram values).
+    var rows_returned: ?u64 = null;
+
     defer {
         const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
         om.recordQueryExecution(op_name, op_name, qt, dur_s, exec_outcome, null);
+        if (rows_returned) |rc| om.recordQueryRowsReturned(op_name, op_name, rc);
         if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();
     }
     switch (stmt) {
@@ -1138,10 +1147,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 try applyRowWindow(allocator, &result, start, end);
             }
 
+            rows_returned = @intCast(result.rows.len);
             return result;
         },
         .Union => |u| {
-            return executeUnionWithContext(allocator, u, context);
+            const result = try executeUnionWithContext(allocator, u, context);
+            rows_returned = @intCast(result.rows.len);
+            return result;
         },
         .Create => |c| {
             const create_graph = if (context.session_state) |session| session.graph else null;
