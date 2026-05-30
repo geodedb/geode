@@ -1870,11 +1870,13 @@ pub fn main() !void {
             // GAP-0333: connection workers also run the recursive-descent GQL
             // parser, which needs ~6 stack frames per nested paren up to the
             // 128-deep hard limit. 2 MiB overflowed (segfault) well before 128;
-            // 8 MiB holds the full limit so an over-deep query returns a clean
-            // parse error instead of crashing. Virtual reservation only — pages
-            // fault in solely for genuinely deep queries, so normal-load RSS is
-            // unchanged (16 MiB default caused ~19 MiB RSS growth per faulted stack).
-            .stack_size = 8 * 1024 * 1024,
+            // 8 MiB held ~120 levels in debug but still segfaulted at 128
+            // (debug frames are ~66 KiB/level vs ~20 KiB release). 16 MiB holds
+            // the full 128-deep limit with margin in both build modes so an
+            // over-deep query returns a clean parse error instead of crashing.
+            // Virtual reservation only — pages fault in solely for genuinely
+            // deep queries, so normal-load RSS is unchanged.
+            .stack_size = 16 * 1024 * 1024,
         }) catch |err| {
             log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
                 Attr.string("error", @errorName(err)),

@@ -159,12 +159,14 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
 // nested parenthesis (parseOrExpr → … → parsePrimaryExpr → parseOrExpr). The
 // parser enforces a hard nesting limit of 128 (Parser.enterRecursion), so the
 // owner stack must hold ~130 levels of that chain or a legal 128-deep query
-// segfaults before the depth guard can return a clean error. At 2 MiB the
-// stack overflowed around ~60–90 levels (release) / ~45 (debug); 8 MiB leaves
-// comfortable headroom for the full 128-deep limit in both build modes. This
-// is virtual reservation only — pages fault in solely for genuinely deep
+// segfaults before the depth guard can return a clean error. Per-level stack
+// cost is ~20 KiB in release but ~66 KiB in unoptimized debug builds, so 130
+// levels needs ~2.6 MiB (release) / ~8.6 MiB (debug). 8 MiB was just short in
+// debug (120-deep OK, 128-deep segfaulted); 16 MiB holds the full 128-deep
+// limit with margin in BOTH build modes (~240 debug / ~800 release levels).
+// This is virtual reservation only — pages fault in solely for genuinely deep
 // queries (bounded by the 128 guard), so normal-load RSS is unchanged.
-const first_stream_owner_stack_size = 8 * 1024 * 1024;
+const first_stream_owner_stack_size = 16 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
 const first_stream_scheduler_turn_delay_per_excess_ns: u64 = 2 * std.time.ns_per_us;
