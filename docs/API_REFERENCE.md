@@ -381,6 +381,36 @@ RETURN a, score() AS relevance
 ORDER BY relevance DESC;
 ```
 
+### `CALL geode.fts.search` (BM25 procedure)
+
+In addition to the `CONTAINS` / `STARTS WITH` predicates above, Geode provides a
+dedicated BM25-ranked full-text index backed end-to-end by the external
+**`fts-storage`** LSM library (durable on disk: WAL + segments + manifest),
+surfaced as a native Geode GQL extension.
+
+```gql
+CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext;   -- backfills existing nodes
+CALL geode.fts.search('doc_idx', 'quick brown');               -- returns node, score rows
+DROP INDEX doc_idx;                                            -- server stays alive
+```
+
+`CALL geode.fts.search('<index>', '<query>'[, <max>])` returns one row per match
+with `node` (the matching node id) and `score` (the BM25 relevance score); the
+optional third argument caps the number of results. Results ride the generic GQL
+Execute+rows protocol, so they are reachable over the QUIC wire with no client,
+proto, or transport changes.
+
+> **Geode extension.** Uses ISO GQL's `CALL` procedure (not a scalar function,
+> and not Cypher's `UNWIND … YIELD`). See [FULLTEXT_SEARCH.md](FULLTEXT_SEARCH.md).
+
+Notes:
+
+- The index is maintained incrementally on node create / `SET` / delete,
+  including nodes inserted after the index was created.
+- Indexes are durable and survive a server restart (lazy re-open on first query).
+- **Limitation:** the bulk-MERGE fast path does **not** auto-index its nodes; re-run
+  `CREATE INDEX … USING fulltext` to backfill those nodes.
+
 ## Index Management
 
 ### SHOW INDEXES

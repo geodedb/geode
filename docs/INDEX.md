@@ -26,6 +26,7 @@ Quick reference to all Geode documentation.
 - [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md) - MVCC
 - [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md) - Federation
 - [GRAPH_ALGORITHMS_USAGE_GUIDE.md](GRAPH_ALGORITHMS_USAGE_GUIDE.md) - Algorithms
+- [FULLTEXT_SEARCH.md](FULLTEXT_SEARCH.md) - Full-text search (fts-storage-backed)
 
 ## Security
 

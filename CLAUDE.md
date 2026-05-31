@@ -22,6 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **CANARY coverage gap (GAP-0514, Open)**: ~15% of CANARY markers remain at `IMPL` status (implemented but not yet verified by a named test). This is governance/hygiene, not functional defect — all 1036 existing Zig tests pass. Tracked for a follow-up test-writing sprint targeting `execution.zig` and `graph_store.zig` first (27% of IMPL markers).
 - **MCP server (GAP-0516, Partial)**: the `src/mcp/server.zig` handlers for resource subscriptions (`subscribeResource`/`unsubscribeResource`) are intentionally not implemented — Geode does not yet produce streaming resource-change notifications. Clients should poll via `readResource` instead. `completeHandler` forwards to the LSP completion path; `setLogLevelHandler` is a safe no-op that acknowledges the request without changing runtime verbosity.
 - **Auth DDL persistence**: Auth DDL writes persist to the HMAC-chained `__geode_security` graph and survive restart (users, roles, password/role/active changes, and per-graph `GRANT … ON GRAPH …`). Hydrated at startup via `PersistentUserResolver`, `hydrateCustomRolesFromGraph`, and `GraphRBACPolicy.loadGraphGrants`. Residuals: no model for a `GRANT <privilege>` without `ON GRAPH` (global privilege is governed by the user's role); custom-role membership beyond the built-in role field is not modeled; RLS policy persistence is still TODO (separate plan); the BIND-time per-graph grant check is additive/permissive in default single-tenant config. See [docs/GQL_AUTH_DDL.md](docs/GQL_AUTH_DDL.md) for the full persistence spec and known limitations.
+- **Full-text search bulk-MERGE auto-indexing (Open)**: FTS is backed end-to-end by the external `fts-storage` LSM library (see Full-Text Search below). Node create / `SET` / delete keep a fulltext index current via the live-maintenance hook, but the **bulk-MERGE fast path** (`adapter.bulkMergeNode`, run on the worker-thread pool) does **NOT** auto-index its nodes into FTS. Bulk-MERGE'd nodes become searchable only after a re-`CREATE INDEX <name> ... USING fulltext` (which backfills all existing matching nodes). All other write paths and restart (lazy re-open of on-disk indexes) are covered.
 - **Full audit report**: See [docs/FULL_AUDIT_2026_04_06.md](docs/FULL_AUDIT_2026_04_06.md) (with 2026-04-11 closure-notes footer) for the comprehensive audit and per-gap resolution details.
 
 ## 📚 Documentation Structure
@@ -99,9 +100,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Parser/Lexer** (`src/gql/`): 100% ISO GQL compliance (70/70 tests)
 - **Query Planner** (`src/planner/`): Cost-based optimization with statistics
 - **Storage Engine** (`src/storage/`): MVCC, WAL, TDE with <1% overhead
-- **Index System** (`src/index/`): 6 index types including HNSW and R-tree
+- **Index System** (`src/index/`): 6 index types including HNSW and R-tree. Full-text search is backed by the external **`fts-storage`** LSM library (see Full-Text Search below) via `src/storage/fts_storage_adapter.zig`; the `FullTextIndex` facade (`src/index/fulltext.zig`) delegates to it.
 - **Security** (`src/security/`): Enterprise authentication, audit, encryption, enhanced RLS
 - **Transport** (`src/transport/`): QUIC+TLS only with protocol compliance
+
+### 🔎 Full-Text Search (fts-storage-backed)
+
+Full-text search uses the external **`fts-storage`** LSM library as the **primary backing store**, surfaced as a native Geode GQL extension. The legacy in-memory inverted index + bespoke `fulltext_persist.zig` were removed; durability now comes from the library's WAL + segments + manifest.
+
+- **Layout / adapter**: `src/storage/fts_storage_adapter.zig` is a per-graph registry of `fts_storage.Engine`s, one per index, under `{graph_dir}/fts/<index_name>/`. The `FullTextIndex` facade (`src/index/fulltext.zig`) delegates to the adapter; tokenization lives in `src/index/fts_tokenizer.zig`.
+- **GQL surface** (native Geode extension, ISO-GQL-compliant in form):
+  - `CREATE INDEX <name> FOR (n:Label) ON (n.prop[, n.prop2]) USING fulltext` — creates a fulltext index and backfills existing matching nodes.
+  - `CALL geode.fts.search('<index>', '<query>'[, <max>])` — returns rows of `node` (id) + `score` (BM25), reachable over the QUIC wire. (This is ISO GQL's `CALL` procedure form — not a scalar function, and not Cypher `UNWIND`.)
+  - `DROP INDEX <name>` — drops the fulltext index (server stays alive; the fts-storage 0.1.1 single-writer thread-check fix makes cross-worker-thread DROP safe).
+- **Live maintenance**: node create / `SET` / delete keep the index current, including nodes inserted after the index was created.
+- **Durability**: indexes survive a server restart (lazy re-open of on-disk fts indexes on first query).
+- **Dependency**: pinned in `build.zig.zon` as `.fts_storage` v0.1.1 (commit `908c1f54`). See [.migration/PUBLISH-CHECKLIST.md](.migration/PUBLISH-CHECKLIST.md) for the publish requirement.
+- **Verification**: unit tests (`tests/test_fts_storage_adapter.zig`, `test_fts_tokenizer.zig`, `test_fts_e2e.zig`, `test_fts_coverage.zig`, `test_fts_maintenance.zig`), a native VarianceEnvelope benchmark (`benchmarks/benchmark_fts_storage.zig`), a CI-aware latency gate (`tests/test_fts_latency.zig`), and harness specs (`geodetestlab-cli/specs/fts_storage_basic.yml`, `fulltext_search_basic.yml`).
+- **Known limitation**: the bulk-MERGE fast path (`adapter.bulkMergeNode`) does NOT auto-index its nodes into FTS — bulk-MERGE'd nodes become searchable only after a re-`CREATE INDEX` (which backfills). See Known Limitations above.
+
+See [docs/FULLTEXT_SEARCH.md](docs/FULLTEXT_SEARCH.md) for the full reference.
 
 ## 🧮 Key Data Types
 
@@ -404,7 +422,7 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been imp
 
 **See the complete documentation in [`./docs/`](docs/)** for detailed technical specifications, API references, performance analysis, and implementation guides.
 
-*Last Updated: May 2026*
+*Last Updated: 2026-05-31*
 *Status: DEVELOPMENT READY (single-tenant) - 100% GQL compliance, 97.4% test pass rate (see Known Limitations for multi-tenant and distributed gaps)*
 *License: Apache License, Version 2.0 - Copyright 2024-2025 CodePros*
 
