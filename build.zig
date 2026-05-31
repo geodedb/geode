@@ -1038,6 +1038,18 @@ pub fn build(b: *std.Build) void {
     const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
     bench_step.dependOn(&run_tde_encrypt_pages.step);
 
+    // FTS storage native variance benchmark (fts_storage-backed FTS hot paths:
+    // index-batch throughput + single-term search latency). Emits a
+    // schema_version-2 VarianceEnvelope + VARIANCE_OK/VARIANCE_FAIL token per
+    // scenario for the CI bench gate (GAP-0244). Imports fts_storage_lib only,
+    // so it compiles cheaply without dragging in the geode root module.
+    const fts_storage_bench_exe = b.addExecutable(.{ .name = "benchmark_fts_storage", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_fts_storage.zig"), .target = target, .optimize = optimize }) });
+    fts_storage_bench_exe.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
+    const run_fts_storage_bench = b.addRunArtifact(fts_storage_bench_exe);
+    bench_step.dependOn(&run_fts_storage_bench.step);
+    // Also attached to the CI `benchmark` aggregate below (after that step is
+    // defined — see `benchmark_step.dependOn(&run_fts_storage_bench.step)`).
+
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
     lib_unit_tests.root_module.addImport("geode", root_mod);
     lib_unit_tests.root_module.addImport("json", json_mod);
@@ -1451,6 +1463,19 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0811_aggregation_fastpath_tests.root_module.addImport("geode", root_mod);
     const run_gap0811_aggregation_fastpath_tests = b.addRunArtifact(gap0811_aggregation_fastpath_tests);
+
+    // FTS latency gate: CALL geode.fts.search must return matching :Doc rows
+    // within a (CI-skipped) latency budget. CI-aware perf gate mirroring the
+    // gap0811 harness idiom (tests/test_fts_latency.zig). Brings the fts-storage
+    // FTS path to the same perf-gate bar as graph storage.
+    const fts_latency_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_fts_latency.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    fts_latency_tests.root_module.addImport("geode", root_mod);
+    const run_fts_latency_tests = b.addRunArtifact(fts_latency_tests);
 
     // GAP-0811 Task 2.2: property-aggregate fast-path for
     // `MATCH (p:Label) RETURN sum|avg|min|max(p.key)` — iterates the label
@@ -2318,6 +2343,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0810_parse_cache_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0810_cross_subsystem_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811_aggregation_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_fts_latency_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811b_property_aggregate_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0812_topk_streaming_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0813_bulk_materialize_path_tests.step, 1, test_shard_loads, test_shard_index);
@@ -2587,6 +2613,10 @@ pub fn build(b: *std.Build) void {
     const run_phase1_benchmarks = b.addRunArtifact(phase1_benchmarks);
     const benchmark_step = b.step("benchmark", "Run performance benchmarks (all phases)");
     benchmark_step.dependOn(&run_phase1_benchmarks.step);
+    // FTS storage native variance benchmark also runs under the CI `benchmark`
+    // aggregate (declared up near the `bench` step). Brings the fts-storage FTS
+    // path to the same VarianceEnvelope perf-gate bar as graph storage.
+    benchmark_step.dependOn(&run_fts_storage_bench.step);
 
     // Add Phase 2 storage optimization benchmarks
     // CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
