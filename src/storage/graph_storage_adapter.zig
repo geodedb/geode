@@ -3964,28 +3964,29 @@ pub const StorageAdapter = struct {
     }
 
     const FtsInitResult = struct {
-        index: *fulltext.FullTextIndex,
+        /// Transitional "default" facade. Now null by default — the fts-storage
+        /// Engine (single-writer, captures its creating thread and asserts
+        /// owning-thread on flush/deinit) is created LAZILY only on
+        /// `CREATE INDEX ... USING fulltext` / `getFulltextIndexNamed`, not
+        /// eagerly for every graph. See `getFulltextIndexNamed`.
+        index: ?*fulltext.FullTextIndex,
         adapter: *adapter_mod.FtsStorageAdapter,
         base_dir: std.Io.Dir,
         dir: []const u8,
     };
 
-    /// The single per-graph fulltext index name used transitionally. A4
-    /// generalizes to truly-named indexes (the adapter registry natively
-    /// supports multiple); A3 preserves a single "default" index per graph so
-    /// `getFulltextIndex(name)` keeps returning a working facade.
-    const default_fts_index_name = "default";
-
-    /// Attempt to create or load a per-graph full-text search index, backed by
-    /// the external fts-storage LSM engine via `FtsStorageAdapter`.
+    /// Attempt to set up per-graph full-text search backing, via the external
+    /// fts-storage LSM engine registry (`FtsStorageAdapter`).
     ///
-    /// Builds `{graph_dir}/fts`, opens it as a `std.Io.Dir`, constructs the
-    /// adapter over it, and create-or-opens the single "default" index (try open
-    /// first so a restart replays the existing WAL/segments; create if absent).
-    /// Returns null on failure (soft failure — the graph remains usable without
-    /// FTS). `load_existing` is accepted for call-site symmetry but the adapter
-    /// already does the right thing regardless (the on-disk dir is the source of
-    /// truth), so it is unused.
+    /// Builds `{graph_dir}/fts`, opens it as a `std.Io.Dir`, and constructs the
+    /// adapter over it. The adapter itself is engine-free (it just roots the
+    /// per-index child dirs); no fts-storage Engine is created here. The Engine
+    /// — which captures its creating thread and asserts owning-thread on
+    /// flush/deinit — is created lazily on the first `CREATE INDEX` /
+    /// `getFulltextIndexNamed`. Returns null on failure (soft failure — the
+    /// graph remains usable without FTS). `load_existing` is accepted for
+    /// call-site symmetry but the adapter already does the right thing
+    /// regardless (the on-disk dir is the source of truth), so it is unused.
     fn initFtsForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, load_existing: bool) ?FtsInitResult {
         _ = load_existing;
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -4017,31 +4018,11 @@ pub const StorageAdapter = struct {
         };
         errdefer adapter.deinit();
 
-        // Try to open the existing default index (restart path); on miss, create
-        // it fresh. createIndex/openIndex gate on the on-disk dir's existence.
-        adapter.openIndex(default_fts_index_name) catch |open_err| {
-            if (open_err != adapter_mod.Error.IndexNotFound) {
-                log.warn("failed to open default FTS index: {}", .{open_err});
-                return null;
-            }
-            adapter.createIndex(default_fts_index_name) catch |create_err| {
-                log.warn("failed to create default FTS index: {}", .{create_err});
-                return null;
-            };
-        };
-
-        const idx = allocator.create(fulltext.FullTextIndex) catch |err| {
-            log.warn("failed to allocate per-graph FTS facade: {}", .{err});
-            return null;
-        };
-        errdefer allocator.destroy(idx);
-
-        idx.* = fulltext.FullTextIndex.initBacked(allocator, adapter, default_fts_index_name) catch |err| {
-            log.warn("failed to init per-graph FTS facade: {}", .{err});
-            return null;
-        };
-
-        return .{ .index = idx, .adapter = adapter, .base_dir = base_dir, .dir = fts_dir };
+        // No eager default index / facade: the fts-storage Engine is created
+        // lazily on demand (CREATE INDEX / getFulltextIndexNamed) so graphs that
+        // never use full-text search pay nothing and never capture an owning
+        // thread that would later assert on cross-thread teardown.
+        return .{ .index = null, .adapter = adapter, .base_dir = base_dir, .dir = fts_dir };
     }
 
     fn createGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
@@ -5909,23 +5890,26 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
         const mg = try adapter.getOrCreateGraph("fts_graph");
         graph_uuid = mg.uuid;
 
-        // Per-graph FTS index should be initialised (non-null).
-        try std.testing.expect(mg.fts_index != null);
+        // Lazy engine: no eager default index. The adapter is engine-free and
+        // the legacy `fts_index` facade stays null until an index is created;
+        // the fts/ base dir + adapter ARE eager.
+        try std.testing.expect(mg.fts_index == null);
         try std.testing.expect(mg.fts_dir != null);
+        try std.testing.expect(mg.fts_adapter != null);
 
-        // Accessor on StorageAdapter returns the same index.
-        const idx = adapter.getFulltextIndex("fts_graph");
-        try std.testing.expect(idx != null);
-        try std.testing.expect(idx.? == mg.fts_index.?);
+        // Create the default index explicitly (builds the fts-storage Engine on
+        // this thread), then drive it via the production lazy named facade.
+        try mg.fts_adapter.?.createIndex("default");
+        const fts = mg.getFulltextIndexNamed(allocator, "default") orelse return error.TestUnexpectedNull;
 
         // Index a document into the per-graph FTS index (facade → fts-storage
         // engine).
-        try mg.fts_index.?.indexDocument(42, "the quick brown fox jumps over the lazy dog");
+        try fts.indexDocument(42, "the quick brown fox jumps over the lazy dog");
         // Explicit checkpoint so the segment is durable for the reopen below.
-        try mg.fts_index.?.flush();
+        try fts.flush();
 
         // The just-indexed document must be searchable in this session.
-        const hits = try mg.fts_index.?.search("fox", 10);
+        const hits = try fts.search("fox", 10);
         defer allocator.free(hits);
         try std.testing.expect(hits.len >= 1);
         try std.testing.expectEqual(@as(u64, 42), hits[0].doc_id);
@@ -5955,10 +5939,13 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
 
         const mg = try adapter.openGraphWithUuid("fts_graph", graph_uuid);
 
-        try std.testing.expect(mg.fts_index != null);
+        // Lazy engine: open the persisted default index (replays WAL/segments)
+        // into the adapter registry, then fetch its facade.
+        try mg.fts_adapter.?.openIndex("default");
+        const fts = mg.getFulltextIndexNamed(allocator, "default") orelse return error.TestUnexpectedNull;
 
         // The previously indexed document should be searchable after reload.
-        const hits = try mg.fts_index.?.search("fox", 10);
+        const hits = try fts.search("fox", 10);
         defer allocator.free(hits);
         try std.testing.expect(hits.len >= 1);
         try std.testing.expectEqual(@as(u64, 42), hits[0].doc_id);
@@ -6032,10 +6019,13 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     const mg = try adapter.getOrCreateGraph("__geode_security");
     const graph_uuid = mg.uuid;
 
-    // Verify all subsystems are initialised.
+    // Verify all subsystems are initialised. FTS is lazy now — the adapter is
+    // eager but the legacy default `fts_index` facade is null until an index is
+    // created; assert the eager adapter instead.
     try std.testing.expect(mg.audit_logger != null);
     try std.testing.expect(mg.ts_store != null);
-    try std.testing.expect(mg.fts_index != null);
+    try std.testing.expect(mg.fts_adapter != null);
+    try std.testing.expect(mg.fts_index == null);
 
     // Get the graph directory path before dropping.
     const graph_dir = try StorageAdapter.graphDirPath(allocator, path, graph_uuid);
