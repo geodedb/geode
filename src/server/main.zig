@@ -828,9 +828,11 @@ fn bindLib(comptime LibObservability: type, comptime scope_name: []const u8) voi
 // and a single 5-minute load exceeded 9 GB. Setting M_MMAP_THRESHOLD also
 // disables that dynamic adjustment, so freed per-connection memory is returned
 // and RSS stays flat (matching the page-backed debug allocator profile).
-// No-op on non-Linux / non-glibc targets.
+// No-op on non-Linux / non-glibc targets.  mallopt is a glibc extension; musl
+// does not provide it, so guard the cross-compile path as well.
 fn tuneServerMalloc() void {
     if (comptime builtin.os.tag != .linux) return;
+    if (comptime builtin.target.abi == .musl) return;
     const c = struct {
         extern "c" fn mallopt(param: c_int, value: c_int) c_int;
     };
