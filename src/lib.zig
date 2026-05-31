@@ -301,7 +301,6 @@ pub const index = struct {
     pub const domain_trie = @import("index/domain_trie.zig");
     pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
     pub const fulltext = @import("index/fulltext.zig");
-    pub const fulltext_persist = @import("index/fulltext_persist.zig");
     pub const IndexManager = @import("index/index_manager.zig").IndexManager;
     pub const vector_index = @import("index/vector_index.zig");
     pub const spatial_index = @import("index/spatial_index.zig");

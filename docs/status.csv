@@ -2346,10 +2346,11 @@ REQ-GQL-FED-001,Distributed Query Federation,Core,IMPL,,,distributed,2026-04-05,
 REQ-GQL-FINANCIAL-NETWORK,FinancialNetwork,Integration,TESTED,,,team,2025-10-02,tests/integration/test_financial_fraud_network.zig
 REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,TESTED,,,core,2025-09-26,src/util/feature_flags.zig
 REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,TESTED,,,core,2025-09-26,tests/unit_feature_flags.zig
-REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2025-09-29,src/index/fulltext.zig
+REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig
+REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig
 REQ-GQL-FTS-001,BM25 Scoring,SEARCH,TESTED,,,search,2025-09-26,src/fts/bm25.zig
 REQ-GQL-FTS-001,BM25 skeleton,SEARCH,TESTED,,,search,2025-09-26,tests/unit_bm25_skeleton.zig
-REQ-GQL-FTS-002,Document Indexing,FTS,TESTED,,,index,2025-09-29,src/index/fulltext.zig
+REQ-GQL-FTS-002,Document Indexing,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig
 REQ-GQL-FTS-002,FTS Tokenizer,Tokenize,TESTED,,,index,2026-05-30,src/index/fts_tokenizer.zig
 REQ-GQL-FTS-003,FTS,IndexOptimizer,TESTED,,,search,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-FTS-003,FTS IndexOptimizer Integration,TESTING,TESTED,,,search,2025-10-04,tests/test_fts_indexoptimizer_integration.zig
@@ -2778,7 +2779,6 @@ REQ-GQL-UNICODE-005,UnicodeCore,CliFoldCaseFlag,TESTED,,,clients,2025-09-27,test
 REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,EXEMPT,,,unicode,2026-01-14,build.zig
 REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,TESTED,,,unicode,2025-09-27,tests/canary_unicode_build_integration.zig
 REQ-GQL-UNICODE-007,UnicodeBuildEnforcement,Verification,EXEMPT,,,unicode,2026-01-14,build.zig
-REQ-GQL-UNICODE-007,UnicodeFtsIntegration,IndexerNormalize,TESTED,,,unicode,2025-09-27,src/index/fulltext.zig
 REQ-GQL-UNICODE-007,UnicodeFtsIntegration,IndexerNormalize,TESTED,,,unicode,2025-09-27,tests/canary_unicode_fts.zig
 REQ-GQL-UNICODE-008,UnicodeBuildVerification,TableCheck,EXEMPT,,,unicode,2026-01-14,build.zig
 REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,,,unicode,2025-09-27,src/fts/advanced.zig
@@ -4537,7 +4537,6 @@ REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,<Component>,TESTED,,,security,2026-01-28,docs/TDE_FILE_LEVEL_ENCRYPTION.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,DomainTrie,TESTED,,,security,2026-01-28,src/index/domain_trie_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig
-REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FullTextIndex,IMPL,,,security,2026-04-07,src/index/fulltext_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-04-01,src/index/hnsw_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,src/index/interval_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,JSONBIndex,TESTED,,,security,2026-01-28,src/index/jsonb_inverted_persist.zig

@@ -204,7 +204,7 @@ pub const IndexManager = struct {
             .property_indexes = std.StringHashMap(PropertyIndex).init(allocator),
             .label_indexes = std.StringHashMap(LabelIndex).init(allocator),
             .composite_indexes = std.ArrayList(CompositeIndex).empty,
-            .fulltext_indexes = std.StringHashMap(fulltext.FullTextIndex).init(allocator),
+            .fulltext_indexes = std.StringHashMap(FulltextIndexRecord).init(allocator),
             .spatial_indexes = std.StringHashMap(*rtree.RTree).init(allocator),
             .vector_indexes = std.StringHashMap(*anyopaque).init(allocator),
             // Initialize advanced type indexes

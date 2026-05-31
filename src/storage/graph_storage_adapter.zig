@@ -649,8 +649,18 @@ pub const ManagedGraph = struct {
     ts_store: ?*ts_mod.Store = null,
     /// Per-graph full-text search index persisting to `{graph_dir}/fts/`.
     /// May be null if FTS init failed (soft failure — graph still usable).
+    /// Now a thin facade over `fts_adapter`'s default named index.
     fts_index: ?*fulltext.FullTextIndex = null,
-    /// Owned path to the FTS subdirectory (needed for saveToDisk on close).
+    /// Per-graph FTS storage adapter (the external fts-storage LSM engine
+    /// registry) rooted at `{graph_dir}/fts`. Owns the named index engines and
+    /// their child dirs; the facade in `fts_index` borrows it. May be null if
+    /// FTS init failed (soft failure).
+    fts_adapter: ?*adapter_mod.FtsStorageAdapter = null,
+    /// The `{graph_dir}/fts` base dir, opened by `initFtsForGraph` and passed to
+    /// the adapter. The adapter does NOT close base_dir — we close it here in
+    /// `deinit` AFTER tearing the adapter down.
+    fts_base_dir: ?std.Io.Dir = null,
+    /// Owned path to the FTS subdirectory (retained for diagnostics + free).
     fts_dir: ?[]const u8 = null,
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
@@ -764,15 +774,22 @@ pub const ManagedGraph = struct {
     }
 
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
+        // Teardown order matters: facade → adapter (flushes + closes each engine
+        // and its child dir) → base_dir (the adapter never closes base_dir) →
+        // free the owned path. Durability is owned by the engine WAL/segments;
+        // `adapter.deinit` best-effort flushes each engine before closing it.
         if (self.fts_index) |fts| {
-            if (self.fts_dir) |dir| {
-                fts.saveToDisk(dir) catch |err| {
-                    log.warn("failed to persist per-graph FTS index: {}", .{err});
-                };
-            }
             fts.deinit();
             allocator.destroy(fts);
             self.fts_index = null;
+        }
+        if (self.fts_adapter) |fa| {
+            fa.deinit();
+            self.fts_adapter = null;
+        }
+        if (self.fts_base_dir) |*bd| {
+            bd.close(std.Io.Threaded.global_single_threaded.io());
+            self.fts_base_dir = null;
         }
         if (self.fts_dir) |dir| {
             allocator.free(dir);
@@ -3873,12 +3890,31 @@ pub const StorageAdapter = struct {
 
     const FtsInitResult = struct {
         index: *fulltext.FullTextIndex,
+        adapter: *adapter_mod.FtsStorageAdapter,
+        base_dir: std.Io.Dir,
         dir: []const u8,
     };
 
-    /// Attempt to create or load a per-graph full-text search index.
-    /// Returns null on failure (soft failure — the graph remains usable without FTS).
+    /// The single per-graph fulltext index name used transitionally. A4
+    /// generalizes to truly-named indexes (the adapter registry natively
+    /// supports multiple); A3 preserves a single "default" index per graph so
+    /// `getFulltextIndex(name)` keeps returning a working facade.
+    const default_fts_index_name = "default";
+
+    /// Attempt to create or load a per-graph full-text search index, backed by
+    /// the external fts-storage LSM engine via `FtsStorageAdapter`.
+    ///
+    /// Builds `{graph_dir}/fts`, opens it as a `std.Io.Dir`, constructs the
+    /// adapter over it, and create-or-opens the single "default" index (try open
+    /// first so a restart replays the existing WAL/segments; create if absent).
+    /// Returns null on failure (soft failure — the graph remains usable without
+    /// FTS). `load_existing` is accepted for call-site symmetry but the adapter
+    /// already does the right thing regardless (the on-disk dir is the source of
+    /// truth), so it is unused.
     fn initFtsForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, load_existing: bool) ?FtsInitResult {
+        _ = load_existing;
+        const io = std.Io.Threaded.global_single_threaded.io();
+
         const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
             log.warn("failed to build graph dir path for FTS: {}", .{err});
             return null;
@@ -3892,38 +3928,45 @@ pub const StorageAdapter = struct {
         };
         errdefer allocator.free(fts_dir);
 
-        // Ensure the FTS subdirectory exists.
-        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), fts_dir) catch |err| {
-            log.warn("failed to create FTS dir '{s}': {}", .{ fts_dir, err });
+        // Create (if needed) and OPEN the FTS subdirectory — the adapter needs an
+        // open base_dir to root its per-index child dirs.
+        var base_dir = std.Io.Dir.cwd().createDirPathOpen(io, fts_dir, .{}) catch |err| {
+            log.warn("failed to create/open FTS dir '{s}': {}", .{ fts_dir, err });
             return null;
+        };
+        errdefer base_dir.close(io);
+
+        const adapter = adapter_mod.FtsStorageAdapter.init(allocator, io, base_dir, fts_dir) catch |err| {
+            log.warn("failed to init FTS storage adapter for '{s}': {}", .{ fts_dir, err });
+            return null;
+        };
+        errdefer adapter.deinit();
+
+        // Try to open the existing default index (restart path); on miss, create
+        // it fresh. createIndex/openIndex gate on the on-disk dir's existence.
+        adapter.openIndex(default_fts_index_name) catch |open_err| {
+            if (open_err != adapter_mod.Error.IndexNotFound) {
+                log.warn("failed to open default FTS index: {}", .{open_err});
+                return null;
+            }
+            adapter.createIndex(default_fts_index_name) catch |create_err| {
+                log.warn("failed to create default FTS index: {}", .{create_err});
+                return null;
+            };
         };
 
         const idx = allocator.create(fulltext.FullTextIndex) catch |err| {
-            log.warn("failed to allocate per-graph FTS index: {}", .{err});
+            log.warn("failed to allocate per-graph FTS facade: {}", .{err});
             return null;
         };
         errdefer allocator.destroy(idx);
 
-        if (load_existing) {
-            idx.* = fulltext.FullTextIndex.loadFromDisk(allocator, fts_dir) catch |err| {
-                log.warn("failed to load per-graph FTS index from disk: {}", .{err});
-                // Fall back to a fresh index.
-                idx.* = fulltext.FullTextIndex.init(allocator) catch |err2| {
-                    log.warn("failed to init fresh FTS index after load failure: {}", .{err2});
-                    allocator.destroy(idx);
-                    return null;
-                };
-                return .{ .index = idx, .dir = fts_dir };
-            };
-        } else {
-            idx.* = fulltext.FullTextIndex.init(allocator) catch |err| {
-                log.warn("failed to init per-graph FTS index: {}", .{err});
-                allocator.destroy(idx);
-                return null;
-            };
-        }
+        idx.* = fulltext.FullTextIndex.initBacked(allocator, adapter, default_fts_index_name) catch |err| {
+            log.warn("failed to init per-graph FTS facade: {}", .{err});
+            return null;
+        };
 
-        return .{ .index = idx, .dir = fts_dir };
+        return .{ .index = idx, .adapter = adapter, .base_dir = base_dir, .dir = fts_dir };
     }
 
     fn createGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
@@ -3975,6 +4018,8 @@ pub const StorageAdapter = struct {
         // Initialise per-graph FTS (fresh index for new graphs).
         if (initFtsForGraph(self.allocator, self.data_dir, graph_uuid, false)) |fts_result| {
             mg.fts_index = fts_result.index;
+            mg.fts_adapter = fts_result.adapter;
+            mg.fts_base_dir = fts_result.base_dir;
             mg.fts_dir = fts_result.dir;
         }
 
@@ -4058,6 +4103,8 @@ pub const StorageAdapter = struct {
         // Load per-graph FTS from disk (existing graphs may have persisted data).
         if (initFtsForGraph(self.allocator, self.data_dir, graph_uuid, true)) |fts_result| {
             mg.fts_index = fts_result.index;
+            mg.fts_adapter = fts_result.adapter;
+            mg.fts_base_dir = fts_result.base_dir;
             mg.fts_dir = fts_result.dir;
         }
 
@@ -5796,8 +5843,17 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
         try std.testing.expect(idx != null);
         try std.testing.expect(idx.? == mg.fts_index.?);
 
-        // Index a document into the per-graph FTS index.
+        // Index a document into the per-graph FTS index (facade → fts-storage
+        // engine).
         try mg.fts_index.?.indexDocument(42, "the quick brown fox jumps over the lazy dog");
+        // Explicit checkpoint so the segment is durable for the reopen below.
+        try mg.fts_index.?.flush();
+
+        // The just-indexed document must be searchable in this session.
+        const hits = try mg.fts_index.?.search("fox", 10);
+        defer allocator.free(hits);
+        try std.testing.expect(hits.len >= 1);
+        try std.testing.expectEqual(@as(u64, 42), hits[0].doc_id);
 
         // Verify fts/ subdirectory exists inside the graph directory.
         const graph_dir = try StorageAdapter.graphDirPath(allocator, path, mg.uuid);
@@ -5812,10 +5868,12 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
         };
         dir.close(std.Io.Threaded.global_single_threaded.io());
 
-        // deinit triggers saveToDisk for the FTS index.
+        // deinit flushes + tears down the fts-storage engine; durability is
+        // owned by its WAL/segments.
     }
 
-    // Reopen the adapter and verify FTS data persists.
+    // Reopen the adapter and verify FTS data persists (the fts-storage engine
+    // replays its WAL/segments on init).
     {
         const adapter = try StorageAdapter.init(allocator, path, testConfig());
         defer adapter.deinit();
@@ -5824,10 +5882,11 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
 
         try std.testing.expect(mg.fts_index != null);
 
-        // The previously indexed document should be present after reload.
-        // We verify via the document count rather than search() to avoid
-        // ArrayList leak in FullTextIndex.search().
-        try std.testing.expect(mg.fts_index.?.documents.count() > 0);
+        // The previously indexed document should be searchable after reload.
+        const hits = try mg.fts_index.?.search("fox", 10);
+        defer allocator.free(hits);
+        try std.testing.expect(hits.len >= 1);
+        try std.testing.expectEqual(@as(u64, 42), hits[0].doc_id);
     }
 }
 
