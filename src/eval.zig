@@ -922,6 +922,14 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call result;
             }
 
+            // A4a: Geode-extension fulltext_search(index, query[, max]) → a List
+            // of {node_id, score} Map records the caller UNWINDs. Sibling of the
+            // timeseries dispatch above; returns null for any other function so
+            // the remaining builtins below still get a chance.
+            if (try evalFulltextFunction(allocator, function_name, call.args, env)) |result| {
+                break :blk_call result;
+            }
+
             // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-14
             // Handle all(x IN list WHERE condition) - returns true if all elements match the condition
             if (std.ascii.eqlIgnoreCase(function_name, "all")) {
@@ -3815,6 +3823,77 @@ fn resolveTimeseriesStore(env: Env, graph_name: ?[]const u8) ?*TimeseriesStore {
     // effectively read-only at query time.
     if (env.timeseries_store) |ptr| return @constCast(ptr);
     return getTimeseriesStoreForGraph(graph_name);
+}
+
+/// A4a: Geode-extension `fulltext_search(index_name, query [, max_results])`.
+///
+/// Resolves the NAMED fulltext facade on the DEFAULT graph (the in-process / CLI
+/// graph; there is no per-Env graph dimension, mirroring the timeseries family
+/// which reaches the adapter via the module-global) and returns a `List` of
+/// `Map` records `{node_id: Int, score: Double}` sorted by BM25 score desc. The
+/// caller `UNWIND`s the list to expand rows, e.g.:
+///   `UNWIND fulltext_search('idx', 'fox') AS r RETURN r.node_id, r.score`.
+///
+/// Returns null when `function_name` is not `fulltext_search` (case-insensitive)
+/// so the dispatch chain falls through. Errors `Unsupported` if the index does
+/// not exist (so the client gets a clear failure, not silent empty results).
+/// This is a Geode extension; it does NOT reroute the ISO `CONTAINS` predicate.
+fn evalFulltextFunction(
+    allocator: std.mem.Allocator,
+    function_name: []const u8,
+    args: []*ast.Expr,
+    env: Env,
+) EvalError!?Value {
+    if (!std.ascii.eqlIgnoreCase(function_name, "fulltext_search")) return null;
+    if (args.len < 2 or args.len > 3) return EvalError.InvalidArgs;
+
+    const index_val = try evalExpr(allocator, args[0].*, env);
+    const query_val = try evalExpr(allocator, args[1].*, env);
+
+    const index_name = switch (index_val) {
+        .Str => |s| s,
+        .Text => |s| s,
+        else => return EvalError.TypeMismatch,
+    };
+    const query_text = switch (query_val) {
+        .Str => |s| s,
+        .Text => |s| s,
+        else => return EvalError.TypeMismatch,
+    };
+
+    var max_results: usize = 10; // default cap
+    if (args.len == 3) {
+        const max_val = try evalExpr(allocator, args[2].*, env);
+        switch (max_val) {
+            .Int => |n| {
+                if (n < 0) return EvalError.InvalidArgs;
+                max_results = @intCast(n);
+            },
+            else => return EvalError.TypeMismatch,
+        }
+    }
+
+    const adapter = graph_store.getGlobalAdapter() orelse return EvalError.Unsupported;
+    const facade = adapter.getFulltextIndexNamed(graph_store.DEFAULT_GRAPH_NAME, index_name) orelse
+        return EvalError.Unsupported;
+
+    const results = facade.search(query_text, max_results) catch return EvalError.OutOfMemory;
+    defer allocator.free(results);
+
+    // Shape each hit as a Map record {node_id, score}; collect into a List the
+    // caller UNWINDs. Map keys are dupe'd so they own their lifetime alongside
+    // the arena-allocated Value (the executor frees the result tree).
+    const rows = allocator.alloc(Value, results.len) catch return EvalError.OutOfMemory;
+    for (results, 0..) |hit, i| {
+        var map = std.StringHashMap(Value).init(allocator);
+        const node_key = allocator.dupe(u8, "node_id") catch return EvalError.OutOfMemory;
+        const score_key = allocator.dupe(u8, "score") catch return EvalError.OutOfMemory;
+        map.put(node_key, .{ .Int = @intCast(hit.doc_id) }) catch return EvalError.OutOfMemory;
+        map.put(score_key, .{ .Double = hit.score }) catch return EvalError.OutOfMemory;
+        rows[i] = .{ .Map = map };
+    }
+
+    return Value{ .List = rows };
 }
 
 /// GAP-0282/0290: Dispatch timeseries.* GQL function calls.

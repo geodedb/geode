@@ -609,27 +609,6 @@ pub fn build(b: *std.Build) void {
     const fts_adapter_step = b.step("test-fts-storage-adapter", "Unit test the fts_storage adapter in isolation");
     fts_adapter_step.dependOn(&run_fts_adapter.step);
 
-    // Cheap isolated unit test for the fts tokenizer. Compiles ONLY the
-    // tokenizer + its path-imported unicode helpers + fts_storage_lib + std, so
-    // it runs in ~1-2 min instead of pulling geode root into the 30-min build.
-    const fts_tok_mod = b.createModule(.{ .root_source_file = b.path("src/index/fts_tokenizer.zig"), .target = target, .optimize = optimize });
-    fts_tok_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
-    // geode_unicode.zig imports only std, so it stands alone as a named module.
-    // It is wired by name because a module rooted at src/index/ cannot path-import
-    // a sibling under src/unicode/.
-    const fts_tok_unicode_mod = b.createModule(.{ .root_source_file = b.path("src/unicode/geode_unicode.zig"), .target = target, .optimize = optimize });
-    fts_tok_mod.addImport("geode_unicode", fts_tok_unicode_mod);
-    const fts_tok_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_fts_tokenizer.zig"),
-        .target = target,
-        .optimize = optimize,
-    }) });
-    fts_tok_tests.root_module.addImport("fts_tokenizer", fts_tok_mod);
-    fts_tok_tests.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
-    const run_fts_tok = b.addRunArtifact(fts_tok_tests);
-    const fts_tok_step = b.step("test-fts-tokenizer", "Unit test the fts tokenizer in isolation");
-    fts_tok_step.dependOn(&run_fts_tok.step);
-
     const auth_dep = b.dependency("auth", .{ .target = target, .optimize = optimize });
     const auth_ext_mod = auth_dep.module("auth");
 

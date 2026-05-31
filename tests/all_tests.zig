@@ -146,6 +146,11 @@ const _test_raft_persistent_storage = @import("test_raft_persistent_storage.zig"
 const _test_twophase_unit = @import("test_twophase_unit.zig");
 const _test_2pc_distributed = @import("test_2pc_distributed.zig");
 const _test_fulltext_bm25 = @import("test_fulltext_bm25.zig");
+const _test_fts_tokenizer = @import("test_fts_tokenizer.zig");
+// A4a: end-to-end fulltext CREATE/DROP INDEX + fulltext_search query fn.
+// Registered here (same pattern as the sibling FTS unit tests above) so it runs
+// under `zig build test` via the all_tests aggregate.
+const _test_fts_e2e = @import("test_fts_e2e.zig");
 const _test_leiden_community = @import("test_leiden_community.zig");
 const _test_wcoj = @import("test_wcoj.zig");
 

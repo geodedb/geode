@@ -1,6 +1,7 @@
 const std = @import("std");
-const tok = @import("fts_tokenizer");
-const fts = @import("fts_storage_lib");
+const geode = @import("geode");
+const tok = geode.index.fts_tokenizer;
+const fts = geode.index.fts_storage;
 
 fn findTerm(postings: []fts.TermPosting, term: []const u8) ?fts.TermPosting {
     for (postings) |p| {

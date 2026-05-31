@@ -54,6 +54,8 @@ const statement_handlers = @import("execution/statement_handlers.zig");
 const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
+// A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
+const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
@@ -1475,6 +1477,27 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return err;
             };
 
+            // A4a: fulltext index → create the NAMED fts-storage engine and
+            // backfill existing matching nodes. Routes through the current graph
+            // (CLI/server default = "default"). The catalog row above is the SHOW
+            // source of truth; this adds the real backing engine + documents.
+            if (ci.index_type == .fulltext) {
+                // CREATE INDEX carries no per-statement graph in this context;
+                // target the default graph (same default the CRUD paths use when
+                // no graph is bound — graph_store DEFAULT_GRAPH_NAME = "default").
+                const target_graph = graph_store.DEFAULT_GRAPH_NAME;
+                fts_index_ops.createFulltextIndex(allocator, target_graph, index_name, ci.label, ci.properties) catch |err| switch (err) {
+                    // Adapter already had the engine but catalog accepted the row
+                    // (e.g. a prior DROP that left the on-disk dir): treat an
+                    // existing engine as success when IF NOT EXISTS, else surface.
+                    fts_index_ops.Error.FulltextIndexExists => if (!ci.if_not_exists) return err,
+                    // No FTS on this graph (init soft-failed): the catalog row
+                    // still records the index; search will report it missing.
+                    fts_index_ops.Error.FulltextUnavailable => {},
+                    else => return err,
+                };
+            }
+
             try statement_dispatcher.ensureAdvancedRuntimeIndex(allocator, index_name, ci.label, ci.properties, ci.index_type);
 
             return ExecutionResult{
@@ -1564,6 +1587,20 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             if (found_key) |key| {
                 if (cat.indexes.fetchRemove(key)) |removed| {
+                    // A4a: fulltext index → drop the NAMED fts-storage engine and
+                    // free its cached facade. Done BEFORE the catalog strings are
+                    // freed (so the index name is still valid). Tolerates a
+                    // missing engine via if_exists=true; a fulltext catalog row
+                    // can outlive its engine if FTS init soft-failed at CREATE.
+                    if (std.mem.eql(u8, removed.value.index_type, "fulltext")) {
+                        const target_graph = graph_store.DEFAULT_GRAPH_NAME;
+                        fts_index_ops.dropFulltextIndex(target_graph, removed.value.name, true) catch |err| {
+                            log.warn("DROP INDEX: fulltext engine drop failed", &.{
+                                Attr.string("index", removed.value.name),
+                                Attr.string("error", @errorName(err)),
+                            });
+                        };
+                    }
                     if (statement_dispatcher.runtimeAdvancedIndexTypeFromCatalog(removed.value.index_type)) |kind| {
                         if (index_manager.getGlobalIndexManager()) |manager| {
                             _ = manager.dropAdvancedIndex(removed.value.name, kind) catch false;

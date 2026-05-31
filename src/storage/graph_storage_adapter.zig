@@ -663,6 +663,15 @@ pub const ManagedGraph = struct {
     fts_base_dir: ?std.Io.Dir = null,
     /// Owned path to the FTS subdirectory (retained for diagnostics + free).
     fts_dir: ?[]const u8 = null,
+    /// A4a: registry of NAMED fulltext-index facades keyed by index name. Each
+    /// facade is a thin `*FullTextIndex` wrapper over the corresponding named
+    /// engine in `fts_adapter`. Lazily populated by `getFulltextIndexNamed` and
+    /// eagerly populated by `CREATE INDEX ... USING fulltext`. The map OWNS each
+    /// facade pointer (allocated with `allocator`, freed in `deinit`) and OWNS
+    /// each key (the dupe'd index name). The transitional `fts_index` ("default")
+    /// facade is NOT stored here — it is freed separately above so a graph that
+    /// only ever uses the default index keeps the original teardown path.
+    fts_facades: std.StringHashMapUnmanaged(*fulltext.FullTextIndex) = .{},
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
@@ -774,6 +783,44 @@ pub const ManagedGraph = struct {
         return self.engine.shards[gs.shard_count.shardOfNode(node_id)];
     }
 
+    /// A4a: resolve a NAMED fulltext facade by index name, lazily constructing
+    /// (and caching in `fts_facades`) one over the backing engine when present.
+    /// Returns null if FTS is uninitialised for this graph OR no engine named
+    /// `index_name` exists in the adapter registry (so an unknown name yields
+    /// null rather than a fabricated empty index). The returned facade is owned
+    /// by `fts_facades` and freed in `deinit`; callers must NOT free it.
+    pub fn getFulltextIndexNamed(self: *ManagedGraph, allocator: Allocator, index_name: []const u8) ?*fulltext.FullTextIndex {
+        if (self.fts_facades.get(index_name)) |existing| return existing;
+        const fa = self.fts_adapter orelse return null;
+        // Only build a facade for an engine that actually exists on the adapter.
+        if (fa.getIndex(index_name) == null) return null;
+
+        const facade = allocator.create(fulltext.FullTextIndex) catch return null;
+        facade.* = fulltext.FullTextIndex.initBacked(allocator, fa, index_name) catch {
+            allocator.destroy(facade);
+            return null;
+        };
+        // Key the map on the facade's own owned name dupe so the map key and the
+        // facade share lifetime and we don't double-own the string.
+        self.fts_facades.put(allocator, facade.index_name, facade) catch {
+            facade.deinit();
+            allocator.destroy(facade);
+            return null;
+        };
+        return facade;
+    }
+
+    /// A4a: drop a NAMED fulltext facade from the cache (deinit + destroy),
+    /// freeing the facade and removing its map entry. The backing engine is NOT
+    /// touched here — the caller drops the engine via `fts_adapter.dropIndex`.
+    /// No-op if no cached facade exists for `index_name`.
+    pub fn dropFulltextFacade(self: *ManagedGraph, allocator: Allocator, index_name: []const u8) void {
+        if (self.fts_facades.fetchRemove(index_name)) |kv| {
+            kv.value.deinit();
+            allocator.destroy(kv.value);
+        }
+    }
+
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
         // Teardown order matters: facade → adapter (flushes + closes each engine
         // and its child dir) → base_dir (the adapter never closes base_dir) →
@@ -783,6 +830,17 @@ pub const ManagedGraph = struct {
             fts.deinit();
             allocator.destroy(fts);
             self.fts_index = null;
+        }
+        // A4a: free every NAMED facade (deinit + destroy) and the map itself.
+        // Facades borrow `fts_adapter`, so they MUST be torn down before the
+        // adapter below. The keys are the dupe'd index names owned by the map.
+        {
+            var fit = self.fts_facades.iterator();
+            while (fit.next()) |entry| {
+                entry.value_ptr.*.deinit();
+                allocator.destroy(entry.value_ptr.*);
+            }
+            self.fts_facades.deinit(allocator);
         }
         if (self.fts_adapter) |fa| {
             fa.deinit();
@@ -1290,6 +1348,22 @@ pub const StorageAdapter = struct {
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return if (mg) |m| m.fts_index else null;
+    }
+
+    /// A4a: resolve a NAMED fulltext index facade for graph `graph_name` /
+    /// index `index_name`. Distinct from `getFulltextIndex`, whose `name`
+    /// parameter is the GRAPH name (it returns that graph's single "default"
+    /// facade). This is the resolver the `fulltext_search(...)` query function
+    /// uses. Returns null if the graph does not exist, FTS is uninitialised, or
+    /// no engine named `index_name` exists. Holds `self.mutex` only for the
+    /// graph-map lookup; facade construction happens after release.
+    pub fn getFulltextIndexNamed(self: *StorageAdapter, graph_name: []const u8, index_name: []const u8) ?*fulltext.FullTextIndex {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name);
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const m = mg orelse return null;
+        return m.getFulltextIndexNamed(self.allocator, index_name);
     }
 
     /// Check whether a graph with the given name exists either in memory or in

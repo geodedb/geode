@@ -1,10 +1,16 @@
 const std = @import("std");
 const fts = @import("fts_storage_lib");
-// Named-module import (not a sibling path): a module rooted at src/index/ may not
-// path-import ../unicode/*, so build.zig wires geode_unicode.zig as the named
-// module "geode_unicode". geode_unicode imports only std, so the module is
-// self-contained (no further addImport needed).
-const geode_unicode = @import("geode_unicode");
+
+/// Re-export the posting type the tokenizer produces so consumers (e.g. the
+/// fulltext DDL backfill in execution/fts_index_ops.zig) can name it without
+/// taking a second import of `fts_storage_lib`.
+pub const TermPosting = fts.TermPosting;
+// Relative path import of the sibling unicode helper, mirroring src/index/fulltext.zig
+// (which path-imports `../unicode/geode_unicode.zig`). fts_tokenizer.zig lives inside
+// the geode module (root src/lib.zig, root dir src/), so from src/index/ the path
+// `../unicode/geode_unicode.zig` resolves to the SAME file instance lib.zig already
+// uses — no named module, no module diamond. geode_unicode imports only std.
+const geode_unicode = @import("../unicode/geode_unicode.zig");
 
 // CANARY: REQ=REQ-GQL-FTS-002; FEATURE="FTS Tokenizer"; ASPECT=Tokenize; STATUS=TESTED; TEST=test_fts_tokenizer; OWNER=index; UPDATED=2026-05-30
 //

@@ -306,6 +306,12 @@ pub const index = struct {
     /// it via `fulltext.FullTextIndex.initBacked` (the facade has no standalone
     /// in-memory `init` after the fts-storage migration).
     pub const fts_storage_adapter = @import("storage/fts_storage_adapter.zig");
+    /// Standalone full-text tokenizer producing fts_storage TermPostings.
+    /// Re-exported so the unit suite can reach it through the geode module.
+    pub const fts_tokenizer = @import("index/fts_tokenizer.zig");
+    /// The external fts-storage library (TermPosting etc). Re-exported so tests
+    /// reaching the tokenizer through `geode` can also name its return type.
+    pub const fts_storage = @import("fts_storage_lib");
     pub const IndexManager = @import("index/index_manager.zig").IndexManager;
     pub const vector_index = @import("index/vector_index.zig");
     pub const spatial_index = @import("index/spatial_index.zig");
