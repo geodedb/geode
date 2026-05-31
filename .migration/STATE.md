@@ -367,3 +367,17 @@ MILESTONE 2026-05-31: A4a + lazy-engine fix CONFIRMED — independent zig build 
   migration tests pass (ts_ingest, ts_latency, fts suite), bench VARIANCE_OK, harness FTS 17/17 + ts 10/10.
 - LESSON (reinforce [[fts-ts-migration-env]]): NEVER run other tasks during a build; the timing perf tests
   (test_two_phase_edge_lock, test_match_set_label_scan_regression) flake above ~load 4 on this single-core box.
+
+### 2026-05-31 ~18:50 — PUSH PREP: rebased onto origin/main (user authorized push)
+- origin/main moved during the session: 20c2fe16 → edca38a7 (6 new fix commits: grpc-zig hash, CI gate split,
+  RSS arena-reset bound, multiline CI summary, GPA double-free on connection cleanup, label-scan iterator
+  invalidation). merge-base was our base 77f5ed10 → clean rebase.
+- `git rebase origin/main` = ZERO conflicts (REBASE_EXIT=0). Auto-merged 4 overlapping non-source files
+  (build.zig, build.zig.zon, .gitlab-ci.yml, docs/status.csv); NO src/ overlap (remote src fixes are in
+  main.zig/connection_pool.zig/label_scan.zig/graph_store.zig — files the migration never touched).
+- Merge correctness verified: build.zig.zon has BOTH remote grpc-zig hash AND my fts_storage 0.1.1 pin +
+  timeseries 0.2.0; build.zig retains bench-ts-storage/test-ts-latency/test-ts-ingest/benchmark_fts_storage;
+  zero conflict markers. Fallback (pre-rebase) SHA = 585a22db.
+- New HEAD fd594ac8 (origin/main + 21 migration commits, linear). Running mandatory post-rebase `zig build test`
+  before pushing to main (remote added concurrency-sensitive fixes under our code). On green: ff main → push
+  main + feature branch + harness; then fts-storage 0.1.1 dep push (CI).
