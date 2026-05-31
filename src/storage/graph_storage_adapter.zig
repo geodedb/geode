@@ -807,6 +807,21 @@ pub const ManagedGraph = struct {
     pub fn getFulltextIndexNamed(self: *ManagedGraph, allocator: Allocator, index_name: []const u8) ?*fulltext.FullTextIndex {
         if (self.fts_facades.get(index_name)) |existing| return existing;
         const fa = self.fts_adapter orelse return null;
+        // Lazily re-open an on-disk index that is not yet in the adapter's
+        // in-memory registry. After a store restart `initFtsForGraph` builds an
+        // engine-free adapter (the registry starts empty) even though the index
+        // tree is durably present under {graph_dir}/fts/<name>. Without this
+        // re-open, a post-restart `fulltext_search` would resolve to null and
+        // silently return zero hits. `openIndex` replays the on-disk WAL/segments
+        // (it errors `IndexNotFound` when no such dir exists → we fall through to
+        // the null return below, preserving "unknown name → no facade"). The
+        // engine captures THIS (connection/query) thread as its owner; its later
+        // flush/deinit run on the same thread during store teardown
+        // (`ManagedGraph.deinit` → `fts_adapter.deinit`), mirroring the lazy-open
+        // already performed by `createFulltextIndexNamed`.
+        if (fa.getIndex(index_name) == null) {
+            fa.openIndex(index_name) catch {};
+        }
         // Only build a facade for an engine that actually exists on the adapter.
         if (fa.getIndex(index_name) == null) return null;
 
