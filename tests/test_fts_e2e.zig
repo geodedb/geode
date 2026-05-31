@@ -6,10 +6,12 @@
 //   2. CREATE INDEX doc_body_idx FOR (d:Doc) ON (d.body) USING fulltext
 //      — this creates the NAMED fts-storage engine AND backfills the two
 //      pre-existing nodes (the path A4a adds; no DML write hook needed).
-//   3. CALL geode.fts.search('doc_body_idx', 'fox') YIELD node, score
-//      RETURN node, score — assert the fox node is returned and the dog node is
-//      not. This is the ISO/IEC 39075:2024 set-returning surface (CALL … YIELD);
-//      `node` is the matching node id (Int), `score` the BM25 score (Double).
+//   3. CALL geode.fts.search('doc_body_idx', 'fox') — assert the fox node is
+//      returned and the dog node is not. This is the ISO/IEC 39075:2024
+//      set-returning surface; YIELD is OPTIONAL in GQL clause 16.3, so the bare
+//      CALL auto-projects the procedure's result columns as rows (Option A,
+//      exactly like CALL geode.schema.indexes()). `node` is the matching node id
+//      (Int), `score` the BM25 score (Double).
 //   4. DROP INDEX doc_body_idx; assert SHOW INDEXES no longer lists it.
 //
 // This exercises the real store + real parser + real executor (no mocks),
@@ -102,11 +104,12 @@ test "A4a FTS e2e: CREATE INDEX backfills then CALL geode.fts.search finds the m
         r.deinit(aa);
     }
 
-    // 3. Search for 'fox' via the CALL … YIELD row-set. The fox node must
-    //    appear; the dog node must not. One row per hit; columns node/score.
+    // 3. Search for 'fox' via the bare CALL row-set (no YIELD — auto-projected).
+    //    The fox node must appear; the dog node must not. One row per hit;
+    //    columns node/score.
     {
         var res = try h.runQuery(
-            "CALL geode.fts.search('doc_body_idx', 'fox') YIELD node, score RETURN node, score",
+            "CALL geode.fts.search('doc_body_idx', 'fox')",
         );
         defer res.deinit(aa);
 
@@ -122,7 +125,7 @@ test "A4a FTS e2e: CREATE INDEX backfills then CALL geode.fts.search finds the m
     var fox_id: i64 = -1;
     {
         var res = try h.runQuery(
-            "CALL geode.fts.search('doc_body_idx', 'fox') YIELD node, score RETURN node",
+            "CALL geode.fts.search('doc_body_idx', 'fox')",
         );
         defer res.deinit(aa);
         try testing.expectEqual(@as(usize, 1), res.rows.len);
@@ -130,7 +133,7 @@ test "A4a FTS e2e: CREATE INDEX backfills then CALL geode.fts.search finds the m
     }
     {
         var res = try h.runQuery(
-            "CALL geode.fts.search('doc_body_idx', 'dog') YIELD node, score RETURN node",
+            "CALL geode.fts.search('doc_body_idx', 'dog')",
         );
         defer res.deinit(aa);
         try testing.expectEqual(@as(usize, 1), res.rows.len);
@@ -141,7 +144,7 @@ test "A4a FTS e2e: CREATE INDEX backfills then CALL geode.fts.search finds the m
     // A query term present in NEITHER document returns no rows.
     {
         var res = try h.runQuery(
-            "CALL geode.fts.search('doc_body_idx', 'elephant') YIELD node, score RETURN node",
+            "CALL geode.fts.search('doc_body_idx', 'elephant')",
         );
         defer res.deinit(aa);
         try testing.expectEqual(@as(usize, 0), res.rows.len);
@@ -188,7 +191,7 @@ test "A4a FTS e2e: DROP INDEX removes the fulltext index from SHOW INDEXES" {
     // accept either, since both prove the index was dropped.
     {
         if (h.runQuery(
-            "CALL geode.fts.search('doc_body_idx', 'fox') YIELD node, score RETURN node",
+            "CALL geode.fts.search('doc_body_idx', 'fox')",
         )) |res_ok| {
             var res = res_ok;
             defer res.deinit(aa);
