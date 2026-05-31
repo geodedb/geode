@@ -993,10 +993,9 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 ai += 1;
             }
         } else if (std.mem.eql(u8, argv[ai], "--no-auth")) {
-            if (@import("builtin").mode != .Debug) {
-                std.debug.print("Error: --no-auth is only available in debug builds. Use --token for production.\n", .{});
-                std.process.exit(1);
-            }
+            // Record the request; the release-build gate is applied after the
+            // parse loop because it depends on the selected transport (which
+            // may be specified by a later argument, e.g. `--stdio --no-auth`).
             no_auth = true;
         } else if (std.mem.eql(u8, argv[ai], "--stdio")) {
             use_stdio = true;
@@ -1007,6 +1006,20 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
             // Skip the 'serve' subcommand as it's the default action
             continue;
         }
+    }
+
+    // SEC-08 / GAP-0345: `--no-auth` disables MCP-level bearer auth. On the
+    // network-exposed HTTP transport that is a release footgun, so it stays
+    // debug-only there. The stdio transport, by contrast, is a local pipe owned
+    // by the spawning process (Claude Desktop/Code, the test harness, etc.) with
+    // no network surface, so MCP-level auth is meaningless and `--no-auth` is
+    // permitted in release. The gate runs here, post-parse, because the
+    // transport may be selected by an argument that follows `--no-auth`
+    // (e.g. `geode mcp --no-auth --stdio`). The geode *endpoint* credentials in
+    // the `--endpoint` DSN are unaffected and still authenticate to the server.
+    if (no_auth and !use_stdio and @import("builtin").mode != .Debug) {
+        std.debug.print("Error: --no-auth is only available in debug builds for the HTTP transport. Use --token for production, or --stdio for a local pipe.\n", .{});
+        std.process.exit(1);
     }
 
     // SEC-08: Also check GEODE_MCP_TOKEN env var as fallback for bearer token
