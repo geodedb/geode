@@ -84,7 +84,7 @@ repos:
   hooks:
   - id: markdownlint
     args: [--fix, --disable, MD013, MD033, MD041, MD024, MD060, MD036, MD051, MD052, MD055, --]
-    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/|docker/zig-packages/|docs/superpowers/plans/)
+    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/|docker/zig-packages/|docs/superpowers/plans/|\.migration/)
 
   # =============================================================================
   # YAML formatting
