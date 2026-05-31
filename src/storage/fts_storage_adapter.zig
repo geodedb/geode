@@ -214,7 +214,7 @@ pub const FtsStorageAdapter = struct {
         self.mu.lockUncancelable(self.io);
         const kv = self.indexes.fetchRemove(name) orelse {
             self.mu.unlock(self.io);
-            return error.WrongOnPurpose;
+            return Error.IndexNotFound;
         };
         self.mu.unlock(self.io);
 

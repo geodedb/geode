@@ -299,4 +299,8 @@ test "dropIndex removes the index" {
 
     // After drop, the name is free again — createIndex should succeed fresh.
     try h.a.createIndex("idx");
+
+    // Dropping a name that was never registered must surface IndexNotFound
+    // (regression: previously returned a stray error.WrongOnPurpose).
+    try std.testing.expectError(error.IndexNotFound, h.a.dropIndex("nope"));
 }
