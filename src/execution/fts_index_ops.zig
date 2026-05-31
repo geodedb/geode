@@ -120,6 +120,7 @@ fn backfillExistingNodes(
             for (doc_terms.items) |p| {
                 allocator.free(p.term);
                 allocator.free(p.positions);
+                if (p.field) |f| allocator.free(f);
             }
             doc_terms.deinit(allocator);
         }
@@ -294,6 +295,7 @@ fn indexNodeDocument(
         for (doc_terms.items) |p| {
             allocator.free(p.term);
             allocator.free(p.positions);
+            if (p.field) |f| allocator.free(f);
         }
         doc_terms.deinit(allocator);
     }
