@@ -381,3 +381,17 @@ MILESTONE 2026-05-31: A4a + lazy-engine fix CONFIRMED — independent zig build 
 - New HEAD fd594ac8 (origin/main + 21 migration commits, linear). Running mandatory post-rebase `zig build test`
   before pushing to main (remote added concurrency-sensitive fixes under our code). On green: ff main → push
   main + feature branch + harness; then fts-storage 0.1.1 dep push (CI).
+
+### 2026-05-31 ~18:55 — PUSHED (user authorized "pull then push")
+- Pre-push: rebased onto origin/main edca38a7 (0 conflicts, 21 commits replayed); post-rebase `zig build test`
+  RTEST_EXIT=0 (0 fail, 0 panic) against remote's bumped timeseries-storage 0.2.2 + 6 new remote fixes.
+  Re-fetched immediately before push: origin/main still ancestor (no concurrent push) → clean fast-forward.
+- PUSHED (all authoritative via ls-remote):
+  * geode origin/main = fc6acbe4dba2 (was edca38a7; fast-forward, no force)
+  * geode origin/feat/storage-lib-migration = fc6acbe4dba2
+  * geode-test-harness origin/main = c9c7a71b (4 spec commits: fts_storage_basic, fulltext_search_basic, timeseries_basic)
+  * fts-storage origin/feat/optional-single-writer-thread-check = 908c1f54 (NEW branch — makes the pinned commit
+    reachable so geode CI resolves .fts_storage). timeseries-storage 0.2.2 already on its origin/main.
+- ALL dependency-push requirements from PUBLISH-CHECKLIST are now SATISFIED. CI on geode main can resolve all deps.
+- Optional follow-up (NOT done, user's call): merge/tag the fts-storage branch into its main as v0.1.1 for a stable
+  ref (the commit is reachable via the branch now, which is sufficient for the pinned-hash fetch).
