@@ -1050,6 +1050,23 @@ pub fn build(b: *std.Build) void {
     // Also attached to the CI `benchmark` aggregate below (after that step is
     // defined — see `benchmark_step.dependOn(&run_fts_storage_bench.step)`).
 
+    // Timeseries-storage native variance benchmark (timeseries_storage-backed
+    // geode.ts.* hot paths: Store.insertMany ingest + Store.queryRange range
+    // scan). Emits schema_version-2 VarianceEnvelope JSON + a VARIANCE_OK /
+    // VARIANCE_FAIL token per scenario for the CI bench gate (GAP-0244). Imports
+    // `geode` (for the timeseries re-export). The timeseries analog of
+    // benchmark_fts_storage above.
+    const ts_storage_bench_exe = b.addExecutable(.{ .name = "benchmark_ts_storage", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_ts_storage.zig"), .target = target, .optimize = optimize }) });
+    ts_storage_bench_exe.root_module.addImport("geode", root_mod);
+    const run_ts_storage_bench = b.addRunArtifact(ts_storage_bench_exe);
+    bench_step.dependOn(&run_ts_storage_bench.step);
+    // Dedicated step to run ONLY the timeseries-storage variance bench in
+    // isolation (fast triage / VARIANCE_OK gate capture).
+    const ts_storage_bench_step = b.step("bench-ts-storage", "Run only the timeseries-storage VarianceEnvelope benchmark");
+    ts_storage_bench_step.dependOn(&run_ts_storage_bench.step);
+    // Also attached to the CI `benchmark` aggregate below (after that step is
+    // defined — see `benchmark_step.dependOn(&run_ts_storage_bench.step)`).
+
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
     lib_unit_tests.root_module.addImport("geode", root_mod);
     lib_unit_tests.root_module.addImport("json", json_mod);
@@ -1476,6 +1493,21 @@ pub fn build(b: *std.Build) void {
     }) });
     fts_latency_tests.root_module.addImport("geode", root_mod);
     const run_fts_latency_tests = b.addRunArtifact(fts_latency_tests);
+
+    // TS latency gate: CALL geode.ts.range must return the seeded (ts, value)
+    // rows within budget over the real store + real parser + real executor.
+    // Mirrors the fts_latency harness idiom (tests/test_ts_latency.zig). Brings
+    // the timeseries-storage path to FTS/graph-storage latency-gate parity.
+    const ts_latency_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_ts_latency.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    ts_latency_tests.root_module.addImport("geode", root_mod);
+    const run_ts_latency_tests = b.addRunArtifact(ts_latency_tests);
+    // Dedicated step to run ONLY the ts latency gate in isolation (fast triage).
+    const ts_latency_step = b.step("test-ts-latency", "Run only the geode.ts.range CI-aware latency gate");
+    ts_latency_step.dependOn(&run_ts_latency_tests.step);
 
     // ----- TS INGEST ROUND-TRIP (native geode.ts.* surface, B3) -----
     // Drives the timeseries CALL geode.ts.* procedures through the full
@@ -2361,6 +2393,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0810_cross_subsystem_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811_aggregation_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_fts_latency_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_ts_latency_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_ingest_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811b_property_aggregate_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0812_topk_streaming_tests.step, 1, test_shard_loads, test_shard_index);
@@ -2635,6 +2668,10 @@ pub fn build(b: *std.Build) void {
     // aggregate (declared up near the `bench` step). Brings the fts-storage FTS
     // path to the same VarianceEnvelope perf-gate bar as graph storage.
     benchmark_step.dependOn(&run_fts_storage_bench.step);
+    // Timeseries-storage native variance benchmark also runs under the CI
+    // `benchmark` aggregate (declared up near the `bench` step). Brings the
+    // timeseries-storage path to graph-storage/FTS perf-gate parity.
+    benchmark_step.dependOn(&run_ts_storage_bench.step);
 
     // Add Phase 2 storage optimization benchmarks
     // CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
