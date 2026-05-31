@@ -204,7 +204,7 @@ pub const IndexManager = struct {
             .property_indexes = std.StringHashMap(PropertyIndex).init(allocator),
             .label_indexes = std.StringHashMap(LabelIndex).init(allocator),
             .composite_indexes = std.ArrayList(CompositeIndex).empty,
-            .fulltext_indexes = std.StringHashMap(FulltextIndexRecord).init(allocator),
+            .fulltext_indexes = std.StringHashMap(fulltext.FullTextIndex).init(allocator),
             .spatial_indexes = std.StringHashMap(*rtree.RTree).init(allocator),
             .vector_indexes = std.StringHashMap(*anyopaque).init(allocator),
             // Initialize advanced type indexes
@@ -500,12 +500,20 @@ pub const IndexManager = struct {
         label: []const u8,
         properties: [][]const u8,
     ) !void {
+        _ = self;
+        _ = name;
         _ = label;
         _ = properties;
 
-        const ft_index = try fulltext.FullTextIndex.init(self.allocator);
-        try self.fulltext_indexes.put(name, ft_index);
-        self.statistics.total_indexes += 1;
+        // After the fts-storage migration the FullTextIndex facade no longer
+        // has a standalone `init` — it must be constructed with `initBacked`
+        // over a per-graph `FtsStorageAdapter`, which `IndexManager` does not
+        // own. The live FTS path is `ManagedGraph.getFulltextIndex` in
+        // graph_storage_adapter.zig (adapter created in `initFtsForGraph`).
+        // This IndexManager entry point has no callers and the adapter-backed
+        // CREATE-INDEX wiring is a follow-up task; fail explicitly rather than
+        // silently no-op so a future caller is forced through the owning path.
+        return error.FullTextIndexRequiresAdapter;
     }
 
     // Insert into property index

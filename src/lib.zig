@@ -301,6 +301,11 @@ pub const index = struct {
     pub const domain_trie = @import("index/domain_trie.zig");
     pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
     pub const fulltext = @import("index/fulltext.zig");
+    /// The fts-storage adapter that backs the `fulltext` facade. Re-exported so
+    /// callers/tests can construct a `FtsStorageAdapter` + named index and wrap
+    /// it via `fulltext.FullTextIndex.initBacked` (the facade has no standalone
+    /// in-memory `init` after the fts-storage migration).
+    pub const fts_storage_adapter = @import("storage/fts_storage_adapter.zig");
     pub const IndexManager = @import("index/index_manager.zig").IndexManager;
     pub const vector_index = @import("index/vector_index.zig");
     pub const spatial_index = @import("index/spatial_index.zig");

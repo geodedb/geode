@@ -17,6 +17,7 @@ const property_codec = @import("../property_value_codec.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
+const adapter_mod = @import("fts_storage_adapter.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
