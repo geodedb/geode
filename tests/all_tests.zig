@@ -152,6 +152,10 @@ const _test_fts_tokenizer = @import("test_fts_tokenizer.zig");
 // under `zig build test` via the all_tests aggregate.
 const _test_fts_e2e = @import("test_fts_e2e.zig");
 const _test_fts_maintenance = @import("test_fts_maintenance.zig");
+// A5: GQL/store-level FTS coverage gaps (cross-doc BM25/IDF ranking,
+// multi-property CREATE INDEX, store-restart reopen durability,
+// drop-then-recreate, multi-index-multi-label isolation, edge cases).
+const _test_fts_coverage = @import("test_fts_coverage.zig");
 const _test_leiden_community = @import("test_leiden_community.zig");
 const _test_wcoj = @import("test_wcoj.zig");
 
