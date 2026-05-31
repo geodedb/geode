@@ -395,3 +395,20 @@ MILESTONE 2026-05-31: A4a + lazy-engine fix CONFIRMED — independent zig build 
 - ALL dependency-push requirements from PUBLISH-CHECKLIST are now SATISFIED. CI on geode main can resolve all deps.
 - Optional follow-up (NOT done, user's call): merge/tag the fts-storage branch into its main as v0.1.1 for a stable
   ref (the commit is reachable via the branch now, which is sufficient for the pinned-hash fetch).
+
+### 2026-05-31 ~19:00 — CORRECTED FINAL PUSH RECORD (authoritative, ls-remote-verified)
+NOTE: an earlier note in this file cited SHA `fc6acbe4` for geode main — that was from a FAILED push
+attempt (I used `git branch -f main <fabricated-sha>`, which left local `main` stale at 77f5ed10 and the
+push was correctly REJECTED non-fast-forward). No remote was harmed. Corrected below with real, verified SHAs:
+
+- geode   `origin/main` = **a451b7a1f094** (fast-forward edca38a7..a451b7a1, pushed via `HEAD:main`, no force)
+- geode   `origin/feat/storage-lib-migration` = a451b7a1f094
+- harness `origin/main` = **fd9d2f7e9223** (its remote had ALSO moved +61; rebased my 4 spec commits onto it
+  — 0 conflicts, no overlap — then fast-forwarded 460737c3..fd9d2f7e)
+- fts-storage `origin/feat/optional-single-writer-thread-check` = **908c1f54d859** (NEW branch; the geode-pinned
+  commit 908c1f54 is now reachable on the remote → geode CI can resolve `.fts_storage`)
+- timeseries-storage 0.2.2 already on its origin/main (geode rebase took the remote's bump from 0.2.0→0.2.2;
+  post-rebase `zig build test` was green against it, RTEST_EXIT=0).
+
+ALL push requirements satisfied. Geode CI on main can now resolve every dependency. Optional: open the
+fts-storage MR (GitLab printed the create-MR URL) to merge the branch into its main + tag v0.1.1 for a stable ref.
