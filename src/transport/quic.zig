@@ -1426,6 +1426,95 @@ fn resolveHostToIp(allocator: std.mem.Allocator, host: []const u8) !struct { ip:
     return error.InvalidAddress;
 }
 
+/// GAP-0838: parse a PEM CA file into a DER trust-anchor chain.
+///
+/// The vendor api-client TLS path consumes inline DER trust anchors
+/// (cfg.inline_ca_chain_der), not the ca_path string, so cluster TLS must parse
+/// the CA itself. Every `-----BEGIN CERTIFICATE-----` block is parsed so a CA
+/// bundle (root + intermediates) is trusted in full. Caller owns the returned
+/// slice and each DER element (freed in QuicClient.deinit). Returns
+/// error.NoCertificatesInCaFile when the file has no parseable certificate.
+fn loadCaChainDer(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const st = try file.stat(io);
+    const size: usize = @intCast(@min(st.size, 1024 * 1024));
+    const pem = try allocator.alloc(u8, size);
+    defer allocator.free(pem);
+    _ = try file.readPositionalAll(io, pem, 0);
+    return parsePemCertChain(allocator, pem);
+}
+
+/// Parse every `-----BEGIN CERTIFICATE-----` block in `pem` into a DER chain.
+/// A malformed block is skipped so a valid bundle still loads. Returns
+/// error.NoCertificatesInCaFile when no block parses. Caller owns the slice
+/// and each element. Pure (no I/O) so it is unit-testable.
+fn parsePemCertChain(allocator: std.mem.Allocator, pem: []const u8) ![]const []const u8 {
+    var ders = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (ders.items) |d| allocator.free(d);
+        ders.deinit(allocator);
+    }
+
+    const begin_marker = "-----BEGIN CERTIFICATE-----";
+    const end_marker = "-----END CERTIFICATE-----";
+    var search: usize = 0;
+    while (std.mem.indexOfPos(u8, pem, search, begin_marker)) |b| {
+        const e = std.mem.indexOfPos(u8, pem, b, end_marker) orelse break;
+        const block_end = e + end_marker.len;
+        const der = api.pem.parseCertificate(allocator, pem[b..block_end]) catch {
+            // Skip a malformed block but keep any valid certificates.
+            search = block_end;
+            continue;
+        };
+        try ders.append(allocator, der);
+        search = block_end;
+    }
+    if (ders.items.len == 0) return error.NoCertificatesInCaFile;
+    return try ders.toOwnedSlice(allocator);
+}
+
+test "parsePemCertChain: single + multi-cert PEM bundle -> DER chain (GAP-0838)" {
+    const allocator = std.testing.allocator;
+
+    // No-cert input must error rather than return an empty chain.
+    try std.testing.expectError(error.NoCertificatesInCaFile, parsePemCertChain(allocator, "not a cert"));
+
+    // A real P-256 self-signed CA cert (PEM) loads as one DER entry.
+    const real_ca =
+        \\-----BEGIN CERTIFICATE-----
+        \\MIIBhzCCAS2gAwIBAgIUJ6CMbLEVoIXcU/q+qA5iwVkPauEwCgYIKoZIzj0EAwIw
+        \\GTEXMBUGA1UEAwwOZ2FwODM4LXRlc3QtY2EwHhcNMjYwNTMxMTI0NTI1WhcNMzYw
+        \\NTI4MTI0NTI1WjAZMRcwFQYDVQQDDA5nYXA4MzgtdGVzdC1jYTBZMBMGByqGSM49
+        \\AgEGCCqGSM49AwEHA0IABFldZSlqBRHc4WW5oFc0t/VzpY9rLSCw8v72dZC9H11S
+        \\9cSQtvnDcw39RkP14uH+xGgo7kzQQY5qDklM5fRBw4mjUzBRMB0GA1UdDgQWBBRs
+        \\Z3sXT0H9DDpGAlHA5L0vq+q4PzAfBgNVHSMEGDAWgBRsZ3sXT0H9DDpGAlHA5L0v
+        \\q+q4PzAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCICpSWMBf6lAv
+        \\ezUhsA35jcPhh1plsrLKH7X6C97xw0fWAiEAi0tla5rpYF3rSujSPuPExHNMVbTr
+        \\FsRCzAiRbbxiaMI=
+        \\-----END CERTIFICATE-----
+    ;
+    const single = try parsePemCertChain(allocator, real_ca);
+    defer {
+        for (single) |d| allocator.free(d);
+        allocator.free(single);
+    }
+    try std.testing.expectEqual(@as(usize, 1), single.len);
+    try std.testing.expect(single[0].len > 0);
+    try std.testing.expectEqual(@as(u8, 0x30), single[0][0]); // DER SEQUENCE tag
+
+    // A bundle of two concatenated certs (root + intermediate style) -> two DERs.
+    const bundle = try std.fmt.allocPrint(allocator, "{s}\n{s}", .{ real_ca, real_ca });
+    defer allocator.free(bundle);
+    const pair = try parsePemCertChain(allocator, bundle);
+    defer {
+        for (pair) |d| allocator.free(d);
+        allocator.free(pair);
+    }
+    try std.testing.expectEqual(@as(usize, 2), pair.len);
+}
+
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
     /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
@@ -1434,6 +1523,10 @@ pub const QuicClient = struct {
     /// Heap-allocated QUIC config; freed in deinit().
     quic_config: ?*VendorQuicConfig = null,
     alpn_storage: [1][]const u8 = undefined,
+    /// GAP-0838: DER-encoded CA trust anchors loaded from ca_cert_path, handed to
+    /// the vendor TLS client via cfg.inline_ca_chain_der. Owns its backing; freed
+    /// last in deinit() so it outlives any TLS context that references it.
+    ca_chain_der: ?[]const []const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) QuicClient {
         return QuicClient{
@@ -1454,6 +1547,13 @@ pub const QuicClient = struct {
         if (self.quic_config) |cfg| {
             self.allocator.destroy(cfg);
             self.quic_config = null;
+        }
+        // GAP-0838: free CA trust anchors last — the destroyed config and any TLS
+        // context built from it may have referenced this backing.
+        if (self.ca_chain_der) |chain| {
+            for (chain) |der| self.allocator.free(der);
+            self.allocator.free(chain);
+            self.ca_chain_der = null;
         }
     }
 
@@ -1533,6 +1633,20 @@ pub const QuicClient = struct {
         const resolved = try resolveHostToIp(self.allocator, normalized_address);
         defer if (resolved.allocated) self.allocator.free(resolved.ip);
 
+        // GAP-0838: the vendor api-client TLS path validates the server cert against
+        // cfg.inline_ca_chain_der (DER trust anchors), NOT cfg.ca_path (a path string).
+        // Load the CA bundle here so cluster TLS actually has a trust anchor and can
+        // complete a leaf-only server chain. Owned by self; freed in deinit().
+        if (ca_cert_path) |ca_p| {
+            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| blk: {
+                tlog.warn("cluster TLS: failed to load CA chain; proceeding without pinned anchor", &.{
+                    Attr.string("path", ca_p),
+                    Attr.string("error", @errorName(err)),
+                });
+                break :blk null;
+            };
+        }
+
         // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
         const cfg = try self.allocator.create(VendorQuicConfig);
         errdefer {
@@ -1564,6 +1678,8 @@ pub const QuicClient = struct {
             .aead_integrity_limit_override = null,
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
+            // GAP-0838: hand the loaded CA trust anchors to the vendor TLS client.
+            .inline_ca_chain_der = self.ca_chain_der,
         };
         self.quic_config = cfg;
 
