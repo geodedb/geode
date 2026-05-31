@@ -1477,6 +1477,23 @@ pub fn build(b: *std.Build) void {
     fts_latency_tests.root_module.addImport("geode", root_mod);
     const run_fts_latency_tests = b.addRunArtifact(fts_latency_tests);
 
+    // ----- TS INGEST ROUND-TRIP (native geode.ts.* surface, B3) -----
+    // Drives the timeseries CALL geode.ts.* procedures through the full
+    // execution path (parse → executeStatementWithContext → ts_dispatch),
+    // plus the two B0 Store fixes (inclusive queryRange end-bound and the
+    // series_cache concurrent-ingest race). Mirrors the FTS e2e/latency wiring.
+    const ts_ingest_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/ts_ingest_roundtrip.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    ts_ingest_tests.root_module.addImport("geode", root_mod);
+    const run_ts_ingest_tests = b.addRunArtifact(ts_ingest_tests);
+    // Dedicated step to run ONLY the ts_ingest tests in isolation (fast triage).
+    const ts_ingest_step = b.step("test-ts-ingest", "Run only the native geode.ts.* round-trip tests");
+    ts_ingest_step.dependOn(&run_ts_ingest_tests.step);
+
     // GAP-0811 Task 2.2: property-aggregate fast-path for
     // `MATCH (p:Label) RETURN sum|avg|min|max(p.key)` — iterates the label
     // posting list and calls `getNodeProperty(node_id, key)` per slot, so
@@ -2344,6 +2361,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0810_cross_subsystem_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811_aggregation_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_fts_latency_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_ts_ingest_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811b_property_aggregate_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0812_topk_streaming_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0813_bulk_materialize_path_tests.step, 1, test_shard_loads, test_shard_index);

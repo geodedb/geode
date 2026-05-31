@@ -2768,6 +2768,8 @@ REQ-GQL-TOBOOLEAN-001,TypeConversionFunctions,ToBooleanConversion,TESTED,,,eval,
 REQ-GQL-TOBOOLEAN-001,TypeConversionFunctions,ToBooleanConversion,TESTED,,,eval,2025-12-24,src/eval/call_handlers.zig
 REQ-GQL-TRIANGLE-COUNT-001,Statistics,TriangleCount,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-TRIANGLE-COUNT-001,TriangleCounting,Statistics,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
+REQ-GQL-TS-PROC-001,CALL geode.ts.* native timeseries surface,Dispatch,TESTED,,,timeseries,2026-05-31,src/execution/procedure_registry.zig
+REQ-GQL-TS-PROC-001,CALL geode.ts.* read procedures,ReadOnlyClassification,TESTED,,,timeseries,2026-05-31,src/execution/procedure_access.zig
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,2025-01-05,docs/TYPE_CONVERSION_FUNCTIONS.md
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,"2025-01-05""",tests/type_conversion_functions_regression_test.sh
 REQ-GQL-TYPES,NetworkTypes,Implementation,TESTED,,,types-team,2025-10-03,src/types/network.zig

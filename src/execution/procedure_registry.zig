@@ -38,6 +38,7 @@ const auth_dispatch = @import("auth_dispatch.zig");
 const meta_dispatch = @import("meta_dispatch.zig");
 const rls_dispatch = @import("rls_dispatch.zig");
 const fts_dispatch = @import("fts_dispatch.zig");
+const ts_dispatch = @import("ts_dispatch.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
@@ -198,6 +199,14 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // CANARY: REQ=REQ-GQL-FTS-PROC-001; FEATURE="CALL geode.fts.search YIELD node,score"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_fts_e2e.zig; OWNER=index; UPDATED=2026-05-31
     if (std.mem.startsWith(u8, proc_name, "geode.fts.")) {
         if (try fts_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
+            return result;
+        }
+    }
+
+    // ---- geode.ts.* procedures (timeseries: insert/insert_many/range/last/bucket_avg/sample_by) ----
+    // CANARY: REQ=REQ-GQL-TS-PROC-001; FEATURE="CALL geode.ts.* native timeseries surface"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/ts_ingest_roundtrip.zig; OWNER=timeseries; UPDATED=2026-05-31
+    if (std.mem.startsWith(u8, proc_name, "geode.ts.")) {
+        if (try ts_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }
     }

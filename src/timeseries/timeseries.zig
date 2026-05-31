@@ -38,6 +38,20 @@ pub const Store = struct {
     pool: ?*thread_pool.ThreadPool,
     config: StoreConfig,
     series_cache: std.AutoHashMap(u128, *Series),
+    // B0 bug-1 fix: serialize all access to `series_cache` (and the per-series
+    // point ArrayLists it owns). Before native `geode.ts.*` GQL ingest landed,
+    // the Store was only ever driven single-threaded; the QUIC server's
+    // worker-thread pool can now drive concurrent inserts/reads, which raced the
+    // unsynchronized cache. This is a NEW leaf-tier mutex below every other
+    // geode lock (it touches no other lock). The non-recursive mutex means
+    // public methods that call each other do so via private `*Unlocked` helpers
+    // while holding the lock — never re-entrantly.
+    //
+    // Zig 0.16 retired `std.Thread.Mutex`; we use the Io-integrated
+    // `std.Io.Mutex` + `std.Io.Threaded.global_single_threaded.io()` pattern
+    // used everywhere else in geode (graph_store.zig, schema_provider.zig). The
+    // `lockHere()`/`unlockHere()` helpers below keep the call sites readable.
+    store_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -142,12 +156,24 @@ pub const Store = struct {
         return hashKeyStatic(k);
     }
 
+    // B0 bug-1 helpers: acquire/release `store_mutex` via the global
+    // single-threaded io (the geode-wide std.Io.Mutex idiom).
+    fn lockHere(self: *Store) void {
+        self.store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+    fn unlockHere(self: *Store) void {
+        self.store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
     pub fn insertMany(self: *Store, key: SeriesKey, pts: []const Point) !void {
         if (pts.len == 0) return;
+        self.lockHere();
+        defer self.unlockHere();
+
         const sid = self.hashKey(key);
 
         // Update cache if it exists, or create it
-        const series = try self.getOrCreateSeries(key);
+        const series = try self.getOrCreateSeriesUnlocked(key);
         try series.points.appendSlice(self.allocator, pts);
 
         // Sort the cache array to maintain invariants
@@ -165,6 +191,12 @@ pub const Store = struct {
     }
 
     pub fn last(self: *Store, key: SeriesKey) ?Point {
+        self.lockHere();
+        defer self.unlockHere();
+        return self.lastUnlocked(key);
+    }
+
+    fn lastUnlocked(self: *Store, key: SeriesKey) ?Point {
         if (self.engine) |eng| {
             const sid = self.hashKey(key);
             var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -188,6 +220,12 @@ pub const Store = struct {
     }
 
     pub fn valueBefore(self: *Store, key: SeriesKey, ts: i64) ?Point {
+        self.lockHere();
+        defer self.unlockHere();
+        return self.valueBeforeUnlocked(key, ts);
+    }
+
+    fn valueBeforeUnlocked(self: *Store, key: SeriesKey, ts: i64) ?Point {
         if (self.engine) |eng| {
             const sid = self.hashKey(key);
             var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -215,7 +253,20 @@ pub const Store = struct {
         }
     }
 
+    /// Query the points in `[start_ts, end_ts]` — INCLUSIVE of both bounds in
+    /// BOTH the durable engine path AND the in-memory cache path (B0 bug-2 fix).
+    /// The durable engine (`eng.queryPoints`) is end-inclusive by lib contract;
+    /// the in-memory branch was historically end-EXCLUSIVE (`p.ts < end_ts`),
+    /// so the same query dropped a boundary point in cache mode but kept it in
+    /// durable mode. Both branches now use `p.ts <= end_ts` so the two modes
+    /// return identical slices.
     pub fn queryRange(self: *Store, key: SeriesKey, start_ts: i64, end_ts: i64, allocator: std.mem.Allocator) ![]Point {
+        self.lockHere();
+        defer self.unlockHere();
+        return self.queryRangeUnlocked(key, start_ts, end_ts, allocator);
+    }
+
+    fn queryRangeUnlocked(self: *Store, key: SeriesKey, start_ts: i64, end_ts: i64, allocator: std.mem.Allocator) ![]Point {
         var points: std.ArrayList(Point) = .empty;
         errdefer points.deinit(allocator);
 
@@ -229,7 +280,7 @@ pub const Store = struct {
         } else {
             if (self.series_cache.get(self.hashKey(key))) |s| {
                 for (s.points.items) |p| {
-                    if (p.ts >= start_ts and p.ts < end_ts) {
+                    if (p.ts >= start_ts and p.ts <= end_ts) {
                         try points.append(allocator, p);
                     }
                 }
@@ -239,14 +290,25 @@ pub const Store = struct {
     }
 
     pub fn getSeries(self: *Store, key: SeriesKey) ?*Series {
+        self.lockHere();
+        defer self.unlockHere();
         if (self.series_cache.get(self.hashKey(key))) |s| return s;
         if (self.engine != null) {
-            return self.getOrCreateSeries(key) catch null;
+            return self.getOrCreateSeriesUnlocked(key) catch null;
         }
         return null;
     }
 
-    fn getOrCreateSeries(self: *Store, key: SeriesKey) !*Series {
+    /// Public, lock-acquiring wrapper. Internal callers that already hold
+    /// `store_mutex` MUST use `getOrCreateSeriesUnlocked` instead to avoid a
+    /// re-entrant deadlock on the non-recursive mutex.
+    pub fn getOrCreateSeries(self: *Store, key: SeriesKey) !*Series {
+        self.lockHere();
+        defer self.unlockHere();
+        return self.getOrCreateSeriesUnlocked(key);
+    }
+
+    fn getOrCreateSeriesUnlocked(self: *Store, key: SeriesKey) !*Series {
         const hk = self.hashKey(key);
         if (self.series_cache.get(hk)) |s| return s;
 
@@ -280,7 +342,10 @@ pub const Store = struct {
         end_ts: i64,
         allocator: std.mem.Allocator,
     ) ![]ts_lib.store.BucketAvgRow {
-        const points = try self.queryRange(key, start_ts, end_ts, allocator);
+        self.lockHere();
+        defer self.unlockHere();
+
+        const points = try self.queryRangeUnlocked(key, start_ts, end_ts, allocator);
         defer allocator.free(points);
 
         var results: std.ArrayList(ts_lib.store.BucketAvgRow) = .empty;
@@ -323,7 +388,10 @@ pub const Store = struct {
         agg: ts_lib.store.Aggregation,
         allocator: std.mem.Allocator,
     ) ![]ts_lib.store.SampleRow {
-        const points = try self.queryRange(key, start_ts, end_ts, allocator);
+        self.lockHere();
+        defer self.unlockHere();
+
+        const points = try self.queryRangeUnlocked(key, start_ts, end_ts, allocator);
         defer allocator.free(points);
 
         var results: std.ArrayList(ts_lib.store.SampleRow) = .empty;
