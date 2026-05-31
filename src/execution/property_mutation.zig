@@ -4,6 +4,10 @@ const index_manager = @import("../index/index_manager.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const fle_hooks = @import("fle_hooks.zig");
+// A4b: fulltext write-maintenance hook (delete-then-index on SET).
+const fts_index_ops = @import("fts_index_ops.zig");
+
+const log = std.log.scoped(.property_mutation);
 
 // CANARY: REQ=REQ-ADV-TYPE-MIGRATION-001; FEATURE="AdvancedPropertyMigration"; ASPECT=ExecutionMutation; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
 const json_lib = @import("json");
@@ -289,6 +293,18 @@ pub fn setNodePropertyFromValue(
 
     try store.setNodeProperty(node_id, key, prop_value);
     if (labels.len > 0) rebuildAdvancedIndexesForProperty(store, labels[0], key);
+
+    // A4b: keep fulltext indexes current. This is the single property-write
+    // chokepoint for ALL node SET paths (CREATE…SET, MATCH…SET, MERGE ON
+    // CREATE/MATCH, replaceNodeProperties), so hooking here covers them all with
+    // one call. Cheap-exits when no FTS index covers `labels`. Graph is resolved
+    // from the node id inside the helper (no graph in scope here). Runs on the
+    // executor/connection thread — the same thread that owns the fts engine
+    // (verified: setNodePropertyFromValue is never called from bulkMergeNode or
+    // any worker thread). `.update` = delete-then-index (append-only engine).
+    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .update) catch |err| {
+        log.warn("fts maintain (SET) failed for node {d} prop '{s}': {}", .{ node_id, key, err });
+    };
 }
 
 pub fn setEdgePropertyFromValue(

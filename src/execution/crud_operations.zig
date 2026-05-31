@@ -4,6 +4,8 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
+// A4b: fulltext write-maintenance hook (delete postings on node DELETE).
+const fts_index_ops = @import("fts_index_ops.zig");
 const value_types = @import("../value_types.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
@@ -1134,6 +1136,24 @@ fn executeBatchCreateHomogeneous(
     if (template_props.len > 0 and labels.len > 0) {
         for (template_props) |prop| {
             property_mutation.rebuildAdvancedIndexesForPropertyPublic(store, labels[0], prop.key);
+        }
+    }
+
+    // A4b: keep fulltext indexes current for the homogeneous batch-CREATE fast
+    // path. This path writes via `setNodePropertiesBatch` (NOT
+    // `setNodePropertyFromValue`), so the SET chokepoint hook does NOT fire here
+    // — index each just-created node explicitly. Runs on the executor/connection
+    // thread (this function is the serial fast path, never a worker), so it
+    // respects the fts engine's owning-thread contract. Cheap-exits per node
+    // when no FTS index covers `labels`.
+    if (template_props.len > 0 and labels.len > 0) {
+        for (slot_ids) |node_id| {
+            fts_index_ops.maintainFulltextOnWrite(allocator, target_graph, node_id, labels, .create) catch |err| {
+                log.warn("fts maintain (batch CREATE) failed", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
         }
     }
 
@@ -2715,6 +2735,21 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
             // Delete the collected nodes
             for (nodes_to_delete.items) |node_id| {
+                // A4b: drop the node's fulltext postings BEFORE the store delete,
+                // while its labels are still readable (covering-index lookup is
+                // keyed by label). Runs on the executor/connection thread
+                // (executeDelete is never invoked from bulkMergeNode / worker
+                // threads — verified). Cheap-exits when no FTS index covers the
+                // labels. Graph passed explicitly from current_graph.
+                if (read_store.nodes.getPtr(node_id)) |node_ptr| {
+                    fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
+                        log.warn("fts maintain (DELETE) failed", &.{
+                            Attr.uint("node_id", node_id),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+
                 if (d.detach) {
                     // P8: Use adjacency indexes instead of full edge scan.
                     // Collect edge IDs first since deleteEdgeNoSave mutates the

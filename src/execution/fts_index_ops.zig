@@ -74,6 +74,15 @@ pub fn createFulltextIndex(
 
     try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa);
 
+    // A4b: record (label → this index) so the node write-maintenance hook can
+    // find covering indexes on CREATE/SET/DELETE. Done AFTER backfill so the
+    // initial one-shot index of pre-existing nodes is not double-counted by a
+    // concurrent write hook (writes on this graph run on the same connection
+    // thread, so there is no real race, but the ordering keeps the invariant
+    // clear). Uses the adapter allocator so the registry's owned strings share
+    // the ManagedGraph lifetime, mirroring `dropFulltextFacade`.
+    try mg.addFtsLabelIndex(adapter.allocator, label, index_name, properties);
+
     // Durability + segment formation. The same-process search path sees memtable
     // writes without this, but a flush hardens the WAL into a segment.
     fa.flush(index_name) catch |err| {
@@ -178,10 +187,138 @@ pub fn dropFulltextIndex(
     // Free the cached facade first (it borrows the engine we are about to drop).
     mg.dropFulltextFacade(adapter.allocator, index_name);
 
+    // A4b: drop the label→index registry entries for this index so the write
+    // hook stops maintaining it. Scans all label lists by name (drop is keyed by
+    // index name only — no label parameter is available here).
+    mg.removeFtsLabelIndex(adapter.allocator, index_name);
+
     fa.dropIndex(index_name) catch |err| switch (err) {
         adapter_mod.Error.IndexNotFound => {
             if (!if_exists) return err;
         },
         else => return err,
     };
+}
+
+/// A4b: the kind of node write that triggered maintenance.
+pub const FtsWriteOp = enum { create, update, delete };
+
+/// A4b: keep fulltext indexes current after a single-node write. CHEAP-EXITS
+/// when no fulltext index covers any of `labels` (the dominant case → near-zero
+/// overhead for non-FTS graphs).
+///
+/// THREAD-SAFETY (A4b §6): MUST be called on the executor/connection thread —
+/// the SAME thread that ran `CREATE INDEX` and therefore owns the fts engine.
+/// The fts engine enforces a single-writer owning-thread contract; callers on
+/// worker threads (e.g. the bulk MERGE fast path `bulkMergeNode`) MUST NOT call
+/// this — they reindex post-bulk on the connection thread instead.
+///
+/// Behavior per covering index (de-duplicated by index name across labels):
+///   * `.delete` / `.update`: `deleteNode(name, node_id)` to drop stale postings
+///     (the engine is append-only — re-indexing without deleting duplicates).
+///   * `.create` / re-index tail of `.update`: read each `spec.properties` from
+///     the store (`.String` only), tokenize with the property name as the field
+///     tag, concatenate into ONE document, and `indexNode(name, node_id, doc)`.
+///
+/// Errors: a missing index (`IndexNotFound`) on the delete leg is tolerated
+/// (logged at debug). Other engine errors are SURFACED so a failing index on a
+/// committed user write is visible rather than silently dropped.
+pub fn maintainFulltextOnWrite(
+    scratch: std.mem.Allocator,
+    graph_name: ?[]const u8,
+    node_id: u64,
+    labels: []const []const u8,
+    op: FtsWriteOp,
+) !void {
+    // Fast cheap-exit: no adapter at all (FTS subsystem absent) → nothing to do.
+    const adapter = graph_store.getGlobalAdapter() orelse return;
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+    // Resolve the owning graph. CREATE/DELETE pass `target_graph` directly; the
+    // SET chokepoint has no graph in scope, so it passes null and we read the
+    // node's `graph_name` tag from the store by id (the node still exists at
+    // create/update time). Fall back to the default graph if the node is gone.
+    // A missing graph is a clean no-op — never fail a user write for missing FTS.
+    const gname = graph_name orelse blk: {
+        const np = store.getNodePtr(node_id) orelse break :blk graph_store.DEFAULT_GRAPH_NAME;
+        break :blk np.graph_name;
+    };
+
+    const mg = adapter.lookupManagedGraph(gname) catch return;
+    const fa = mg.fts_adapter orelse return; // no FTS on this graph → free exit
+
+    // De-dup index names across labels so a node carrying two labels both
+    // covered by the same index is maintained exactly once (otherwise `.create`
+    // would double-append the same document into the append-only engine).
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(scratch);
+
+    for (labels) |label| {
+        const specs = mg.coveringFtsIndexes(label) orelse continue;
+        for (specs) |spec| {
+            const gop = try seen.getOrPut(scratch, spec.name);
+            if (gop.found_existing) continue;
+
+            // Drop stale postings for update/delete. Tolerate a missing engine
+            // (IndexNotFound) — e.g. a first-ever SET on a never-indexed node.
+            if (op == .delete or op == .update) {
+                fa.deleteNode(spec.name, node_id) catch |err| switch (err) {
+                    adapter_mod.Error.IndexNotFound => {},
+                    else => return err,
+                };
+            }
+
+            if (op == .create or op == .update) {
+                try indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties);
+            }
+        }
+    }
+}
+
+/// A4b: rebuild ONE fulltext document for `node_id` from `properties` and index
+/// it under `index_name`. Mirrors `backfillExistingNodes`' tokenize + move/free
+/// ownership contract EXACTLY (see §1.3 of the change-map): postings from
+/// `tokenize` are MOVED into the accumulator, the tokenize slice header is freed,
+/// and each accumulated element's `term`/`positions` are freed in the defer — we
+/// MUST NOT call `freeTermPostings` on the accumulator (double-free vs deinit).
+fn indexNodeDocument(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    fa: *adapter_mod.FtsStorageAdapter,
+    index_name: []const u8,
+    node_id: u64,
+    properties: []const []u8,
+) !void {
+    var doc_terms: std.ArrayListUnmanaged(tokenizer.TermPosting) = .empty;
+    defer {
+        for (doc_terms.items) |p| {
+            allocator.free(p.term);
+            allocator.free(p.positions);
+        }
+        doc_terms.deinit(allocator);
+    }
+
+    for (properties) |prop| {
+        const pv = store.getNodeProperty(node_id, prop) orelse continue;
+        const text = switch (pv) {
+            .String => |s| s,
+            else => continue, // only string is indexable for FTS
+        };
+        if (text.len == 0) continue;
+
+        const postings = tokenizer.tokenize(allocator, text, prop) catch |err| {
+            log.warn("fulltext maintain tokenize failed (node {d}, prop '{s}'): {}", .{ node_id, prop, err });
+            continue;
+        };
+        if (postings.len == 0) continue;
+        doc_terms.appendSlice(allocator, postings) catch |err| {
+            tokenizer.freeTermPostings(allocator, postings);
+            return err;
+        };
+        allocator.free(postings); // header only — elements now owned by doc_terms
+    }
+
+    if (doc_terms.items.len == 0) return; // nothing indexable on this node
+
+    try fa.indexNode(index_name, node_id, doc_terms.items);
 }

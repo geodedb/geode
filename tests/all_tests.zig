@@ -151,6 +151,7 @@ const _test_fts_tokenizer = @import("test_fts_tokenizer.zig");
 // Registered here (same pattern as the sibling FTS unit tests above) so it runs
 // under `zig build test` via the all_tests aggregate.
 const _test_fts_e2e = @import("test_fts_e2e.zig");
+const _test_fts_maintenance = @import("test_fts_maintenance.zig");
 const _test_leiden_community = @import("test_leiden_community.zig");
 const _test_wcoj = @import("test_wcoj.zig");
 

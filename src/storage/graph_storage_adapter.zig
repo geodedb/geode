@@ -672,6 +672,21 @@ pub const ManagedGraph = struct {
     /// facade is NOT stored here — it is freed separately above so a graph that
     /// only ever uses the default index keeps the original teardown path.
     fts_facades: std.StringHashMapUnmanaged(*fulltext.FullTextIndex) = .{},
+    /// A4b: label → fulltext indexes that cover it. Populated on
+    /// `CREATE INDEX … USING fulltext`, cleared on `DROP INDEX`. The node
+    /// write-maintenance hook (`fts_index_ops.maintainFulltextOnWrite`) does an
+    /// O(1) lookup here per label and CHEAP-EXITS when no entry exists (the 99%
+    /// common case → near-zero overhead for non-FTS graphs). All keys, spec
+    /// names, and property entries are OWNED (dupe'd with the adapter allocator)
+    /// and freed in `deinit`. Guarded by `fts_label_index_mutex` (brief holds
+    /// only — never held across engine I/O).
+    fts_label_index: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(FtsIndexSpec)) = .{},
+    /// Brief-hold mutex serializing `fts_label_index` mutation/lookup. Held only
+    /// for the map probe + slice copy, NEVER while the fts engine performs I/O.
+    /// Uses `std.Io.Mutex` (the convention in this file — `std.Thread.Mutex` is
+    /// not available in the geode root module's std) locked via the global
+    /// single-threaded io handle.
+    fts_label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
@@ -821,6 +836,121 @@ pub const ManagedGraph = struct {
         }
     }
 
+    /// A4b: a single fulltext index covering some label, as recorded in
+    /// `fts_label_index`. `name` is the index name; `properties` is the ordered
+    /// list of string-valued properties the index tokenizes into one document.
+    /// Both `name` and every `properties` entry are OWNED (dupe'd with the
+    /// adapter allocator) and freed in `removeFtsLabelIndex` / `deinit`.
+    pub const FtsIndexSpec = struct {
+        name: []u8, // owned
+        properties: [][]u8, // owned (slice + each element)
+    };
+
+    /// A4b: record that fulltext index `name` (over `properties`) covers `label`.
+    /// Dupes `label`, `name`, and each property with `allocator` so the registry
+    /// owns its strings independent of the caller's buffers. Idempotent on
+    /// (label, name): a duplicate spec for the same label+name is not appended.
+    /// Brief mutex hold only (no engine I/O).
+    pub fn addFtsLabelIndex(
+        self: *ManagedGraph,
+        allocator: Allocator,
+        label: []const u8,
+        name: []const u8,
+        properties: []const []const u8,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.fts_label_index_mutex.lockUncancelable(io);
+        defer self.fts_label_index_mutex.unlock(io);
+
+        const gop = try self.fts_label_index.getOrPut(allocator, label);
+        if (!gop.found_existing) {
+            // Own the key; init an empty spec list.
+            gop.key_ptr.* = try allocator.dupe(u8, label);
+            gop.value_ptr.* = .empty;
+        } else {
+            // De-dup: skip if this label already lists an index of this name.
+            for (gop.value_ptr.items) |existing| {
+                if (std.mem.eql(u8, existing.name, name)) return;
+            }
+        }
+
+        // Build the owned spec.
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+
+        const owned_props = try allocator.alloc([]u8, properties.len);
+        var filled: usize = 0;
+        errdefer {
+            for (owned_props[0..filled]) |p| allocator.free(p);
+            allocator.free(owned_props);
+        }
+        for (properties, 0..) |p, i| {
+            owned_props[i] = try allocator.dupe(u8, p);
+            filled = i + 1;
+        }
+
+        try gop.value_ptr.append(allocator, .{ .name = owned_name, .properties = owned_props });
+    }
+
+    /// A4b: free a single owned spec (name + each property + the props slice).
+    fn freeFtsIndexSpec(allocator: Allocator, spec: FtsIndexSpec) void {
+        allocator.free(spec.name);
+        for (spec.properties) |p| allocator.free(p);
+        allocator.free(spec.properties);
+    }
+
+    /// A4b: drop every spec named `name` from all label lists, freeing the owned
+    /// strings. Label entries whose list becomes empty are removed (key freed).
+    /// Brief mutex hold only.
+    pub fn removeFtsLabelIndex(self: *ManagedGraph, allocator: Allocator, name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.fts_label_index_mutex.lockUncancelable(io);
+        defer self.fts_label_index_mutex.unlock(io);
+
+        var to_remove: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer to_remove.deinit(allocator);
+
+        var it = self.fts_label_index.iterator();
+        while (it.next()) |entry| {
+            const list = entry.value_ptr;
+            var i: usize = 0;
+            while (i < list.items.len) {
+                if (std.mem.eql(u8, list.items[i].name, name)) {
+                    const spec = list.orderedRemove(i);
+                    freeFtsIndexSpec(allocator, spec);
+                } else {
+                    i += 1;
+                }
+            }
+            if (list.items.len == 0) {
+                // Defer key removal until after iteration to avoid mutating the
+                // map while iterating it.
+                to_remove.append(allocator, entry.key_ptr.*) catch {};
+            }
+        }
+
+        for (to_remove.items) |label_key| {
+            if (self.fts_label_index.fetchRemove(label_key)) |kv| {
+                var list = kv.value; // mutable copy — deinit needs *ArrayListUnmanaged
+                list.deinit(allocator); // empty list — frees backing array only
+                allocator.free(kv.key);
+            }
+        }
+    }
+
+    /// A4b: covering fulltext indexes for `label`, or null if none. The returned
+    /// slice borrows the registry's storage and is valid only while no concurrent
+    /// add/remove mutates the list. The maintenance hook runs on the executor
+    /// (connection) thread and copies the specs it needs before any engine I/O.
+    pub fn coveringFtsIndexes(self: *ManagedGraph, label: []const u8) ?[]const FtsIndexSpec {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.fts_label_index_mutex.lockUncancelable(io);
+        defer self.fts_label_index_mutex.unlock(io);
+        const list = self.fts_label_index.getPtr(label) orelse return null;
+        if (list.items.len == 0) return null;
+        return list.items;
+    }
+
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
         // Teardown order matters: facade → adapter (flushes + closes each engine
         // and its child dir) → base_dir (the adapter never closes base_dir) →
@@ -841,6 +971,21 @@ pub const ManagedGraph = struct {
                 allocator.destroy(entry.value_ptr.*);
             }
             self.fts_facades.deinit(allocator);
+        }
+        // A4b: free the label→index registry: each label key, every spec's name
+        // + property strings + props slice, and each per-label ArrayList, then
+        // the map itself. Done before `fts_adapter` teardown for symmetry with
+        // the facade teardown above (the registry holds no engine pointers).
+        {
+            var lit = self.fts_label_index.iterator();
+            while (lit.next()) |entry| {
+                for (entry.value_ptr.items) |spec| {
+                    freeFtsIndexSpec(allocator, spec);
+                }
+                entry.value_ptr.deinit(allocator);
+                allocator.free(entry.key_ptr.*);
+            }
+            self.fts_label_index.deinit(allocator);
         }
         if (self.fts_adapter) |fa| {
             fa.deinit();
