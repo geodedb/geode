@@ -177,7 +177,16 @@ pub const FtsStorageAdapter = struct {
         var child = try self.base_dir.createDirPathOpen(self.io, name, .{});
         errdefer child.close(self.io);
 
-        const engine = try fts.Engine.init(self.io, self.allocator, child);
+        // single_writer_thread_check = false: geode's QUIC server drives the engine
+        // from a worker-thread pool, so init and a later flush/deinit/index/delete
+        // can run on different threads. Concurrency is still enforced by the
+        // adapter's per-engine write_mu plus the engine's rw_lock (writers
+        // exclusive / readers shared); only the thread-identity debug assert is
+        // disabled. Without this, DROP INDEX / teardown on a different worker thread
+        // tripped assertOwnedByCurrentThread and crashed the server (fts-storage 0.1.1).
+        const engine = try fts.Engine.initWithConfig(self.io, self.allocator, child, .{
+            .single_writer_thread_check = false,
+        });
         errdefer engine.deinit();
 
         const name_copy = try self.allocator.dupe(u8, name);

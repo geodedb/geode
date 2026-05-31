@@ -399,8 +399,14 @@
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/fts-storage.git#3f080a1b19f764fbb699e2f4c8c0be68d844b090",
-            .hash = "fts_storage-0.1.0-daM0d322CgC0H_BPPgMtB6G3f9wERBWW_sB7AJwP26WH",
+            // v0.1.1 adds EngineConfig.single_writer_thread_check (default true);
+            // geode sets it false in fts_storage_adapter so the engine can be
+            // driven from the QUIC server's worker-thread pool (geode serializes
+            // via the adapter write_mu + the engine rw_lock). Commit on branch
+            // feat/optional-single-writer-thread-check — user must push for CI;
+            // local builds resolve from the zig cache via the hash below.
+            .url = "git+https://gitlab.com/devnw/zig/fts-storage.git#908c1f54d8597b60ac84e6f44ad8748a2b72f95f",
+            .hash = "fts_storage-0.1.1-daM0d4TNCgBuDB3Lbb1fn-5yy15Na-l8dADLQpMB6Zos",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
