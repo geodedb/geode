@@ -42,6 +42,27 @@ All 7 development phases from the TODO list have been successfully implemented:
 - **JSONB & XML**: Semi-structured data with indexing
 - **Arrays & Ranges**: Multi-dimensional and interval operations
 
+### **Time-Series** (timeseries-storage-backed)
+
+Native Geode GQL extension (ISO GQL `CALL`-procedure form, the analog of
+`CALL geode.fts.search`) backed by the external `timeseries-storage` LSM
+library. A series is identified by a `(device_id, metric)` pair. `ts` and
+`value` are **integers (`i64`) only** this release — float/decimal values are
+rejected.
+
+- **`CALL geode.ts.insert(device_id, metric, ts, value)`** — ingest one point (mutating)
+- **`CALL geode.ts.insert_many(device_id, metric, [[ts, value], …])`** — batch ingest (mutating)
+- **`CALL geode.ts.range(device_id, metric, start_ts, end_ts)`** — rows of `(ts, value)`, inclusive `[start_ts, end_ts]` (read-only)
+- **`CALL geode.ts.last` / `bucket_avg` / `sample_by`** — newest point / fixed-width averages / interval downsampling (read-only)
+- **Durable** (points survive restart); rides the generic GQL rows wire path over QUIC (no client/proto change)
+
+```gql
+CALL geode.ts.insert(1, 'cpu.load', 1000, 72);
+CALL geode.ts.range(1, 'cpu.load', 0, 2000);   -- rows of (ts, value)
+```
+
+See [TIMESERIES.md](TIMESERIES.md) for the full reference.
+
 ## 🔐 Enterprise Security
 
 ### **Authentication & Authorization**

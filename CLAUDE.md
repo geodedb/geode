@@ -121,6 +121,21 @@ Full-text search uses the external **`fts-storage`** LSM library as the **primar
 
 See [docs/FULLTEXT_SEARCH.md](docs/FULLTEXT_SEARCH.md) for the full reference.
 
+### ⏱️ Time-Series (timeseries-storage-backed)
+
+Time-series uses the external **`timeseries-storage`** LSM library as its backing store (geode wraps it in `src/timeseries/timeseries.zig`, pinned in `build.zig.zon`). It was already the store layer; what's NEW is the native GQL surface to write + query it over the wire — surfaced exactly the way FTS is (`CALL geode.ts.*`, the analog of `CALL geode.fts.search`). Dispatch lives in `src/execution/ts_dispatch.zig`.
+
+- **GQL surface** (native Geode extension, ISO/IEC 39075 `CALL`-procedure form — NOT Cypher; `YIELD` is optional, a bare `CALL` auto-projects its columns as rows):
+  - WRITE (**mutating** — a read-only user cannot ingest): `CALL geode.ts.insert(device_id, metric, ts, value)` → YIELD `inserted` (count); `CALL geode.ts.insert_many(device_id, metric, [[ts, value], ...])` → YIELD `inserted`.
+  - READ (**read-only** — queryable by a read-only user): `CALL geode.ts.range(device_id, metric, start_ts, end_ts)` → YIELD `ts, value` (one row per point, inclusive of both bounds); `CALL geode.ts.last(device_id, metric)` → YIELD `ts, value`; `CALL geode.ts.bucket_avg(device_id, metric, start_ts, end_ts, bucket_seconds)` → YIELD `bucket_ts, avg`; `CALL geode.ts.sample_by(device_id, metric, interval_ms, start_ts, end_ts, agg)` → YIELD `bucket_ts, value` (agg ∈ avg/sum/min/max/count/first/last).
+  - A series is identified by the `(device_id, metric)` pair (`device_id` an integer, `metric` a string).
+- **Value type: integer (`i64`) only in this release.** `ts` and `value` are integers; a float/decimal value (e.g. `100.0`) is **rejected** with a clear error. Document `100`, not `100.0`. A float value lane is a deferred follow-up.
+- **Wire protocol**: values ride the generic GQL rows wire protocol — **no client or proto change** (same posture as `CALL geode.fts.search`).
+- **Concurrency / durability**: the timeseries Store is mutex-guarded for concurrent ingest from the QUIC worker pool (a new leaf-tier lock, see the lock-ordering table below); points persist (durable engine) and survive restart; `range` is inclusive `[start_ts, end_ts]` in both the in-memory and durable paths.
+- **Verification**: unit tests (`tests/ts_ingest_roundtrip.zig` — ingest/read/restart/exactness/multi-series/bounds/concurrency/rejection), a native VarianceEnvelope benchmark + a CI-aware latency gate (added in a parallel commit), and a geode-test-harness spec (`timeseries_basic.yml`, forthcoming).
+
+See [docs/TIMESERIES.md](docs/TIMESERIES.md) for the full reference.
+
 ## 🧮 Key Data Types
 
 ### **Vector Types** (Fully Implemented)
@@ -373,6 +388,7 @@ When acquiring multiple mutexes, always acquire in this order (lower tier first)
 | 6 | `audit_mutex` | `procedure_registry.zig` | Audit logger |
 | 6 | `tde_mutex` | `procedure_registry.zig` | TDE engine |
 | 6 | `cdc_mutex` | `procedure_registry.zig` | CDC engine |
+| 7 | `store_mutex` (timeseries) | `timeseries/timeseries.zig` | Timeseries Store (`std.Io.Mutex`) — guards concurrent ingest/read from the QUIC worker pool. Leaf lock: touches no other geode lock and is NEVER held while acquiring another lock. |
 
 Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local atomics (`std.atomic.Value`) don't require ordering.
 
