@@ -92,9 +92,9 @@ const Harness = struct {
         r.deinit(self.allocator);
     }
 
-    /// Number of fulltext_search hits for `term` in `index`.
+    /// Number of geode.fts.search hits for `term` in `index`.
     fn searchCount(self: *Harness, index: []const u8, term: []const u8) !usize {
-        const gql = try std.fmt.allocPrint(self.allocator, "CALL fulltext_search('{s}', '{s}')", .{ index, term });
+        const gql = try std.fmt.allocPrint(self.allocator, "CALL geode.fts.search('{s}', '{s}')", .{ index, term });
         defer self.allocator.free(gql);
         var r = try self.exec(gql);
         defer r.deinit(self.allocator);
@@ -104,7 +104,7 @@ const Harness = struct {
     /// The single node id returned for `term` in `index`. Asserts exactly one
     /// hit; returns its node_id (column 0, an Int) as i64.
     fn searchSingleId(self: *Harness, index: []const u8, term: []const u8) !i64 {
-        const gql = try std.fmt.allocPrint(self.allocator, "CALL fulltext_search('{s}', '{s}')", .{ index, term });
+        const gql = try std.fmt.allocPrint(self.allocator, "CALL geode.fts.search('{s}', '{s}')", .{ index, term });
         defer self.allocator.free(gql);
         var r = try self.exec(gql);
         defer r.deinit(self.allocator);
@@ -164,7 +164,7 @@ test "fts coverage: rare-term doc outranks common-term docs (cross-doc BM25/IDF)
     // Two-term OR query: the rare term lifts the special doc to rank #1, ahead
     // of every alpha-only doc, because "zebra" has far higher IDF than "alpha".
     {
-        var r = try h.exec("CALL fulltext_search('idx', 'zebra alpha')");
+        var r = try h.exec("CALL geode.fts.search('idx', 'zebra alpha')");
         defer r.deinit(allocator);
 
         // All 9 docs match (every doc has "alpha"); the special doc also has

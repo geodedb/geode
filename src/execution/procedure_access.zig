@@ -72,6 +72,8 @@ const read_only_procedure_names = [_][]const u8{
     // CANARY: REQ=REQ-RLS-DDL-001; FEATURE="RLS deny-policy procedure"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-05-22
     "geode.rls.list_deny_policies",
     "geode.rls.policy_count",
+    // CANARY: REQ=REQ-GQL-FTS-PROC-001; FEATURE="CALL geode.fts.search YIELD node,score"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=tests/test_fts_e2e.zig; OWNER=index; UPDATED=2026-05-31
+    "geode.fts.search",
     "cdc.status",
     "cdc.export_diagnostics",
     "cdc.get_events",

@@ -57,9 +57,9 @@ const Harness = struct {
         r.deinit(self.allocator);
     }
 
-    /// Number of fulltext_search hits for `term` in `index`.
+    /// Number of geode.fts.search hits for `term` in `index`.
     fn searchCount(self: *Harness, index: []const u8, term: []const u8) !usize {
-        const gql = try std.fmt.allocPrint(self.allocator, "CALL fulltext_search('{s}', '{s}')", .{ index, term });
+        const gql = try std.fmt.allocPrint(self.allocator, "CALL geode.fts.search('{s}', '{s}')", .{ index, term });
         defer self.allocator.free(gql);
         var r = try self.exec(gql);
         defer r.deinit(self.allocator);

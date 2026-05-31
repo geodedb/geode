@@ -37,6 +37,7 @@ const storage_dispatch = @import("storage_dispatch.zig");
 const auth_dispatch = @import("auth_dispatch.zig");
 const meta_dispatch = @import("meta_dispatch.zig");
 const rls_dispatch = @import("rls_dispatch.zig");
+const fts_dispatch = @import("fts_dispatch.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
@@ -189,6 +190,14 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // ---- geode.storage.* procedures (storage inspection) ----
     if (std.mem.startsWith(u8, proc_name, "geode.storage.")) {
         if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt)) |result| {
+            return result;
+        }
+    }
+
+    // ---- geode.fts.* procedures (full-text search) ----
+    // CANARY: REQ=REQ-GQL-FTS-PROC-001; FEATURE="CALL geode.fts.search YIELD node,score"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_fts_e2e.zig; OWNER=index; UPDATED=2026-05-31
+    if (std.mem.startsWith(u8, proc_name, "geode.fts.")) {
+        if (try fts_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }
     }
