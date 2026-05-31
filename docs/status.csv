@@ -2350,6 +2350,7 @@ REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2025-09-29,src/index/fu
 REQ-GQL-FTS-001,BM25 Scoring,SEARCH,TESTED,,,search,2025-09-26,src/fts/bm25.zig
 REQ-GQL-FTS-001,BM25 skeleton,SEARCH,TESTED,,,search,2025-09-26,tests/unit_bm25_skeleton.zig
 REQ-GQL-FTS-002,Document Indexing,FTS,TESTED,,,index,2025-09-29,src/index/fulltext.zig
+REQ-GQL-FTS-002,FTS Tokenizer,Tokenize,TESTED,,,index,2026-05-30,src/index/fts_tokenizer.zig
 REQ-GQL-FTS-003,FTS,IndexOptimizer,TESTED,,,search,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-FTS-003,FTS IndexOptimizer Integration,TESTING,TESTED,,,search,2025-10-04,tests/test_fts_indexoptimizer_integration.zig
 REQ-GQL-FTS-003,FTS Statistics,Performance,TESTED,,,fts,2025-10-04,src/server/index_statistics.zig
