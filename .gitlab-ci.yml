@@ -1175,32 +1175,17 @@ test-harness-integration:
       # NOTE: an earlier revision bounded the QUIC worker pools here on the
       # theory that geode's ~800 startup threads thrash the CI runner and
       # cause the gql_catalog_operations_comprehensive.yml timeouts. That was
-      # DISPROVEN on real CI: pipeline #1181 still failed catalog 30/7 with
-      # the bounded pools (~108 threads), identical to the default (~800),
-      # while the reduced connection/admission pools REGRESSED
-      # connection_pool_max_connections.yml and distributed_2pc_undo.yml. So
-      # the worker bounding is removed (defaults restored) — the catalog
-      # timeout is a separate CI-only issue captured by the diagnostic below.
-
-      echo "=== DIAGNOSTIC: catalog spec in isolation, verbose (server logs to trace) ==="
-      # The 7 catalog timeouts reproduce ONLY on CI (37/37 clean locally,
-      # verbose AND non-verbose, default AND bounded workers). Run the spec
-      # alone with -v so the server's own stdout/stderr lands in this job
-      # trace — the last lines before a hang localize the stall. Two useful
-      # outcomes: (a) it fails here too -> the trace shows the server's last
-      # action before the stall; (b) it passes alone but fails in the full
-      # suite -> the failure is suite-context/accumulation dependent. Wrapped
-      # so it can NEVER gate the pipeline (the authoritative gate is the full
-      # `make test` below); a 10-min cap bounds the cost.
-      mkdir -p "${CI_PROJECT_DIR}/harness-reports"
-      ( set +e
-        source /opt/venv/bin/activate
-        cd ../geode-test-harness
-        timeout 600 geodetestlab run \
-          --spec geodetestlab-cli/specs/gql_catalog_operations_comprehensive.yml -v \
-          --output "${CI_PROJECT_DIR}/harness-reports/catalog-isolated.json" 2>&1 | tail -160
-        echo "DIAGNOSTIC catalog-isolated exit: ${PIPESTATUS[0]:-?}"
-      ) || true
+      # DISPROVEN on real CI (#1181: catalog 30/7 at both ~108 and ~800
+      # threads) and the reduced pools REGRESSED
+      # connection_pool_max_connections.yml + distributed_2pc_undo.yml. The
+      # real cause was a subprocess pipe-deadlock in the harness: server.py
+      # captured the server's stdout/stderr to an undrained subprocess.PIPE,
+      # so at --log-level info (only the catalog spec) the server overflowed
+      # the 64KB pipe and blocked in writev() on stderr while holding the
+      # global stderr lock — deadlocking any geode thread that logged while
+      # holding a data lock. Fixed in geode-test-harness@9f27afa (server
+      # output -> temp file; a file never backpressures). The geode CI clones
+      # the harness from main, so this job picks the fix up automatically.
 
       echo "=== Running Full Test Harness Suite ==="
       source /opt/venv/bin/activate
