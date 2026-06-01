@@ -1126,12 +1126,28 @@ test-harness-integration:
         tar -C /usr/local -xzf /tmp/go.tgz
       fi
       export PATH="/usr/local/go/bin:${PATH}"
+      # Symlink into /usr/local/bin (always on PATH) so the spec's `go build`
+      # step finds go even if PATH export doesn't reach the test subprocess.
+      ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
       export GOTOOLCHAIN=local
       # frame_probe (database/sql + quic-go) is pure Go; disable cgo so no
       # C toolchain is required and the build is reproducible.
       export CGO_ENABLED=0
+      # Pin Go's module + build caches to explicit, exported paths so the
+      # prewarm below and the spec's own `go build` SHARE one warm cache.
+      # Without this the spec build was COLD (default GOCACHE not shared with
+      # before_script) — a cold compile of quic-go+grpc takes ~25s on a fast
+      # box and well over the spec's 30s build-test timeout on a 1-2 vCPU
+      # runner, so 2pc_frame_limit.yml failed 0/3. A warm relink is ~1-2s.
+      # The geodetestlab runner does env=os.environ.copy(), so the spec build
+      # inherits these exact GOCACHE/GOMODCACHE/GOPATH values.
+      export GOPATH="${CI_PROJECT_DIR}/.gocache/gopath"
+      export GOMODCACHE="${CI_PROJECT_DIR}/.gocache/gomod"
+      export GOCACHE="${CI_PROJECT_DIR}/.gocache/build"
+      mkdir -p "$GOPATH" "$GOMODCACHE" "$GOCACHE"
       go version
-      echo "=== Pre-warming frame_probe module cache ==="
+      echo "=== Pre-warming frame_probe build+module cache (warms GOCACHE) ==="
       ( cd ../geode-test-harness/runners/frame_probe \
         && go build -o /tmp/frame_probe_geode_prewarm . \
         && echo "frame_probe prewarm OK" ) \
@@ -1156,31 +1172,35 @@ test-harness-integration:
       echo "Geode binary: ${GEODE_BINARY}"
       "${GEODE_BINARY}" --version || true
 
-      echo "=== Bounding QUIC worker pools for the CPU-constrained CI runner ==="
-      # geode sizes its QUIC worker pools to FIXED per-pool defaults
-      # (stream/acceptor/connection = 64 each, plus first-stream/admission
-      # pools), NOT to the available CPU. On a dev box that's ~800 startup
-      # threads — wasteful but harmless. On GitLab-SaaS shared runners
-      # (~1-2 usable vCPUs behind a cgroup quota) those ~800 threads thrash
-      # the scheduler, starving QUIC handshakes and the single-threaded
-      # global IO executor that catalog DDL save()/lock ops use. The result
-      # was ~30s timeouts on later catalog statements in
-      # gql_catalog_operations_comprehensive.yml (7 specs) — reproduced
-      # locally by pinning the run to 2 cores (taskset -c 0,1), and FIXED
-      # by the bounded counts below (802 → ~150 threads; 5/5 clean under the
-      # same pinning vs reliable failure with the defaults). The harness
-      # runs serially (PARALLEL_WORKERS=1), and the most concurrent spec
-      # (connection_pool_exhaustion.yml) opens 16 streams, so 16 workers per
-      # pool is ample. The server inherits these via os.environ (the
-      # geodetestlab runner does env = os.environ.copy()).
-      export GEODE_QUIC_STREAM_WORKERS=16
-      export GEODE_QUIC_ACCEPTOR_WORKERS=8
-      export GEODE_QUIC_CONNECTION_WORKERS=16
-      export GEODE_QUIC_POLL_WORKERS=2
-      export GEODE_QUIC_CONNECTION_ADMISSION_THREADS=16
-      export GEODE_QUIC_DETACHED_FIRST_STREAM_THREADS=16
-      export GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS=8
-      export GEODE_QUIC_MAX_GLOBAL_STREAM_THREADS=32
+      # NOTE: an earlier revision bounded the QUIC worker pools here on the
+      # theory that geode's ~800 startup threads thrash the CI runner and
+      # cause the gql_catalog_operations_comprehensive.yml timeouts. That was
+      # DISPROVEN on real CI: pipeline #1181 still failed catalog 30/7 with
+      # the bounded pools (~108 threads), identical to the default (~800),
+      # while the reduced connection/admission pools REGRESSED
+      # connection_pool_max_connections.yml and distributed_2pc_undo.yml. So
+      # the worker bounding is removed (defaults restored) — the catalog
+      # timeout is a separate CI-only issue captured by the diagnostic below.
+
+      echo "=== DIAGNOSTIC: catalog spec in isolation, verbose (server logs to trace) ==="
+      # The 7 catalog timeouts reproduce ONLY on CI (37/37 clean locally,
+      # verbose AND non-verbose, default AND bounded workers). Run the spec
+      # alone with -v so the server's own stdout/stderr lands in this job
+      # trace — the last lines before a hang localize the stall. Two useful
+      # outcomes: (a) it fails here too -> the trace shows the server's last
+      # action before the stall; (b) it passes alone but fails in the full
+      # suite -> the failure is suite-context/accumulation dependent. Wrapped
+      # so it can NEVER gate the pipeline (the authoritative gate is the full
+      # `make test` below); a 10-min cap bounds the cost.
+      mkdir -p "${CI_PROJECT_DIR}/harness-reports"
+      ( set +e
+        source /opt/venv/bin/activate
+        cd ../geode-test-harness
+        timeout 600 geodetestlab run \
+          --spec geodetestlab-cli/specs/gql_catalog_operations_comprehensive.yml -v \
+          --output "${CI_PROJECT_DIR}/harness-reports/catalog-isolated.json" 2>&1 | tail -160
+        echo "DIAGNOSTIC catalog-isolated exit: ${PIPESTATUS[0]:-?}"
+      ) || true
 
       echo "=== Running Full Test Harness Suite ==="
       source /opt/venv/bin/activate
