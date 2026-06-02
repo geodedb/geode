@@ -10,6 +10,20 @@
 
 ---
 
+## ⚠️ UPDATE 2026-06-02 — Real root cause found and fixed (supersedes the RC1/RC2 framing below)
+
+Task 1's reproduction (built + committed) became the empirical gate and **refuted the original "missing trust anchor" hypothesis**. With an instrumented in-process secure handshake on `127.0.0.2` (real openssl CA cert), an exhaustive 2×2 matrix (SEC1/PKCS#8 keys × self-signed/CA-trust) showed **every secure handshake fails identically at the TLS 1.3 `CertificateVerify` check with `error.InvalidSignature`** — the signing key is provably correct (derived pubkey == leaf SPKI) and x509 chain validation passes.
+
+**Pinned root cause:** a client-side TLS 1.3 **transcript fold-order bug** in the shared `devnw/zig/tls` library (`tls13/context.zig` `processCrypto`). The inbound loop folded every message into the transcript before dispatch **except `.finished`**; `.certificate_verify` was *not* excluded, so the verifier finalized `H(…‖Certificate‖CertificateVerify)` while the server correctly signs `H(…‖Certificate)` (RFC 8446 §4.4.3). Instrumented per-message transcript hashes are byte-identical through `Certificate`; the only divergence is the CV fold order. `GEODE_CLUSTER_INSECURE=1` masked it by skipping the CV check entirely — so verified TLS server-auth had **never** worked in this stack (and insecure is refused in release builds, so release clusters could never form). This is also the production cross-pod failure.
+
+**Fix (applied, validated):** in `processCrypto`, also exclude `.certificate_verify` from the pre-dispatch fold and fold it **after** `handleHandshakeMessage` verifies it — mirroring the existing `.finished` handling and the server's own `emitServerFlight` fold-Cert→sign-CV→fold-CV order. One change fixes both client server-auth and the symmetric mTLS client-auth path (shared loop). Validation: `zig build test-gap0838-cluster-tls` → 3/3 pass (both secure positive cases now succeed); tls lib unit tests pass; `test-cluster-coord-config` 5/5 and `test-cluster-forward-to-shard` 3/3 pass.
+
+**Landing (the durable step — requires re-pin):** geode pins tls transitively via `quic v0.1.22`. Real fix path: commit+push the tls fix → bump quic's tls pin (new quic commit) → bump geode `build.zig.zon` quic pin → re-vendor `zig-pkg/`. This is the outward-facing step gated on explicit approval.
+
+**Tasks below:** Task 1 (test) = DONE/committed. The TLS transcript fix = DONE/validated (pending re-pin). Tasks 2–3 (trust-anchor fallback + fail-fast UX) remain valuable **secondary hardening** — they let a `--cert`-only cluster form without a separate `GEODE_CLUSTER_CA_CERT` and turn the silent peer-wedge into an actionable startup warning — but are no longer the primary fix. Task 5 (docs) updated to record the transcript root cause.
+
+---
+
 ## Background — verified root cause (file:line evidence)
 
 - `src/distributed/raft_consensus.zig:874-903` `connectWithTLS`: priority is `GEODE_CLUSTER_INSECURE` → `GEODE_CLUSTER_CA_CERT` → **`qc.connect()`** (default). The default `connect()` (`src/transport/quic.zig:1560-1622`) calls `connectInsecure(allow_insecure=false)` whose config literal **never sets `inline_ca_chain_der`** (lines 1601-1609) → empty trust store → `tls` `validateChainReturnParsed` fails → `HandshakeError`.
