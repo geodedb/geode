@@ -1,12 +1,12 @@
 # Gap Analysis
 
 Last updated: 2026-05-30
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)** + **Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542)** + **2026-05-15 audit Phase 4 (GAP-0833 through GAP-0837)** + **DiveLife QA 3-node cluster deployment audit (2026-05-30, GAP-0838)**
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)** + **Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542)** + **2026-05-15 audit Phase 4 (GAP-0833 through GAP-0837)** + **DiveLife QA 3-node cluster deployment audit (2026-05-30, GAP-0838)** + **GAP-0838 cross-pod re-test on geode 0.6.12 (2026-06-02): STILL FAILS — unresolved, see `docs/superpowers/plans/2026-06-02-gap0838-0.6.12-cross-pod-retest.md`**
 
 ## Summary
 
 - **Total open gaps:** 9
-- **Critical:** 2 (GAP-0256 blocked, **GAP-0838** — cross-pod cluster TLS handshake fails)
+- **Critical:** 2 (GAP-0256 blocked, **GAP-0838** — cross-pod cluster TLS handshake fails; re-confirmed unresolved on geode 0.6.12, 2026-06-02)
 - **High:** 2 (GAP-0526, GAP-0527)
 - **Medium:** 2 (GAP-0528, GAP-0514 residual, **GAP-0542 won't do** — extraction follow-up)
 - **Low:** 2 (GAP-0529, GAP-0509 residual)
@@ -40,17 +40,19 @@ The same image's cluster code is validated by the geode-test-harness, but
 This is the first time the cluster transport has been exercised between
 distinct IPs, and it does not work.
 
-### GAP-0838: Raft cluster QUIC peer handshake fails between non-loopback nodes
+### GAP-0838: Raft cluster QUIC peer handshake fails between non-loopback nodes (0.6.7 AND 0.6.12)
 
 - **GitLab issue:** N/A in this session (glab unavailable in env — see GAP-0526). File against the distributed/cluster component when tooling is restored.
 - **Category:** Distributed / Cluster / Transport
 - **Severity:** Critical
+- **Status:** OPEN — re-confirmed on `geodedb/geode:0.6.12` (2026-06-02); **not fixed** between 0.6.7 and 0.6.12. Full re-test report: `docs/superpowers/plans/2026-06-02-gap0838-0.6.12-cross-pod-retest.md`.
 - **Requirement source:** Multi-node HA deployment (3-node Raft cluster) for DiveLife QA; `docs/superpowers/plans/2026-05-27-cluster-final-status.md` ("All 302 specs … deterministically pass under `--force-cluster-size 3`"), which presents cluster mode as production-ready.
 - **Current state (evidence):**
   - 3 pods `geode-0/1/2` on image `geodedb/geode:0.6.7`, each with `GEODE_CLUSTER_TOKEN`, `GEODE_NODE_ID` (= StatefulSet ordinal + 1), `GEODE_CLUSTER_PORT=4242`, `--cluster-port 4242`, and an identical `GEODE_PEERS` list of the three pod-DNS names on :4242. Startup logs confirm: `Cluster coordinator started node_id=1 cluster_port=4242` and both QUIC listeners (3141 client, 4242 raft) report `status=listening tls=true`.
   - Every node loops `[raft] node N state=candidate term=0 iter=…` indefinitely (term never advances past 0; no leader elected).
   - Each peer dial logs `WARN geode.raft raft transport getOrCreatePeerConnection failed error=HandshakeError peer=<id>`, repeating ~1×/sec (fast rejection, **not** a `waitForHandshake` timeout — points to TLS handshake refusal, not a dropped-packet/connectivity timeout).
   - Reproduced on the published release image; the cluster code path is identical to the harness's (release-mode `ReleaseSafe` binary, `GEODE_CLUSTER_INSECURE` unset → refused in non-Debug per `src/distributed/cluster_auth.zig:79`).
+  - **RE-TESTED on `geodedb/geode:0.6.12` (2026-06-02) — STILL FAILS, identical behaviour.** An isolated throwaway 3-node StatefulSet (`geode-ct`, own cert-manager leaf from the `geode-ca` `Issuer` with per-pod SANs, fresh per-pod PVCs, raft env identical to the production attempt) was stood up alongside the production single node (production untouched) and torn down after. Both TLS paths fail: (a) default/unverified, and (b) CA-verified with `GEODE_CLUSTER_CA_CERT=/certs/ca.crt` (the leaf secret's `ca.crt` was present). Result both ways: `getOrCreatePeerConnection failed error=HandshakeError` (18× in 300 log lines) on every node, all nodes stuck `state=candidate`/`follower` at `term=0`, **no leader ever elected**. Note: 0.6.12 `geode serve --help` exposes only `--cert`/`--key` (no cluster-CA/peer-trust flag); the CA path is reachable only via `GEODE_CLUSTER_CA_CERT` and still fails. So the peer handshake was NOT addressed between 0.6.7 and 0.6.12. Full report + reproduction: `docs/superpowers/plans/2026-06-02-gap0838-0.6.12-cross-pod-retest.md`.
 - **What was ruled out (so this is not a deployment misconfig):**
   - **Cert SANs:** leaf cert carries SANs for `geode.divelife-qa.svc.cluster.local` and each pod DNS `geode-0/1/2.geode.divelife-qa.svc.cluster.local`; verified mounted in-pod.
   - **CA trust:** tested both TLS modes. (a) **Unverified path** — `GEODE_CLUSTER_CA_CERT` unset → `connectWithTLS` (`src/distributed/raft_consensus.zig:863-880`) falls to `qc.connect()` → `connectInsecure(host,port,false)` (`src/transport/quic.zig:1460,1464`); this is the *exact* path the harness uses and still fails cross-pod. (b) **Verified path** — `GEODE_CLUSTER_CA_CERT=/certs/ca.crt` → `connectEx(host,port,ca,null,null)` (`quic.zig:1524`, `cluster.zig:1952`/`2269`). Initially failed because the cert was a self-signed *leaf* (`basicConstraints CA:FALSE`); after rebuilding TLS as a real CA chain (`isCA:true` CA → CA-issuer → leaf, so `ca.crt` is `CA:TRUE` and `openssl verify -CAfile ca.crt tls.crt` = OK, leaf issued by `CN=geode-ca`), the strict `connectEx` path **still** failed `HandshakeError`. SNI uses the peer hostname (in-SAN); chain is valid. So neither the unverified nor the correctly-CA-verified path completes the handshake between distinct IPs.
