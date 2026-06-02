@@ -59,6 +59,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     restart: on-failure
     deploy:
       resources:

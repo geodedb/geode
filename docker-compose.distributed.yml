@@ -45,6 +45,11 @@ services:
     networks:
       geode-cluster-net:
         ipv4_address: 172.29.0.10
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     deploy:
       resources:
         limits:
@@ -95,6 +100,11 @@ services:
     networks:
       geode-cluster-net:
         ipv4_address: 172.29.0.11
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     deploy:
       resources:
         limits:
@@ -145,6 +155,11 @@ services:
     networks:
       geode-cluster-net:
         ipv4_address: 172.29.0.12
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     deploy:
       resources:
         limits:

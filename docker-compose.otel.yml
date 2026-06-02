@@ -82,6 +82,11 @@ services:
       - "9091:9091/tcp"   # Prometheus /metrics
     volumes:
       - geode-data:/data
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
 
 volumes:
   otel-output:

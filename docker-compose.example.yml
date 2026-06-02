@@ -21,6 +21,11 @@ services:
       - GEODE_CERT_PATH=/certs
       # Extended type system is enabled by default
       # All indexes (Patricia, R-tree, HNSW) are automatically available
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     healthcheck:
       test: ["CMD", "/usr/local/bin/geode query", "--host", "127.0.0.1", "--port", "3141", "RETURN 1"]
       interval: 10s

@@ -12,6 +12,11 @@ services:
     - GEODE_LOG_LEVEL=debug
     entrypoint: [/usr/local/bin/geode, serve]
     command: [--listen, 0.0.0.0:7567, --data-dir, /data, --log-level, debug]
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     healthcheck:
       test: [CMD, geode, query, RETURN 1 AS health, --server, 127.0.0.1:7567]
       interval: 30s

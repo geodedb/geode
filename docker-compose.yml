@@ -221,6 +221,13 @@ services:
       - "/certs/server.crt"
       - "--key"
       - "/certs/server.key"
+    # Release builds spawn ~800 threads; set explicit limits to avoid
+    # SystemResources (EAGAIN from pthread_create) on restrictive daemon configs.
+    ulimits:
+      nproc:
+        soft: 4096
+        hard: 4096
+    pids_limit: 4096
     # Security: Use specific capabilities instead of privileged mode.
     # NET_ADMIN is needed for QUIC UDP buffer sysctl tuning.
     # SYS_NICE is needed for real-time thread scheduling.
