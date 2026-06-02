@@ -32,7 +32,10 @@ SystemCallErrorNumber=EPERM
 
 # Resource limits
 LimitNOFILE=65536
-LimitNPROC=512
+# Release builds spawn ~800 threads (cooperative first-stream scheduler default = 512).
+# 512 caused EAGAIN → SystemResources; 4096 provides headroom for production.
+LimitNPROC=4096
+TasksMax=4096
 
 # Environment
 Environment="GEODE_DATA_DIR=/var/lib/geode/%i"
