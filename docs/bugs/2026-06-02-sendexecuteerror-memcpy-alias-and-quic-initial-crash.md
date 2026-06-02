@@ -1,6 +1,99 @@
 # Bug: server crash under client connection load — `@memcpy` alias panic in `sendExecuteError` and SIGSEGV in `processInitialDatagramConcurrent`
 
-**Status:** **OPEN** — reported 2026-06-02 from a live deployment. Two
+**Status:** **RESOLVED 2026-06-02** — root-caused to a single **use-after-free
+in geode's own connection-teardown path** (NOT the protobuf/quic dependencies,
+which are innocent victims of the resulting heap corruption). Fixed in
+`src/server/quic_connection_handler.zig` + `src/server/leaked_conn_reaper.zig`.
+See **§0 Resolution** below.
+
+---
+
+## 0. Resolution (2026-06-02)
+
+**Both crash signatures are the same bug: a use-after-free of the heap
+`FirstStreamOwnerContext` (and its embedded `conn_state: SharedConnState`) on
+the stream-acceptor *bail* path.** The protobuf `@memcpy`-alias panic (Crash A)
+and the `recovery.onPacketSent` SIGSEGV (Crash B) are **downstream symptoms** of
+the heap corruption that UAF causes — they fire later, on an unrelated
+allocation that the allocator recycled the freed block into.
+
+**Proof the deps are NOT at fault:**
+
+- *Crash A (protobuf):* `writeSubmessage` serializes each submessage into a
+  *separate* `Allocating` scratch writer and then `writer.writeAll(w.written())`
+  — source and destination are distinct live heap allocations, so it provably
+  cannot self-alias single-threaded. A faithful standalone reproduction (real
+  nested `ServerPacket → quic → execute → {status, error}` shape,
+  `std.heap.c_allocator`, ReleaseSafe, 100k+ iterations across every malloc
+  size class) **passes**. There is no in-place length backpatch /
+  `@memcpy`/`@memmove` anywhere in `protobuf.zig`.
+- *Crash B (quic recovery):* geode drives the QUIC endpoint from a **single**
+  poll-loop thread (`runPollLoopTask`; multi-threaded poll "requires upstream
+  QUIC-library changes"), so `processInitialDatagramConcurrent` never runs on
+  two threads at once. The SIGSEGV in `sent_index.put` happens while
+  `recovery.mutex` is held on a connection nothing else is touching — i.e. its
+  memory was already corrupted by an unrelated UAF.
+
+**The actual root cause** — `cleanupFirstStreamOwner`
+(`quic_connection_handler.zig`):
+
+1. `shutdownAcceptorOwner` signals the stream-acceptor thread to exit and waits
+   up to 30 s. Under a connection-burst + close-churn the acceptor can wedge
+   (blocked in `tryAcceptStream` / `Endpoint.mu` contention — the same "wedge"
+   the report's §3 describes). At the 30 s deadline it logged *"acceptor wait
+   deadline exceeded; leaking conn to avoid UAF"*, set `destroy_conn = false`,
+   registered the conn with the leaked-conn reaper, and **returned while the
+   acceptor thread was still running**.
+2. `cleanupFirstStreamOwner` then **unconditionally** ran `ctx.conn_state.deinit()`
+   and `gpa.destroy(ctx)` — freeing `FirstStreamOwnerContext` and its embedded
+   `conn_state`. The `destroy_conn=false` guard only spared the `QuicConnection`
+   wrapper; it did **not** spare `conn_state`/`first_ctx`.
+3. `streamAcceptorLoop` captured `conn_state = ctx.conn_state` (a pointer to
+   `&first_ctx.conn_state`) and keeps dereferencing it every loop iteration
+   (`active_streams` atomics, `streams_mu`/`streams_cv`, `registerActiveStream`).
+   After `first_ctx` was freed → **use-after-free**: the acceptor's stale
+   atomic/mutex writes scribble over whatever the allocator recycled the block
+   into → later surfaces as the protobuf `@memcpy`-alias panic or the
+   poll-thread `recovery.onPacketSent` SIGSEGV.
+
+The developers had already flagged this path as a "UAF risk" (the comment at
+`streamAcceptorLoop` literally says it can *"crash the server"*) but only
+mitigated the conn-wrapper free, never the `conn_state` the acceptor actually
+uses.
+
+**The fix:**
+
+- On the bail path, **do not free `first_ctx`/`conn_state` on the owner thread.**
+  Transfer the whole teardown (`destroyFirstStreamOwnerResources`:
+  `conn_state` deinit + `destroyConnection` + freeing the owner context) to the
+  leaked-conn reaper, which runs it via a new **deferred-cleanup** hook only
+  **after** the acceptor has exited (`acceptor_ctx.done`). If no reaper is
+  available the resources are intentionally leaked (reclaimed at the QUIC idle
+  timeout) — a leak is strictly safer than the UAF.
+- **Secondary reaper bug fixed:** `LeakedConnRegistry.reapOnce` called
+  `entries.toOwnedSlice(gpa)` after the reap loop, which empties the registry
+  every pass — silently dropping every not-yet-done survivor (never reaped; the
+  conn and its ctx ref both leaked) and leaking the backing buffer. Removed.
+
+**Verification:** the corruption is allocator-reuse + timing dependent and was
+not reproducible on the single-core localhost box (a faithful ReleaseSafe +
+`tc netem` 10% loss + connection-burst + error-query reproduction reproduced the
+**wedge** precursor — `proto_reader` stall ≫ 30 s — but not the fatal
+corruption). The fix is verified by: a new reaper regression test
+(`LeakedConnRegistry defers owner teardown until acceptor is done`) that pins
+the exact lifetime invariant whose violation was the UAF; a clean full build;
+and code inspection (the normal close path is byte-for-byte unchanged — only the
+rare bail path now defers instead of freeing-under-a-live-acceptor).
+
+**Dependencies:** no dependency changes were required — the fix is entirely in
+geode. (The report's hypothesis that the bug lived in `protobuf`/`quic` was
+incorrect; both were disproven above.)
+
+---
+
+## Original report
+
+**Status (as reported):** **OPEN** — reported 2026-06-02 from a live deployment. Two
 distinct crash signatures, both fatal to the whole server process, observed
 on the same node within minutes of each other under ordinary client load.
 

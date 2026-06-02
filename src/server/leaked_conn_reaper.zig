@@ -56,10 +56,27 @@ pub const CtxHandle = struct {
     release: *const fn (ctx: *anyopaque) void,
 };
 
+/// Owner-supplied teardown that the reaper runs AFTER the acceptor has
+/// exited (`is_done == true`).  Used by the first-stream owner's bail path
+/// (2026-06-02 UAF fix): the owner cannot free its heap
+/// `FirstStreamOwnerContext` while the still-running acceptor keeps
+/// dereferencing the embedded `conn_state`, so it hands the whole teardown
+/// (conn_state.deinit + `transport.destroyConnection(conn)` + freeing the
+/// owner context) to the reaper.  When `deferred` is set the reaper invokes
+/// `run(self)` INSTEAD of its own `transport.destroyConnection(conn)` — the
+/// deferred routine is responsible for destroying the conn itself.
+pub const DeferredCleanup = struct {
+    self: *anyopaque,
+    run: *const fn (self: *anyopaque) void,
+};
+
 pub const Entry = struct {
     transport: *quic_transport.QuicTransport,
     conn: *quic_transport.QuicConnection,
     ctx: CtxHandle,
+    /// Optional owner-deferred teardown.  When non-null it OWNS the conn
+    /// destruction; the reaper does not call `destroyConnection` directly.
+    deferred: ?DeferredCleanup = null,
     /// Monotonic timestamp (ns) at which the entry was registered;
     /// surfaced as `quic_leaked_connection_age_ns_max` for operator
     /// alerting on slow reapers.
@@ -106,6 +123,7 @@ pub const LeakedConnRegistry = struct {
         transport: *quic_transport.QuicTransport,
         conn: *quic_transport.QuicConnection,
         ctx: CtxHandle,
+        deferred: ?DeferredCleanup,
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mu.lockUncancelable(io);
@@ -114,6 +132,7 @@ pub const LeakedConnRegistry = struct {
             .transport = transport,
             .conn = conn,
             .ctx = ctx,
+            .deferred = deferred,
             .registered_ns = monoNs(),
         });
         _ = self.registered_total.fetchAdd(1, .monotonic);
@@ -128,6 +147,13 @@ pub const LeakedConnRegistry = struct {
         defer self.mu.unlock(io);
 
         // Walk in reverse so swapRemove is safe across the iteration.
+        //
+        // NOTE: do NOT call `entries.toOwnedSlice()` after this loop — that
+        // empties the list and hands the backing buffer (still holding every
+        // not-yet-done survivor) to the caller, which previously discarded it.
+        // The result was that survivors were silently dropped from the registry
+        // (never reaped, ctx ref + conn leaked) AND the buffer leaked every
+        // pass.  `swapRemove` already maintains the list correctly.
         var i: usize = self.entries.items.len;
         var reaped: usize = 0;
         while (i > 0) {
@@ -135,13 +161,19 @@ pub const LeakedConnRegistry = struct {
             const entry = self.entries.items[i];
             if (entry.ctx.is_done(entry.ctx.self)) {
                 // Acceptor has stopped dereferencing conn; safe to free.
-                entry.transport.destroyConnection(entry.conn);
+                if (entry.deferred) |d| {
+                    // Owner-deferred teardown OWNS the conn destruction (it frees
+                    // conn_state + the FirstStreamOwnerContext + destroys conn).
+                    d.run(d.self);
+                } else {
+                    entry.transport.destroyConnection(entry.conn);
+                }
                 entry.ctx.release(entry.ctx.self);
                 _ = self.entries.swapRemove(i);
                 reaped += 1;
             }
         }
-        _ = self.entries.toOwnedSlice(gpa) catch {}; // ensure capacity matches
+        _ = gpa; // retained for signature/ABI stability; list maintained by swapRemove
         if (reaped > 0) {
             _ = self.reaped_total.fetchAdd(reaped, .monotonic);
             log.debug("reaped leaked connections", &.{Attr.int("count", @intCast(reaped))});
@@ -243,7 +275,7 @@ test "LeakedConnRegistry reap skips entries whose acceptor still runs" {
     // transport pointer is dereferenced.
     const dummy_transport: *quic_transport.QuicTransport = undefined;
     const dummy_conn: *quic_transport.QuicConnection = undefined;
-    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx.handle());
+    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx.handle(), null);
 
     try testing.expectEqual(@as(usize, 1), reg.pendingCount());
     try testing.expectEqual(@as(usize, 0), reg.reapOnce(testing.allocator));
@@ -265,8 +297,56 @@ test "LeakedConnRegistry counters monotonic across multiple registers" {
     const dummy_transport: *quic_transport.QuicTransport = undefined;
     const dummy_conn: *quic_transport.QuicConnection = undefined;
 
-    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx1.handle());
-    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx2.handle());
+    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx1.handle(), null);
+    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx2.handle(), null);
     try testing.expectEqual(@as(u64, 2), reg.registeredTotal());
     try testing.expectEqual(@as(usize, 2), reg.pendingCount());
+}
+
+// Regression for the 2026-06-02 use-after-free: on the first-stream owner's
+// acceptor-bail path the owner must NOT free its FirstStreamOwnerContext
+// (which embeds the conn_state the still-running acceptor keeps dereferencing)
+// — it hands the teardown to the reaper, which must run it ONLY after the
+// acceptor has exited (is_done == true). This test pins that gating: the
+// deferred cleanup runs exactly once, and never while is_done == false.
+const DeferredProbe = struct {
+    runs: u32 = 0,
+    fn run(ptr: *anyopaque) void {
+        const self: *DeferredProbe = @ptrCast(@alignCast(ptr));
+        self.runs += 1;
+    }
+};
+
+test "LeakedConnRegistry defers owner teardown until acceptor is done" {
+    var reg = LeakedConnRegistry.init();
+    defer reg.deinit(testing.allocator);
+
+    var ctx = TestCtx{ .done = false, .refs = 1 };
+    var probe = DeferredProbe{};
+    const dummy_transport: *quic_transport.QuicTransport = undefined;
+    const dummy_conn: *quic_transport.QuicConnection = undefined;
+
+    try reg.register(testing.allocator, dummy_transport, dummy_conn, ctx.handle(), .{
+        .self = @ptrCast(&probe),
+        .run = DeferredProbe.run,
+    });
+
+    // Acceptor still running (done == false): deferred teardown MUST NOT run,
+    // and the entry MUST remain. This is the exact invariant whose violation
+    // was the UAF (owner freeing conn_state while the acceptor used it).
+    try testing.expectEqual(@as(usize, 0), reg.reapOnce(testing.allocator));
+    try testing.expectEqual(@as(u32, 0), probe.runs);
+    try testing.expectEqual(@as(usize, 1), reg.pendingCount());
+
+    // Acceptor has now exited: the reaper runs the deferred teardown exactly
+    // once and drops the entry.
+    ctx.done = true;
+    try testing.expectEqual(@as(usize, 1), reg.reapOnce(testing.allocator));
+    try testing.expectEqual(@as(u32, 1), probe.runs);
+    try testing.expectEqual(@as(usize, 0), reg.pendingCount());
+    try testing.expectEqual(@as(i32, 0), ctx.refs); // reaper released its ref
+
+    // Idempotent: a second pass does nothing.
+    try testing.expectEqual(@as(usize, 0), reg.reapOnce(testing.allocator));
+    try testing.expectEqual(@as(u32, 1), probe.runs);
 }

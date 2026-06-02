@@ -2402,14 +2402,32 @@ fn runStreamQueryLoop(
     );
 }
 
+/// Signal the stream acceptor to exit and wait (bounded) for it to do so.
+///
+/// Returns `true` if it BAILED — i.e. the acceptor did not exit within the
+/// deadline and is therefore still dereferencing `first_ctx.conn_state` and
+/// `first_ctx.conn` from inside `streamAcceptorLoop`. On bail the caller MUST
+/// NOT free `first_ctx`: ownership of the conn_state + FirstStreamOwnerContext
+/// + conn teardown is transferred to the leaked-conn reaper, which runs
+/// `deferredDestroyFirstStreamOwner` only after the acceptor has exited
+/// (`acceptor_ctx.done`). If no reaper is available (or registration fails) the
+/// resources are intentionally LEAKED and reclaimed at the QUIC idle timeout —
+/// a leak is strictly safer than the use-after-free.
+///
+/// 2026-06-02 fix: the previous code set `destroy_conn=false` (sparing only the
+/// conn wrapper) and then let the owner UNCONDITIONALLY free `first_ctx` (and
+/// its embedded `conn_state`). The still-running acceptor's stale atomic/mutex
+/// writes through the freed `conn_state` corrupted whatever the allocator
+/// recycled the block into, surfacing later as the protobuf `@memcpy`-alias
+/// panic or the poll-thread `recovery.onPacketSent` SIGSEGV on an unrelated
+/// connection. See docs/bugs/2026-06-02-sendexecuteerror-memcpy-alias-and-quic-initial-crash.md.
 fn shutdownAcceptorOwner(
     gpa: std.mem.Allocator,
-    transport: *quic_transport.QuicTransport,
-    conn: *quic_transport.QuicConnection,
+    first_ctx: *FirstStreamOwnerContext,
     acceptor_ctx: *StreamAcceptorContext,
     acceptor_submitted: bool,
-    destroy_conn: *bool,
-) void {
+) bool {
+    var bailed = false;
     if (acceptor_submitted) {
         acceptor_ctx.shutdown.store(true, .release);
         const wait_warn_ms: i64 = 5_000;
@@ -2421,22 +2439,34 @@ fn shutdownAcceptorOwner(
             const now = compat_milliTimestamp();
             const elapsed = now - wait_start;
             if (elapsed > wait_deadline_ms) {
-                log.err("acceptor wait deadline exceeded; leaking conn to avoid UAF", &.{
-                    Attr.int("elapsed_ms", @intCast(elapsed)),
-                });
-                destroy_conn.* = false;
+                bailed = true;
+                var registered = false;
                 if (g_leaked_conn_registry) |reg| {
                     acceptor_ctx.addRef();
-                    reg.register(gpa, transport, conn, .{
+                    if (reg.register(gpa, first_ctx.transport, first_ctx.conn, .{
                         .self = @ptrCast(acceptor_ctx),
                         .is_done = acceptorCtxIsDone,
                         .release = acceptorCtxRelease,
-                    }) catch |reg_err| {
+                    }, .{
+                        .self = @ptrCast(first_ctx),
+                        .run = deferredDestroyFirstStreamOwner,
+                    })) |_| {
+                        registered = true;
+                    } else |reg_err| {
                         acceptor_ctx.release();
-                        log.warn("failed to register leaked conn for reaping; falling back to QUIC idle timeout", &.{
+                        log.warn("failed to register leaked conn for deferred reaping", &.{
                             Attr.string("error", @errorName(reg_err)),
                         });
-                    };
+                    }
+                }
+                if (registered) {
+                    log.err("acceptor wait deadline exceeded; deferring conn+conn_state teardown to reaper to avoid UAF", &.{
+                        Attr.int("elapsed_ms", @intCast(elapsed)),
+                    });
+                } else {
+                    log.err("acceptor wait deadline exceeded; leaking conn+ctx to avoid UAF (no reaper; reclaimed at QUIC idle timeout)", &.{
+                        Attr.int("elapsed_ms", @intCast(elapsed)),
+                    });
                 }
                 break;
             }
@@ -2449,6 +2479,7 @@ fn shutdownAcceptorOwner(
         }
     }
     acceptor_ctx.release();
+    return bailed;
 }
 
 const FirstStreamOwnerContext = struct {
@@ -2497,7 +2528,6 @@ fn registerFirstStreamReader(ctx: *FirstStreamOwnerContext) void {
 
 fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     const gpa = ctx.allocator;
-    var destroy_conn = true;
 
     if (posixGetenv("GEODE_QUIC_FIRST_STREAM_DIAGNOSTICS")) |enabled| {
         if (enabled.len == 0 or enabled[0] != '0') {
@@ -2552,11 +2582,33 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     ctx.stream.close();
 
     if (ctx.acceptor_ctx) |acceptor_ctx| {
-        shutdownAcceptorOwner(gpa, ctx.transport, ctx.conn, acceptor_ctx, ctx.acceptor_submitted, &destroy_conn);
+        const bailed = shutdownAcceptorOwner(gpa, ctx, acceptor_ctx, ctx.acceptor_submitted);
         ctx.acceptor_ctx = null;
         ctx.acceptor_submitted = false;
+        if (bailed) {
+            // The acceptor thread did not exit within the deadline and is
+            // still dereferencing `&ctx.conn_state` and `ctx.conn` every loop
+            // iteration. Ownership of the conn_state + this
+            // FirstStreamOwnerContext + the conn has been transferred to the
+            // reaper (or intentionally leaked when no reaper is available).
+            // Freeing any of it here is the 2026-06-02 use-after-free.
+            return;
+        }
     }
 
+    destroyFirstStreamOwnerResources(ctx);
+}
+
+/// Tear down a first-stream owner's per-connection resources and free the
+/// context, then destroy the underlying connection. Runs on the owner thread
+/// for a normal close, or — via `deferredDestroyFirstStreamOwner` — on the
+/// reaper thread for the acceptor-bail path, but ONLY after the acceptor has
+/// exited (`acceptor_ctx.done`), so nothing else still references
+/// `ctx.conn_state` / `ctx.conn`. `waitForAllStreamsDrained` then blocks until
+/// every additional-stream handler the acceptor spawned has also released
+/// `conn_state`, making the subsequent `deinit`/free safe.
+fn destroyFirstStreamOwnerResources(ctx: *FirstStreamOwnerContext) void {
+    const gpa = ctx.allocator;
     ctx.conn_state.unregisterActiveStream(ctx.stream.stream_id);
     ctx.conn_state.releaseActiveStream();
     ctx.conn_state.waitForAllStreamsDrained();
@@ -2566,9 +2618,16 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     ctx.federation_manager.deinit();
     releaseQuotaTenant(gpa, &ctx.quota_tenant_id);
     deinitQuicServerState(gpa, &ctx.state, "first stream close");
-    if (destroy_conn) ctx.transport.destroyConnection(ctx.conn);
+    ctx.transport.destroyConnection(ctx.conn);
     if (ctx.peer_ip_allocated) gpa.free(ctx.peer_ip);
     gpa.destroy(ctx);
+}
+
+/// Reaper callback: runs `destroyFirstStreamOwnerResources` once the acceptor
+/// has exited. Registered by `shutdownAcceptorOwner` on the bail path.
+fn deferredDestroyFirstStreamOwner(p: *anyopaque) void {
+    const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(p));
+    destroyFirstStreamOwnerResources(ctx);
 }
 
 fn cleanupFirstStreamOwnerAsync(ctx: *FirstStreamOwnerContext) void {
