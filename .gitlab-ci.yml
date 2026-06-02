@@ -1340,11 +1340,30 @@ snapshot:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Use vendored cache if present, otherwise zig build fetches from network
+    # Populate the Zig package cache from the vendored packages so the build
+    # does NOT fetch deps over the network. The 87 vendored packages (incl.
+    # the private devnw/zig/* deps like gql) live in zig-pkg/;
+    # docker/zig-packages/ is empty. Copying only docker/zig-packages/ left
+    # the cache empty, so `zig build` fell back to fetching
+    # git+https://gitlab.com/devnw/zig/gql.git and died with "unable to
+    # discover remote git server capabilities: ProtocolError" (v0.6.11
+    # build-release, pipeline #2568471642). Copy from zig-pkg/ too (the same
+    # set the *zig-vendor-cache anchor used by the test jobs pulls from).
     - |
       mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+      populated=0
+      if [ -d "zig-pkg" ] && ls zig-pkg/* >/dev/null 2>&1; then
+        cp -rn zig-pkg/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+        populated=1
+      fi
       if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
         cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+        populated=1
+      fi
+      if [ "$populated" = "1" ]; then
+        echo "✓ populated Zig cache from vendored packages"
+      else
+        echo "⚠ no vendored packages present — zig build will fetch from network"
       fi
   script:
     - |
@@ -1493,11 +1512,30 @@ build-release:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Use vendored cache if present, otherwise zig build fetches from network
+    # Populate the Zig package cache from the vendored packages so the build
+    # does NOT fetch deps over the network. The 87 vendored packages (incl.
+    # the private devnw/zig/* deps like gql) live in zig-pkg/;
+    # docker/zig-packages/ is empty. Copying only docker/zig-packages/ left
+    # the cache empty, so `zig build` fell back to fetching
+    # git+https://gitlab.com/devnw/zig/gql.git and died with "unable to
+    # discover remote git server capabilities: ProtocolError" (v0.6.11
+    # build-release, pipeline #2568471642). Copy from zig-pkg/ too (the same
+    # set the *zig-vendor-cache anchor used by the test jobs pulls from).
     - |
       mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+      populated=0
+      if [ -d "zig-pkg" ] && ls zig-pkg/* >/dev/null 2>&1; then
+        cp -rn zig-pkg/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+        populated=1
+      fi
       if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
         cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+        populated=1
+      fi
+      if [ "$populated" = "1" ]; then
+        echo "✓ populated Zig cache from vendored packages"
+      else
+        echo "⚠ no vendored packages present — zig build will fetch from network"
       fi
   script:
     - |
