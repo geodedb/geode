@@ -1210,6 +1210,21 @@ pub fn build(b: *std.Build) void {
     const cluster_3node_election_step = b.step("test-cluster-3node-election", "Run in-process 3-node leader election smoke test (A5)");
     cluster_3node_election_step.dependOn(&run_cluster_3node_election_tests.step);
 
+    // GAP-0838: non-loopback (distinct IP) secure-mode peer TLS handshake.
+    // Binds a QuicTransport server on 127.0.0.2 with a real openssl CA-issued
+    // leaf and drives a secure QuicClient handshake (NOT insecure). This is
+    // both the cross-pod reproduction and the permanent CI guard.
+    const gap0838_cluster_tls_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0838_cluster_tls_noloopback.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0838_cluster_tls_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    gap0838_cluster_tls_tests.root_module.link_libc = true;
+    const run_gap0838_cluster_tls_tests = b.addRunArtifact(gap0838_cluster_tls_tests);
+    const gap0838_cluster_tls_step = b.step("test-gap0838-cluster-tls", "Run GAP-0838 non-loopback secure peer TLS handshake test");
+    gap0838_cluster_tls_step.dependOn(&run_gap0838_cluster_tls_tests.step);
+
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator
@@ -2384,6 +2399,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_cluster_bootstrap_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_raft_command_refactor_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_raft_envelope_roundtrip_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_gap0838_cluster_tls_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);
