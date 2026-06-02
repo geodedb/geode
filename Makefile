@@ -1547,6 +1547,14 @@ docker-integration-smoke: docker-integration-build
 # External Mermaid Integration Tests
 # ====================================================================================
 
+# GAP-0838: non-loopback (distinct IP) secure-mode peer TLS handshake
+# regression test. Guards the TLS 1.3 CertificateVerify transcript fix so a
+# cross-pod cluster handshake cannot silently regress to loopback-only.
+.PHONY: test-gap0838
+test-gap0838:
+	@echo "Running GAP-0838 non-loopback secure peer TLS handshake test..."
+	zig build test-gap0838-cluster-tls
+
 # External mermaid integration test (uses @mermaid-js/mermaid-cli to
 # verify --format mermaid output is real, parseable Mermaid).
 .PHONY: test-mermaid-integration
