@@ -1,10 +1,36 @@
 # OTel export produced no geode telemetry — wrong env vars on the deployment
 
 **Date:** 2026-06-03
-**Status:** Root-caused. Fix is a deployment change (geode-argo-arda); geode-server
-DX recommendations below are optional follow-ups.
+**Status:** Root-caused. Primary fix is a deployment change (geode-argo-arda).
+**geode-side DX recommendations 1 & 2 are now RESOLVED (2026-06-03)** — see
+*Resolution (geode-side)* below; docs (3 & 4) were already present.
 **Scope:** geode server (qa/prod on the arda cluster) OTLP export. Affects metrics
 **and** traces. The OTel collector and geode-ui export were verified working.
+
+---
+
+## Resolution (geode-side DX)
+
+The silent failure mode is now visible at startup. `src/monitoring/otel_metrics.zig`
+`init()` emits an **unconditional** OTLP export-status line and a targeted warning
+when a legacy `GEODE_OTEL_*` var is set (which geode ignores):
+
+- **Disabled** (the bug state): `info: otel: OTLP/HTTP push DISABLED
+  (OTEL_METRICS_EXPORTER/OTEL_TRACES_EXPORTER != otlp); metrics available via
+  /metrics pull only. To enable: set OTEL_METRICS_EXPORTER=otlp … OTLP/HTTP on
+  port 4318, NOT gRPC 4317`.
+- **Legacy var set:** `warning: otel: env var GEODE_OTEL_ENDPOINT is set but geode
+  IGNORES it — geode reads only the standard OTEL_* SDK vars, not GEODE_OTEL_*. …`
+- **Enabled:** `info: otel: OTLP/HTTP push ENABLED (metrics=enabled traces=enabled)
+  endpoint=… protocol=http/protobuf; /metrics pull also available`.
+
+The decision logic is a pure, unit-tested classifier (`classifyExportStatus` /
+`OtelExportStatus`), regression-covered by `tests/test_otel_export_status.zig`
+(incl. the exact "GEODE_OTEL_* set, standard vars unset" misconfiguration). Recs
+3 (env contract) and 4 (HTTP-only transport) were already documented in
+`docs/OBSERVABILITY_ARCHITECTURE.md` §"Enabling OTLP export". The **deployment**
+fix (replace `GEODE_OTEL_*` with the standard `OTEL_*` vars on the geode
+StatefulSet) still must be applied in `geode-argo-arda`.
 
 ---
 

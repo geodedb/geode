@@ -164,6 +164,14 @@ pub fn init(allocator: std.mem.Allocator, opts: otel_resource.Options) !void {
     g_provider = provider;
     g_allocator = allocator;
 
+    // --- OTLP export-status summary (DX visibility) ----------------------
+    // Emit one unconditional, actionable line about whether OTLP/HTTP push is
+    // enabled, and warn if a legacy GEODE_OTEL_* var is set (which geode
+    // ignores). This makes the "silently exporting nothing" misconfiguration
+    // visible at startup instead of requiring an end-to-end trace to discover.
+    // See docs/bugs/2026-06-03-otel-export-not-enabled-wrong-env-vars.md.
+    logOtlpExportStatusFromEnv();
+
     // --- OTLP/HTTP push wiring (Task 21) ---------------------------------
     // Read the OTel env config. Errors are non-fatal: a misconfigured
     // endpoint should not prevent the server from starting. If wiring
@@ -326,6 +334,138 @@ pub fn shutdown() void {
 // -----------------------------------------------------------------------
 // OTLP/HTTP push wiring (Task 21)
 // -----------------------------------------------------------------------
+
+// --- OTLP export-status classification (DX visibility) ------------------
+// Bug 2026-06-03: a deployment set `GEODE_OTEL_ENDPOINT` / `GEODE_OTEL_INSECURE`
+// (which geode does NOT read) and left the standard `OTEL_{METRICS,TRACES}_EXPORTER`
+// unset, so geode exported nothing — silently. The classification below drives an
+// unconditional startup log so that "nothing is being exported" is visible, and a
+// warning when a legacy GEODE_OTEL_* var is the likely cause.
+// See docs/bugs/2026-06-03-otel-export-not-enabled-wrong-env-vars.md.
+
+/// Status of a single OTLP signal (metrics or traces) exporter, derived from
+/// the corresponding `OTEL_{METRICS,TRACES}_EXPORTER` env var.
+pub const OtlpSignalStatus = enum {
+    /// Env var unset — OTLP push not enabled for this signal (Prometheus pull
+    /// / stdout only).
+    unset,
+    /// Set to `otlp` / `otlp_http` — OTLP/HTTP push enabled for this signal.
+    enabled,
+    /// Set to `none` — explicitly disabled.
+    disabled_none,
+    /// Set to some other value (e.g. `prometheus`, `console`) — OTLP push NOT
+    /// enabled for this signal.
+    other,
+};
+
+/// Pure description of geode's OTLP export configuration, derived from the
+/// environment without side effects. Produced by `classifyExportStatus` so the
+/// decision logic is unit-testable without touching the process environment.
+pub const OtelExportStatus = struct {
+    metrics: OtlpSignalStatus,
+    traces: OtlpSignalStatus,
+    /// A legacy, geode-specific `GEODE_OTEL_*` env var is present. geode does
+    /// NOT read these — it uses only the standard `OTEL_*` SDK vars — so a set
+    /// value is almost always an operator mistake.
+    legacy_geode_var_present: bool,
+
+    /// True when OTLP/HTTP push is enabled for at least one signal.
+    pub fn anyEnabled(self: OtelExportStatus) bool {
+        return self.metrics == .enabled or self.traces == .enabled;
+    }
+
+    /// True when a legacy `GEODE_OTEL_*` var is set but neither standard
+    /// exporter var enables OTLP — the exact misconfiguration that produces a
+    /// silently non-exporting server.
+    pub fn legacyMisconfig(self: OtelExportStatus) bool {
+        return self.legacy_geode_var_present and !self.anyEnabled();
+    }
+};
+
+fn classifySignal(value: ?[]const u8) OtlpSignalStatus {
+    const v = value orelse return .unset;
+    if (sdk_config.ExporterKind.fromString(v) == .otlp_http) return .enabled;
+    if (std.ascii.eqlIgnoreCase(v, "none")) return .disabled_none;
+    return .other;
+}
+
+/// Classify the OTLP export configuration from raw env values. Pure: no
+/// `getenv`, no logging, no allocation — callers pass the values they read.
+pub fn classifyExportStatus(
+    metrics_exporter: ?[]const u8,
+    traces_exporter: ?[]const u8,
+    legacy_geode_var_present: bool,
+) OtelExportStatus {
+    return .{
+        .metrics = classifySignal(metrics_exporter),
+        .traces = classifySignal(traces_exporter),
+        .legacy_geode_var_present = legacy_geode_var_present,
+    };
+}
+
+/// Legacy, geode-specific OTLP env vars that geode does NOT read. Presence of
+/// any of these is treated as a likely misconfiguration (the operator reached
+/// for `GEODE_OTEL_*` instead of the standard `OTEL_*` SDK vars).
+const legacy_geode_otel_vars = [_][*:0]const u8{
+    "GEODE_OTEL_ENDPOINT",
+    "GEODE_OTEL_INSECURE",
+    "GEODE_OTEL_PROTOCOL",
+    "GEODE_OTEL_HEADERS",
+};
+
+/// Return the name of the first legacy `GEODE_OTEL_*` env var that is set, or
+/// `null` if none are.
+fn firstLegacyGeodeOtelVar() ?[]const u8 {
+    for (legacy_geode_otel_vars) |name| {
+        if (getenv(name) != null) return std.mem.sliceTo(name, 0);
+    }
+    return null;
+}
+
+/// Resolve the OTLP endpoint for the startup summary line, mirroring the
+/// resolution order used by the metric/trace wiring (shared var, then either
+/// per-signal var, then the loopback default).
+fn resolvedOtlpEndpointForSummary() []const u8 {
+    return getenv("OTEL_EXPORTER_OTLP_ENDPOINT") orelse
+        getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") orelse
+        getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") orelse
+        "http://localhost:4318 (default)";
+}
+
+/// Emit an unconditional, actionable startup log describing whether OTLP/HTTP
+/// push export is enabled. Called once from `init()`. The Prometheus pull path
+/// (`/metrics`) is always available regardless of this status.
+fn logExportStatus(status: OtelExportStatus, resolved_endpoint: []const u8, legacy_var: ?[]const u8) void {
+    if (status.anyEnabled()) {
+        std.log.info(
+            "otel: OTLP/HTTP push ENABLED (metrics={s} traces={s}) endpoint={s} protocol=http/protobuf; /metrics pull also available",
+            .{ @tagName(status.metrics), @tagName(status.traces), resolved_endpoint },
+        );
+    } else {
+        std.log.info(
+            "otel: OTLP/HTTP push DISABLED (OTEL_METRICS_EXPORTER/OTEL_TRACES_EXPORTER != otlp); metrics available via /metrics pull only. To enable: set OTEL_METRICS_EXPORTER=otlp OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4318 (OTLP/HTTP on port 4318, NOT gRPC 4317)",
+            .{},
+        );
+    }
+    if (legacy_var) |name| {
+        std.log.warn(
+            "otel: env var {s} is set but geode IGNORES it — geode reads only the standard OTEL_* SDK vars, not GEODE_OTEL_*. Use OTEL_METRICS_EXPORTER=otlp / OTEL_TRACES_EXPORTER=otlp / OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4318 instead.",
+            .{name},
+        );
+    }
+}
+
+/// Read the environment and emit the startup OTLP export-status summary. Thin
+/// wrapper over the pure `classifyExportStatus` + `logExportStatus`.
+fn logOtlpExportStatusFromEnv() void {
+    const legacy_var = firstLegacyGeodeOtelVar();
+    const status = classifyExportStatus(
+        getenv("OTEL_METRICS_EXPORTER"),
+        getenv("OTEL_TRACES_EXPORTER"),
+        legacy_var != null,
+    );
+    logExportStatus(status, resolvedOtlpEndpointForSummary(), legacy_var);
+}
 
 /// Read an env var (no allocation) via `std.c.getenv`. Returns the
 /// value slice as a zero-terminated C string borrowed from the process

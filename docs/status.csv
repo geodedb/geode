@@ -3602,6 +3602,7 @@ REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TE
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPTransportCompiledIn,TESTED,,,monitoring,2026-05-29,tests/test_otel_otlp_transport_delivery.zig
+REQ-OTEL-OTLP-PUSH-002,OTel Instrumentation,OTLPExportStatusVisibility,TESTED,,,monitoring,2026-06-03,tests/test_otel_export_status.zig
 REQ-OTEL-PRIV-001,OTel Instrumentation,CardinalityPrivacyGuard,TESTED,,,monitoring,2026-04-28,tests/test_otel_cardinality_guard.zig
 REQ-OTEL-PROMETHEUS-RESPONDER-001,OTel Instrumentation,PrometheusBridge,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_prometheus_responder.zig
 REQ-OTEL-TRACE-001,Geode Emitted Spans,QueryExecuteSpan,TESTED,,,monitoring,2026-05-29,tests/test_otel_span_facade.zig

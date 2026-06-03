@@ -5317,6 +5317,20 @@ pub fn build(b: *std.Build) void {
     const otel_metrics_step = b.step("test-otel-facade-smoke", "Run OTel metrics facade smoke tests");
     otel_metrics_step.dependOn(&run_otel_metrics_tests.step);
 
+    // OTLP export-status classification regression: pins the pure logic behind
+    // the unconditional startup "OTLP push ENABLED/DISABLED" log and the legacy
+    // GEODE_OTEL_* misconfiguration warning. See
+    // docs/bugs/2026-06-03-otel-export-not-enabled-wrong-env-vars.md.
+    const otel_export_status_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_export_status.zig"), .target = target, .optimize = optimize });
+    otel_export_status_test_mod.addImport("otel", otel_mod);
+    otel_export_status_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_export_status_tests = b.addTest(.{ .root_module = otel_export_status_test_mod });
+    otel_export_status_tests.root_module.link_libc = true; // std.c.getenv in otel_metrics
+    const run_otel_export_status_tests = b.addRunArtifact(otel_export_status_tests);
+    shardDep(test_step, &run_otel_export_status_tests.step, 1, test_shard_loads, test_shard_index);
+    const otel_export_status_step = b.step("test-otel-export-status", "Run OTLP export-status classification regression tests");
+    otel_export_status_step.dependOn(&run_otel_export_status_tests.step);
+
     // Phase C1: runtime-metrics → OTLP bridge unit test. Registers a counter +
     // gauge in a runtime_metrics.Registry, bridges them via
     // registerRuntimeMetricsOtel, and asserts the geode.runtime.* observable
