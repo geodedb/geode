@@ -26,6 +26,28 @@ Wiring: `src/monitoring/otel_metrics.zig` (facade), enabled at runtime by `OTEL_
 / `OTEL_TRACES_EXPORTER=otlp` + `OTEL_EXPORTER_OTLP_ENDPOINT`. The std.http.Client OTLP transport is
 compiled in by default (`-Dotel_use_devnw_tls`, default true in geode/build.zig).
 
+### Enabling OTLP export (operator quick-reference)
+
+geode reads the **standard OTel SDK env vars** — confirmed in the binary:
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_{METRICS,TRACES}_ENDPOINT`,
+`OTEL_METRICS_EXPORTER`, `OTEL_TRACES_EXPORTER`. There is **no `GEODE_OTEL_*`**
+variable — setting `GEODE_OTEL_ENDPOINT`/`GEODE_OTEL_INSECURE` does nothing and
+leaves geode pull-only. Transport is **OTLP/HTTP** (`std.http.Client`), so the
+endpoint must be the collector's **HTTP** port, not gRPC.
+
+```bash
+OTEL_METRICS_EXPORTER=otlp
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector-host>:4318   # HTTP port; http:// = plaintext
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf                  # geode is HTTP-only
+# optional: OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=<env>
+```
+
+The geode-test-harness's `make otel-*` targets / `GEODE_OTEL=1` source exactly
+these `OTEL_*` vars (see `reports/.otel-env`). A 2026-06-03 arda deployment used
+`GEODE_OTEL_*` instead and exported nothing — see
+`docs/bugs/2026-06-03-otel-export-not-enabled-wrong-env-vars.md`.
+
 ### Metrics
 
 - **Server / query / transport / storage / WAL / index / transactions** — `geode.server.*`,
