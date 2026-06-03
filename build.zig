@@ -1100,6 +1100,25 @@ pub fn build(b: *std.Build) void {
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_gql_unit_tests = b.addRunArtifact(gql_unit_tests);
 
+    // Focused runner for the acceptor-shutdown bail-deadline regression
+    // (docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md).
+    // Roots src/main.zig like exe_unit_tests but filters to the inline
+    // "acceptor bail deadline" tests so the connection-burst-wedge fix can be
+    // validated without running the entire exe unit-test suite. These inline
+    // tests also run as part of `test` (via exe_unit_tests shard 8).
+    const acceptor_bail_test_mod = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize });
+    acceptor_bail_test_mod.addImport("geode", root_mod);
+    acceptor_bail_test_mod.addImport("json", json_mod);
+    acceptor_bail_test_mod.addImport("build_options", build_options_mod);
+    acceptor_bail_test_mod.addImport("timeseries_lib", timeseries_ext_mod);
+    acceptor_bail_test_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    acceptor_bail_test_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+    const acceptor_bail_tests = b.addTest(.{ .root_module = acceptor_bail_test_mod, .filters = &.{"acceptor bail deadline"} });
+    acceptor_bail_tests.root_module.link_libc = true; // std.c.getenv via posixGetenv
+    const run_acceptor_bail_tests = b.addRunArtifact(acceptor_bail_tests);
+    const acceptor_bail_step = b.step("test-acceptor-bail", "Run acceptor-shutdown bail-deadline regression (connection-burst wedge)");
+    acceptor_bail_step.dependOn(&run_acceptor_bail_tests.step);
+
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
     custom_tests.root_module.addImport("auth_lib", auth_ext_mod);

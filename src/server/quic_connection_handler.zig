@@ -2421,6 +2421,67 @@ fn runStreamQueryLoop(
 /// recycled the block into, surfacing later as the protobuf `@memcpy`-alias
 /// panic or the poll-thread `recovery.onPacketSent` SIGSEGV on an unrelated
 /// connection. See docs/bugs/2026-06-02-sendexecuteerror-memcpy-alias-and-quic-initial-crash.md.
+/// Default grace period (ms) the first-stream owner waits for a shutdown-signalled
+/// acceptor to exit before deferring teardown to the leaked-conn reaper.
+///
+/// A healthy acceptor checks `ctx.shutdown` at the top of every loop iteration
+/// and its idle sleep is bounded by `server_handler_wait_for_poll_ns` (100 ms),
+/// so it exits well within this window. A WEDGED acceptor (blocked inside the
+/// QUIC library on endpoint-lock contention under a connection-burst) never
+/// exits; capping the wait here — rather than at the old 30 s — frees the
+/// owner's capped concurrency slot (stream-pool worker / first-stream detach
+/// gate) ~30x faster, so a burst of closing+wedged connections can no longer
+/// starve NEW-connection admission. The reaper reclaims the wedged conn once its
+/// acceptor finally exits (or at the QUIC idle timeout).
+/// See docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
+const default_acceptor_bail_deadline_ms: i64 = 1_000;
+/// After this much elapsed time (ms) the owner logs that the acceptor is still
+/// running, at most once per second, while it waits out the bail deadline.
+const default_acceptor_bail_warn_ms: i64 = 500;
+
+/// Parse the `GEODE_ACCEPTOR_BAIL_MS` override value. Pure (no env access) so it
+/// is unit-testable. Falls back to the default on null / unparseable input and
+/// clamps to a sane [50 ms, 60 s] range so a typo cannot reintroduce a
+/// many-second owner-thread stall (or a 0 ms busy-bail).
+fn parseAcceptorBailMs(env_val: ?[]const u8) i64 {
+    const raw = env_val orelse return default_acceptor_bail_deadline_ms;
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return default_acceptor_bail_deadline_ms;
+    return std.math.clamp(parsed, 50, 60_000);
+}
+
+/// Resolve the acceptor bail deadline from the environment (operator override
+/// via `GEODE_ACCEPTOR_BAIL_MS`), defaulting to `default_acceptor_bail_deadline_ms`.
+fn acceptorBailDeadlineMs() i64 {
+    return parseAcceptorBailMs(posixGetenv("GEODE_ACCEPTOR_BAIL_MS"));
+}
+
+/// Wait for a shutdown-signalled acceptor to set `done`, up to `deadline_ms`.
+/// Returns `true` if the deadline elapsed first (the acceptor is still wedged and
+/// the caller MUST defer teardown to the reaper to avoid a UAF), `false` if the
+/// acceptor exited cleanly in time (the caller may tear down inline).
+///
+/// Touches only `acceptor_ctx`'s done flag / futex, so it is unit-testable
+/// without a live connection. Parks in ≤100 ms slices on the done futex so a
+/// prompt acceptor exit returns immediately rather than after a fixed sleep.
+fn waitForAcceptorExit(acceptor_ctx: *StreamAcceptorContext, deadline_ms: i64, warn_ms: i64) bool {
+    const wait_start = compat_milliTimestamp();
+    var last_warn_ms: i64 = wait_start;
+    while (!acceptor_ctx.done.load(.acquire)) {
+        _ = acceptor_ctx.waitUntilDone(100 * std.time.ns_per_ms);
+        const now = compat_milliTimestamp();
+        const elapsed = now - wait_start;
+        if (elapsed >= deadline_ms) return true;
+        if (elapsed > warn_ms and now - last_warn_ms > 1_000) {
+            log.warn("acceptor still running after shutdown signal", &.{
+                Attr.int("elapsed_ms", @intCast(elapsed)),
+            });
+            last_warn_ms = now;
+        }
+    }
+    return false;
+}
+
 fn shutdownAcceptorOwner(
     gpa: std.mem.Allocator,
     first_ctx: *FirstStreamOwnerContext,
@@ -2430,51 +2491,36 @@ fn shutdownAcceptorOwner(
     var bailed = false;
     if (acceptor_submitted) {
         acceptor_ctx.shutdown.store(true, .release);
-        const wait_warn_ms: i64 = 5_000;
-        const wait_deadline_ms: i64 = 30_000;
-        const wait_start = compat_milliTimestamp();
-        var last_warn_ms: i64 = wait_start;
-        while (!acceptor_ctx.done.load(.acquire)) {
-            _ = acceptor_ctx.waitUntilDone(200 * std.time.ns_per_ms);
-            const now = compat_milliTimestamp();
-            const elapsed = now - wait_start;
-            if (elapsed > wait_deadline_ms) {
-                bailed = true;
-                var registered = false;
-                if (g_leaked_conn_registry) |reg| {
-                    acceptor_ctx.addRef();
-                    if (reg.register(gpa, first_ctx.transport, first_ctx.conn, .{
-                        .self = @ptrCast(acceptor_ctx),
-                        .is_done = acceptorCtxIsDone,
-                        .release = acceptorCtxRelease,
-                    }, .{
-                        .self = @ptrCast(first_ctx),
-                        .run = deferredDestroyFirstStreamOwner,
-                    })) |_| {
-                        registered = true;
-                    } else |reg_err| {
-                        acceptor_ctx.release();
-                        log.warn("failed to register leaked conn for deferred reaping", &.{
-                            Attr.string("error", @errorName(reg_err)),
-                        });
-                    }
-                }
-                if (registered) {
-                    log.err("acceptor wait deadline exceeded; deferring conn+conn_state teardown to reaper to avoid UAF", &.{
-                        Attr.int("elapsed_ms", @intCast(elapsed)),
-                    });
-                } else {
-                    log.err("acceptor wait deadline exceeded; leaking conn+ctx to avoid UAF (no reaper; reclaimed at QUIC idle timeout)", &.{
-                        Attr.int("elapsed_ms", @intCast(elapsed)),
+        const deadline_ms = acceptorBailDeadlineMs();
+        if (waitForAcceptorExit(acceptor_ctx, deadline_ms, default_acceptor_bail_warn_ms)) {
+            bailed = true;
+            var registered = false;
+            if (g_leaked_conn_registry) |reg| {
+                acceptor_ctx.addRef();
+                if (reg.register(gpa, first_ctx.transport, first_ctx.conn, .{
+                    .self = @ptrCast(acceptor_ctx),
+                    .is_done = acceptorCtxIsDone,
+                    .release = acceptorCtxRelease,
+                }, .{
+                    .self = @ptrCast(first_ctx),
+                    .run = deferredDestroyFirstStreamOwner,
+                })) |_| {
+                    registered = true;
+                } else |reg_err| {
+                    acceptor_ctx.release();
+                    log.warn("failed to register leaked conn for deferred reaping", &.{
+                        Attr.string("error", @errorName(reg_err)),
                     });
                 }
-                break;
             }
-            if (elapsed > wait_warn_ms and now - last_warn_ms > 1_000) {
-                log.warn("acceptor still running after shutdown signal", &.{
-                    Attr.int("elapsed_ms", @intCast(elapsed)),
+            if (registered) {
+                log.err("acceptor did not exit within bail deadline; deferring conn+conn_state teardown to reaper to avoid UAF (connection-burst wedge; reaper reclaims once acceptor exits)", &.{
+                    Attr.int("deadline_ms", @intCast(deadline_ms)),
                 });
-                last_warn_ms = now;
+            } else {
+                log.err("acceptor did not exit within bail deadline; leaking conn+ctx to avoid UAF (no reaper; reclaimed at QUIC idle timeout)", &.{
+                    Attr.int("deadline_ms", @intCast(deadline_ms)),
+                });
             }
         }
     }
@@ -7079,4 +7125,103 @@ test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or 
     // After join, the acceptor has fully exited (its release() ran and
     // freed the struct because refcount went 1 -> 0).  Any leak or
     // double-free here would surface via the testing allocator.
+}
+
+// =============================================================================
+// 2026-06-03 — acceptor-shutdown bail-deadline regression.
+//
+// Bug: docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md
+//
+// `shutdownAcceptorOwner` runs on the first-stream owner thread (a capped
+// stream-pool worker / first-stream detach-gate slot). Under a connection-burst
+// + close-churn the per-connection acceptor can wedge inside the QUIC library on
+// endpoint-lock contention and never observe `ctx.shutdown`. The owner used to
+// wait up to 30 s for it, pinning that capped slot the whole time; a burst of
+// such closures exhausts the pool/gate, so NEW connections can no longer be
+// admitted ("transport dial ... timeout: no recent network activity") until a
+// pod restart. The fix caps the owner-side wait at a short, env-tunable deadline
+// (default 1 s) and defers the wedged conn to the already-safe leaked-conn
+// reaper, so capped slots free ~30x faster and the accept path survives the
+// burst. These tests pin (a) the short bail deadline is honored (not 30 s),
+// (b) a healthy acceptor that exits in time does NOT bail, and (c) the env
+// override parses + clamps sanely (regression guard against reverting to 30 s).
+// =============================================================================
+
+test "acceptor bail deadline: wedged acceptor bails within the short deadline (not 30s)" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_0601);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_0602);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_0604);
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+    // No acceptor thread runs here, so `done` is never set — the "wedged
+    // acceptor" case. We hold both refs (owner + would-be acceptor) and free
+    // them at the end.
+    defer {
+        ctx.release();
+        ctx.release();
+    }
+
+    const start = compat_milliTimestamp();
+    const bailed = waitForAcceptorExit(ctx, 150, 75);
+    const elapsed = compat_milliTimestamp() - start;
+
+    try std.testing.expect(bailed); // deadline elapsed before done -> defer to reaper
+    try std.testing.expect(elapsed >= 150); // honored the deadline
+    try std.testing.expect(elapsed < 5_000); // nowhere near the old 30 s
+}
+
+test "acceptor bail deadline: a timely acceptor exit does NOT bail" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_0611);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_0612);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_0614);
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    // Acceptor exits ~20 ms after being signalled — well within a 5 s deadline.
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(c: *StreamAcceptorContext) void {
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 20 * std.time.ns_per_ms };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            c.markDone();
+        }
+    }.run, .{ctx});
+
+    const bailed = waitForAcceptorExit(ctx, 5_000, 1_000);
+    thread.join();
+
+    try std.testing.expect(!bailed); // exited in time -> owner tears down inline
+    ctx.release();
+    ctx.release();
+}
+
+test "acceptor bail deadline: env parse defaults, clamps, and stays short" {
+    // Regression guard: the default must never silently revert to the old 30 s.
+    try std.testing.expect(default_acceptor_bail_deadline_ms >= 100);
+    try std.testing.expect(default_acceptor_bail_deadline_ms <= 5_000);
+
+    // Pure env-value parser: default on null/garbage, clamp to [50, 60000].
+    try std.testing.expectEqual(default_acceptor_bail_deadline_ms, parseAcceptorBailMs(null));
+    try std.testing.expectEqual(default_acceptor_bail_deadline_ms, parseAcceptorBailMs("garbage"));
+    try std.testing.expectEqual(@as(i64, 2000), parseAcceptorBailMs("2000"));
+    try std.testing.expectEqual(@as(i64, 50), parseAcceptorBailMs("0")); // clamp low
+    try std.testing.expectEqual(@as(i64, 60_000), parseAcceptorBailMs("100000000")); // clamp high
 }

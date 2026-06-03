@@ -1,6 +1,55 @@
 # Bug: stream-acceptor / accept-path **wedge** under connection-burst — new QUIC connections refused (≫30 s) until pod restart
 
-**Status:** **OPEN** — reported 2026-06-03 from `divelife-qa`.
+**Status:** **MITIGATED (geode-side) 2026-06-03.** The dominant geode-level
+amplifier — the 30 s owner-thread bail that pins capped concurrency slots while a
+wedged acceptor is waited out — is fixed (see *Resolution* below). The deepest
+root cause (QUIC-library `Endpoint.mu` poll-vs-acceptStream contention) is a
+documented **upstream** concern (`pollLoop` notes "deeper sharding requires
+upstream QUIC-library changes"); it is out of scope for a geode patch and tracked
+separately.
+
+---
+
+## Resolution (geode-side amplifier fixed)
+
+**Mechanism (geode-level):** `shutdownAcceptorOwner` (`src/server/quic_connection_handler.zig`)
+runs on the first-stream **owner** thread — a *capped* stream-pool worker /
+first-stream detach-gate slot. When the per-connection acceptor wedges (blocked
+inside the QUIC library, never observing `ctx.shutdown`), the owner used to wait
+**30 s** for it before deferring to the leaked-conn reaper, pinning that capped
+slot the entire time. A burst of closing+wedged connections exhausts the
+pool/gate, so NEW connections can no longer be admitted → `transport dial …
+timeout: no recent network activity` until a pod restart. The inline test comment
+at the old code (`"main accept loop starved on ep.mu"`, 2026-04-28) already
+recorded this amplifier.
+
+**Fix:** cap the owner-side wait at a short, env-tunable **bail deadline**
+(default **1 s**, override `GEODE_ACCEPTOR_BAIL_MS`, clamped to [50 ms, 60 s])
+and defer the still-wedged connection to the **already-safe** leaked-conn reaper
+(the `86d58fdb` UAF-safe path). A healthy acceptor exits in ≤100 ms
+(`server_handler_wait_for_poll_ns`), so normal closes are unaffected; only
+genuinely-wedged acceptors hit the deadline, and they now free the capped slot
+**~30x faster**. The accept path therefore survives a connection-burst instead of
+starving, and the reaper reclaims each wedged conn once its acceptor finally
+exits (or at the QUIC idle timeout) — i.e. recovery is automatic, no pod restart.
+
+**Wait loop extracted** to a pure, unit-testable `waitForAcceptorExit`; env parse
+is the pure `parseAcceptorBailMs`. Regression cover: inline tests in
+`src/server/quic_connection_handler.zig` ("acceptor bail deadline: …") and the
+focused `zig build test-acceptor-bail` step — pinning (a) a wedged acceptor bails
+within the short deadline (not 30 s), (b) a timely acceptor exit does NOT bail,
+(c) the default stays short + env parse clamps (guard against reverting to 30 s).
+
+**Residual (upstream):** under extreme burst the QUIC-library `Endpoint.mu`
+contention between the poll thread (`ep.pollWithStats`, delivering new Initials)
+and per-connection `api.acceptStream` can still slow handshakes; eliminating that
+needs poll sharding / lock-splitting in the `quic` dependency (documented in
+`pollLoop`). The geode-side fix removes the worker-starvation amplifier that
+turned that contention into a hard, restart-only outage.
+
+---
+
+**Original status:** OPEN — reported 2026-06-03 from `divelife-qa`.
 
 **Relationship to the resolved crash report:** This is the **still-open root
 trigger** behind
