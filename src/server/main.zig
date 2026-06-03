@@ -1216,6 +1216,15 @@ pub fn main() !void {
                 return env_err;
             };
         } else |_| {}
+        // GAP-0838 (Bug B): forward $HOSTNAME so cluster_bootstrap's identity
+        // self-diagnostic can match this node against its GEODE_PEERS entry
+        // (the StatefulSet pod name, e.g. `geode-1`) and flag a GEODE_NODE_ID
+        // that doesn't equal this node's 1-based position. Best-effort: absent
+        // HOSTNAME just disables the position-mismatch check.
+        if (getEnvVarOwned(gpa, "HOSTNAME")) |hn| {
+            defer gpa.free(hn);
+            process_env.put("HOSTNAME", hn) catch {};
+        } else |_| {}
 
         cluster_handle = cluster_bootstrap.maybeStart(
             gpa,
