@@ -39,6 +39,8 @@ const quic_response_metrics = @import("quic_response_metrics");
 
 // DNS resolution for hostnames that the vendor QUIC library cannot resolve.
 const dns = @import("dns");
+// GAP-0838 (Bug A): resolv.conf `search`-domain + `ndots` aware expansion.
+const dns_search = @import("dns_search");
 
 // Import the QUIC modules through the vendor API which re-exports them
 const api = @import("vendor_quic");
@@ -1405,22 +1407,32 @@ fn resolveHostToIp(allocator: std.mem.Allocator, host: []const u8) !struct { ip:
         return .{ .ip = host, .allocated = false };
     } else |_| {}
 
-    // DNS resolution needed.
+    // DNS resolution needed. GAP-0838 (Bug A): the bundled dns client issues a
+    // bare A lookup with no resolv.conf `search`-domain expansion, so short
+    // k8s headless peer names (e.g. `geode-0.geode`) return NXDOMAIN even
+    // though the pod's glibc resolver finds them via the `search` list. Build
+    // the search/ndots-ordered candidate list and try each until one resolves.
+    // On any resolv.conf read failure `candidatesForHost` falls back to the
+    // bare host name, so non-k8s environments behave exactly as before.
+    const candidates = dns_search.candidatesForHost(allocator, host) catch {
+        return error.InvalidAddress;
+    };
+    defer dns_search.freeCandidates(allocator, candidates);
+
     var client = dns.Client.init(allocator) catch {
         return error.InvalidAddress;
     };
     defer client.deinit();
 
-    var result = client.resolveA(host) catch {
-        return error.InvalidAddress;
-    };
-    defer result.deinit(allocator);
-
-    // ResolveResult.addresses is []const []const u8 — each entry is an
-    // IP address string like "172.176.193.24" (not binary bytes).
-    if (result.addresses.len > 0) {
-        const ip_str = try allocator.dupe(u8, result.addresses[0]);
-        return .{ .ip = ip_str, .allocated = true };
+    for (candidates) |candidate| {
+        // ResolveResult.addresses is []const []const u8 — each entry is an
+        // IP address string like "172.176.193.24" (not binary bytes).
+        var result = client.resolveA(candidate) catch continue;
+        defer result.deinit(allocator);
+        if (result.addresses.len > 0) {
+            const ip_str = try allocator.dupe(u8, result.addresses[0]);
+            return .{ .ip = ip_str, .allocated = true };
+        }
     }
 
     return error.InvalidAddress;

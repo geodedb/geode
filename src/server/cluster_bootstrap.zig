@@ -26,6 +26,11 @@
 const std = @import("std");
 const geode = @import("geode");
 const cluster = geode.distributed.cluster;
+// GAP-0838 (Bug B hardening): boot-time cluster identity-contract diagnostic.
+const cluster_identity = @import("cluster_identity.zig");
+
+/// Whether an appendPeer call added the peer or skipped it as a self-reference.
+const PeerOutcome = enum { added, skipped_self };
 
 const DEFAULT_CLUSTER_PORT: u16 = 4242;
 const DEFAULT_CLUSTER_NAME: []const u8 = "geode-cluster";
@@ -150,19 +155,53 @@ pub fn maybeStart(
     const self_port = cluster_port;
     const self_aliases = [_][]const u8{ "127.0.0.1", "0.0.0.0", "localhost", "::1" };
 
-    if (cli_peers.len > 0) {
-        for (cli_peers, 0..) |spec, i| {
-            try appendPeer(allocator, &addresses_list, &peer_configs_list, spec, i, node_id, self_port, &self_aliases);
+    // Collect the peer specs from CLI (wins) or GEODE_PEERS into one indexed
+    // list so the append loop AND the identity diagnostic see the same view.
+    var env_specs = std.ArrayList([]const u8).empty;
+    defer env_specs.deinit(allocator);
+    const specs: []const []const u8 = if (cli_peers.len > 0) cli_peers else blk: {
+        if (env.get("GEODE_PEERS")) |peers_csv| {
+            var it = std.mem.splitScalar(u8, peers_csv, ',');
+            while (it.next()) |raw| {
+                const spec = std.mem.trim(u8, raw, " \t");
+                if (spec.len == 0) continue;
+                try env_specs.append(allocator, spec);
+            }
         }
-    } else if (env.get("GEODE_PEERS")) |peers_csv| {
-        var it = std.mem.splitScalar(u8, peers_csv, ',');
-        var idx: usize = 0;
-        while (it.next()) |raw| {
-            const spec = std.mem.trim(u8, raw, " \t");
-            if (spec.len == 0) continue;
-            try appendPeer(allocator, &addresses_list, &peer_configs_list, spec, idx, node_id, self_port, &self_aliases);
-            idx += 1;
+        break :blk env_specs.items;
+    };
+
+    var self_skips: usize = 0;
+    for (specs, 0..) |spec, i| {
+        const outcome = try appendPeer(allocator, &addresses_list, &peer_configs_list, spec, i, node_id, self_port, &self_aliases);
+        if (outcome == .skipped_self) self_skips += 1;
+    }
+
+    // GAP-0838 (Bug B): boot-time identity-contract self-check. A node's own
+    // identity in Kubernetes is its $HOSTNAME (the StatefulSet pod name, e.g.
+    // `geode-1`); compare it to the peer entries so we can flag a GEODE_NODE_ID
+    // that doesn't match this node's position BEFORE the doomed election runs.
+    // Purely diagnostic — does not change which peers were configured above.
+    {
+        const own_hostname = env.get("HOSTNAME") orelse "";
+        var any_dns = false;
+        var self_pos: ?usize = null;
+        for (specs, 0..) |spec, i| {
+            const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse continue;
+            const host = spec[0..colon];
+            if (!cluster_identity.isLoopbackAlias(host)) any_dns = true;
+            if (self_pos == null and cluster_identity.hostMatchesSelf(host, own_hostname)) {
+                self_pos = i + 1;
+            }
         }
+        logIdentityDiagnostics(allocator, .{
+            .node_id = node_id,
+            .total_entries = specs.len,
+            .self_skips = self_skips,
+            .resulting_peers = peer_configs_list.items.len,
+            .any_dns_peer = any_dns,
+            .self_position_by_hostname = self_pos,
+        });
     }
 
     // Hand ownership of the backing slices to the Bootstrap struct.
@@ -264,7 +303,7 @@ fn appendPeer(
     self_node_id: u64,
     self_port: u16,
     self_aliases: []const []const u8,
-) Error!void {
+) Error!PeerOutcome {
     const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse return Error.InvalidPeerSpec;
     const host = spec[0..colon];
     const port_str = spec[colon + 1 ..];
@@ -277,7 +316,7 @@ fn appendPeer(
     // collides AND the host is a documented loopback alias.
     if (port == self_port) {
         for (self_aliases) |alias| {
-            if (std.mem.eql(u8, host, alias)) return;
+            if (std.mem.eql(u8, host, alias)) return .skipped_self;
         }
     }
 
@@ -288,7 +327,7 @@ fn appendPeer(
     // subsequent peers, because the position-derived id is the contract
     // every node in the cluster relies on for a stable shared view.
     const peer_id: u64 = idx + 1;
-    if (peer_id == self_node_id) return;
+    if (peer_id == self_node_id) return .skipped_self;
 
     const owned_host = try allocator.dupe(u8, host);
     errdefer allocator.free(owned_host);
@@ -301,4 +340,33 @@ fn appendPeer(
         .address = owned_host,
         .port = port,
     });
+    return .added;
+}
+
+/// Emit the boot-time cluster identity-contract self-diagnostic to stderr.
+///
+/// Purely additive: this NEVER changes which peers are configured. It only
+/// surfaces the silent misconfigurations (chiefly GEODE_NODE_ID not matching
+/// this node's position in GEODE_PEERS) that otherwise leave a Kubernetes
+/// cluster hung at `state=candidate term=0` with no transport error. Uses
+/// `std.debug.print` so the message lands on stderr alongside the `[raft]`
+/// lines, guaranteed visible in `kubectl logs`.
+fn logIdentityDiagnostics(allocator: std.mem.Allocator, r: cluster_identity.PeerResolution) void {
+    const findings = cluster_identity.analyze(allocator, r) catch return;
+    defer allocator.free(findings);
+    for (findings) |f| {
+        const sev = switch (f.severity) {
+            .info => "INFO",
+            .warn => "WARN",
+            .err => "ERROR",
+        };
+        std.debug.print(
+            "[cluster-identity] {s}: {s} (node_id={d}, configured_peers={d}, self_skips={d}, voter_peers={d}",
+            .{ sev, cluster_identity.message(f.code), r.node_id, r.total_entries, r.self_skips, r.resulting_peers },
+        );
+        if (r.self_position_by_hostname) |p| {
+            std.debug.print(", this_host_position={d}", .{p});
+        }
+        std.debug.print(")\n", .{});
+    }
 }

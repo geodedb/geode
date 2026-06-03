@@ -627,6 +627,10 @@ pub fn build(b: *std.Build) void {
     transport_quic_mod.addImport("logging", logging_mod);
     transport_quic_mod.addImport("dns", dns_mod);
     transport_quic_mod.addImport("quic_response_metrics", quic_response_metrics_mod);
+    // GAP-0838 (Bug A): resolv.conf `search`-domain + `ndots` aware hostname
+    // expansion so short k8s headless peer names (geode-0.geode) resolve.
+    const dns_search_mod = b.createModule(.{ .root_source_file = b.path("src/transport/dns_search.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod.addImport("dns_search", dns_search_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
@@ -3049,6 +3053,25 @@ pub fn build(b: *std.Build) void {
     const quic_condition_cadence_step = b.step("test-quic-condition-cadence", "Run QUIC hand-rolled timedWait cadence audit");
     quic_condition_cadence_step.dependOn(&run_quic_condition_cadence_tests.step);
     shardDep(test_step, &quic_condition_cadence_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // GAP-0838 (Bug A): resolv.conf `search`-domain + `ndots` aware hostname
+    // expansion so short k8s headless peer names (geode-0.geode) resolve.
+    // Pure std-only module -- fast to compile, no vendor_quic dependency.
+    const dns_search_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/transport/dns_search.zig"), .target = target, .optimize = optimize }) });
+    dns_search_tests.root_module.link_libc = true;
+    const run_dns_search_tests = b.addRunArtifact(dns_search_tests);
+    const dns_search_step = b.step("test-dns-search", "Run resolv.conf search-domain/ndots expansion unit tests (GAP-0838 Bug A)");
+    dns_search_step.dependOn(&run_dns_search_tests.step);
+    shardDep(test_step, &dns_search_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // GAP-0838 (Bug B hardening): boot-time cluster identity-contract
+    // self-diagnostic. Pure std-only module.
+    const cluster_identity_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/server/cluster_identity.zig"), .target = target, .optimize = optimize }) });
+    cluster_identity_tests.root_module.link_libc = true;
+    const run_cluster_identity_tests = b.addRunArtifact(cluster_identity_tests);
+    const cluster_identity_step = b.step("test-cluster-identity", "Run cluster identity-contract self-diagnostic unit tests (GAP-0838 Bug B)");
+    cluster_identity_step.dependOn(&run_cluster_identity_tests.step);
+    shardDep(test_step, &cluster_identity_tests.step, 1, test_shard_loads, test_shard_index);
 
     // QUIC-HC-029: Geode-owned bounded parallel facade for the QUIC package.
     // This compiles the facade against the current quic package API and runs
