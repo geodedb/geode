@@ -43,6 +43,73 @@ pub const Error = error{
     OutOfMemory,
 };
 
+// ----------------------------------------------------------------------
+// GAP-0838 Bug B: node-identity auto-derivation.
+//
+// Each peer's raft id is its 1-based POSITION in the shared GEODE_PEERS list,
+// and a node stamps its own id as `from` on outgoing frames; the raft lib drops
+// frames whose `from` is not a known voter. On loopback a node self-identifies
+// by (host,port); with k8s DNS peer names that skip can't fire, so a wrong/unset
+// GEODE_NODE_ID leaves the cluster hung at `state=candidate term=0`. The helpers
+// below let the bootstrap auto-derive the id from the $HOSTNAME-matched position
+// (authoritative — it is what every peer assigns this node).
+// See docs/bugs/2026-06-02-cluster-0.6.14-k8s-still-fails.md (Bug B).
+// ----------------------------------------------------------------------
+
+/// Where the effective raft node_id came from (for startup logging).
+pub const NodeIdSource = enum {
+    /// Used the explicit GEODE_NODE_ID (no hostname match, or it agreed).
+    env_explicit,
+    /// Derived from the $HOSTNAME-matched position; GEODE_NODE_ID was unset.
+    derived_from_hostname,
+    /// GEODE_NODE_ID was set but disagreed with the $HOSTNAME-matched position;
+    /// the hostname position (what every peer uses for this node) overrode it.
+    env_corrected_by_hostname,
+};
+
+pub const ResolvedNodeId = struct { node_id: u64, source: NodeIdSource };
+
+/// Resolve the effective raft node_id. The hostname-matched position is what
+/// every other node will assign this node, so it is AUTHORITATIVE: derive from
+/// it when no explicit GEODE_NODE_ID was given, and override a mismatched
+/// explicit value (the k8s bug where a hand-set GEODE_NODE_ID != position leaves
+/// the cluster hung at `state=candidate term=0`). Fall back to the explicit
+/// value only when there is no hostname match (loopback / non-k8s). Returns null
+/// when neither signal is available — the caller surfaces MissingNodeId.
+pub fn resolveNodeId(explicit: ?u64, self_position_by_hostname: ?usize) ?ResolvedNodeId {
+    if (self_position_by_hostname) |pos| {
+        const p: u64 = @intCast(pos);
+        if (explicit) |e| {
+            return .{ .node_id = p, .source = if (e == p) .env_explicit else .env_corrected_by_hostname };
+        }
+        return .{ .node_id = p, .source = .derived_from_hostname };
+    }
+    if (explicit) |e| return .{ .node_id = e, .source = .env_explicit };
+    return null;
+}
+
+pub const SelfIdentity = struct {
+    /// 1-based position of the first peer entry whose host matched $HOSTNAME.
+    self_position: ?usize,
+    /// At least one peer host is a non-loopback (DNS) name.
+    any_dns_peer: bool,
+};
+
+/// Scan the peer specs for this node's own entry by matching each host against
+/// `$HOSTNAME` (exact or leading-label, via cluster_identity.hostMatchesSelf),
+/// and note whether any peer uses a DNS name. Pure: no allocation, no I/O.
+pub fn computeSelfIdentity(specs: []const []const u8, hostname: []const u8) SelfIdentity {
+    var self_pos: ?usize = null;
+    var any_dns = false;
+    for (specs, 0..) |spec, i| {
+        const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse continue;
+        const host = spec[0..colon];
+        if (!cluster_identity.isLoopbackAlias(host)) any_dns = true;
+        if (self_pos == null and cluster_identity.hostMatchesSelf(host, hostname)) self_pos = i + 1;
+    }
+    return .{ .self_position = self_pos, .any_dns_peer = any_dns };
+}
+
 /// Initialized cluster coordinator handle.  Caller MUST call `deinit` on
 /// shutdown.  `deinit` tears down the coordinator (raft state, graph_store
 /// nonce tracker, replay guard) and frees the owned peer-address backing
@@ -121,8 +188,14 @@ pub fn maybeStart(
         // client-auth handler later. No cluster_coord bootstrap.
         return null;
     }
-    const node_id_str = node_id_str_opt orelse return Error.MissingNodeId;
-    const node_id = std.fmt.parseInt(u64, node_id_str, 10) catch return Error.InvalidNodeId;
+    // GEODE_NODE_ID is now OPTIONAL: when peers use $HOSTNAME-matchable DNS
+    // names the id is auto-derived from position below (resolveNodeId). Parse
+    // it here if present; the real `node_id` is resolved after the peer specs
+    // are known so $HOSTNAME can supply/override it (GAP-0838 Bug B).
+    const explicit_node_id: ?u64 = if (node_id_str_opt) |s|
+        (std.fmt.parseInt(u64, s, 10) catch return Error.InvalidNodeId)
+    else
+        null;
 
     const cluster_name = env.get("GEODE_CLUSTER_NAME") orelse DEFAULT_CLUSTER_NAME;
 
@@ -171,38 +244,47 @@ pub fn maybeStart(
         break :blk env_specs.items;
     };
 
+    // Resolve this node's identity. On k8s the pod's $HOSTNAME (StatefulSet pod
+    // name, e.g. geode-1) matches one GEODE_PEERS entry; that entry's 1-based
+    // position is the raft id every peer assigns us, so it is authoritative over
+    // a hand-set GEODE_NODE_ID. This is what lets a StatefulSet form a cluster
+    // with NO GEODE_NODE_ID, and auto-corrects a mis-set one instead of leaving
+    // it hung at `state=candidate term=0` (GAP-0838 Bug B).
+    const own_hostname = env.get("HOSTNAME") orelse "";
+    const self_identity = computeSelfIdentity(specs, own_hostname);
+    const resolved = resolveNodeId(explicit_node_id, self_identity.self_position) orelse return Error.MissingNodeId;
+    const node_id = resolved.node_id;
+    switch (resolved.source) {
+        .derived_from_hostname => std.debug.print(
+            "[cluster-identity] INFO: derived GEODE_NODE_ID={d} from $HOSTNAME '{s}' (1-based position in GEODE_PEERS); no GEODE_NODE_ID was set.\n",
+            .{ node_id, own_hostname },
+        ),
+        .env_corrected_by_hostname => std.debug.print(
+            "[cluster-identity] WARN: GEODE_NODE_ID={d} disagrees with $HOSTNAME '{s}' position {d} in GEODE_PEERS; using {d} (the position every peer assigns this node) so the election can form. Fix GEODE_NODE_ID to silence this.\n",
+            .{ explicit_node_id.?, own_hostname, node_id, node_id },
+        ),
+        .env_explicit => {},
+    }
+
     var self_skips: usize = 0;
     for (specs, 0..) |spec, i| {
         const outcome = try appendPeer(allocator, &addresses_list, &peer_configs_list, spec, i, node_id, self_port, &self_aliases);
         if (outcome == .skipped_self) self_skips += 1;
     }
 
-    // GAP-0838 (Bug B): boot-time identity-contract self-check. A node's own
-    // identity in Kubernetes is its $HOSTNAME (the StatefulSet pod name, e.g.
-    // `geode-1`); compare it to the peer entries so we can flag a GEODE_NODE_ID
-    // that doesn't match this node's position BEFORE the doomed election runs.
-    // Purely diagnostic — does not change which peers were configured above.
-    {
-        const own_hostname = env.get("HOSTNAME") orelse "";
-        var any_dns = false;
-        var self_pos: ?usize = null;
-        for (specs, 0..) |spec, i| {
-            const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse continue;
-            const host = spec[0..colon];
-            if (!cluster_identity.isLoopbackAlias(host)) any_dns = true;
-            if (self_pos == null and cluster_identity.hostMatchesSelf(host, own_hostname)) {
-                self_pos = i + 1;
-            }
-        }
-        logIdentityDiagnostics(allocator, .{
-            .node_id = node_id,
-            .total_entries = specs.len,
-            .self_skips = self_skips,
-            .resulting_peers = peer_configs_list.items.len,
-            .any_dns_peer = any_dns,
-            .self_position_by_hostname = self_pos,
-        });
-    }
+    // GAP-0838 (Bug B): boot-time identity-contract self-check (safety net). The
+    // id is auto-derived above from `self_identity`, so on a healthy k8s config
+    // this emits only the informational DNS-contract note; it still flags an
+    // out-of-range id or a no-self-skip configuration. Purely diagnostic — does
+    // not change which peers were configured above.
+    logIdentityDiagnostics(allocator, .{
+        .node_id = node_id,
+        .total_entries = specs.len,
+        .self_skips = self_skips,
+        .resulting_peers = peer_configs_list.items.len,
+        .any_dns_peer = self_identity.any_dns_peer,
+        .self_position_by_hostname = self_identity.self_position,
+    });
 
     // Hand ownership of the backing slices to the Bootstrap struct.
     const owned_addresses = try addresses_list.toOwnedSlice(allocator);

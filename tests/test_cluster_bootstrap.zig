@@ -133,3 +133,107 @@ test "maybeStart: CLI peers override GEODE_PEERS env" {
     defer bs.deinit();
     try std.testing.expectEqual(@as(usize, 2), bs.coordinator.raft.peers.len);
 }
+
+// ----------------------------------------------------------------------
+// GAP-0838 Bug B: auto-derive node_id from $HOSTNAME so a k8s StatefulSet
+// elects a leader without a hand-set GEODE_NODE_ID. Pure-helper unit tests.
+// See docs/superpowers/plans/2026-06-03-cluster-election-autoderive-node-id.md
+// ----------------------------------------------------------------------
+
+test "resolveNodeId: hostname match with no explicit id derives the position" {
+    const r = cluster_bootstrap.resolveNodeId(null, 2).?;
+    try std.testing.expectEqual(@as(u64, 2), r.node_id);
+    try std.testing.expectEqual(cluster_bootstrap.NodeIdSource.derived_from_hostname, r.source);
+}
+
+test "resolveNodeId: explicit id that agrees with hostname is env_explicit" {
+    const r = cluster_bootstrap.resolveNodeId(2, 2).?;
+    try std.testing.expectEqual(@as(u64, 2), r.node_id);
+    try std.testing.expectEqual(cluster_bootstrap.NodeIdSource.env_explicit, r.source);
+}
+
+test "resolveNodeId: explicit id that disagrees with hostname is corrected to the hostname position" {
+    // THE BUG: GEODE_NODE_ID=1 on the geode-1 pod (position 2). Hostname wins.
+    const r = cluster_bootstrap.resolveNodeId(1, 2).?;
+    try std.testing.expectEqual(@as(u64, 2), r.node_id);
+    try std.testing.expectEqual(cluster_bootstrap.NodeIdSource.env_corrected_by_hostname, r.source);
+}
+
+test "resolveNodeId: no hostname match falls back to the explicit id (loopback/non-k8s)" {
+    const r = cluster_bootstrap.resolveNodeId(3, null).?;
+    try std.testing.expectEqual(@as(u64, 3), r.node_id);
+    try std.testing.expectEqual(cluster_bootstrap.NodeIdSource.env_explicit, r.source);
+}
+
+test "resolveNodeId: neither signal present returns null (caller errors MissingNodeId)" {
+    try std.testing.expectEqual(@as(?cluster_bootstrap.ResolvedNodeId, null), cluster_bootstrap.resolveNodeId(null, null));
+}
+
+test "computeSelfIdentity: k8s DNS peers match $HOSTNAME by leading label" {
+    const specs = [_][]const u8{
+        "geode-0.geode.geode-qa.svc.cluster.local:4242",
+        "geode-1.geode.geode-qa.svc.cluster.local:4242",
+        "geode-2.geode.geode-qa.svc.cluster.local:4242",
+    };
+    const id = cluster_bootstrap.computeSelfIdentity(&specs, "geode-1");
+    try std.testing.expectEqual(@as(?usize, 2), id.self_position);
+    try std.testing.expect(id.any_dns_peer);
+}
+
+test "computeSelfIdentity: loopback peers yield no hostname match and any_dns=false" {
+    const specs = [_][]const u8{ "127.0.0.1:14242", "127.0.0.1:14243", "127.0.0.1:14244" };
+    const id = cluster_bootstrap.computeSelfIdentity(&specs, "geode-0");
+    try std.testing.expectEqual(@as(?usize, null), id.self_position);
+    try std.testing.expect(!id.any_dns_peer);
+}
+
+test "computeSelfIdentity: empty hostname never matches" {
+    const specs = [_][]const u8{ "geode-0.geode:4242", "geode-1.geode:4242" };
+    const id = cluster_bootstrap.computeSelfIdentity(&specs, "");
+    try std.testing.expectEqual(@as(?usize, null), id.self_position);
+    try std.testing.expect(id.any_dns_peer);
+}
+
+test "maybeStart: derives node_id from $HOSTNAME when GEODE_NODE_ID is unset (k8s StatefulSet)" {
+    // Drives a real coordinator; skip under contended CI like the sibling tests.
+    if (std.c.getenv("CI") != null) return error.SkipZigTest;
+    resetGlobalGraphStore();
+    defer resetGlobalGraphStore();
+    const a = std.testing.allocator;
+    var env = std.process.Environ.Map.init(a);
+    defer env.deinit();
+    try env.put("GEODE_CLUSTER_TOKEN", "tok");
+    try env.put("GEODE_CLUSTER_PORT", "14250");
+    // The pod's hostname (StatefulSet pod name). NO GEODE_NODE_ID is set — it
+    // must be auto-derived from this host's position in GEODE_PEERS.
+    try env.put("HOSTNAME", "geode-0");
+    // Self entry uses the pod hostname (position 1); the other two are loopback
+    // so the coordinator's background connect attempts have somewhere to go.
+    try env.put("GEODE_PEERS", "geode-0:14250,127.0.0.1:14251,127.0.0.1:14252");
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null)) orelse return error.TestExpectedNonNull;
+    defer bs.deinit();
+    // node_id derived as 1 from the $HOSTNAME match (geode-0 at position 1).
+    try std.testing.expectEqual(@as(u64, 1), bs.coordinator.raft.id);
+    // Self (geode-0, position 1) skipped -> 2 voter peers (ids 2 and 3).
+    try std.testing.expectEqual(@as(usize, 2), bs.coordinator.raft.peers.len);
+}
+
+test "maybeStart: $HOSTNAME position overrides a mismatched GEODE_NODE_ID (the k8s bug)" {
+    if (std.c.getenv("CI") != null) return error.SkipZigTest;
+    resetGlobalGraphStore();
+    defer resetGlobalGraphStore();
+    const a = std.testing.allocator;
+    var env = std.process.Environ.Map.init(a);
+    defer env.deinit();
+    try env.put("GEODE_CLUSTER_TOKEN", "tok");
+    try env.put("GEODE_CLUSTER_PORT", "14253");
+    try env.put("HOSTNAME", "geode-1"); // pod is geode-1 -> position 2
+    try env.put("GEODE_NODE_ID", "1"); // MISCONFIGURED (the silent-hang bug)
+    try env.put("GEODE_PEERS", "127.0.0.1:14254,geode-1:14253,127.0.0.1:14255");
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null)) orelse return error.TestExpectedNonNull;
+    defer bs.deinit();
+    // Despite GEODE_NODE_ID=1, the hostname position (2) wins so votes are counted.
+    try std.testing.expectEqual(@as(u64, 2), bs.coordinator.raft.id);
+    // Self (geode-1, position 2) skipped -> 2 voter peers.
+    try std.testing.expectEqual(@as(usize, 2), bs.coordinator.raft.peers.len);
+}
