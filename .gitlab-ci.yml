@@ -101,7 +101,7 @@ cache:
       - .zig-cache/
       - zig-cache/
     policy: pull-push
-  - key: "zig-protoc-v32.1"
+  - key: "zig-protoc-v32.1" # gitleaks:allow -- public cache key name, not a credential
     paths:
       # protoc-linux-x86_64 (host protoc for every linux runner), addressed by
       # the protobuf dep's pinned hash N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.
