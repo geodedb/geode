@@ -80,15 +80,33 @@ default:
   interruptible: true  # Allow auto-cancel of redundant pipelines on push
 
 # Issue #465: Global Zig build cache for CI pipeline efficiency
+#
+# GAP-0838 / pipeline #2571779098 hardening: a second, STABLE-keyed cache holds
+# the immutable pinned `protoc` binary. The protobuf dep resolves its host
+# protoc via an UNCONDITIONAL `b.lazyDependency("protoc-<host>")` in its
+# build(), so every cold-cache `zig build` fetches
+# `protoc-32.1-linux-x86_64.zip` from GitHub releases — which intermittently
+# fails with `HttpConnectionClosing`. The per-branch cache below goes cold
+# (even `zig-cache-main-protected` was missing in #2571779098), so this
+# version-keyed cache (NOT branch/commit-scoped) survives evictions: warmed
+# once, every subsequent pipeline on any branch restores protoc and never
+# touches GitHub. Bump the key + path hash when protoc is upgraded (see the
+# `.@"protoc-*"` hashes in the protobuf dep's build.zig.zon).
 cache:
-  key: "zig-cache-${CI_COMMIT_REF_SLUG}"
-  fallback_keys:
-    - "zig-cache-main-protected"
-    - "zig-cache-main"
-  paths:
-    - .zig-cache/
-    - zig-cache/
-  policy: pull-push
+  - key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    fallback_keys:
+      - "zig-cache-main-protected"
+      - "zig-cache-main"
+    paths:
+      - .zig-cache/
+      - zig-cache/
+    policy: pull-push
+  - key: "zig-protoc-v32.1"
+    paths:
+      # protoc-linux-x86_64 (host protoc for every linux runner), addressed by
+      # the protobuf dep's pinned hash N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.
+      - zig-cache/p/N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ/
+    policy: pull-push
 
 variables:
   DOCKER_BUILDKIT: 1
