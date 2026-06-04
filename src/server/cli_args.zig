@@ -64,6 +64,16 @@ pub const ServerConfig = struct {
     // downstream when cluster_bootstrap.parseConfig sees an empty CLI list.
     peers: [][]const u8 = &.{},
 
+    // Whether cert_path/key_path were EXPLICITLY supplied by the operator
+    // (via --cert/--key or a config file) as opposed to auto-derived from
+    // --data-dir / GEODE_CERT_DIR / the /tmp fallback. An explicitly-provided
+    // cert MUST be loaded as-is and never regenerated or replaced by a
+    // throwaway self-signed cert. See
+    // docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
+    // CANARY: REQ=REQ-CLUSTER-CERT-PROVIDED-HONORED; FEATURE="DistributedClusterTLS"; ASPECT=ExplicitCertTracking; STATUS=TESTED; TEST=tests/test_cert_provided_cert_honored.zig; OWNER=distributed; UPDATED=2026-06-04
+    cert_explicit: bool = false,
+    key_explicit: bool = false,
+
     // Track which fields were allocated (vs static strings)
     _allocated_listen_quic: bool = false,
     _allocated_listen_grpc: bool = false,
@@ -151,10 +161,18 @@ pub fn mergeFileConfig(config: *ServerConfig, file_result: config_lib.Value) voi
         if (config.listen_grpc == null) config.listen_grpc = v;
     }
     if (file_result.getString("cert_path")) |v| {
-        if (config.cert_path == null) config.cert_path = v;
+        if (config.cert_path == null) {
+            config.cert_path = v;
+            // A cert supplied via the config file is just as "explicit" as one
+            // supplied via --cert: it must be loaded as-is, never regenerated.
+            config.cert_explicit = true;
+        }
     }
     if (file_result.getString("key_path")) |v| {
-        if (config.key_path == null) config.key_path = v;
+        if (config.key_path == null) {
+            config.key_path = v;
+            config.key_explicit = true;
+        }
     }
     if (file_result.getString("data_dir")) |v| {
         if (config.data_dir == null) config.data_dir = v;
@@ -310,10 +328,12 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         } else if (std.mem.eql(u8, arg, "--cert") and ai + 1 < args.len) {
             config.cert_path = try allocator.dupe(u8, args[ai + 1]);
             config._allocated_cert_path = true;
+            config.cert_explicit = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--key") and ai + 1 < args.len) {
             config.key_path = try allocator.dupe(u8, args[ai + 1]);
             config._allocated_key_path = true;
+            config.key_explicit = true;
             ai += 1;
         } else if ((std.mem.eql(u8, arg, "--data_dir") or std.mem.eql(u8, arg, "--data-dir")) and ai + 1 < args.len) {
             config.data_dir = try allocator.dupe(u8, args[ai + 1]);
@@ -402,8 +422,17 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
 
 /// Resolve certificate paths based on configuration.
 /// Precedence: CLI flags > GEODE_CERT_DIR env > data_dir > /tmp fallback.
-/// Returns struct with cert_path and key_path fields.
-pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !struct { cert_path: []const u8, key_path: []const u8 } {
+/// Returns the resolved cert_path/key_path plus whether each was EXPLICITLY
+/// supplied by the operator (vs auto-derived). Callers must honor an explicit
+/// cert by loading it as-is and failing loud if it cannot be read — never
+/// regenerate or fall back. See
+/// docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
+pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !struct {
+    cert_path: []const u8,
+    key_path: []const u8,
+    cert_explicit: bool,
+    key_explicit: bool,
+} {
     // If QUIC is enabled and no custom certs specified, use defaults
     if (config.listen_quic != null) {
         if (config.cert_path == null or config.key_path == null) {
@@ -445,5 +474,7 @@ pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !st
     return .{
         .cert_path = config.cert_path.?,
         .key_path = config.key_path.?,
+        .cert_explicit = config.cert_explicit,
+        .key_explicit = config.key_explicit,
     };
 }

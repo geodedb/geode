@@ -631,6 +631,10 @@ REQ-CLIENT-INTEGRATION-001,RustClientIntegration,QUICTransport,TESTED,,,clients,
 REQ-CLIENT-INTEGRATION-001,range() function,BuiltinFunctions,TESTED,,,eval,2025-11-15,src/eval.zig
 REQ-CLIENT-INTEGRATION-001,range() function,BuiltinFunctions,TESTED,,,eval,2025-11-15,src/eval/call_handlers.zig
 REQ-CLUSTER-AUTH-001,ClusterAuth,SharedModule,TESTED,,,security,2026-04-01,src/distributed/cluster_auth.zig
+REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertLoadAsIs,TESTED,,,distributed,2026-06-04,src/server/main.zig
+REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertNotDiscarded,TESTED,,,distributed,2026-06-04,tests/test_cert_provided_cert_honored.zig
+REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertTracking,TESTED,,,distributed,2026-06-04,src/server/cli_args.zig
+REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ListenerCertProbe,TESTED,,,transport,2026-06-04,src/transport/quic.zig
 REQ-CODEQUALITY-001,CodeQuality,ErrorHandling,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-CODEQUALITY-002,CodeQuality,MemoryManagement,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-CODEQUALITY-003,CodeQuality,NamingConventions,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig

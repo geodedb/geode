@@ -953,21 +953,75 @@ pub fn main() !void {
     const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
     var cert_path = cert_paths.cert_path;
     var key_path = cert_paths.key_path;
+    const cert_explicit = cert_paths.cert_explicit or cert_paths.key_explicit;
 
-    // Try to generate certificates if using QUIC or gRPC (TLS needed for both)
+    // Try to ensure certificates if using QUIC or gRPC (TLS needed for both).
+    //
+    // CANARY: REQ=REQ-CLUSTER-CERT-PROVIDED-HONORED; FEATURE="DistributedClusterTLS"; ASPECT=ExplicitCertLoadAsIs; STATUS=TESTED; TEST=tests/test_cert_provided_cert_honored.zig; OWNER=distributed; UPDATED=2026-06-04
+    //
+    // An operator-PROVIDED --cert/--key (or config-file cert_path/key_path)
+    // must be loaded exactly as supplied: never probe-then-regenerate, never
+    // overwrite, never fall back to a throwaway /tmp self-signed cert. Doing
+    // so silently downgraded security and — in a Kubernetes StatefulSet — gave
+    // every node a distinct self-signed cert on the Raft port, so peers could
+    // not verify each other and the cluster never elected a leader. See
+    // docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
     phase_start = compat_milliTimestamp();
     if (listen_quic != null or listen_grpc != null) {
-        cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
-            log.warn("Could not generate certificates, using fallback paths", &.{
-                Attr.string("error", @errorName(err)),
-                Attr.string("fallback_cert", "/tmp/geode-server.crt"),
-                Attr.string("fallback_key", "/tmp/geode-server.key"),
+        if (cert_explicit) {
+            // An explicit cert REQUIRES an explicit key (and vice versa): they
+            // are a matching pair. A half-configuration is an operator error;
+            // refuse loudly rather than silently self-signing the other half.
+            if (!(cert_paths.cert_explicit and cert_paths.key_explicit)) {
+                std.debug.print(
+                    "SECURITY: --cert and --key (or config cert_path/key_path) must be provided together; got cert_explicit={}, key_explicit={}. Refusing to start.\n",
+                    .{ cert_paths.cert_explicit, cert_paths.key_explicit },
+                );
+                log.err("TLS cert/key must be provided together; refusing to start", &.{
+                    Attr.string("cert_path", cert_path),
+                    Attr.string("key_path", key_path),
+                });
+                return error.IncompleteCertificateConfiguration;
+            }
+            // Load the provided cert/key as-is. Fail loud if unreadable —
+            // do NOT self-sign. Use std.debug.print (reaches `kubectl logs`
+            // at this pre-logger-flush stage, unlike the structured logger).
+            cert_gen.requireExistingCertificates(cert_path, key_path) catch |err| {
+                std.debug.print(
+                    "SECURITY: operator-provided TLS certificate/key could not be read; refusing to start. cert='{s}' key='{s}' error={s}\n",
+                    .{ cert_path, key_path, @errorName(err) },
+                );
+                log.err("operator-provided TLS cert/key unreadable; refusing to start", &.{
+                    Attr.string("cert_path", cert_path),
+                    Attr.string("key_path", key_path),
+                    Attr.string("error", @errorName(err)),
+                });
+                return err;
+            };
+            std.debug.print(
+                "[startup] using operator-provided TLS certificate {s} ({d}ms)\n",
+                .{ cert_path, compat_milliTimestamp() - phase_start },
+            );
+            log.info("using operator-provided TLS certificate", &.{
+                Attr.string("cert_path", cert_path),
+                Attr.string("key_path", key_path),
             });
-            cert_path = "/tmp/geode-server.crt";
-            key_path = "/tmp/geode-server.key";
-            try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
-        };
-        std.debug.print("[startup] certificates ready ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
+        } else {
+            // Auto path: no cert supplied → generate-if-missing into the
+            // resolved (data-dir/cert-dir) location, with a /tmp fallback only
+            // when that location is not writable.
+            cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
+                log.warn("Could not generate certificates, using fallback paths", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.string("fallback_cert", "/tmp/geode-server.crt"),
+                    Attr.string("fallback_key", "/tmp/geode-server.key"),
+                });
+                cert_path = "/tmp/geode-server.crt";
+                key_path = "/tmp/geode-server.key";
+                try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
+            };
+            std.debug.print("[startup] certificates ready ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
+        }
     }
 
     // Initialize AuditLogger.

@@ -129,3 +129,61 @@ A targeted regression test should launch a real `geode serve --cert <provided> -
 ## Deployment status / workaround attempts (geode-argo-arda)
 
 The 3-node clustered component (`manifests/components/clustered/`) was wired correctly (3 replicas, `Parallel`, FQDN peers, `GEODE_CLUSTER_TOKEN`, `GEODE_AUTH_HMAC_KEY`, cert-manager self-signed CA with pod-DNS SANs, `GEODE_CLUSTER_CA_CERT`). The cluster still will not form solely because of this bug. Deployment-layer workarounds attempted and rejected as unreliable: copy the cert into writable tmpfs/`/data`; run geode as a non-PID-1 child; `setsid`; `cd` off the data-dir; redirect stdout to a file + `tail -F`. Each "fixed" it in some throwaway pods but **not** in the real PVC-backed StatefulSet — confirming Defect 2's environment sensitivity. The component is left disabled on qa pending a geode fix; re-enable once an explicit `--cert` is honored deterministically.
+
+---
+
+## ✅ RESOLVED (2026-06-04)
+
+Fixed in geode `main`. An explicitly-provided `--cert`/`--key` (or config-file
+`cert_path`/`key_path`) is now loaded **as-is**, and the existence check no
+longer depends on the `.failing`-allocator `std.Io` probe.
+
+**Changes:**
+
+- **`src/server/cli_args.zig`** — `ServerConfig` now tracks `cert_explicit` /
+  `key_explicit` (set when the cert/key come from `--cert`/`--key` or the config
+  file, NOT when auto-derived from `--data-dir`/`GEODE_CERT_DIR`/`/tmp`).
+  `resolveCertPaths` returns both flags.
+- **`src/tools/cert_gen.zig`** —
+  - `certFileReadable(path)`: allocation-free, `Io`-independent readability check
+    via a raw `openat()` syscall (no `global_single_threaded`, no `.failing`
+    allocator, no dependence on process session / cwd / stdout fd / backing fs).
+    This addresses **Defect 2**.
+  - `requireExistingCertificates(cert, key)`: verifies an operator-provided pair
+    is readable and returns `error.ProvidedCertificateUnreadable` /
+    `error.ProvidedKeyUnreadable` otherwise. **Never** generates, overwrites, or
+    falls back to `/tmp`. This addresses **Defect 1**.
+  - `ensureCertificatesAtPath` (auto path) now uses `certFileReadable` and only
+    regenerates on *genuine* absence — replacing the bare `catch {}` that
+    swallowed every error.
+- **`src/server/main.zig`** — the QUIC/gRPC cert-resolution step branches: when
+  the cert is explicit it calls `requireExistingCertificates` and **refuses to
+  start** (non-zero exit, loud `std.debug.print` that reaches `kubectl logs`)
+  if the provided cert/key can't be read — it never self-signs. A half
+  configuration (only one of `--cert`/`--key`) is also refused. The resolved
+  `cert_path` is then forwarded unchanged to the Raft cluster listener
+  (`cluster_bootstrap.maybeStart`), the gRPC server, and the QUIC transport, so
+  every node now presents the SAME operator-provided cert on the Raft port.
+- **`src/transport/quic.zig`** — `QuicTransport.listen()`'s cert probe likewise
+  uses the allocation-free `certPathReadable` instead of the
+  `global_single_threaded` `access` probe, so a present cert is never
+  misreported as missing and spuriously self-signed.
+
+**Regression test:** `tests/test_cert_provided_cert_honored.zig` (build step
+`zig build test-cert-provided`):
+
+- Unit: `certFileReadable` true/false; `requireExistingCertificates` ok for a
+  real pair, fails loud for a missing cert/key, and never fabricates a `/tmp`
+  cert.
+- E2E (subprocess, **stdout = pipe** — the exact launch context that flipped the
+  bug): `geode serve --cert <missing>` **refuses** (non-zero exit, no
+  `Generated self-signed`, no `/tmp/geode-server.crt`); `geode serve --cert
+  <existing>` **loads it** (`using operator-provided TLS certificate` marker),
+  leaves the provided cert byte-for-byte intact, and generates no `/tmp` cert.
+
+These tests **failed against the pre-fix binary** (the missing-cert case
+self-signed at the provided path; the existing-cert case never emitted the
+load-as-is marker) and **pass after the fix**.
+
+**Next:** re-enable the 3-node `components/clustered` overlay on qa to validate
+end-to-end cluster formation now that explicit certs are honored deterministically.

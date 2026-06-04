@@ -69,11 +69,62 @@ pub fn ensureCertificates(allocator: std.mem.Allocator) !void {
     };
 }
 
+/// Robust, allocation-free readability check for a certificate/key file.
+///
+/// This deliberately does NOT use `std.Io.Dir.access` over
+/// `std.Io.Threaded.global_single_threaded` (whose allocator is `.failing`):
+/// that probe was empirically environment-sensitive when geode runs as a
+/// container entrypoint (PVC-backed data-dir, stdout = container log pipe), so
+/// a perfectly readable operator-provided cert could be misreported as missing
+/// and silently regenerated. See
+/// docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
+///
+/// Instead we attempt to open the file for reading with a raw `openat`
+/// syscall and let the open's result be authoritative. No allocator, no
+/// `std.Io.Threaded` cancellation machinery, no dependence on process session,
+/// cwd, stdout fd, or the backing filesystem.
+pub fn certFileReadable(path: []const u8) bool {
+    if (comptime builtin.os.tag == .linux) {
+        // AT.FDCWD resolves `path` relative to cwd for relative paths and
+        // ignores it for absolute paths — same semantics as the old probe,
+        // minus the failing-allocator fragility. `std.posix.close` was
+        // removed in Zig 0.16; use the raw linux close.
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
+        defer _ = std.os.linux.close(fd);
+        return true;
+    }
+    // Portable fallback (macOS/Windows): open via a LOCAL Threaded backed by a
+    // real allocator — never the `.failing` global_single_threaded.
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var f = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    f.close(io);
+    return true;
+}
+
+/// Verify that an operator-PROVIDED cert+key pair exists and is readable.
+///
+/// Unlike `ensureCertificatesAtPath`, this NEVER generates, NEVER overwrites,
+/// and NEVER falls back to a throwaway `/tmp` cert. An explicitly-provided
+/// `--cert`/`--key` must be loaded exactly as supplied; if it cannot be read,
+/// the caller must fail loud (refuse to start) rather than silently self-sign,
+/// which would be a security downgrade. See
+/// docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
+pub fn requireExistingCertificates(cert_path: []const u8, key_path: []const u8) error{ ProvidedCertificateUnreadable, ProvidedKeyUnreadable }!void {
+    if (!certFileReadable(cert_path)) return error.ProvidedCertificateUnreadable;
+    if (!certFileReadable(key_path)) return error.ProvidedKeyUnreadable;
+}
+
 pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8) !void {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    // Check if certificates already exist
-    std.Io.Dir.cwd().access(io, cert_path, .{}) catch {
+    // Only (re)generate when the cert is genuinely absent. The previous
+    // implementation probed via `std.Io.Dir.access` over the `.failing`
+    // global_single_threaded Io under a bare `catch {}` that swallowed ALL
+    // errors and regenerated — environment-sensitive and a silent footgun.
+    // `certFileReadable` is allocation-free and deterministic.
+    if (!certFileReadable(cert_path)) {
         // Generate new certificates
+        const io = std.Io.Threaded.global_single_threaded.io();
         try generateSelfSignedCert(allocator, "geode.local", cert_path, key_path);
 
         // Harden file permissions:
@@ -91,7 +142,7 @@ pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const
         }
 
         std.debug.print("Generated self-signed certificates at {s} and {s}\n", .{ cert_path, key_path });
-    };
+    }
 }
 
 pub fn main() !void {

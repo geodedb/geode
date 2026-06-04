@@ -1248,6 +1248,29 @@ pub fn build(b: *std.Build) void {
     const gap0838_cluster_tls_step = b.step("test-gap0838-cluster-tls", "Run GAP-0838 non-loopback secure peer TLS handshake test");
     gap0838_cluster_tls_step.dependOn(&run_gap0838_cluster_tls_tests.step);
 
+    // Regression for docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md
+    // Proves an explicitly-provided --cert/--key is loaded as-is (never silently
+    // self-signed / discarded), via subprocess `geode serve` runs whose stdout
+    // is a PIPE — the exact launch context that flipped the bug — plus unit
+    // tests of the new cert_gen.certFileReadable / requireExistingCertificates
+    // helpers. The subprocess tests depend on a pre-built ./zig-out/bin/geode
+    // (they SKIP if it is missing).
+    const cert_provided_mod = b.createModule(.{
+        .root_source_file = b.path("src/tools/cert_gen.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const cert_provided_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cert_provided_cert_honored.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cert_provided_tests.root_module.addImport("cert_gen", cert_provided_mod);
+    cert_provided_tests.root_module.link_libc = true;
+    const run_cert_provided_tests = b.addRunArtifact(cert_provided_tests);
+    const cert_provided_step = b.step("test-cert-provided", "Run explicit-cert-honored regression (provided --cert not discarded)");
+    cert_provided_step.dependOn(&run_cert_provided_tests.step);
+
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator
@@ -2423,6 +2446,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_raft_command_refactor_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_raft_envelope_roundtrip_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0838_cluster_tls_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cert_provided_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);

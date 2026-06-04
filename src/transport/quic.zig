@@ -47,6 +47,27 @@ const api = @import("vendor_quic");
 const Endpoint = api.QuicEndpoint;
 const Connection = api.QuicConnection;
 const VendorQuicConfig = api.QuicConfig;
+const builtin = @import("builtin");
+
+/// Allocation-free, Io-independent readability check for a cert/key file.
+/// Mirrors `cert_gen.certFileReadable`: it attempts a raw `openat` and lets the
+/// result be authoritative, deliberately avoiding `std.Io.Dir.access` over the
+/// `.failing` global_single_threaded Io (which was environment-sensitive as a
+/// container entrypoint). See
+/// docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
+fn certPathReadable(path: []const u8) bool {
+    if (comptime builtin.os.tag == .linux) {
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
+        defer _ = std.os.linux.close(fd);
+        return true;
+    }
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var f = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    f.close(io);
+    return true;
+}
 
 pub const QuicInnerConnection = Connection;
 pub const QuicReadReadyFn = *const fn (ctx: *anyopaque, c: *QuicInnerConnection) void;
@@ -483,31 +504,37 @@ pub const QuicTransport = struct {
     }
 
     pub fn listen(self: *QuicTransport) !void {
-        // Verify certificates exist or generate them
-        std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), self.config.cert_path, .{}) catch |err| {
-            if (err == error.FileNotFound) {
-                // Try to generate self-signed certificates
-                if (self.generateSelfSignedCert()) {
-                    tlog.info("auto-generated self-signed TLS certificate", &.{
-                        Attr.string("path", self.config.cert_path),
-                    });
-                } else |gen_err| {
-                    // Use .err (not .fatal) so the logger does not panic when
-                    // this fires inside a unit-test binary.  The caller still
-                    // receives CertificateError and the server refuses to start.
-                    tlog.err("TLS certificates not found and generation failed", &.{
-                        Attr.string("cert_path", self.config.cert_path),
-                        Attr.string("key_path", self.config.key_path),
-                        Attr.string("error", @errorName(gen_err)),
-                    });
-                    std.debug.print("SECURITY: Refusing to start without TLS. Generate certificates manually:\n", .{});
-                    std.debug.print("  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout {s} -out {s} -days 365\n", .{ self.config.key_path, self.config.cert_path });
-                    return QuicError.CertificateError;
-                }
-            } else {
-                return err;
+        // Verify certificates exist or generate them.
+        //
+        // CANARY: REQ=REQ-CLUSTER-CERT-PROVIDED-HONORED; FEATURE="DistributedClusterTLS"; ASPECT=ListenerCertProbe; STATUS=TESTED; TEST=tests/test_cert_provided_cert_honored.zig; OWNER=transport; UPDATED=2026-06-04
+        //
+        // The previous probe used `std.Io.Dir.access` over the `.failing`
+        // global_single_threaded Io, which was environment-sensitive when geode
+        // runs as a container entrypoint and could misreport a present cert as
+        // missing → spurious self-sign. `certPathReadable` is an allocation-free
+        // openat() syscall and only takes the generate branch on genuine
+        // absence. See
+        // docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
+        if (!certPathReadable(self.config.cert_path)) {
+            // Cert genuinely absent → try to generate self-signed certificates.
+            if (self.generateSelfSignedCert()) {
+                tlog.info("auto-generated self-signed TLS certificate", &.{
+                    Attr.string("path", self.config.cert_path),
+                });
+            } else |gen_err| {
+                // Use .err (not .fatal) so the logger does not panic when
+                // this fires inside a unit-test binary.  The caller still
+                // receives CertificateError and the server refuses to start.
+                tlog.err("TLS certificates not found and generation failed", &.{
+                    Attr.string("cert_path", self.config.cert_path),
+                    Attr.string("key_path", self.config.key_path),
+                    Attr.string("error", @errorName(gen_err)),
+                });
+                std.debug.print("SECURITY: Refusing to start without TLS. Generate certificates manually:\n", .{});
+                std.debug.print("  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout {s} -out {s} -days 365\n", .{ self.config.key_path, self.config.cert_path });
+                return QuicError.CertificateError;
             }
-        };
+        }
 
         // Load and parse certificate file (convert to DER for inline TLS material)
         const io_cert = std.Io.Threaded.global_single_threaded.io();
