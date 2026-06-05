@@ -369,3 +369,34 @@ recommended liveness/readiness check.
    ```
 
    Expected: `{"rows":[{"expr":1}],...}` with exit code 0.
+
+---
+
+## 9. Geode-side auto-recovery — accept-path wedge watchdog (FIXED)
+
+The k8s probe (§8) is the deployment-side detector. geode now also **self-heals
+without depending on the probe**: a watchdog on the existing 5 s metrics-loop
+tick samples the listener UDP socket's `rx_queue` depth (the same
+`/proc/net/udp` signal as §2b's diagnostic). A healthy acceptor keeps rx_queue
+at 0–few KB; a wedged one lets it grow to megabytes and never recede. When
+rx_queue stays **continuously at/above a threshold for longer than a deadline**,
+geode logs a loud `ACCEPTOR WEDGE: …` line and performs a controlled
+`std.process.exit(70)`, so the Kubernetes `restartPolicy` restarts the pod
+automatically — converting the silent, manual-`kubectl delete pod` outage into
+automatic recovery within the deadline.
+
+- **Module:** `src/server/acceptor_watchdog.zig` — pure, unit-tested
+  `parseUdpRxQueueBytes` (find the listener's rx_queue row in `/proc/net/udp`),
+  `parseConfig` (env), and `WedgeTracker.update` (the streak/deadline decision,
+  time injected). The single side effect (read `/proc/net/udp`; exit) lives in
+  the `main.zig` metrics loop. Mirrors the existing
+  `parseAcceptorBailMs` / `waitForAcceptorExit` split.
+- **Tuning (env):** `GEODE_ACCEPTOR_WATCHDOG_RX_BYTES` (default 8 MiB —
+  far above any transient burst, well below the observed ~12.6 MB wedge),
+  `GEODE_ACCEPTOR_WATCHDOG_DEADLINE_MS` (default 30 000, clamped
+  [1 000, 600 000]), `GEODE_ACCEPTOR_WATCHDOG_DISABLE=1` to opt out.
+- **Scope:** Linux-only (reads `/proc/net/udp`); a no-op elsewhere and when the
+  listener port can't be resolved. It does **not** fix the upstream
+  `Endpoint.mu` contention that *causes* the wedge (that remains a `quic`
+  dependency fix — §6) — it makes recovery automatic so the wedge is no longer a
+  restart-only outage. Tests: `zig build test-acceptor-watchdog`.

@@ -3946,6 +3946,8 @@ REQ-QUALITY-GAP-413-015,OrphanedTestRemediation,FileAccessAPI,TESTED,,,quality,2
 REQ-QUALITY-GAP-413-016,OrphanedTestRemediation,FormatString,TESTED,,,quality,2026-01-30,tests/test_cef.zig
 REQ-QUERY-CHAIN-LIMIT-001,QueryChainingWithLimitFix,ChainLimit,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-QUIC-001,QUICProtocol,ConnectionHandling,TESTED,,,wire,2026-01-15,tests/test_gap_0193_final_batch.zig
+REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG,QUIC High-Concurrency Connection Admission,AcceptPathWedgeAutoRecovery,TESTED,,,transport,2026-06-05,src/server/acceptor_watchdog.zig
+REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG,QUIC High-Concurrency Connection Admission,AcceptPathWedgeAutoRecovery,TESTED,,,transport,2026-06-05,src/server/main.zig
 REQ-QUIC-CATALOG-003,CatalogDataDirIsolation,ServerInit,IMPL,,,engine,2026-01-27,src/server/server_init.zig
 REQ-QUIC-CLIENT-READLINE-001,QuicClientReadLine,RetryLogic,IMPL,,,transport,2026-01-30,src/transport/quic.zig
 REQ-QUIC-CLIENT-READLINE-002,QuicClientReadLine,RegressionTests,TESTED,,,transport,2026-01-30,tests/test_quic_transport.zig

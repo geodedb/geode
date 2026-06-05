@@ -64,6 +64,13 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+/// Non-allocating getenv returning a borrowed slice (valid for the process
+/// lifetime, like all of `environ`). Used where the value is consumed
+/// immediately (e.g. parsed into a config) and not retained.
+fn posixGetenv(name: [*:0]const u8) ?[]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
+
 fn envUsize(allocator: std.mem.Allocator, name: []const u8, default_value: usize, min_value: usize, max_value: usize) usize {
     const raw = getEnvVarOwned(allocator, name) catch return default_value;
     defer allocator.free(raw);
@@ -133,6 +140,7 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 // (Task 4 of docs/superpowers/plans/2026-04-25-quic-cascade-investigation.md)
 const quic_metrics = @import("quic_connection_metrics.zig");
 const leaked_conn_reaper = @import("leaked_conn_reaper.zig");
+const acceptor_watchdog = @import("acceptor_watchdog.zig");
 const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 const quic_response_metrics = @import("quic_response_metrics");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
@@ -2290,6 +2298,15 @@ pub fn main() !void {
             registry: *runtime_metrics_mod.Registry,
             should_stop: *std.atomic.Value(u32),
             allocator: std.mem.Allocator,
+            // QUIC listener port for the accept-path wedge watchdog (0 = unknown
+            // → watchdog inert). Parsed from `--listen host:port`.
+            quic_port: u16,
+        };
+        // Resolve the QUIC listener port for the wedge watchdog.
+        const watchdog_quic_port: u16 = blk: {
+            const la = listen_quic orelse break :blk 0;
+            const pcolon = std.mem.lastIndexOfScalar(u8, la, ':') orelse break :blk 0;
+            break :blk std.fmt.parseInt(u16, la[pcolon + 1 ..], 10) catch 0;
         };
         const metrics_ctx = try gpa.create(MetricsCtx);
         defer gpa.destroy(metrics_ctx);
@@ -2297,6 +2314,7 @@ pub fn main() !void {
             .registry = metrics_registry,
             .should_stop = &metrics_should_stop,
             .allocator = gpa,
+            .quic_port = watchdog_quic_port,
         };
 
         // PERF-D / #816: park on `should_stop` via futexWaitTimeout instead
@@ -2329,6 +2347,14 @@ pub fn main() !void {
                     .clock = .awake,
                 } };
                 var last_stall_log_idle_ns: u64 = 0;
+                // Accept-path wedge watchdog config (parsed once). See
+                // docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md §6.
+                const wd_cfg = acceptor_watchdog.parseConfig(
+                    posixGetenv("GEODE_ACCEPTOR_WATCHDOG_RX_BYTES"),
+                    posixGetenv("GEODE_ACCEPTOR_WATCHDOG_DEADLINE_MS"),
+                    posixGetenv("GEODE_ACCEPTOR_WATCHDOG_DISABLE"),
+                );
+                var wd_tracker = acceptor_watchdog.WedgeTracker{};
                 while (ctx.should_stop.load(.acquire) == 0) {
                     // Park until the 5s tick elapses or shutdown is signalled.
                     // `should_stop` is the futex word: the producer stores 1
@@ -2395,6 +2421,38 @@ pub fn main() !void {
                                 "per-stream proto_reader stall: stream_id={d} peer={s} idle_ms={d} (this stream wedged while others may still be progressing; restart pod or wait for client retry)",
                                 .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms },
                             );
+                        }
+                    }
+
+                    // Accept-path wedge watchdog: when the listener UDP rx_queue
+                    // backs up past the threshold continuously for longer than
+                    // the deadline, the QUIC acceptor is wedged (Endpoint.mu
+                    // contention) and not draining new connections — the pod
+                    // stays Running but is effectively down with no automatic
+                    // recovery. Self-restart so the orchestrator recovers it.
+                    // See docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
+                    // CANARY: REQ=REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=AcceptPathWedgeAutoRecovery; STATUS=TESTED; TEST=src/server/acceptor_watchdog.zig; OWNER=transport; UPDATED=2026-06-05
+                    if (wd_cfg.enabled and ctx.quic_port != 0) {
+                        if (acceptor_watchdog.readListenerRxQueue(ctx.quic_port)) |rx| {
+                            const now_ms2: i64 = @intCast(now_ns / std.time.ns_per_ms);
+                            if (wd_tracker.update(rx, now_ms2, wd_cfg) == .restart) {
+                                std.log.err(
+                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes stayed >= {d} for >= {d}ms — the QUIC acceptor is wedged and not draining new connections. Self-restarting so the orchestrator recovers automatically (set GEODE_ACCEPTOR_WATCHDOG_DISABLE=1 to opt out).",
+                                    .{ ctx.quic_port, rx, wd_cfg.rx_threshold_bytes, wd_cfg.deadline_ms },
+                                );
+                                std.debug.print(
+                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes wedged >= {d}ms; self-restarting for automatic recovery.\n",
+                                    .{ ctx.quic_port, rx, wd_cfg.deadline_ms },
+                                );
+                                // Let the log flush, then exit non-zero so the
+                                // k8s restartPolicy restarts the pod. (This path
+                                // is linux-only — readListenerRxQueue returns
+                                // null elsewhere.)
+                                var flush_req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
+                                var flush_rem: std.os.linux.timespec = undefined;
+                                _ = std.os.linux.nanosleep(&flush_req, &flush_rem);
+                                std.process.exit(70); // EX_SOFTWARE
+                            }
                         }
                     }
                 }

@@ -1288,6 +1288,19 @@ pub fn build(b: *std.Build) void {
     const cluster_steady_step = b.step("test-cluster-steady-state", "Run 3-node distinct-IP CA-TLS steady-state leader-hold regression");
     cluster_steady_step.dependOn(&run_cluster_steady_tests.step);
 
+    // Accept-path wedge watchdog: pure rx_queue-parse / config / decision unit
+    // tests for the auto-recovery added in
+    // docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
+    const acceptor_watchdog_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/server/acceptor_watchdog.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    acceptor_watchdog_tests.root_module.link_libc = true;
+    const run_acceptor_watchdog_tests = b.addRunArtifact(acceptor_watchdog_tests);
+    const acceptor_watchdog_step = b.step("test-acceptor-watchdog", "Run accept-path wedge watchdog unit tests (rx_queue parse + decision)");
+    acceptor_watchdog_step.dependOn(&run_acceptor_watchdog_tests.step);
+
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator
@@ -2465,6 +2478,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0838_cluster_tls_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cert_provided_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_acceptor_watchdog_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);
