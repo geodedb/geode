@@ -199,6 +199,17 @@ pub fn maybeStart(
 
     const cluster_name = env.get("GEODE_CLUSTER_NAME") orelse DEFAULT_CLUSTER_NAME;
 
+    // Intra-cluster (:4242 Raft mesh) bind address. Defaults to 0.0.0.0, which
+    // is correct on Kubernetes (each pod has its own network namespace). On a
+    // single host running multiple nodes, 0.0.0.0:<port> would be shared via
+    // SO_REUSEPORT across every process and the kernel would misroute peer
+    // handshake datagrams between them, so a multi-node-on-one-host deployment
+    // (and the steady-state regression test) must bind each node to a DISTINCT
+    // address via GEODE_CLUSTER_LISTEN_ADDRESS. Held as an env reference for the
+    // process lifetime, exactly like cluster_token / cluster_name above.
+    // CANARY: REQ=REQ-DIST-CLUSTER-LISTEN-ADDR; FEATURE="DistributedCluster"; ASPECT=ClusterBindAddress; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+    const listen_address = env.get("GEODE_CLUSTER_LISTEN_ADDRESS") orelse DEFAULT_LISTEN_ADDRESS;
+
     // cluster_port resolution: CLI override > env > default.
     const cluster_port: u16 = blk: {
         if (cli_cluster_port) |p| break :blk p;
@@ -297,7 +308,7 @@ pub fn maybeStart(
 
     const cfg = cluster.ClusterCoordinator.Config{
         .peers = owned_peer_configs,
-        .listen_address = DEFAULT_LISTEN_ADDRESS,
+        .listen_address = listen_address,
         .cluster_port = cluster_port,
         .cluster_token = cluster_token,
         .cluster_name = cluster_name,

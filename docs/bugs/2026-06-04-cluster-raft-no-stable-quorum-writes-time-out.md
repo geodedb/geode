@@ -106,3 +106,23 @@ Drive it under mild CPU pressure / artificial latency to surface the `waitForHan
 ## Deployment status
 
 The geode-argo-arda manifests are now correct (TLS/identity/flags/CPU all resolved). The clustered component is left enabled on **qa**; **prod is untouched (single-node 0.6.14)** and must not be switched to clustered until a geode build elects-and-holds a leader and commits replicated writes on a real multi-pod cluster.
+
+---
+
+## Investigation findings (2026-06-04) — local 3-process distinct-IP CA-TLS repro
+
+Reproduced locally with three real `geode serve` processes on **distinct loopback IPs** (127.0.0.11/12/13), same cluster port 4242, with a CA + CA-signed leaf (SANs for the three IPs) and `GEODE_CLUSTER_CA_CERT` pinned to the CA — i.e. the arda secure-TLS model, not loopback-insecure. Three distinct root causes, in order of how they surface:
+
+### Root cause #1 — cluster listener hardcoded to `0.0.0.0:<port>` (FIXED)
+
+`cluster_bootstrap.zig` hardcoded `listen_address = "0.0.0.0"` with no override, and `QuicTransport` binds that address. On a single host, three processes all bind `0.0.0.0:4242`, which the kernel allows via **SO_REUSEPORT** — and then load-balances/misroutes peer handshake datagrams between the three co-located sockets, so handshakes land on the wrong process → persistent `HandshakeError`, no leader. (In real k8s each pod has its own netns, so `0.0.0.0` is fine there; this specifically blocked any faithful multi-node-on-one-host test, and would block any non-k8s multi-node-per-host deployment.)
+
+**Fix:** added a `GEODE_CLUSTER_LISTEN_ADDRESS` env knob (default `0.0.0.0`, unchanged for k8s), plumbed `main.zig` → `cluster_bootstrap` → `ClusterCoordinator.Config.listen_address`. With each node bound to a distinct address, **a full 3-node cluster elects and HOLDS a single leader for 40s+ with zero handshake errors** on a healthy host. Regression test: `tests/test_cluster_3node_steady_state.zig` (`zig build test-cluster-steady-state`) — passing.
+
+### Root cause #2 — graph writes bypass Raft entirely (the "no replication" defect)
+
+`executeCreate` / `CreateGraph` write directly to the local graph store; `ClusterCoordinator.proposeWrite` had **zero non-test callers** (the propose path was disabled at the executor). Confirmed locally with a healthy 3-node cluster: `CREATE (:ReplTest {v:1})` on the leader returns success (exit 0 — **not** a hang) and the row appears only on the leader (`count=1`), never on followers (`count=0`). The Raft apply path (`raft_apply.applyGraphMutation`) was an **MVP skeleton** (`create` → an *unlabelled* node with raw bytes in a `_raft_data` property; `delete`/`update`/`merge` unimplemented). So replication was not merely "disabled" — the replicated state machine for graph data did not exist. (The doc's "CREATE hangs / exit 124" was the real-k8s no-stable-leader case; with a stable leader the local write returns immediately.) **Being addressed** — see the replication commit that follows: writes route through `proposeWrite` → ordered deterministic apply on every node.
+
+### Root cause #3 — leader-flap under CPU pressure (transport architecture)
+
+Did NOT reproduce on a healthy single host (leader held). The transport is fragile under contention: a **single** outbox drain thread serializes every peer send behind a blocking `waitForHandshake(1)` (`raft_consensus.zig:902`; inconsistent with `cluster.zig`'s 10s), evicts the cached connection on any transient send error (`:733`/`:743`), never calls the dead `preconnectPeer` (`:673`), and opens one QUIC stream per RPC. Under CPU contention a slow handshake to one peer starves heartbeats to **all** peers → followers time out → flap. **Naively raising the 1s timeout would worsen this** (the single thread blocks longer); the correct fix is to stop serializing sends behind blocking handshakes (eager preconnect + async connect + per-peer dispatch + no evict-on-transient). Scoped as a follow-up — unreproducible/unverifiable on a single healthy host.

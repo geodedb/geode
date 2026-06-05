@@ -1270,6 +1270,20 @@ pub fn main() !void {
                 return env_err;
             };
         } else |_| {}
+        // Intra-cluster (:4242 Raft mesh) bind address override. Optional;
+        // defaults to 0.0.0.0 in cluster_bootstrap (correct on k8s, one pod per
+        // netns). Required to run multiple nodes on ONE host (and for the
+        // steady-state regression test) so each binds a DISTINCT address rather
+        // than sharing 0.0.0.0:<port> via SO_REUSEPORT (which misroutes peer
+        // handshake datagrams between the co-located processes). See
+        // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+        if (getEnvVarOwned(gpa, "GEODE_CLUSTER_LISTEN_ADDRESS")) |addr| {
+            defer gpa.free(addr);
+            process_env.put("GEODE_CLUSTER_LISTEN_ADDRESS", addr) catch |env_err| {
+                log.err("Failed to seed cluster_bootstrap env (cluster_listen_address)", &.{Attr.string("error", @errorName(env_err))});
+                return env_err;
+            };
+        } else |_| {}
         // GAP-0838 (Bug B): forward $HOSTNAME so cluster_bootstrap's identity
         // self-diagnostic can match this node against its GEODE_PEERS entry
         // (the StatefulSet pod name, e.g. `geode-1`) and flag a GEODE_NODE_ID

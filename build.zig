@@ -1271,6 +1271,23 @@ pub fn build(b: *std.Build) void {
     const cert_provided_step = b.step("test-cert-provided", "Run explicit-cert-honored regression (provided --cert not discarded)");
     cert_provided_step.dependOn(&run_cert_provided_tests.step);
 
+    // Regression for docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
+    // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13),
+    // same cluster port, CA-signed TLS, asserting a single leader is elected and
+    // HOLDS for >= N seconds (the flap-to-all-candidates failure mode). Requires
+    // a pre-built ./zig-out/bin/geode + openssl (SKIPs otherwise) and the
+    // GEODE_CLUSTER_LISTEN_ADDRESS knob (so each node binds a distinct address
+    // instead of sharing 0.0.0.0:<port> via SO_REUSEPORT on one host).
+    const cluster_steady_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_3node_steady_state.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_steady_tests.root_module.link_libc = true;
+    const run_cluster_steady_tests = b.addRunArtifact(cluster_steady_tests);
+    const cluster_steady_step = b.step("test-cluster-steady-state", "Run 3-node distinct-IP CA-TLS steady-state leader-hold regression");
+    cluster_steady_step.dependOn(&run_cluster_steady_tests.step);
+
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator
@@ -2447,6 +2464,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_raft_envelope_roundtrip_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0838_cluster_tls_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cert_provided_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);
