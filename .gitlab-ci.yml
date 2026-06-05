@@ -500,13 +500,37 @@ test-zig-unit:
 test-cross-build:
   stage: test
   image: $ZIG_IMAGE
-  # Retry on transient network failures (DNS, GitHub 502) during dependency
-  # fetch for cross-compilation targets whose packages aren't in the CI cache.
+  # Give the multi-target ReleaseSafe build room before the cache step runs.
+  # Without this the job inherits the 1h project default and the build itself
+  # eats most of it, so cache archival overruns ("execution took longer than
+  # 1h0m0s") even though every target built — see pipeline #1218.
+  timeout: 2h
+  # Retry on transient network failures (DNS, GitHub 502, HttpConnectionClosing)
+  # during dependency fetch for cross-compilation targets whose packages aren't
+  # in the CI cache. max: 2 matches the macOS job precedent for the same
+  # protobuf transitive-dep fetch flake.
   retry:
-    max: 1
+    max: 2
     when:
       - runner_system_failure
+      - stuck_or_timeout_failure
       - script_failure
+  # Pull-only cache (matches test-macos-unit): a ReleaseSafe build across every
+  # release target produces ~10K cache files whose pull-push archival overruns
+  # the job timeout AND leaves the shared `zig-cache-main-protected` cache
+  # half-written, which cascades into "Failed to extract cache" → network
+  # re-fetch flakes in every later job. The native test-zig-unit /
+  # test-zig-release-safe jobs are the cache producers; this consumer only
+  # needs to read it (deps are vendored in zig-pkg/ regardless).
+  cache:
+    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    fallback_keys:
+      - "zig-cache-main-protected"
+      - "zig-cache-main"
+    paths:
+      - .zig-cache/
+      - zig-cache/
+    policy: pull
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -707,7 +731,10 @@ test-zig-release-safe:
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "8"
   retry:
-    max: 1
+    # max: 2 covers the transient protobuf transitive-dep fetch flake
+    # (HttpConnectionClosing) when the shared cache fails to extract — same
+    # root and remedy as the macOS job and test-cross-build.
+    max: 2
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
@@ -851,6 +878,15 @@ loadtest-regression:
 bench-timeseries:
   stage: test
   image: $ZIG_IMAGE
+  # Blocking gate that previously had no retry: a single transient protobuf
+  # transitive-dep fetch flake (HttpConnectionClosing, when the shared cache
+  # fails to extract) reds main. max: 2 matches the other dep-fetching jobs.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
