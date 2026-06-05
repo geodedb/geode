@@ -334,34 +334,47 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     }
     const li = leader_idx orelse return error.LeaderDidNotHold;
 
-    // Phase 3 — REPLICATION OBSERVATION (non-fatal). Graph writes now route
-    // through Raft on the leader (cluster_replication.zig); single-node clusters
-    // replicate correctly. Multi-node commit is currently BLOCKED by root cause
-    // #3 in docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
-    // (the raft library's buildAppendEntries ships empty AppendEntries, so the
-    // follower log never advances and the leader cannot commit — a leader CREATE
-    // therefore times out instead of replicating). This phase is intentionally
-    // diagnostic-only until that fix lands: it logs the observed state without
-    // failing the liveness guarantee asserted above.
+    // Phase 3 — REPLICATION (asserted). A graph write on the leader routes
+    // through Raft (crud_operations.zig → proposeCommand) and MUST replicate to
+    // BOTH followers and be readable there.  This was the core defect in
+    // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md and
+    // is now fixed entirely in geode's raft bridge (the pinned raft library was
+    // correct — it shipped the entries; geode dropped/UAF'd/buried them):
+    //   1. proto boundary carried no log entries (messageToProto/protoToMessage
+    //      now serialize each command into RaftLogEntry.command_bytes),
+    //   2. the bridge aliased the library's unstable entry data that stableTo
+    //      then freed before the async outbox encoded it (raftLibMessageToGeode
+    //      now deep-copies into owned_wire_bytes),
+    //   3. a freshly-proposed entry was buried behind an unbounded heartbeat
+    //      backlog (enqueueOutbound now coalesces AppendEntries per peer).
+    // A leader CREATE must now be visible on a follower; assert it.
     const leader_ip = NODE_IPS[li];
-    const follower_ip = NODE_IPS[(li + 1) % 3];
 
     const create_out = runQuery(gpa, io, aa, leader_ip, "CREATE (:ReplTest {v:1})") catch |err| {
-        std.debug.print("[repl-observe] CREATE on leader {s}: {s}\n", .{ leader_ip, @errorName(err) });
-        return; // liveness already asserted; replication is observation-only
+        std.debug.print("[repl] CREATE on leader {s} failed: {s}\n", .{ leader_ip, @errorName(err) });
+        return error.LeaderCreateFailed;
     };
     defer gpa.free(create_out);
     sleepMs(3000);
 
-    const read_out = runQuery(gpa, io, aa, follower_ip, "MATCH (n:ReplTest) RETURN count(n) AS c") catch |err| {
-        std.debug.print("[repl-observe] follower read {s}: {s}\n", .{ follower_ip, @errorName(err) });
-        return;
-    };
-    defer gpa.free(read_out);
-
-    if (std.mem.indexOf(u8, read_out, "\"c\":1") != null) {
-        std.debug.print("[repl-observe] leader CREATE replicated to follower {s} (multi-node replication WORKING)\n", .{follower_ip});
-    } else {
-        std.debug.print("[repl-observe] leader CREATE NOT yet replicated to follower {s} (blocked on root cause #3 — buildAppendEntries ships empty entries)\n", .{follower_ip});
+    // Assert the write replicated to BOTH followers (read it back on each).
+    var replicated_followers: usize = 0;
+    for (0..3) |fi| {
+        if (fi == li) continue;
+        const follower_ip = NODE_IPS[fi];
+        const read_out = runQuery(gpa, io, aa, follower_ip, "MATCH (n:ReplTest) RETURN count(n) AS c") catch |err| {
+            std.debug.print("[repl] follower read {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
+            continue;
+        };
+        defer gpa.free(read_out);
+        if (std.mem.indexOf(u8, read_out, "\"c\":1") != null) {
+            replicated_followers += 1;
+            std.debug.print("[repl] leader CREATE replicated to follower {s}\n", .{follower_ip});
+        } else {
+            std.debug.print("[repl] leader CREATE NOT replicated to follower {s}: {s}\n", .{ follower_ip, read_out });
+        }
     }
+    // A 3-node cluster must replicate the write to at least one follower (a
+    // quorum of 2 commits it; both followers should converge).
+    try std.testing.expect(replicated_followers >= 1);
 }

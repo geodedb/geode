@@ -279,7 +279,7 @@ pub fn maybeStart(
 
     var self_skips: usize = 0;
     for (specs, 0..) |spec, i| {
-        const outcome = try appendPeer(allocator, &addresses_list, &peer_configs_list, spec, i, node_id, self_port, &self_aliases);
+        const outcome = try appendPeer(allocator, &addresses_list, &peer_configs_list, spec, i, node_id, self_port, &self_aliases, listen_address);
         if (outcome == .skipped_self) self_skips += 1;
     }
 
@@ -387,6 +387,18 @@ pub fn maybeStart(
 /// lists if it isn't a self-reference.  Peer IDs are derived from the
 /// position in the *input* peer list (idx+1), and we skip any entry that
 /// collides with our own (port + alias-host).
+/// True when `addr` is a wildcard/unspecified bind address — one that cannot
+/// identify this node by host, so the loopback-alias self-skip heuristic is
+/// allowed to apply.  A concrete address (distinct loopback IP, pod IP, DNS
+/// name) returns false: such a node is identified precisely by host equality,
+/// and must NOT alias-skip a different node that merely uses a loopback host.
+fn isWildcardBindAddress(addr: []const u8) bool {
+    return addr.len == 0 or
+        std.mem.eql(u8, addr, "0.0.0.0") or
+        std.mem.eql(u8, addr, "::") or
+        std.mem.eql(u8, addr, "[::]");
+}
+
 fn appendPeer(
     allocator: std.mem.Allocator,
     addresses: *std.ArrayList([]u8),
@@ -396,6 +408,7 @@ fn appendPeer(
     self_node_id: u64,
     self_port: u16,
     self_aliases: []const []const u8,
+    self_listen_address: []const u8,
 ) Error!PeerOutcome {
     const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse return Error.InvalidPeerSpec;
     const host = spec[0..colon];
@@ -403,13 +416,30 @@ fn appendPeer(
     if (host.len == 0 or port_str.len == 0) return Error.InvalidPeerSpec;
     const port = std.fmt.parseInt(u16, port_str, 10) catch return Error.InvalidPeerSpec;
 
-    // Skip self-references so a 3-node cluster can ship the same peer
-    // list to every node.  We can only match heuristically (the binding
-    // address is 0.0.0.0); be conservative — only skip when the port
-    // collides AND the host is a documented loopback alias.
+    // Skip self-references so a 3-node cluster can ship the same peer list to
+    // every node.  The AUTHORITATIVE self-test is the position-based
+    // `peer_id == self_node_id` check below (every node skips exactly its own
+    // position).  The host/port match here is a secondary safety net for a
+    // mis-set node_id, and it MUST be precise:
+    //
+    //   * If we bound a concrete address (e.g. a distinct 127.0.0.2 or a pod
+    //     IP), only the peer whose host EQUALS that bind address is self.  The
+    //     historic blanket "any loopback alias" match wrongly skipped a
+    //     DIFFERENT node addressed as 127.0.0.1 when this node was 127.0.0.2,
+    //     orphaning it at `state=candidate term=0` with no transport error —
+    //     the failure mode that blocks any distinct-loopback-IP multi-node host.
+    //   * Only when we bound a WILDCARD address (0.0.0.0 / :: / unset) can we
+    //     not distinguish ourselves by host, so we fall back to treating the
+    //     documented loopback aliases as self (the original k8s/single-host
+    //     posture, where each node has its own netns or a 127.0.0.1 self-entry).
     if (port == self_port) {
-        for (self_aliases) |alias| {
-            if (std.mem.eql(u8, host, alias)) return .skipped_self;
+        if (self_listen_address.len > 0 and std.mem.eql(u8, host, self_listen_address)) {
+            return .skipped_self;
+        }
+        if (isWildcardBindAddress(self_listen_address)) {
+            for (self_aliases) |alias| {
+                if (std.mem.eql(u8, host, alias)) return .skipped_self;
+            }
         }
     }
 

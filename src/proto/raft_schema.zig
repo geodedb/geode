@@ -283,6 +283,18 @@ pub const RaftLogEntry = struct {
     client_id: ?u64 = null,
     serial_number: ?u64 = null,
     command: ?RaftCommand = null,
+    // Field 7 (command_bytes): the canonical tag-prefixed command encoding
+    // produced by raft_consensus.serializeCommand / consumed by
+    // deserializeCommand.  This is the wire carrier the cluster bridge
+    // actually uses for AppendEntries log replication: it round-trips
+    // byte-exactly through serialize∘deserialize for every Command variant
+    // (noop / write / graph_mutation / schema_change / config_change /
+    // snapshot_pointer / txn_prepare / txn_decide), so it avoids the
+    // structured-RaftCommand mapping while guaranteeing the leader's log
+    // entry is replicated verbatim.  The structured `command` submessage
+    // (field 6) is retained for schema compatibility but left unset on the
+    // replication path.
+    command_bytes: []const u8 = "",
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
@@ -291,6 +303,7 @@ pub const RaftLogEntry = struct {
         .client_id = fd(4, .{ .scalar = .uint64 }),
         .serial_number = fd(5, .{ .scalar = .uint64 }),
         .command = fd(6, .{ .submessage = {} }),
+        .command_bytes = fd(7, .{ .scalar = .bytes }),
     };
 
     pub fn deinit(self: *RaftLogEntry, allocator: std.mem.Allocator) void {

@@ -8,6 +8,37 @@
 
 ---
 
+## ✅ STATUS: RESOLVED (2026-06-05) — write replication works; no raft library change
+
+The Raft write-replication defect is fixed **entirely in geode** (the pinned raft
+library `v0.1.5` was correct all along — see the 2026-06-05 correction on root
+cause #3). On a 3-node distinct-IP CA-signed-TLS cluster (clean build, **pinned**
+raft, zero instrumentation), a leader `CREATE (:T {v:1})` now replicates to and
+reads back as `count=1` on **both** followers and the leader, all stable at
+term 2:
+
+```
+leader=node2  create_exit=0
+node1 (follower term=2): read_count=1
+node2 (leader   term=2): read_count=1
+node3 (follower term=2): read_count=1
+```
+
+The fix is four stacked geode bugs (details under root causes #3 and #4 below):
+
+1. proto wire boundary dropped all AppendEntries log entries (`RaftLogEntry.command_bytes`),
+2. the bridge use-after-free'd a freshly-proposed entry's command (deep-copy into `owned_wire_bytes`),
+3. newly-proposed entries were buried behind an unbounded heartbeat backlog (per-peer outbox coalescing),
+4. the cluster orphaned a node addressed via a loopback alias (precise self-skip).
+
+Regression coverage: `tests/test_cluster_3node_steady_state.zig` (Phase 3 now
+**asserts** replication to a follower) and `tests/test_raft_envelope_roundtrip.zig`
+(AppendEntries-with-entries proto round-trip). **Still open:** root cause #5
+(leader-flap under CPU pressure / blocking-handshake send serialization) —
+secondary, unreproducible on a healthy host, verify under real k8s CPU limits.
+
+---
+
 ## TL;DR
 
 After every TLS/identity prerequisite is satisfied and a leader is elected, the 3-node cluster **will not stay converged and will not commit writes**:
@@ -142,10 +173,90 @@ Reproduced **deterministically** on a healthy 3-node distinct-IP cluster (NOT a 
 - The leader DOES receive the followers' responses (≈1020 `append_entries_response`, `success=true match=0`) — the reverse path works.
 - The followers DO receive heartbeats, but **every** one is `prev_idx=0 prev_term=0 nentries=0 leader_commit=0` — the leader ships an **empty** AppendEntries even though `next_index=1` and it has entries at indices 1–2.
 
-Root cause: the raft library's `ReplicationState.buildAppendEntries` (`~/src/devnw/zig/raft/src/replication.zig`) returns an empty entry list — `raft_log.slice(next, hi)` yields **0 entries despite `lastIndex()==2`** (the in-memory log reports a last index it cannot actually slice). geode's `raftLibMessageToGeode` faithfully copies whatever `buildAppendEntries` produced (verified), so the empty payload originates inside the library's log/storage layer, not the geode bridge. Because the follower's log never grows, its `match_index` stays 0, the leader's quorum-commit median stays 0, and `commit` is pinned at 0.
+> **⚠️ 2026-06-05 CORRECTION — the original root-cause-#3 diagnosis below was WRONG.**
+> The pinned raft library is **CORRECT**. Re-instrumenting `buildAppendEntries`,
+> `slice()`, `lastIndex()` and `stableTo()` directly (local path-override build)
+> proved the library ships the entry properly: `buildAppendEntries` returns
+> `ship=true` with the entry, `slice(next,hi)` returns 1 entry, and
+> `stableTo(2)` correctly advances `cached_storage_last_index` to 2. The earlier
+> "empty AppendEntries / slice yields 0 despite lastIndex==2" reading was an
+> artifact of instrumenting the wrong layer. **No raft library change, version
+> bump, or `build.zig.zon` update is needed.** The defect was entirely in
+> geode's raft bridge, in three stacked places — see RESOLVED below.
 
-**This is the actual "elects a leader but can't hold quorum / replicate" defect.** It is in the pinned raft library (`v0.1.5`), in the log/storage path feeding `buildAppendEntries` (the `slice()` / unstable-vs-stable bookkeeping). Fixing it requires a library change + version bump + a geode `build.zig.zon` dependency update — out of scope for the geode-only change set here, but now pinpointed with a reproducible local harness (`zig build test-cluster-steady-state`, whose Phase-3 observation logs the gap).
+**Original (incorrect) hypothesis, retained for history:** "the raft library's
+`ReplicationState.buildAppendEntries` returns an empty entry list — `slice(next,
+hi)` yields 0 entries despite `lastIndex()==2` … a library change + version
+bump." This was not the case.
 
-### Root cause #4 — leader-flap under CPU pressure (transport architecture, secondary)
+### Root cause #3 — RESOLVED: geode's raft bridge dropped / freed / buried the log entries (three stacked geode bugs)
 
-Did NOT reproduce on a healthy single host (leader held 40s). The transport is fragile under contention: a **single** outbox drain thread serializes every peer send behind a blocking `waitForHandshake(1)` (`raft_consensus.zig`; inconsistent with `cluster.zig`'s 10s), evicts the cached connection on any transient send error, never calls the dead `preconnectPeer`, and opens one QUIC stream per RPC. Under CPU contention a slow handshake to one peer starves heartbeats to **all** peers → followers time out → flap. **Naively raising the 1s timeout would worsen this** (the single thread blocks longer); the correct fix is to stop serializing sends behind blocking handshakes. Scoped as a follow-up — unreproducible on a single healthy host, and moot until root cause #3 is fixed.
+The raft library produced the AppendEntries with the entry correctly. geode then
+lost it, in three independent places between the library and the wire. Each was
+necessary; only all three together make a leader write replicate. Verified
+end-to-end on the 3-node distinct-IP CA-TLS harness, clean build, **pinned**
+raft: a leader `CREATE (:T {v:1})` is read back as `count=1` on **both**
+followers (and the leader), all at term 2.
+
+1. **The protobuf wire boundary carried no entries.** `messageToProto` /
+   `protoToMessage` (`raft_consensus.zig`) built the `RaftMessage.AppendEntries`
+   with `entries = .empty` / `&.{}` — a documented shortcut from when only
+   RequestVote/heartbeat traffic crossed the wire. So *every* AppendEntries went
+   out empty, even the election no-op. **Fix:** carry each entry's canonical
+   `serializeCommand` bytes in a new proto field `RaftLogEntry.command_bytes`
+   (`raft_schema.zig`); `messageToProto` serializes it, `protoToMessage`
+   deserializes it back (owning the bytes via `LogEntry.owned_wire_bytes`,
+   freed in `freeMessage`). Regression: `tests/test_raft_envelope_roundtrip.zig`
+   ("AppendEntries carrying one log entry").
+2. **Use-after-free of the command payload.** `raftLibMessageToGeode` set the
+   geode `LogEntry.command` by `deserializeCommand(e.data)` *aliasing* the raft
+   library's entry bytes. For a freshly-proposed entry those are the leader's
+   **unstable** log buffer, which `RaftLog.stableTo` FREES on the very next
+   `advance()` — which runs immediately after the send is enqueued. Because the
+   outbox is **asynchronous**, the message is encoded much later on the drain
+   thread, reading freed memory; the command serialized to empty/garbage. Only
+   entries already in stable storage from a prior term survived. **Fix:**
+   `raftLibMessageToGeode` deep-copies `e.data` into `owned_wire_bytes` and
+   deserializes from that private copy; freed in `freeOutboundMessage`.
+3. **Newly-proposed entries buried behind an unbounded heartbeat backlog.** The
+   raft tick enqueues an AppendEntries to every peer on a short cadence; when the
+   single drain thread can't keep up (multi-peer cluster, slow handshake) the
+   outbox grows thousands of stale heartbeats. A just-proposed entry's
+   AppendEntries lands at the **tail** and is drained minutes later — or never,
+   before the leader steps down. Measured: 2544 entry-carrying messages
+   produced, only 68 reached the encoder. **Fix:** `enqueueOutbound` coalesces
+   AppendEntries per peer — a newer one supersedes any older still-pending one
+   (AppendEntries is idempotent + cumulative), bounding the outbox to ~one per
+   peer and putting the just-proposed entry on the wire next tick. Votes /
+   responses / snapshots are never coalesced.
+
+A fourth, smaller change reduced wire fragility: `writeRaftFrame` now emits the
+4-byte length prefix and the payload as **one** `writeAll` (one STREAM frame /
+datagram) instead of two, so the receiver gets the frame atomically.
+
+### Root cause #4 — RESOLVED (prerequisite): cluster orphaned a node addressed via a loopback alias
+
+`cluster_bootstrap.appendPeer`'s self-skip blanket-matched the documented
+loopback aliases (`127.0.0.1` / `0.0.0.0` / `localhost` / `::1`) on a port
+collision, regardless of this node's own bind address. With distinct loopback
+IPs (the faithful multi-node-on-one-host model, and the steady-state test), a
+node bound to `127.0.0.2` wrongly skipped the *different* peer at `127.0.0.1`,
+orphaning it at `state=candidate term=0` with no transport error. **Fix:** the
+alias heuristic now only applies when this node's own bind address is a wildcard
+(`0.0.0.0` / `::` / unset — `isWildcardBindAddress`); a concrete bind address is
+matched precisely by host equality. The authoritative position-based
+`peer_id == self_node_id` skip is unchanged. With this, all three nodes join and
+hold a single leader reliably (k8s, which uses distinct pod IPs and `0.0.0.0`
+binds, was never affected — this only unblocked distinct-loopback-IP hosts).
+
+### Root cause #5 — leader-flap under CPU pressure (transport architecture, secondary, still open)
+
+Did NOT reproduce on a healthy single host (leader held 40s+). The transport is
+fragile under contention: the outbox drain thread serializes peer sends behind a
+blocking `waitForHandshake(1)` (`raft_consensus.zig`; inconsistent with
+`cluster.zig`'s 10s), evicts the cached connection on any transient send error,
+and opens one QUIC stream per RPC. Under CPU contention a slow handshake to one
+peer can starve heartbeats to all peers → followers time out → flap. The
+per-peer outbox coalescing (#3.3) reduces the pressure but does not remove the
+blocking-handshake serialization. Scoped as a follow-up; verify under real k8s
+CPU limits before closing.

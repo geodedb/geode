@@ -184,3 +184,68 @@ test "RaftEnvelope pre-A6d wire encoding is genuinely ambiguous and rejected" {
     const result = protobuf.decode(raft_schema.RaftEnvelope, &reader, a);
     try std.testing.expectError(error.InvalidInput, result);
 }
+
+test "RaftEnvelope round-trips an AppendEntries carrying one log entry (command_bytes)" {
+    // Regression for the cluster-replication BLOCKER (2026-06-04): the Raft
+    // bridge dropped the AppendEntries payload at the protobuf boundary, so
+    // followers only ever received empty heartbeats, their match_index never
+    // advanced, and the leader's commit index was wedged at 0 — no write
+    // ever replicated. messageToProto / protoToMessage now carry each log
+    // entry's canonical serializeCommand bytes in RaftLogEntry.command_bytes.
+    // This pins the proto round-trip: a non-empty `entries` repeated
+    // submessage list (an ArrayList of RaftLogEntry) MUST survive encode →
+    // decode with its bytes intact.
+    const a = std.testing.allocator;
+
+    const cmd_payload = [_]u8{ 0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE }; // tag=graph_mutation + body
+    var entries_in = std.ArrayList(raft_schema.RaftLogEntry).empty;
+    defer entries_in.deinit(a);
+    try entries_in.append(a, .{
+        .term = 2,
+        .index = 2,
+        .timestamp = 0,
+        .client_id = null,
+        .serial_number = null,
+        .command = null,
+        .command_bytes = &cmd_payload,
+    });
+
+    const envelope_in = raft_schema.RaftEnvelope{
+        .term = 2,
+        .from = 3,
+        .nonce = 0x0123456789abcdef,
+        .message = .{
+            .append_entries = .{
+                .term = 2,
+                .leader_id = 3,
+                .prev_log_index = 1,
+                .prev_log_term = 2,
+                .entries = entries_in,
+                .leader_commit = 1,
+            },
+        },
+        .auth_token = "test-subprocess-cluster",
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, a, envelope_in);
+    const encoded = aw.writer.buffered();
+
+    var reader: std.Io.Reader = .fixed(encoded);
+    var envelope_out = try protobuf.decode(raft_schema.RaftEnvelope, &reader, a);
+    defer envelope_out.deinit(a);
+
+    try std.testing.expect(envelope_out.message != null);
+    switch (envelope_out.message.?) {
+        .append_entries => |ae| {
+            try std.testing.expectEqual(@as(u64, 1), ae.prev_log_index);
+            // THE assertion: the single replicated entry must survive the wire.
+            try std.testing.expectEqual(@as(usize, 1), ae.entries.items.len);
+            try std.testing.expectEqual(@as(u64, 2), ae.entries.items[0].index);
+            try std.testing.expectEqual(@as(u64, 2), ae.entries.items[0].term);
+            try std.testing.expectEqualSlices(u8, &cmd_payload, ae.entries.items[0].command_bytes);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}

@@ -183,6 +183,14 @@ pub const LogEntry = struct {
     timestamp: i64,
     client_id: ?u64,
     serial_number: ?u64,
+    /// Inbound-only ownership handle.  When a LogEntry is reconstructed from
+    /// the protobuf wire (`protoToMessage`), `command` is the result of
+    /// `deserializeCommand` aliasing into this allocator-owned buffer (a dup
+    /// of the proto `command_bytes`).  The proto decode buffer is freed
+    /// immediately after `protoToMessage` returns, so we keep our own copy
+    /// here and free it in `freeMessage`.  Null for entries built any other
+    /// way (the command's slices then point into externally-owned memory).
+    owned_wire_bytes: ?[]u8 = null,
 };
 
 pub const Peer = struct {
@@ -480,6 +488,35 @@ pub const Transport = struct {
         self.outbox_mutex.lockUncancelable(io);
         defer self.outbox_mutex.unlock(io);
         if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
+
+        // Coalesce AppendEntries per peer (2026-06-04 cluster write-replication
+        // BLOCKER).  The raft tick enqueues an AppendEntries to every peer on a
+        // short cadence; if the dedicated drain thread can't keep up (e.g. a
+        // multi-peer cluster, or a peer paying a slow QUIC handshake), the
+        // outbox grows an unbounded backlog of stale heartbeats.  A freshly
+        // PROPOSED entry's AppendEntries is enqueued at the TAIL of that
+        // backlog and is drained/encoded minutes later — or never before the
+        // leader steps down — so the write never replicates even though the
+        // raft library produced it correctly.  AppendEntries is idempotent and
+        // cumulative: a newer one to peer X strictly supersedes any older
+        // still-pending one (it reflects the current log + commit index), so we
+        // replace the pending entry in place rather than append.  This bounds
+        // the outbox to ~one AppendEntries per peer and guarantees the entry
+        // a leader just proposed is the one on the wire next tick.  Votes,
+        // responses and snapshots are never coalesced — each is distinct.
+        switch (msg) {
+            .append_entries => {
+                for (self.outbox.items) |*existing| {
+                    if (existing.peer.id == peer.id and existing.msg == .append_entries) {
+                        freeOutboundMessage(self.allocator, existing.msg);
+                        existing.* = .{ .peer = peer, .from = from, .term = term, .msg = msg };
+                        return;
+                    }
+                }
+            },
+            else => {},
+        }
+
         try self.outbox.append(self.allocator, .{ .peer = peer, .from = from, .term = term, .msg = msg });
         // Dispatch thread polls every 1 ms so we don't need a condvar
         // signal here; the wakeup latency floor (1 ms) is still 10×
@@ -755,22 +792,9 @@ pub const Transport = struct {
             });
         };
         // Task A6e (2026-05-26): the previous code synchronously called
-        // `conn.client.poll(10)` here to flush the payload + FIN onto
-        // the wire.  That blocked the caller (the bridge `sendImpl`,
-        // which runs under the wrapper's `inner_mutex` when invoked
-        // from the raft tick / step path) for up to 10 ms per send.
-        // With 2 peers and a 10 ms tick, the raft loop was effectively
-        // running at 33 ticks / sec, starving the receive thread that
-        // needed the same mutex to dispatch vote responses.  Election
-        // never converged — three nodes split-voted indefinitely with
-        // terms climbing 1 → 9 in the 30 s subprocess smoke window.
-        //
-        // The dedicated `client_poll_thread` now polls every cached
-        // peer client endpoint at 500 µs intervals, so bytes still
-        // reach the wire within ~1 ms of `finish()` but the bridge
-        // returns immediately.  `dispatchOutbox` (which runs OFF the
-        // raft tick path) is the only caller that ever touches QUIC,
-        // and even it doesn't have to block for the flush.
+        // `conn.client.poll(10)` here to flush the payload + FIN onto the
+        // wire.  The dedicated `client_poll_thread` now polls every cached
+        // peer client endpoint, so the bridge returns immediately.
     }
 
     /// Look up or construct a persistent peer connection.  The
@@ -1174,10 +1198,23 @@ pub fn decodeRaftFrame(allocator: Allocator, payload: []const u8) !DecodedRaftFr
 pub fn writeRaftFrame(allocator: Allocator, stream: anytype, from: u64, term: u64, msg: Message) !void {
     const payload = try encodeRaftFrame(allocator, from, term, msg);
     defer allocator.free(payload);
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(payload.len), .big);
-    try stream.writeAll(&len_buf);
-    try stream.writeAll(payload);
+    // Emit the 4-byte big-endian length prefix and the payload as ONE
+    // contiguous write so the vendor QUIC layer packs them into a SINGLE
+    // STREAM frame / datagram (payloads here are << path MTU).  The prior
+    // two-write form (`writeAll(len)` then `writeAll(payload)`) produced two
+    // separate STREAM frames in two packets; the receiver accepts the stream
+    // on the first (length) packet, reads the length, then blocks for the
+    // second (payload) packet on a poll-less 5 ms retry loop.  For frames
+    // larger than what landed in the first packet this races the per-RPC
+    // stream FIN/close and the payload was dropped — empty-heartbeat frames
+    // (single packet) replicated while any AppendEntries carrying a real log
+    // entry silently vanished, wedging the cluster commit index. One write =
+    // one packet = atomic receive.
+    const framed = try allocator.alloc(u8, 4 + payload.len);
+    defer allocator.free(framed);
+    std.mem.writeInt(u32, framed[0..4], @intCast(payload.len), .big);
+    @memcpy(framed[4..], payload);
+    try stream.writeAll(framed);
 }
 
 pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
@@ -1234,7 +1271,6 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
 // ---- Protobuf conversion helpers ----
 
 fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
-    _ = allocator;
     return switch (msg) {
         .request_vote => |rv| .{
             .request_vote = .{
@@ -1252,23 +1288,45 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .voter_id = rvr.voter_id,
             .pre_vote = rvr.pre_vote,
         } },
-        // raft_schema.AppendEntries.entries is an ArrayList that holds the
-        // log entries to replicate.  We construct it empty here because the
-        // current path is exercised only by raft RequestVote/heartbeat
-        // traffic (A5b of the 2026-05-25 distributed cluster testing plan)
-        // — the GraphMutation / SchemaChange / config_change replication
-        // payload conversion is tracked separately and lives outside this
-        // dispatch hot path.  Initializing as `.empty` matches the
-        // protobuf encoder's expectation that a missing field is an empty
-        // repeated submessage.
-        .append_entries => |ae| .{ .append_entries = .{
-            .term = ae.term,
-            .leader_id = ae.leader_id,
-            .prev_log_index = ae.prev_log_index,
-            .prev_log_term = ae.prev_log_term,
-            .entries = std.ArrayList(raft_schema.RaftLogEntry).empty,
-            .leader_commit = ae.leader_commit,
-        } },
+        // raft_schema.AppendEntries.entries carries the log entries to
+        // replicate.  Serialize each geode LogEntry into a proto
+        // RaftLogEntry whose `command_bytes` holds the canonical
+        // tag-prefixed command encoding (serializeCommand).  This is the
+        // replication payload the cluster bridge MUST carry: dropping it
+        // (the historic `.empty`) left every AppendEntries an empty
+        // heartbeat, so followers' match_index never advanced past their
+        // prev_log_index and the leader's commit index was wedged at 0 —
+        // no write ever replicated.  The ArrayList + each entry's
+        // command_bytes are allocator-owned and freed by the envelope's
+        // recursive `deinit` after protobuf.encode (encodeRaftFrame).
+        .append_entries => |ae| blk: {
+            var entries = std.ArrayList(raft_schema.RaftLogEntry).empty;
+            errdefer {
+                for (entries.items) |*e| e.deinit(allocator);
+                entries.deinit(allocator);
+            }
+            for (ae.entries) |entry| {
+                const cmd_bytes = try serializeCommand(allocator, entry.command);
+                errdefer allocator.free(cmd_bytes);
+                try entries.append(allocator, .{
+                    .term = entry.term,
+                    .index = entry.index,
+                    .timestamp = entry.timestamp,
+                    .client_id = entry.client_id,
+                    .serial_number = entry.serial_number,
+                    .command = null,
+                    .command_bytes = cmd_bytes,
+                });
+            }
+            break :blk .{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = entries,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
         .append_entries_response => |aer| .{ .append_entries_response = .{
             .term = aer.term,
             .success = aer.success,
@@ -1293,7 +1351,6 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
 }
 
 fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
-    _ = allocator;
     return switch (msg) {
         .request_vote => |rv| .{
             .request_vote = .{
@@ -1320,14 +1377,48 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .voter_id = rvr.voter_id,
             .pre_vote = rvr.pre_vote,
         } },
-        .append_entries => |ae| .{ .append_entries = .{
-            .term = ae.term,
-            .leader_id = ae.leader_id,
-            .prev_log_index = ae.prev_log_index,
-            .prev_log_term = ae.prev_log_term,
-            .entries = &.{},
-            .leader_commit = ae.leader_commit,
-        } },
+        // Reconstruct the replicated log entries from the wire.  Each proto
+        // RaftLogEntry.command_bytes is the canonical serializeCommand
+        // encoding; dupe it into an allocator-owned buffer (the proto decode
+        // buffer is freed the moment decodeRaftFrame returns) and deserialize
+        // it back into the geode Command.  `owned_wire_bytes` keeps the dup
+        // alive until freeMessage runs.  Historic code dropped entries here
+        // (`&.{}`), which — paired with the same drop in messageToProto —
+        // wedged the cluster commit index at 0.
+        .append_entries => |ae| blk: {
+            const items = ae.entries.items;
+            const entries = try allocator.alloc(LogEntry, items.len);
+            var built: usize = 0;
+            errdefer {
+                for (entries[0..built]) |*e| {
+                    if (e.owned_wire_bytes) |b| allocator.free(b);
+                }
+                allocator.free(entries);
+            }
+            for (items, 0..) |pe, i| {
+                const dup = try allocator.dupe(u8, pe.command_bytes);
+                errdefer allocator.free(dup);
+                const cmd = deserializeCommand(dup) catch Command{ .write = dup };
+                entries[i] = .{
+                    .term = pe.term,
+                    .index = pe.index,
+                    .command = cmd,
+                    .timestamp = pe.timestamp,
+                    .client_id = pe.client_id,
+                    .serial_number = pe.serial_number,
+                    .owned_wire_bytes = dup,
+                };
+                built += 1;
+            }
+            break :blk .{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = entries,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
         .append_entries_response => |aer| .{ .append_entries_response = .{
             .term = aer.term,
             .success = aer.success,
@@ -1355,8 +1446,23 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
     };
 }
 
-fn freeMessage(_: Allocator, _: *Message) void {
-    // Message fields are either stack values or slices pointing into protobuf decode buffers
+fn freeMessage(allocator: Allocator, msg: *Message) void {
+    // Most Message fields are scalars or slices that point into a protobuf
+    // decode buffer freed elsewhere.  The exception is an inbound
+    // AppendEntries reconstructed by `protoToMessage`: it owns the
+    // `entries` slice and, per entry, the duped `owned_wire_bytes` buffer
+    // that the deserialized Command aliases.  Free those here so the
+    // DecodedRaftFrame.deinit path doesn't leak one buffer per replicated
+    // log entry.
+    switch (msg.*) {
+        .append_entries => |ae| {
+            for (ae.entries) |entry| {
+                if (entry.owned_wire_bytes) |b| allocator.free(b);
+            }
+            if (ae.entries.len > 0) allocator.free(ae.entries);
+        },
+        else => {},
+    }
 }
 
 fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
@@ -1371,6 +1477,12 @@ fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
 pub fn freeOutboundMessage(allocator: Allocator, msg: Message) void {
     switch (msg) {
         .append_entries => |ae| {
+            // Free the per-entry private command copies made by
+            // `raftLibMessageToGeode` (see the deep-copy note there), then the
+            // entries slice itself.
+            for (ae.entries) |entry| {
+                if (entry.owned_wire_bytes) |b| allocator.free(b);
+            }
             if (ae.entries.len > 0) allocator.free(ae.entries);
         },
         else => {},
@@ -2186,10 +2298,36 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
             // Convert raft_lib.Entry[] -> geode LogEntry[] (re-serializing
             // each command's tag-prefixed bytes back into the Command
             // variant the wire format expects).
+            //
+            // CRITICAL (2026-06-04 cluster write-replication BLOCKER): we MUST
+            // deep-copy `e.data` here, not alias it.  `e.data` points into the
+            // raft library's log — for a freshly-proposed entry that is the
+            // leader's *unstable* entry buffer, which `RaftLog.stableTo` FREES
+            // on the very next `advance()` (it runs right after this send is
+            // enqueued).  This conversion feeds the ASYNCHRONOUS outbox: the
+            // message is encoded much later, on the drain thread.  Aliasing
+            // `e.data` therefore reads freed memory at encode time, so the
+            // command serialized to empty/garbage and the AppendEntries went
+            // out with no payload — the leader could never replicate any
+            // freshly-written entry (only entries already in stable storage
+            // from a prior term survived).  Owning a private copy via
+            // `owned_wire_bytes` (freed in `freeOutboundMessage`) makes the
+            // geode message independent of the raft log's unstable lifecycle.
             const entries = try allocator.alloc(LogEntry, ae.entries.len);
-            errdefer allocator.free(entries);
+            var built: usize = 0;
+            errdefer {
+                for (entries[0..built]) |*le| {
+                    if (le.owned_wire_bytes) |b| allocator.free(b);
+                }
+                allocator.free(entries);
+            }
             for (ae.entries, 0..) |e, i| {
-                const cmd = deserializeCommand(e.data) catch Command{ .write = e.data };
+                const owned: ?[]u8 = if (e.data.len > 0) try allocator.dupe(u8, e.data) else null;
+                errdefer if (owned) |b| allocator.free(b);
+                const cmd = if (owned) |b|
+                    (deserializeCommand(b) catch Command{ .write = b })
+                else
+                    Command{ .write = e.data };
                 entries[i] = .{
                     .term = e.term,
                     .index = e.index,
@@ -2197,7 +2335,9 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
                     .timestamp = compat_milliTimestamp(),
                     .client_id = null,
                     .serial_number = null,
+                    .owned_wire_bytes = owned,
                 };
+                built += 1;
             }
             break :blk Message{ .append_entries = .{
                 .term = ae.term,
