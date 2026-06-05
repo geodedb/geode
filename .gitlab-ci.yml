@@ -1558,6 +1558,132 @@ snapshot:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
   allow_failure: true
 
+# ---------------------------------------------------------------------------
+# Dev image (main branch only) — rolling multi-arch geode RUNTIME image so e2e /
+# integration systems can pull a fresh build off main WITHOUT waiting for the
+# full tagged-release pipeline. Publishes the tags `dev`, `main`, and
+# `main-<short-sha>` to BOTH the GitLab Container Registry and
+# docker.io/geodedb/geode. NEVER tags `latest` (that belongs to releases, so a
+# dev push can never overwrite a release image). See Dockerfile.devimage.
+# Both jobs are allow_failure + needs:[] so they publish quickly, in parallel
+# with the test stage, and never block main.
+# ---------------------------------------------------------------------------
+dev-image-build:
+  stage: release
+  image: $ZIG_IMAGE
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
+  allow_failure: true
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - *zig-vendor-cache
+  script:
+    - |
+      set -e
+      build_one() {
+        zig_target="$1"; arch="$2"
+        echo "=== cross-compiling geode for ${zig_target} (${arch}) ==="
+        zig build -Doptimize=ReleaseSafe -Dtarget="${zig_target}" --summary all
+        mkdir -p "dist/linux-${arch}"
+        cp zig-out/bin/geode "dist/linux-${arch}/geode"
+        file "dist/linux-${arch}/geode" || true
+      }
+      build_one x86_64-linux-gnu amd64
+      build_one aarch64-linux-gnu arm64
+      ls -la dist/linux-amd64 dist/linux-arm64
+  artifacts:
+    paths:
+      - dist/linux-amd64/geode
+      - dist/linux-arm64/geode
+    expire_in: 1 week
+
+dev-image:
+  stage: release
+  # docker:dind only runs on Linux runners (see the snapshot job note above).
+  tags:
+    - company
+    - lab
+    - linux
+  image: docker:latest
+  services:
+    - docker:dind
+  needs:
+    - job: dev-image-build
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
+  allow_failure: true
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - apk add --no-cache curl bash coreutils
+  script:
+    - |
+      set -e
+      SHA8=$(echo "${CI_COMMIT_SHA}" | cut -c1-8)
+      DEV_TAGS="dev main main-${SHA8}"   # NEVER 'latest' — releases own that.
+
+      echo "Logging into GitLab registry ${CI_REGISTRY}..."
+      docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+      # Docker Hub is optional — only if creds are provided (same gate the
+      # release jobs use). When absent we still publish to the GitLab registry.
+      PUSH_DOCKERHUB="false"
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+        if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
+          PUSH_DOCKERHUB="true"
+          echo "Docker Hub login OK — also pushing docker.io/geodedb/geode dev tags"
+        else
+          echo "WARNING: Docker Hub login failed — pushing GitLab registry only"
+        fi
+      else
+        echo "DOCKERHUB_USERNAME/TOKEN not set — pushing GitLab registry only"
+      fi
+
+      # Build the --tag flags for both registries (no 'latest').
+      TAG_ARGS=""
+      for t in $DEV_TAGS; do
+        TAG_ARGS="$TAG_ARGS --tag ${CI_REGISTRY_IMAGE}:${t}"
+        if [ "$PUSH_DOCKERHUB" = "true" ]; then
+          TAG_ARGS="$TAG_ARGS --tag docker.io/geodedb/geode:${t}"
+        fi
+      done
+      echo "Publishing dev tags: ${DEV_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
+
+      # Multi-arch amd64+arm64. Register QEMU so the arm64 base-image apt steps
+      # run under emulation (the geode binary itself is pre-cross-compiled, not
+      # emulated, so the build stays fast).
+      docker run --privileged --rm tonistiigi/binfmt --install arm64,amd64 || true
+      docker buildx create --name devimage-builder --driver docker-container --use 2>/dev/null \
+        || docker buildx use devimage-builder
+      docker buildx inspect --bootstrap
+
+      # shellcheck disable=SC2086  # TAG_ARGS is an intentional list of flags
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --file Dockerfile.devimage \
+        --label org.opencontainers.image.revision="${CI_COMMIT_SHA}" \
+        --label org.opencontainers.image.source="${CI_PROJECT_URL}" \
+        --label org.opencontainers.image.version="main-${SHA8}" \
+        ${TAG_ARGS} \
+        --push \
+        .
+      echo "✓ pushed geode dev image tags [${DEV_TAGS}] (no latest)"
+
 # Build release artifacts for tags (alpha, beta, stable)
 build-release:
   stage: release

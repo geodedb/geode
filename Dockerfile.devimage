@@ -1,0 +1,47 @@
+# Dockerfile.devimage — multi-arch geode runtime image for e2e/dev systems.
+#
+# Built by the `dev-image` CI job on every main-branch push and published with
+# rolling tags (dev / main / main-<short-sha>) to the GitLab Container Registry
+# and docker.io/geodedb/geode, so e2e/integration systems can pull a fresh
+# build WITHOUT waiting for the full tagged-release pipeline. Deliberately
+# NEVER tagged `latest` — that belongs to releases only.
+#
+# Unlike Dockerfile (build-from-source) this copies a pre-cross-compiled binary
+# (zig -Dtarget=<arch>-linux-gnu, ReleaseSafe) placed by the `dev-image-build`
+# job at dist/linux-<arch>/geode, so the image builds in seconds and the arm64
+# variant does not pay a full emulated compile. Runtime mirrors
+# Dockerfile.release (debian-slim + libssl3 + non-root geode user + healthcheck).
+#
+# NOTE: Dockerfile.dev is a separate, unrelated artifact (the developer
+# environment / devcontainer). This file is the slim runtime server image.
+FROM debian:bookworm-slim
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Docker sets TARGETARCH to amd64 / arm64 per --platform; select the matching
+# pre-built binary produced by the dev-image-build job.
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 10000 geode \
+    && mkdir -p /data /certs /var/log/geode \
+    && chown -R geode:geode /data /certs /var/log/geode
+
+COPY dist/linux-${TARGETARCH}/geode /usr/local/bin/geode
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh
+
+USER geode
+WORKDIR /home/geode
+ENV LOG_LEVEL=error
+
+EXPOSE 3141/udp 50051/tcp 9090/tcp
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD /usr/local/bin/health-check.sh
+
+ENTRYPOINT ["/usr/local/bin/geode"]
+CMD ["serve", "--data-dir", "/data", "--log-level", "error"]
