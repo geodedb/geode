@@ -152,6 +152,46 @@ variables:
     else
       echo "⚠ no vendored packages present — zig build will fetch from network"
     fi
+    # Resilient protoc pre-fetch (2026-06-05). protobuf's protoc binary is a
+    # LAZY network dependency. The in-repo zig-pkg/ vendoring is .gitignored
+    # (empty on CI), so when the shared GitLab cache fails to extract, every
+    # dep-building job re-downloads protoc from GitHub and intermittently flakes
+    # ("invalid HTTP response: HttpConnectionClosing"); because the
+    # cache-PRODUCER jobs fail before they can repopulate the cache, the whole
+    # pipeline wedges. Download + extract protoc straight into zig's package
+    # cache — the extracted layout is byte-for-byte the package zig expects
+    # (verified) — with retries. Fully non-fatal: on exhausted retries / missing
+    # tools we fall through to zig build's own fetch, exactly as before.
+    ZIG_PROTOC_HASH="N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ"
+    ZIG_PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip"
+    ZIG_PROTOC_DIR="${ZIG_GLOBAL_CACHE_DIR}/p/${ZIG_PROTOC_HASH}"
+    if [ ! -e "${ZIG_PROTOC_DIR}/bin/protoc" ]; then
+      for attempt in 1 2 3 4 5 6; do
+        dl=0
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL --retry 3 --retry-delay 4 --connect-timeout 20 -o /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null && dl=1
+        elif command -v wget >/dev/null 2>&1; then
+          wget -q -O /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null && dl=1
+        fi
+        if [ "$dl" = "1" ]; then
+          mkdir -p "${ZIG_PROTOC_DIR}"
+          ex=0
+          if command -v unzip >/dev/null 2>&1; then
+            unzip -oq /tmp/zig-protoc.zip -d "${ZIG_PROTOC_DIR}" 2>/dev/null && ex=1
+          elif command -v python3 >/dev/null 2>&1; then
+            python3 -c "import zipfile,sys; zipfile.ZipFile('/tmp/zig-protoc.zip').extractall(sys.argv[1])" "${ZIG_PROTOC_DIR}" 2>/dev/null && ex=1
+          fi
+          if [ "$ex" = "1" ] && [ -e "${ZIG_PROTOC_DIR}/bin/protoc" ]; then
+            echo "✓ pre-fetched protoc into cache (attempt ${attempt})"
+            rm -f /tmp/zig-protoc.zip
+            break
+          fi
+        fi
+        echo "⚠ protoc pre-fetch attempt ${attempt} failed; retrying in 8s..."
+        rm -rf "${ZIG_PROTOC_DIR}" 2>/dev/null || true
+        sleep 8
+      done
+    fi
 
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
