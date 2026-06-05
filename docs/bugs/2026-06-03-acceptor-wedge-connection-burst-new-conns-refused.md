@@ -1,15 +1,31 @@
 # Bug: stream-acceptor / accept-path **wedge** under connection-burst — new QUIC connections refused (≫30 s) until pod restart
 
-**Status:** **PARTIALLY MITIGATED — re-occurs on v0.6.19 (2026-06-05).** The
-dominant geode-level amplifier — the 30 s owner-thread bail that pins capped
-concurrency slots while a wedged acceptor is waited out — was fixed in
-`303c9d38` (shipped v0.6.17+). However, the residual upstream `Endpoint.mu`
-poll-vs-acceptStream contention **still causes a full wedge under sufficiently
-heavy burst**, confirmed on v0.6.19 (2026-06-05) with multiple simultaneous
-connection-burst sources. The geode-side fix dramatically lowers the
-probability under moderate load; it does not eliminate the wedge under
-extreme burst. See §2b (new 2026-06-05 evidence) and §8 (k8s liveness probe
-detection gap and fix).
+**Status:** **AUTO-RECOVERY SHIPPED (2026-06-05) — the no-auto-recovery OUTAGE
+is resolved; the underlying wedge can still occur (root quic `Endpoint.mu`
+contention OPEN).** Three layers now apply:
+
+1. **Amplifier fixed** (`303c9d38`, v0.6.17+): the 30 s owner-thread bail that
+   pinned capped concurrency slots while a wedged acceptor was waited out.
+2. **geode-side self-heal** (`7264eaba`, §9 — verified 2026-06-05): an rx_queue
+   watchdog on the metrics loop self-restarts the pod (`exit 70`) when the
+   `:3141` UDP `rx_queue` stays ≥ 8 MiB for ≥ 30 s. Triage confirmed it covers
+   the documented 12.6 MB compound-burst re-occurrence (threshold 8 MiB <
+   12,648,409 B; sampled every ~5 s → fires within ~30–35 s), the
+   `/proc/net/udp` parser is unit-tested against the exact wedged row
+   (port `0x0C45`, rx `0x00C103D9`), and 8/8 watchdog tests pass
+   (`zig build test-acceptor-watchdog`). Env-tunable via
+   `GEODE_ACCEPTOR_WATCHDOG_RX_BYTES` / `_DEADLINE_MS` / `_DISABLE`.
+3. **k8s probe detection** (`divelife-argo 2205c22`, §8): a real QUIC
+   round-trip (`RETURN 1`) liveness/readiness probe so kubelet restarts a
+   wedged-but-Running pod independently of the watchdog.
+
+What remains OPEN: the residual upstream `Endpoint.mu` poll-vs-acceptStream
+contention **can still wedge the acceptor under sufficiently heavy burst**
+(confirmed on v0.6.19 2026-06-05). Layers 2+3 turn that wedge from a
+manual-`kubectl delete pod` outage into an automatic ~30–60 s self-restart;
+they do not eliminate the wedge itself. Eliminating it requires reworking the
+quic dependency's poll-vs-accept locking (§7) — tracked separately. See §2b
+(2026-06-05 evidence), §8 (probe), and §9 (watchdog).
 
 ---
 
