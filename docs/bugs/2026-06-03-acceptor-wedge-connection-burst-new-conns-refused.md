@@ -1,12 +1,15 @@
 # Bug: stream-acceptor / accept-path **wedge** under connection-burst — new QUIC connections refused (≫30 s) until pod restart
 
-**Status:** **MITIGATED (geode-side) 2026-06-03.** The dominant geode-level
-amplifier — the 30 s owner-thread bail that pins capped concurrency slots while a
-wedged acceptor is waited out — is fixed (see *Resolution* below). The deepest
-root cause (QUIC-library `Endpoint.mu` poll-vs-acceptStream contention) is a
-documented **upstream** concern (`pollLoop` notes "deeper sharding requires
-upstream QUIC-library changes"); it is out of scope for a geode patch and tracked
-separately.
+**Status:** **PARTIALLY MITIGATED — re-occurs on v0.6.19 (2026-06-05).** The
+dominant geode-level amplifier — the 30 s owner-thread bail that pins capped
+concurrency slots while a wedged acceptor is waited out — was fixed in
+`303c9d38` (shipped v0.6.17+). However, the residual upstream `Endpoint.mu`
+poll-vs-acceptStream contention **still causes a full wedge under sufficiently
+heavy burst**, confirmed on v0.6.19 (2026-06-05) with multiple simultaneous
+connection-burst sources. The geode-side fix dramatically lowers the
+probability under moderate load; it does not eliminate the wedge under
+extreme burst. See §2b (new 2026-06-05 evidence) and §8 (k8s liveness probe
+detection gap and fix).
 
 ---
 
@@ -123,6 +126,69 @@ The **lower-fanout client survives, the higher-fanout one trips it** pattern
 from the crash report holds: `pds` (fewer conns) rode out longer than `api`
 (pool + worker + healthz conns handshaking together).
 
+## 2b. 2026-06-05 — re-occurrence on v0.6.19 (geode-side bail-deadline fix shipped)
+
+**Image:** `geodedb/geode:0.6.19` (includes `303c9d38` — bail capped at 1 s).
+
+**Trigger combination (compound burst):**
+
+- Three `qa-seed` Kubernetes Jobs ran simultaneously (a dkron-bootstrap cron
+  triggered them all at once). Each job opens its own geode connection pool.
+- Two `divelife-api` + two `divelife-pds` pods were already in
+  `CrashLoopBackOff` with exponential back-off retrying connections — each
+  retry attempt opens a QUIC handshake.
+- Combined: ~5+ connection-burst sources simultaneously → `Endpoint.mu`
+  contention overwhelmed the shortened (1 s) bail path.
+
+**Observed symptoms:**
+
+- `geode-0` stayed `1/1 Running`, restart count unchanged — **no automatic
+  recovery**.
+- Both `divelife-api` (27 restarts) and both `divelife-pds` pods (27
+  restarts) in `CrashLoopBackOff` with `geodex open: geode: transport dial
+  to geode.divelife-qa.svc.cluster.local:3141: timeout: no recent network
+  activity`.
+- `/proc/net/udp` **rx_queue for port 3141 (0x0C45): `0x00C103D9` =
+  12,648,409 bytes (~12 MB)** — the UDP socket buffer filled to capacity
+  with unprocessed QUIC Initial packets the wedged acceptor was not
+  draining.
+- The existing liveness probe (`grep -q ":0C45 " /proc/net/udp`) **passed**
+  throughout, so kubelet never triggered an automatic restart.
+
+**Recovery steps taken:**
+
+1. Deleted the 3 running qa-seed jobs (`kubectl delete jobs ...`).
+2. `kubectl delete pod geode-0 -n divelife-qa` — forced geode restart.
+3. `kubectl rollout restart deployment/api deployment/pds -n divelife-qa` —
+   cleared the CrashLoopBackOff back-off timer.
+4. Verified with `geode query --server localhost:3141 --insecure-tls-skip-verify
+   -U geode -P "$GEODE_ADMIN_PASSWORD" --timeout 5 "RETURN 1"` from inside
+   the pod before declaring healthy.
+
+**Time to recovery:** ~3–4 minutes from manual detection to all pods `1/1`.
+
+**Why the bail-deadline fix didn't prevent it:** `303c9d38` removes the
+**worker-starvation amplifier** (30 s → 1 s) that turned moderate burst into
+a hard outage. Under the 2026-06-05 burst (3 seed jobs + 4 crashlooping
+pods retrying simultaneously), the QUIC-library `Endpoint.mu` contention was
+extreme enough that new connections timed out before any freed slot could
+service them — the amplifier was shorter, but the underlying lock contention
+still fully saturated the accept path.
+
+**rx_queue diagnostic** (run from inside the geode pod):
+
+```sh
+kubectl exec -n <namespace> geode-0 -- \
+  awk '/[0-9A-Fa-f]+:0C45[[:space:]]/{split($5,a,":");
+       printf "rx_queue: 0x%s = %d bytes\n", a[2], ("0x"a[2])+0}' \
+  /proc/net/udp
+```
+
+Normal (healthy): rx_queue = 0–~4096 bytes.
+Wedged: rx_queue grows to megabytes as unprocessed Initials back up.
+
+---
+
 ## 3. Why this matters independently of the crash fix
 
 - It makes geode **unavailable for new connections** under exactly the loads a
@@ -200,3 +266,106 @@ safety around it.
   connection-handler thread forever"*; the acceptor-bail / leaked-conn-reaper
   path.
 - GAP-0838 (cluster TLS) — the active QUIC/TLS hardening line this belongs near.
+
+---
+
+## 8. K8s liveness probe detection gap and operational fix
+
+### The gap
+
+The standard Kubernetes liveness probe for geode checks only that the UDP
+socket is bound:
+
+```yaml
+livenessProbe:
+  exec:
+    command: ["/bin/sh", "-c", "grep -q ':0C45 ' /proc/net/udp"]
+```
+
+**This probe passes even when the QUIC acceptor is fully wedged.** The UDP
+socket stays bound (geode does not close it when wedged) so `/proc/net/udp`
+always shows port 3141. Kubelet never sees a liveness failure and never
+triggers an automatic pod restart — the pod stays `1/1 Running` with a 12 MB
+rx_queue and refuses every new connection indefinitely.
+
+This is why the 2026-06-03 and 2026-06-05 incidents required manual
+intervention (`kubectl delete pod geode-0`).
+
+### The fix (divelife-argo `2205c22`, 2026-06-05)
+
+Replace the liveness and readiness probes with an actual QUIC round-trip
+that fails when the acceptor is wedged:
+
+```yaml
+# Startup: keep the cheap UDP-bind check — geode isn't ready to serve
+# queries yet during initial boot.
+startupProbe:
+  exec:
+    command: ["/bin/sh", "-c", "grep -q ':0C45 ' /proc/net/udp"]
+  periodSeconds: 5
+  failureThreshold: 30
+  timeoutSeconds: 3
+
+# Liveness: QUIC round-trip — fails if the acceptor is wedged.
+livenessProbe:
+  exec:
+    command:
+      - /bin/sh
+      - -c
+      - 'geode query --server localhost:3141 --insecure-tls-skip-verify
+         -U geode -P "$GEODE_ADMIN_PASSWORD" --timeout 5 "RETURN 1" > /dev/null'
+  periodSeconds: 15
+  failureThreshold: 4   # restart after ~60 s wedged
+  timeoutSeconds: 8     # outer timeout > --timeout 5 so the query fails first
+
+# Readiness: same — removes pod from load-balancer within ~20 s.
+readinessProbe:
+  exec:
+    command:
+      - /bin/sh
+      - -c
+      - 'geode query --server localhost:3141 --insecure-tls-skip-verify
+         -U geode -P "$GEODE_ADMIN_PASSWORD" --timeout 5 "RETURN 1" > /dev/null'
+  periodSeconds: 10
+  failureThreshold: 2
+  timeoutSeconds: 8
+```
+
+**Why this works:** `geode query --server localhost:3141 ... --timeout 5` opens
+a new QUIC connection to the local server. If the QUIC acceptor is wedged,
+`Endpoint.acceptStream` never returns → the 5 s `--timeout` fires → the command
+exits non-zero → probe fails. After `failureThreshold` consecutive failures
+kubelet restarts the pod, clearing the wedge automatically.
+
+**Why `--insecure-tls-skip-verify`:** the probe runs inside the container
+against `localhost`. The server certificate covers the in-cluster Service DNS
+(`geode.divelife-qa.svc.cluster.local`), not `localhost`, so TLS verification
+would fail for a different reason. Skip-verify is safe for a same-pod exec
+probe because the network path is the loopback interface — no third party can
+intercept it.
+
+**Secret expansion:** `$GEODE_ADMIN_PASSWORD` expands inside the `/bin/sh -c`
+wrapper because the pod's env var is already in scope. No additional secret
+mounts are needed.
+
+### Recommended geode documentation / release note
+
+For any k8s deployment guide or Helm chart: document that the default probe
+(`/proc/net/udp` bind check) does not detect the QUIC acceptor wedge, and
+provide the `geode query --timeout 5 "RETURN 1"` probe pattern as the
+recommended liveness/readiness check.
+
+### Verify the probe works
+
+1. Apply the updated StatefulSet / Helm values.
+2. Confirm `kubectl describe pod geode-0` shows the new liveness probe.
+3. Simulate a wedge (or wait for a burst) — after at most 4×15 = 60 s the
+   liveness probe fails and kubelet restarts the pod automatically.
+4. After restart, run inside the pod to confirm QUIC is healthy:
+
+   ```sh
+   geode query --server localhost:3141 --insecure-tls-skip-verify \
+     -U geode -P "$GEODE_ADMIN_PASSWORD" --timeout 5 "RETURN 1"
+   ```
+
+   Expected: `{"rows":[{"expr":1}],...}` with exit code 0.
