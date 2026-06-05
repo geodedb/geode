@@ -164,14 +164,31 @@ variables:
     # tools we fall through to zig build's own fetch, exactly as before.
     ZIG_PROTOC_HASH="N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ"
     ZIG_PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip"
+    # Same-network GitLab generic-package mirror (uploaded once to this project);
+    # tried FIRST so a GitHub-releases outage can't red the pipeline. The
+    # CI_JOB_TOKEN grants read access to the project's own package registry.
+    ZIG_PROTOC_MIRROR="${CI_API_V4_URL:-}/projects/${CI_PROJECT_ID:-}/packages/generic/protoc/32.1/protoc-32.1-linux-x86_64.zip"
     ZIG_PROTOC_DIR="${ZIG_GLOBAL_CACHE_DIR}/p/${ZIG_PROTOC_HASH}"
     if [ ! -e "${ZIG_PROTOC_DIR}/bin/protoc" ]; then
       for attempt in 1 2 3 4 5 6; do
         dl=0
+        # Try the GitLab package-registry mirror FIRST (reliable, same network),
+        # then the GitHub upstream. Each download is guarded in its own `if` so a
+        # failure can never abort the before_script (set-e-safe).
         if command -v curl >/dev/null 2>&1; then
-          curl -fsSL --retry 3 --retry-delay 4 --connect-timeout 20 -o /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null && dl=1
+          if [ "$dl" != "1" ] && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
+            if curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -o /tmp/zig-protoc.zip "${ZIG_PROTOC_MIRROR}" 2>/dev/null; then dl=1; fi
+          fi
+          if [ "$dl" != "1" ]; then
+            if curl -fsSL --retry 3 --retry-delay 4 --connect-timeout 20 -o /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null; then dl=1; fi
+          fi
         elif command -v wget >/dev/null 2>&1; then
-          wget -q -O /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null && dl=1
+          if [ "$dl" != "1" ] && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
+            if wget -q --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -O /tmp/zig-protoc.zip "${ZIG_PROTOC_MIRROR}" 2>/dev/null; then dl=1; fi
+          fi
+          if [ "$dl" != "1" ]; then
+            if wget -q -O /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null; then dl=1; fi
+          fi
         fi
         if [ "$dl" = "1" ]; then
           mkdir -p "${ZIG_PROTOC_DIR}"
