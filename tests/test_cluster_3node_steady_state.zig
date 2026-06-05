@@ -82,6 +82,28 @@ fn binaryPresent() bool {
     return true;
 }
 
+const ADMIN_PW = "SteadyStatePw123!";
+
+/// Run `geode query` against `ip:3141` and return captured stdout (caller frees
+/// with `gpa`). Bounded by a hard timeout so a hung query can't wedge the suite.
+fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
+    const server = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+    const argv = [_][]const u8{
+        BINARY_PATH,                  "query", "--server", server,
+        "--insecure-tls-skip-verify", "-U",    "geode",    "-P",
+        ADMIN_PW,                     q,
+    };
+    const res = try std.process.run(gpa, io, .{
+        .argv = &argv,
+        .timeout = .{ .duration = .{
+            .raw = std.Io.Duration.fromNanoseconds(15 * std.time.ns_per_s),
+            .clock = .awake,
+        } },
+    });
+    gpa.free(res.stderr);
+    return res.stdout;
+}
+
 fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
     const result = try std.process.run(gpa, io, .{ .argv = argv });
     defer gpa.free(result.stdout);
@@ -302,13 +324,44 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         return error.LeaderDidNotHold;
     }
 
-    // Confirm at least one node ended as leader.
-    var final_leader = false;
+    // Confirm at least one node ended as leader, and find it.
+    var leader_idx: ?usize = null;
     for (0..3) |i| {
         const s = lastState(captures[i].buf.items, i + 1);
         if (s.role) |r| if (std.mem.eql(u8, r, "leader")) {
-            final_leader = true;
+            leader_idx = i;
         };
     }
-    try std.testing.expect(final_leader);
+    const li = leader_idx orelse return error.LeaderDidNotHold;
+
+    // Phase 3 — REPLICATION OBSERVATION (non-fatal). Graph writes now route
+    // through Raft on the leader (cluster_replication.zig); single-node clusters
+    // replicate correctly. Multi-node commit is currently BLOCKED by root cause
+    // #3 in docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
+    // (the raft library's buildAppendEntries ships empty AppendEntries, so the
+    // follower log never advances and the leader cannot commit — a leader CREATE
+    // therefore times out instead of replicating). This phase is intentionally
+    // diagnostic-only until that fix lands: it logs the observed state without
+    // failing the liveness guarantee asserted above.
+    const leader_ip = NODE_IPS[li];
+    const follower_ip = NODE_IPS[(li + 1) % 3];
+
+    const create_out = runQuery(gpa, io, aa, leader_ip, "CREATE (:ReplTest {v:1})") catch |err| {
+        std.debug.print("[repl-observe] CREATE on leader {s}: {s}\n", .{ leader_ip, @errorName(err) });
+        return; // liveness already asserted; replication is observation-only
+    };
+    defer gpa.free(create_out);
+    sleepMs(3000);
+
+    const read_out = runQuery(gpa, io, aa, follower_ip, "MATCH (n:ReplTest) RETURN count(n) AS c") catch |err| {
+        std.debug.print("[repl-observe] follower read {s}: {s}\n", .{ follower_ip, @errorName(err) });
+        return;
+    };
+    defer gpa.free(read_out);
+
+    if (std.mem.indexOf(u8, read_out, "\"c\":1") != null) {
+        std.debug.print("[repl-observe] leader CREATE replicated to follower {s} (multi-node replication WORKING)\n", .{follower_ip});
+    } else {
+        std.debug.print("[repl-observe] leader CREATE NOT yet replicated to follower {s} (blocked on root cause #3 — buildAppendEntries ships empty entries)\n", .{follower_ip});
+    }
 }

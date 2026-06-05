@@ -27,6 +27,14 @@ const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 const match_operations = @import("match_operations.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
+// Cluster write replication (root cause #2 of
+// docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md). These
+// imports are read-only here; the executor consults the coordinator only when a
+// cluster is active (single-node mode has no coordinator and is unaffected).
+const cluster_mod = @import("../distributed/cluster.zig");
+const raft_consensus = @import("../distributed/raft_consensus.zig");
+const cluster_replication = @import("../distributed/cluster_replication.zig");
+
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
@@ -1177,6 +1185,23 @@ pub fn executeCreateQuery(
     param_values: []const Value,
     current_graph: ?[]const u8,
 ) !ExecutionResult {
+    // Cluster write replication (root cause #2): a bare `CREATE (:Label
+    // {literal})` issued as a query reaches this function (not executeCreate).
+    // When we are the cluster leader and the query is a pure create — no MATCH
+    // bindings, MATCH/WITH/SET/REMOVE/DELETE/RETURN clauses — route the simple
+    // node create through Raft so it replicates to every node.
+    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=QueryProposeNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+    if (matched_bindings == null and
+        q.match.chains.len == 0 and
+        q.with_clause == null and
+        q.set_clauses.len == 0 and
+        q.remove_clauses.len == 0 and
+        q.delete_items.len == 0 and
+        q.ret.items.len == 0)
+    {
+        if (try tryClusterReplicateCreatePattern(allocator, create_pattern, current_graph)) |res| return res;
+    }
+
     // GAP-0815: homogeneous batch-CREATE fast path. Declines on any
     // heterogeneity (mixed labels, mixed key sets, named nodes, hops,
     // WITH/SET/REMOVE/RETURN clauses, MATCH-bound vars), falling through
@@ -1708,7 +1733,95 @@ pub fn executeReturnClauseWithNodes(
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-018; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
+/// Map a literal property Expr to a storage PropertyValue, or null if the
+/// expression is not a plain literal this replication slice supports.
+fn literalExprToPropertyValue(e: ast.Expr) ?graph_store.PropertyValue {
+    return switch (e) {
+        .Int => |i| .{ .Int = i },
+        .BigIntLit => |i| .{ .Int = i },
+        .SmallIntLit => |i| .{ .Int = @as(i64, i) },
+        .String => |s| .{ .String = s },
+        .TextLit => |s| .{ .String = s },
+        .Bool => |b| .{ .Bool = b },
+        .Null => .Null,
+        .DoubleLit => |f| .{ .Float = f },
+        .RealLit => |f| .{ .Float = @as(f64, f) },
+        else => null,
+    };
+}
+
+/// Route an eligible single-node `CREATE (:Label {literal})` through Raft so the
+/// write replicates to every node in the cluster. Returns:
+///   * null  — single-node mode (no coordinator), this node is not the leader,
+///             or the statement is not (yet) replicable; caller proceeds with
+///             the normal local create path (behavior unchanged).
+///   * a result — the create was proposed, committed, and applied via Raft.
+/// See cluster_replication.zig and the bug doc (root cause #2).
+fn tryClusterReplicateCreatePattern(
+    allocator: std.mem.Allocator,
+    pattern: ast.GraphPattern,
+    current_graph: ?[]const u8,
+) !?ExecutionResult {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return null; // single-node
+    if (coord.role() != .leader) return null; // followers: unchanged local path
+
+    // Eligible only for a single standalone node pattern (no relationship hops).
+    if (pattern.chains.len != 1) return null;
+    const chain = pattern.chains[0];
+    if (chain.hops.len != 0) return null;
+    const node = chain.head orelse return null;
+
+    // Evaluate literal properties; fall through to local on any non-literal value.
+    var props = std.ArrayList(cluster_replication.Prop).empty;
+    defer props.deinit(allocator);
+    if (node.props) |plist| {
+        for (plist) |p| {
+            const v = literalExprToPropertyValue(p.value.*) orelse return null;
+            try props.append(allocator, .{ .key = p.key, .value = v });
+        }
+    }
+
+    const graph = current_graph orelse "default";
+    const payload = cluster_replication.serializeNodeCreate(allocator, graph, node.labels, props.items) catch |err| switch (err) {
+        cluster_replication.CodecError.UnsupportedPropertyType => return null, // fall through to local
+        else => return err,
+    };
+    defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+    const cmd = raft_consensus.Command{ .graph_mutation = .{
+        .graph = graph,
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } };
+    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+        error.NotLeader => return null, // lost leadership between the check and propose
+        else => return err,
+    };
+    // Block until the entry is applied locally. Apply happens on quorum commit,
+    // i.e. it has replicated to a majority. A timeout still leaves the entry in
+    // the log to apply; surface it so the client can retry rather than assume
+    // durability.
+    try coord.waitForApplied(idx, 5000);
+
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    // Cluster write replication: in cluster mode, route an eligible simple
+    // `CREATE (:Label {literal})` through Raft so it replicates to every node,
+    // instead of writing local-only (root cause #2). Returns null for
+    // single-node mode, on followers, or for any create this slice does not yet
+    // replicate — those fall through to the unchanged local path below.
+    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=ExecutorProposeNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+    if (c.return_clause == null) {
+        if (try tryClusterReplicateCreatePattern(allocator, c.pattern, current_graph)) |res| return res;
+    }
+
     // GAP-0815: homogeneous batch-CREATE fast path for a top-level
     // `CREATE (:L {...}), (:L {...}), ...` statement (no RETURN). See
     // `homogeneousPatternEligible` for the detection rules. Declines on

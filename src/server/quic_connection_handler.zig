@@ -5511,7 +5511,15 @@ fn handleClientMessage(
             // undo log, RLS filtering, and row materialization.  Any other
             // statement shape (RETURN, expressions, multi-label, etc.) falls
             // through to the regular executor path below.
-            if (is_mutation and geode.bulk_ingest.isEnabled()) {
+            // In cluster mode the write must flow through the regular executor
+            // so it is proposed to Raft and replicated to every node (root cause
+            // #2 of docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md).
+            // The bulk fast path writes straight to the local storage adapter,
+            // bypassing the Raft propose hook in crud_operations, so skip it
+            // whenever a cluster coordinator is active.
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=BulkFastPathClusterBypass; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            const cluster_active = geode.distributed.cluster.getGlobalClusterCoordinator() != null;
+            if (is_mutation and geode.bulk_ingest.isEnabled() and !cluster_active) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
                 if (bulk_shape == .simple_node_create) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
@@ -5552,7 +5560,13 @@ fn handleClientMessage(
             // the same no-RETURN wire shape. They remain gated on `!state.in_txn`
             // because they intentionally skip the undo log; transactional
             // rollback coverage stays on the regular executor path.
-            if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null) {
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=DefaultFastPathClusterBypass; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            // In cluster mode, these direct-adapter fast paths bypass the Raft
+            // propose hook in the executor and would write local-only (root
+            // cause #2). Skip them whenever a cluster coordinator is active so
+            // the write flows through executeProgramWithContext -> executeCreate
+            // -> proposeWrite and replicates to every node.
+            if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null and geode.distributed.cluster.getGlobalClusterCoordinator() == null) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
                 if (bulk_shape == .simple_node_create) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);

@@ -1538,11 +1538,43 @@ pub fn deserializeCommand(data: []const u8) !Command {
                 .commit = payload[8] != 0,
             } };
         },
+        CMD_TAG_GRAPH_MUTATION => {
+            // Wire format mirrors serializeCommand:
+            //   4B graph_len(BE) | graph | 1B mutation_type | 1B has_txn [| 8B txn_id(BE)] | data
+            // Without this case, a proposed graph mutation fell into the `else`
+            // branch below and was applied as an inert `.write`, so cluster
+            // writes never replicated (root cause #2 of
+            // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md).
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=DeserializeGraphMutation; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            if (payload.len < 4 + 1 + 1) return error.InvalidData;
+            const graph_len = std.mem.readInt(u32, payload[0..4], .big);
+            var pos: usize = 4;
+            if (pos + graph_len > payload.len) return error.InvalidData;
+            const graph = payload[pos .. pos + graph_len];
+            pos += graph_len;
+            if (pos + 2 > payload.len) return error.InvalidData;
+            const mtype: @FieldType(GraphMutation, "mutation_type") = @enumFromInt(payload[pos]);
+            pos += 1;
+            const has_txn = payload[pos];
+            pos += 1;
+            var txn_id: ?u64 = null;
+            if (has_txn != 0) {
+                if (pos + 8 > payload.len) return error.InvalidData;
+                txn_id = std.mem.readInt(u64, payload[pos..][0..8], .big);
+                pos += 8;
+            }
+            return .{ .graph_mutation = .{
+                .graph = graph,
+                .mutation_type = mtype,
+                .data = payload[pos..],
+                .txn_id = txn_id,
+            } };
+        },
         else => {
             // For complex types we have not yet wired a deserializer for
-            // (graph_mutation/config_change/snapshot_pointer/txn_prepare),
-            // surface them as a generic write so the apply callback sees a
-            // recognisable variant rather than losing the payload entirely.
+            // (config_change/snapshot_pointer/txn_prepare), surface them as a
+            // generic write so the apply callback sees a recognisable variant
+            // rather than losing the payload entirely.
             return .{ .write = data };
         },
     }

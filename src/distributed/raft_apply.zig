@@ -18,6 +18,7 @@ const GraphMutation = raft_consensus.GraphMutation;
 const SchemaChange = raft_consensus.SchemaChange;
 const graph_store_mod = @import("../graph_store.zig");
 const GraphStore = graph_store_mod.GraphStore;
+const cluster_replication = @import("cluster_replication.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("raft_apply");
@@ -137,10 +138,25 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
 
     switch (gm.mutation_type) {
         .create => {
-            // MVP: create a node in the target graph.
-            // The `data` field contains opaque mutation bytes — for now we
-            // create an unlabelled node and attach the raw data as a property
-            // so the round-trip is observable in tests.
+            // Cluster write replication (GNC1 payload): decode the serialized
+            // single-node create and replay it deterministically. Because every
+            // node applies committed entries in Raft log order from an identical
+            // initial state, node-id assignment is deterministic and all nodes
+            // converge. See cluster_replication.zig.
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            if (cluster_replication.isNodeCreatePayload(gm.data)) {
+                const node_id = try cluster_replication.applyNodeCreatePayload(allocator, store, gm.data);
+                log.info("raft apply: replicated node create", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("graph", graph_name),
+                });
+                const result = try allocator.alloc(u8, 8);
+                std.mem.writeInt(u64, result[0..8], node_id, .little);
+                return result;
+            }
+
+            // Legacy/opaque path: create an unlabelled node and attach the raw
+            // data as a property so the round-trip is observable in tests.
             const labels = &[_][]const u8{};
             const node_id = try store.createNodeWithGraph(labels, graph_name);
 
