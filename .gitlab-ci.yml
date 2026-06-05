@@ -1089,6 +1089,18 @@ test-code-coverage:
 test-gql-compliance:
   stage: test
   image: $ZIG_IMAGE
+  # The single-node geode server under the compliance harness occasionally goes
+  # unresponsive under CI load and queries hit their 30s timeout
+  # (`verify-complete-cleanup: timeout` cascading to many specs). It passed in
+  # pipeline #1218 and fails intermittently — a load/timing flake, not a logic
+  # regression. Retry like the other test jobs; also covers a transient
+  # dep-fetch hiccup.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
