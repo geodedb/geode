@@ -39,6 +39,60 @@ secondary, unreproducible on a healthy host, verify under real k8s CPU limits.
 
 ---
 
+## ❌ RE-OPENED on real Kubernetes (2026-06-06, geode `0.6.23`)
+
+The fixes above were verified **only on one host** (three processes on distinct
+loopback IPs `127.0.0.11/12/13`). Deployed to the **real arda k8s cluster**
+(`geodedb/geode:0.6.23`, 3-pod StatefulSet, distinct pod IPs across 3 nodes,
+CA-signed TLS, 2000m/4000m CPU, the binary confirmed to contain the fix —
+`grep -a graph_mutation/command_bytes/RaftLogEntry $(command -v geode)` matches),
+**the cluster still does not work**:
+
+- **Replication does NOT happen.** On a clean fresh-PVC boot the cluster *did*
+  elect a stable leader (geode-0 leader, geode-1/2 followers, all `term=1`, 0
+  HandshakeErrors, held steadily — a real improvement over 0.6.19's flapping).
+  But a leader `CREATE (:RaftRepl {v:123})` reads back `count=1` on the **leader
+  only**; **both followers stay `count=0`** even after 15s. On disk the nodes
+  have **divergent tenant/graph IDs** (each `<data-dir>/<tenant>/graphs/<id>` set
+  is different per pod) — i.e. each node bootstrapped its own local state and
+  nothing is being applied from the leader's log. No raft log file is present
+  under the data dir on any node.
+- **The write is non-deterministic:** with one leader the `CREATE` returned
+  `exit 0` fast (committed locally, never replicated); with a different leader it
+  **hung (`timeout 15` → exit 124)** — i.e. sometimes it can't even commit.
+- **`SHOW CLUSTER STATUS` hangs** (client `timeout 10` → exit 124) on the leader,
+  while plain client queries (`RETURN 1`, single-graph `MATCH`) on `:3141` work
+  fine throughout — so the `:4242` cluster-coordination path is what stalls.
+- **Election is itself non-deterministic.** After a rolling restart (a routine
+  `kubectl set env` / pod roll) the cluster fell back to the original failure:
+  **all three nodes stuck `state=candidate term=0`** for minutes, raft loop alive
+  (`iter` climbs to 11k–13k) but `term` never advances and no leader is ever
+  elected — with **0 HandshakeErrors** and correct node ids (`node_id=1/2/3`
+  match the `$HOSTNAME` positions). This is the GAP-0838 "Bug B" end-state again,
+  reached with the transport healthy, so RequestVote/AppendEntries are not being
+  delivered+counted across pods even though the QUIC connections are up.
+
+**Net:** raft control + log messages are not reliably delivered/applied between
+**distinct-IP pods**, even though the TLS handshake succeeds (0 errors) and small
+heartbeats keep followers nominally attached. The loopback (`127.0.0.1x`,
+single-host) steady-state and envelope round-trip tests pass but **do not
+reproduce the real multi-pod transport**, which is exactly where both the
+election convergence and the AppendEntries-with-entries delivery fail.
+
+**Suggested next step:** a CI/integration test on a real multi-node Kubernetes
+(or at least separate network namespaces with distinct routable IPs, not
+loopback) that asserts (a) a single leader is elected and **survives a rolling
+restart of any one pod**, and (b) a leader write reads back on **both** followers.
+Instrument the raft transport to log, per outbound message, the message type +
+entry count + bytes + send result, so a multi-pod run shows whether
+AppendEntries-with-entries and RequestVote are leaving the leader and arriving at
+followers (the current logs expose neither at any level). Likely suspects remain
+in `raft_consensus.zig` (per-peer outbox coalescing dropping non-heartbeat frames
+on the real transport; the `waitForHandshake(1)`/evict loop serializing sends) and
+the `cluster.zig` coordination path that backs `SHOW CLUSTER STATUS`.
+
+---
+
 ## TL;DR
 
 After every TLS/identity prerequisite is satisfied and a leader is elected, the 3-node cluster **will not stay converged and will not commit writes**:
