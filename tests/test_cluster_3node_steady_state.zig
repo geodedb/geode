@@ -186,6 +186,95 @@ fn lastState(buf: []const u8, id: usize) struct { role: ?[]const u8, term: i64 }
     return .{ .role = role, .term = term };
 }
 
+/// Index of the node whose last observed raft state is "leader", or null.
+fn currentLeaderIdx(captures: []const Capture) ?usize {
+    var idx: ?usize = null;
+    for (captures, 0..) |c, i| {
+        const s = lastState(c.buf.items, i + 1);
+        if (s.role) |r| if (std.mem.eql(u8, r, "leader")) {
+            idx = i;
+        };
+    }
+    return idx;
+}
+
+/// A node is "healthy" if it produced a raft state line — i.e. it actually
+/// started and joined raft. On a dev host where a node's client port (:3141) is
+/// already bound by another geode it fails to start and is excluded here, so the
+/// surviving quorum is still asserted (and the dead node is never queried, which
+/// would otherwise stall the poll on a 15s client timeout).
+fn isNodeHealthy(captures: []const Capture, idx: usize) bool {
+    return lastState(captures[idx].buf.items, idx + 1).role != null;
+}
+
+/// Run a CREATE on the CURRENT leader (re-resolved each attempt, since leadership
+/// can move on a loaded host) and assert it replicates to EVERY healthy follower.
+/// Retries when the chosen node turns out not to be the leader
+/// (error.ClusterNotLeader). Only healthy nodes are queried, so a node that never
+/// started cannot stall the poll. Errors if there is no healthy follower or one
+/// never receives the row (the leader-only divergence this bug is about).
+fn assertReplicatesToHealthyFollowers(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    aa: std.mem.Allocator,
+    captures: []const Capture,
+    label: []const u8,
+    create_q: []const u8,
+) !void {
+    const read_q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN count(n) AS c", .{label});
+    var attempt: usize = 0;
+    const li: usize = while (attempt < 12) : (attempt += 1) {
+        const idx = currentLeaderIdx(captures) orelse {
+            sleepMs(500);
+            continue;
+        };
+        const out = runQuery(gpa, io, aa, NODE_IPS[idx], create_q) catch {
+            sleepMs(500);
+            continue;
+        };
+        defer gpa.free(out);
+        // Leadership moved between resolve and send — retry against the new leader.
+        if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
+            sleepMs(700);
+            continue;
+        }
+        // NOTE: the create may return a `Timeout` here when commit latency on a
+        // loaded host exceeds the leader's internal waitForApplied budget — the
+        // write still replicates, it just hasn't committed by the time the client
+        // call returns (commit-latency-under-load, root cause #5 in the bug doc).
+        // So we do NOT gate replication on this response; we poll the followers.
+        break idx;
+    } else return error.NoStableLeaderForWrite;
+
+    // Expected = healthy non-leader nodes (the quorum's followers).
+    var expected: usize = 0;
+    for (0..3) |i| {
+        if (i != li and isNodeHealthy(captures, i)) expected += 1;
+    }
+    if (expected == 0) return error.NoHealthyFollower;
+
+    // Poll only the healthy followers (a never-started node is skipped, so it
+    // cannot stall this loop). Replication is asserted by the row appearing on
+    // every healthy follower, independent of how long commit took.
+    var poll: usize = 0;
+    while (poll < 18) : (poll += 1) {
+        sleepMs(1000);
+        var got: usize = 0;
+        for (0..3) |fi| {
+            if (fi == li or !isNodeHealthy(captures, fi)) continue;
+            const read_out = runQuery(gpa, io, aa, NODE_IPS[fi], read_q) catch continue;
+            defer gpa.free(read_out);
+            if (std.mem.indexOf(u8, read_out, "\"c\":1") != null) got += 1;
+        }
+        if (got >= expected) {
+            std.debug.print("[repl] '{s}' replicated to all {d} healthy follower(s) after {d}s\n", .{ label, expected, poll + 1 });
+            return;
+        }
+    }
+    std.debug.print("[repl] '{s}' did NOT replicate to all {d} healthy follower(s)\n", .{ label, expected });
+    return error.ReplicationIncomplete;
+}
+
 test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (posixGetenv("GEODE_SKIP_SUBPROC_CLUSTER") != null) return error.SkipZigTest;
@@ -332,7 +421,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
             leader_idx = i;
         };
     }
-    const li = leader_idx orelse return error.LeaderDidNotHold;
+    _ = leader_idx orelse return error.LeaderDidNotHold;
 
     // Phase 3 — REPLICATION (asserted). A graph write on the leader routes
     // through Raft (crud_operations.zig → proposeCommand) and MUST replicate to
@@ -347,34 +436,51 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     //      now deep-copies into owned_wire_bytes),
     //   3. a freshly-proposed entry was buried behind an unbounded heartbeat
     //      backlog (enqueueOutbound now coalesces AppendEntries per peer).
-    // A leader CREATE must now be visible on a follower; assert it.
-    const leader_ip = NODE_IPS[li];
+    // A leader CREATE must now be visible on every healthy follower; assert it.
+    // Asserting replication to ALL healthy followers (not just >=1) is what
+    // catches the re-open's "leader-only" divergence. The write is sent to the
+    // CURRENT leader (re-resolved, retry on a leadership move) so the assertion
+    // measures replication, not a leadership race.
+    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, "ReplTest", "CREATE (:ReplTest {v:1})");
 
-    const create_out = runQuery(gpa, io, aa, leader_ip, "CREATE (:ReplTest {v:1})") catch |err| {
-        std.debug.print("[repl] CREATE on leader {s} failed: {s}\n", .{ leader_ip, @errorName(err) });
-        return error.LeaderCreateFailed;
-    };
-    defer gpa.free(create_out);
-    sleepMs(3000);
+    // Phase 4 — REPLICATION OF A `CREATE ... RETURN` (re-open regression).
+    // A `CREATE (...) RETURN ...` reaches the executor via the query path, which
+    // previously skipped Raft routing entirely (the routing only fired for a
+    // bare create with NO RETURN) and wrote leader-local only, so the followers
+    // stayed empty — exactly the re-open symptom. The cluster write-routing gate
+    // (crud_operations.zig::clusterReplicateNodeCreate) now replicates a
+    // RETURN-create through Raft and evaluates the constant RETURN. Assert it
+    // lands on every healthy follower.
+    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, "ReplRet", "CREATE (:ReplRet {v:2}) RETURN 1");
 
-    // Assert the write replicated to BOTH followers (read it back on each).
-    var replicated_followers: usize = 0;
-    for (0..3) |fi| {
-        if (fi == li) continue;
-        const follower_ip = NODE_IPS[fi];
-        const read_out = runQuery(gpa, io, aa, follower_ip, "MATCH (n:ReplTest) RETURN count(n) AS c") catch |err| {
-            std.debug.print("[repl] follower read {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
-            continue;
-        };
-        defer gpa.free(read_out);
-        if (std.mem.indexOf(u8, read_out, "\"c\":1") != null) {
-            replicated_followers += 1;
-            std.debug.print("[repl] leader CREATE replicated to follower {s}\n", .{follower_ip});
-        } else {
-            std.debug.print("[repl] leader CREATE NOT replicated to follower {s}: {s}\n", .{ follower_ip, read_out });
+    // Phase 5 — FOLLOWER WRITES MUST FAIL CLOSED (re-open regression). A write
+    // sent to a FOLLOWER previously fell through to that follower's local store
+    // (the re-open's "exit 0 fast, committed locally, never replicated"). It
+    // must now be rejected (error.ClusterNotLeader) and NOT applied anywhere —
+    // a follower must never hold data the rest of the cluster does not.
+    const cur_leader = currentLeaderIdx(&captures) orelse return error.LeaderDidNotHold;
+    // Pick a HEALTHY follower (a node that actually started); never probe a node
+    // that failed to start (its :3141 would be answered by an unrelated process).
+    var follower_idx: ?usize = null;
+    for (0..3) |i| {
+        if (i != cur_leader and isNodeHealthy(&captures, i)) {
+            follower_idx = i;
+            break;
         }
     }
-    // A 3-node cluster must replicate the write to at least one follower (a
-    // quorum of 2 commits it; both followers should converge).
-    try std.testing.expect(replicated_followers >= 1);
+    const fidx = follower_idx orelse return error.NoHealthyFollower;
+    const follower_ip = NODE_IPS[fidx];
+    const rej_out = runQuery(gpa, io, aa, follower_ip, "CREATE (:FollowerReject {v:9})") catch |err| {
+        std.debug.print("[repl] follower-write probe {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
+        return error.FollowerWriteProbeFailed;
+    };
+    defer gpa.free(rej_out);
+    sleepMs(1500);
+    // The follower must NOT have applied the write locally (the divergence bug).
+    const fr_read = runQuery(gpa, io, aa, follower_ip, "MATCH (n:FollowerReject) RETURN count(n) AS c") catch return error.FollowerWriteProbeFailed;
+    defer gpa.free(fr_read);
+    if (std.mem.indexOf(u8, fr_read, "\"c\":0") == null) {
+        std.debug.print("[repl] FOLLOWER SILENTLY APPLIED A WRITE (divergence): {s}\n", .{fr_read});
+        return error.FollowerAppliedWriteLocally;
+    }
 }

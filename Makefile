@@ -1555,6 +1555,17 @@ test-gap0838:
 	@echo "Running GAP-0838 non-loopback secure peer TLS handshake test..."
 	zig build test-gap0838-cluster-tls
 
+# Distinct-IP (NON-loopback) 3-node cluster replication regression. Builds the
+# faithful k8s topology with Linux network namespaces (distinct routable pod
+# IPs, wildcard 0.0.0.0 cluster bind, MTU 1450, FQDN/DNS peers, CA-signed TLS)
+# and asserts the write-routing contract from
+# docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+# Requires root (network namespaces); skips cleanly when unprivileged.
+.PHONY: test-cluster-netns
+test-cluster-netns: build
+	@echo "Running distinct-IP netns cluster replication regression..."
+	sudo tests/cluster/netns_cluster_replication_test.sh zig-out/bin/geode
+
 # External mermaid integration test (uses @mermaid-js/mermaid-cli to
 # verify --format mermaid output is real, parseable Mermaid).
 .PHONY: test-mermaid-integration

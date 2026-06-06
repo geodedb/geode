@@ -93,6 +93,89 @@ the `cluster.zig` coordination path that backs `SHOW CLUSTER STATUS`.
 
 ---
 
+## ✅ RE-RESOLVED (2026-06-06) — cluster write-routing gate (no silent divergence)
+
+The re-opened "replication does NOT happen / divergent state" failure was
+reproduced **faithfully** with Linux network namespaces — the distinct-routable-IP,
+non-loopback topology the report explicitly asked for: 3 nodes, each in its own
+netns with a distinct routable IP on a bridge, **wildcard `0.0.0.0` cluster bind**
+(exactly as the k8s StatefulSet leaves it), MTU 1450 (flannel VXLAN parity), a
+DNS server resolving k8s-style FQDN peers, **hostname-derived node identity**, and
+CA-signed TLS. Committed as `tests/cluster/netns_cluster_replication_test.sh`,
+with CI-friendly assertions also added to the loopback subprocess test
+`tests/test_cluster_3node_steady_state.zig` (Phases 3–5).
+
+### Root cause — graph writes silently bypassed Raft and were applied to ONE node
+
+The Raft transport + apply path were **correct**: a bare `CREATE (:L {lit})` with
+NO `RETURN` replicated to both followers in every faithful topology (IP peers and
+FQDN+DNS+hostname). The defect was a **too-narrow write-routing gate in the
+executor** — only a pure single-node `CREATE` with no `RETURN` was routed through
+Raft. Everything else fell through to the node's **local** graph store:
+
+- `CREATE (...) RETURN ...` (the original repro shape, and the common write shape)
+  was written **leader-local only** → followers stayed empty (the re-open's
+  "count=1 on the leader only"). A `RETURN` clause made the routing decline.
+- A write sent to a **follower** was applied to that follower's local store and
+  never proposed (the re-open's "exit 0 fast, committed locally, never
+  replicated" — run against a non-leader).
+- `MERGE` / `DELETE` / `INSERT` / multi-node / relationship creates likewise wrote
+  local-only.
+
+So every non-trivial write silently diverged the cluster — exactly the "each node
+bootstrapped its own local state, nothing applied from the leader's log".
+
+### Fix (`src/execution/crud_operations.zig`)
+
+A cluster write-routing gate now governs every graph-data mutation. In cluster
+mode it is **fail-closed — a write is either replicated through Raft or rejected;
+it is NEVER applied to a single node's local store**:
+
+- On a **follower/candidate**: graph-data writes return `error.ClusterNotLeader`
+  (clients retry the leader — standard Raft client semantics). No local apply.
+- On the **leader**: an eligible single-node `CREATE` — now **including a constant
+  `RETURN`**, and now resolving **parameter-valued** props (not just literals) — is
+  proposed through Raft and replicated to every node. Shapes outside that slice
+  (`MERGE`/`DELETE`/`INSERT`, multi-node, relationship hops, or a `RETURN` that
+  references the created node) return `error.ClusterWriteNotReplicable` instead of
+  diverging.
+
+Regression coverage:
+
+- `tests/cluster/netns_cluster_replication_test.sh` (distinct-IP netns,
+  **deterministic PASS**): (A2) a bare `CREATE` replicates to both followers,
+  (A3) a `CREATE ... RETURN` replicates to both followers, (A4) a follower write
+  is rejected with no divergence.
+- `tests/test_cluster_3node_steady_state.zig` Phases 3–5 — loopback subprocess CI
+  coverage of the same three properties (re-resolves the leader per write and
+  polls for replication so commit latency does not flake the assertion).
+
+### Still open (characterized, secondary — reliability hardening, NOT divergence)
+
+- **Commit latency under CPU pressure (root cause #5).** Under heavy host load
+  (and the report's k8s CPU limits) a leader write's commit can exceed the
+  leader's `waitForApplied` budget and surface a `Timeout` to the client even
+  though the entry replicates shortly after — the re-open's "writes hang / time
+  out". With the gate this is **correct-but-slow** (the write still replicates; it
+  is never silently local-only). The underlying transport latency — the single
+  outbox-drain thread serializing peer sends behind `waitForHandshake`, one QUIC
+  stream per RPC — is the next change; reproduce with the netns harness under
+  `cgroup`/`cpulimit` pressure.
+- **Restart re-apply / no persisted raft log (root cause #6, newly found).** The
+  cluster `RaftNode` uses `raft_lib.InMemoryStorage` — there is **no `raft_log.bin`
+  on disk**, matching the report's "no raft log file present". After a pod restart
+  the node re-applies committed entries from the leader and, because the apply path
+  is not idempotent, can **duplicate** rows (reproduced: a rescheduled-with-new-IP
+  node read back `count=2` for a single replicated node). The raft library already
+  ships a crash-safe `FileStorage`; wiring it (plus applied-index/snapshot
+  coordination with the persisted graph store) is the fix. Reproduce with the netns
+  rolling-restart harness.
+
+Neither remaining item reintroduces the silent-divergence defect this section
+closes; both are reliability hardening on top of the now-correct replication path.
+
+---
+
 ## TL;DR
 
 After every TLS/identity prerequisite is satisfied and a leader is elected, the 3-node cluster **will not stay converged and will not commit writes**:

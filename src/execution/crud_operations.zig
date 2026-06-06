@@ -1185,21 +1185,35 @@ pub fn executeCreateQuery(
     param_values: []const Value,
     current_graph: ?[]const u8,
 ) !ExecutionResult {
-    // Cluster write replication (root cause #2): a bare `CREATE (:Label
-    // {literal})` issued as a query reaches this function (not executeCreate).
-    // When we are the cluster leader and the query is a pure create — no MATCH
-    // bindings, MATCH/WITH/SET/REMOVE/DELETE/RETURN clauses — route the simple
-    // node create through Raft so it replicates to every node.
-    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=QueryProposeNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
-    if (matched_bindings == null and
-        q.match.chains.len == 0 and
-        q.with_clause == null and
-        q.set_clauses.len == 0 and
-        q.remove_clauses.len == 0 and
-        q.delete_items.len == 0 and
-        q.ret.items.len == 0)
-    {
-        if (try tryClusterReplicateCreatePattern(allocator, create_pattern, current_graph)) |res| return res;
+    // Cluster write routing: a `CREATE (...)` issued as a query reaches this
+    // function (not executeCreate), including `CREATE (...) RETURN ...`. In
+    // cluster mode the write must be ordered through Raft on the leader and
+    // never applied to a single node's local store. A follower fails closed
+    // (clients retry the leader); the leader replicates a pure single-node
+    // create (optionally with a constant RETURN) or fails closed for shapes
+    // outside the replicable slice (MATCH/WITH/SET/REMOVE/DELETE, multi-node,
+    // relationship hops). See the re-open notes in the bug doc + the distinct-IP
+    // regression test tests/cluster/netns_cluster_replication_test.sh.
+    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=QueryProposeNodeCreate; STATUS=TESTED; TEST=tests/cluster/netns_cluster_replication_test.sh; OWNER=distributed; UPDATED=2026-06-06
+    switch (try clusterWriteRole()) {
+        .standalone => {}, // single-node: unchanged local path below
+        .leader => {
+            const pure_create = matched_bindings == null and
+                q.match.chains.len == 0 and
+                q.with_clause == null and
+                q.set_clauses.len == 0 and
+                q.remove_clauses.len == 0 and
+                q.delete_items.len == 0;
+            if (!pure_create) return error.ClusterWriteNotReplicable;
+            return clusterReplicateNodeCreate(
+                allocator,
+                create_pattern,
+                if (q.ret.items.len > 0) q.ret else null,
+                param_names,
+                param_values,
+                current_graph,
+            );
+        },
     }
 
     // GAP-0815: homogeneous batch-CREATE fast path. Declines on any
@@ -1732,58 +1746,120 @@ pub fn executeReturnClauseWithNodes(
     };
 }
 
-// CANARY: REQ=REQ-MULTI-GRAPH-018; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-/// Map a literal property Expr to a storage PropertyValue, or null if the
-/// expression is not a plain literal this replication slice supports.
-fn literalExprToPropertyValue(e: ast.Expr) ?graph_store.PropertyValue {
-    return switch (e) {
-        .Int => |i| .{ .Int = i },
-        .BigIntLit => |i| .{ .Int = i },
-        .SmallIntLit => |i| .{ .Int = @as(i64, i) },
-        .String => |s| .{ .String = s },
-        .TextLit => |s| .{ .String = s },
-        .Bool => |b| .{ .Bool = b },
+// ── Cluster write routing ────────────────────────────────────────────────────
+// Re-open fix for docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+//
+// In cluster mode EVERY graph-data write must be ordered through Raft on the
+// leader and applied uniformly on all nodes. Two silent-divergence holes were
+// reproduced on a distinct-IP (non-loopback) 3-node cluster
+// (tests/cluster/netns_cluster_replication_test.sh):
+//
+//   1. A write sent to a FOLLOWER fell through to the follower's local store —
+//      the write existed on exactly one node and the rest of the cluster never
+//      saw it (the re-open's "exit 0 fast, committed locally, never replicated").
+//   2. A `CREATE ... RETURN ...` (and any non-trivial create) on the LEADER
+//      skipped the Raft path entirely and was written leader-local only, so the
+//      followers stayed empty (the re-open's "count=1 on the leader only").
+//
+// The gate below makes those fail closed instead of diverging: a follower
+// rejects the write (error.ClusterNotLeader — clients retry against the leader,
+// standard Raft semantics), and the leader either replicates the write through
+// Raft or rejects it (error.ClusterWriteNotReplicable) when the create shape is
+// outside the replicable slice. NOTHING is ever applied to a single node's
+// local store in cluster mode.
+const ClusterWriteRole = enum { standalone, leader };
+
+/// Resolve how a graph-data write must be handled. `.standalone` => no cluster
+/// coordinator, take the unchanged single-node local path. `.leader` => this
+/// node is the leader, the write must be replicated via Raft.
+/// `error.ClusterNotLeader` => follower/candidate; the caller must NOT apply
+/// the write locally (that diverges the cluster).
+fn clusterWriteRole() error{ClusterNotLeader}!ClusterWriteRole {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return .standalone;
+    if (coord.role() != .leader) return error.ClusterNotLeader;
+    return .leader;
+}
+
+/// Map an evaluated GQL Value to a scalar PropertyValue the single-node-create
+/// replication codec supports, or null when the type is outside that slice (so
+/// the caller fails closed rather than writing leader-local).
+fn clusterPropValue(v: Value) ?graph_store.PropertyValue {
+    return switch (v) {
         .Null => .Null,
-        .DoubleLit => |f| .{ .Float = f },
-        .RealLit => |f| .{ .Float = @as(f64, f) },
+        .Int => |i| .{ .Int = i },
+        .BigInt => |i| .{ .Int = i },
+        .SmallInt => |i| .{ .Int = @as(i64, i) },
+        .Bool => |b| .{ .Bool = b },
+        .Double => |f| .{ .Float = f },
+        .Real => |f| .{ .Float = @as(f64, f) },
+        .Str => |s| .{ .String = s },
+        .Text => |s| .{ .String = s },
         else => null,
     };
 }
 
-/// Route an eligible single-node `CREATE (:Label {literal})` through Raft so the
-/// write replicates to every node in the cluster. Returns:
-///   * null  — single-node mode (no coordinator), this node is not the leader,
-///             or the statement is not (yet) replicable; caller proceeds with
-///             the normal local create path (behavior unchanged).
-///   * a result — the create was proposed, committed, and applied via Raft.
-/// See cluster_replication.zig and the bug doc (root cause #2).
-fn tryClusterReplicateCreatePattern(
+/// Replicate an eligible single-node `CREATE (:Label {props})` through Raft and
+/// return its result. Called ONLY when this node is the cluster leader. The
+/// create is proposed to the Raft log (never written locally) and applied
+/// deterministically on every node. An optional constant RETURN clause is
+/// evaluated and returned to the client.
+///
+/// Returns `error.ClusterWriteNotReplicable` for any create shape this slice
+/// does not replicate (relationship hops, multiple nodes, a non-scalar/param
+/// property, or a RETURN clause that references the created node), so the write
+/// fails closed instead of being applied leader-local.
+fn clusterReplicateNodeCreate(
     allocator: std.mem.Allocator,
     pattern: ast.GraphPattern,
+    return_clause: ?ast.ReturnClause,
+    param_names: []const []const u8,
+    param_values: []const Value,
     current_graph: ?[]const u8,
-) !?ExecutionResult {
-    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return null; // single-node
-    if (coord.role() != .leader) return null; // followers: unchanged local path
+) !ExecutionResult {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
-    // Eligible only for a single standalone node pattern (no relationship hops).
-    if (pattern.chains.len != 1) return null;
+    // Only a single standalone node pattern (no relationship hops) is replicable here.
+    if (pattern.chains.len != 1) return error.ClusterWriteNotReplicable;
     const chain = pattern.chains[0];
-    if (chain.hops.len != 0) return null;
-    const node = chain.head orelse return null;
+    if (chain.hops.len != 0) return error.ClusterWriteNotReplicable;
+    const node = chain.head orelse return error.ClusterWriteNotReplicable;
 
-    // Evaluate literal properties; fall through to local on any non-literal value.
+    const env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+
+    // Evaluate the RETURN projection BEFORE proposing so a non-replicable RETURN
+    // (one that references the created node variable, which is unbound here)
+    // fails closed without writing anything. Constant/param RETURNs evaluate
+    // fine; the result is held and returned after the write commits.
+    var ret_result: ?ExecutionResult = null;
+    errdefer if (ret_result) |*r| r.deinit(allocator);
+    if (return_clause) |rc| {
+        if (rc.items.len > 0) {
+            ret_result = executeReturnClauseWithEnv(allocator, rc, env) catch
+                return error.ClusterWriteNotReplicable;
+        }
+    }
+
+    // Evaluate properties (literals AND parameters) into replicable scalars.
     var props = std.ArrayList(cluster_replication.Prop).empty;
     defer props.deinit(allocator);
     if (node.props) |plist| {
         for (plist) |p| {
-            const v = literalExprToPropertyValue(p.value.*) orelse return null;
-            try props.append(allocator, .{ .key = p.key, .value = v });
+            const val = eval.evalExpr(allocator, p.value.*, env) catch
+                return error.ClusterWriteNotReplicable;
+            const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+            try props.append(allocator, .{ .key = p.key, .value = pv });
         }
     }
 
     const graph = current_graph orelse "default";
     const payload = cluster_replication.serializeNodeCreate(allocator, graph, node.labels, props.items) catch |err| switch (err) {
-        cluster_replication.CodecError.UnsupportedPropertyType => return null, // fall through to local
+        cluster_replication.CodecError.UnsupportedPropertyType => return error.ClusterWriteNotReplicable,
         else => return err,
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
@@ -1795,15 +1871,19 @@ fn tryClusterReplicateCreatePattern(
         .txn_id = null,
     } };
     const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        error.NotLeader => return null, // lost leadership between the check and propose
+        // Lost leadership between the role check and the propose — fail closed.
+        error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    // Block until the entry is applied locally. Apply happens on quorum commit,
-    // i.e. it has replicated to a majority. A timeout still leaves the entry in
-    // the log to apply; surface it so the client can retry rather than assume
-    // durability.
+    // Block until the entry is applied locally. Apply happens on quorum commit
+    // (replicated to a majority); a timeout means the write did not durably
+    // replicate, so surface it rather than claim success.
     try coord.waitForApplied(idx, 5000);
 
+    if (ret_result) |r| {
+        ret_result = null; // ownership transferred to the caller
+        return r;
+    }
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
@@ -1812,14 +1892,23 @@ fn tryClusterReplicateCreatePattern(
 }
 
 pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    // Cluster write replication: in cluster mode, route an eligible simple
-    // `CREATE (:Label {literal})` through Raft so it replicates to every node,
-    // instead of writing local-only (root cause #2). Returns null for
-    // single-node mode, on followers, or for any create this slice does not yet
-    // replicate — those fall through to the unchanged local path below.
-    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=ExecutorProposeNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
-    if (c.return_clause == null) {
-        if (try tryClusterReplicateCreatePattern(allocator, c.pattern, current_graph)) |res| return res;
+    // Cluster write routing: in cluster mode the write is ordered through Raft
+    // on the leader and never written to a single node's local store. A
+    // follower fails closed (error.ClusterNotLeader — clients retry the
+    // leader); the leader replicates an eligible single-node create (optionally
+    // with a constant RETURN) or fails closed for non-replicable shapes. See
+    // tests/cluster/netns_cluster_replication_test.sh.
+    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=ExecutorProposeNodeCreate; STATUS=TESTED; TEST=tests/cluster/netns_cluster_replication_test.sh; OWNER=distributed; UPDATED=2026-06-06
+    switch (try clusterWriteRole()) {
+        .standalone => {}, // single-node: unchanged local path below
+        .leader => return clusterReplicateNodeCreate(
+            allocator,
+            c.pattern,
+            c.return_clause,
+            context.query_param_names,
+            context.query_param_values,
+            current_graph,
+        ),
     }
 
     // GAP-0815: homogeneous batch-CREATE fast path for a top-level
@@ -2125,6 +2214,15 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
 // CANARY: REQ=REQ-MULTI-GRAPH-019; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteInsert; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8) !ExecutionResult {
+    // Cluster write routing: INSERT is not in the Raft-replicable slice yet, so
+    // in cluster mode it must fail closed rather than be written to a single
+    // node's local store (follower => ClusterNotLeader; leader => not
+    // replicable). See tests/cluster/netns_cluster_replication_test.sh.
+    switch (try clusterWriteRole()) {
+        .standalone => {},
+        .leader => return error.ClusterWriteNotReplicable,
+    }
+
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 
@@ -2312,6 +2410,14 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    // Cluster write routing: MERGE is not in the Raft-replicable slice yet, so
+    // in cluster mode it must fail closed rather than be written to a single
+    // node's local store. See tests/cluster/netns_cluster_replication_test.sh.
+    switch (try clusterWriteRole()) {
+        .standalone => {},
+        .leader => return error.ClusterWriteNotReplicable,
+    }
+
     const store = graph_store.getWritableGlobalStore(allocator);
     // GAP-0511: MERGE already executes under the graph write lock, so an
     // adapter-backed QueryReadSession would clone the entire graph once per
@@ -2676,6 +2782,14 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    // Cluster write routing: DELETE is not in the Raft-replicable slice yet, so
+    // in cluster mode it must fail closed rather than be applied to a single
+    // node's local store. See tests/cluster/netns_cluster_replication_test.sh.
+    switch (try clusterWriteRole()) {
+        .standalone => {},
+        .leader => return error.ClusterWriteNotReplicable,
+    }
+
     const store = graph_store.getWritableGlobalStore(allocator);
     // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
     // adds O(total graph size) overhead without improving correctness under the
