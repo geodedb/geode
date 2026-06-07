@@ -1615,6 +1615,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     }
                     cat.allocator.free(removed.key);
                     cat.allocator.free(removed.value.name);
+                    cat.allocator.free(removed.value.index_type);
                     cat.allocator.free(removed.value.table_name);
                     for (removed.value.columns) |col| {
                         cat.allocator.free(col);
