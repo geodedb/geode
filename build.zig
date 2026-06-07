@@ -1301,6 +1301,21 @@ pub fn build(b: *std.Build) void {
     const acceptor_watchdog_step = b.step("test-acceptor-watchdog", "Run accept-path wedge watchdog unit tests (rx_queue parse + decision)");
     acceptor_watchdog_step.dependOn(&run_acceptor_watchdog_tests.step);
 
+    // Slow-poll warning observability test for
+    // docs/bugs/2026-06-07-unresponsive-under-sustained-query-load-liveness-kill-503.md
+    // Pure decision-helper unit test: verifies shouldWarnSlowPoll fires only when the
+    // poll cycle exceeds the threshold AND the rate-limit interval has elapsed.
+    const slow_poll_warn_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_quic_slow_poll_warning.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    slow_poll_warn_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    slow_poll_warn_tests.root_module.link_libc = true;
+    const run_slow_poll_warn_tests = b.addRunArtifact(slow_poll_warn_tests);
+    const slow_poll_warn_step = b.step("test-quic-slow-poll-warning", "Run slow-poll rate-limited warning unit test (2026-06-07 liveness-kill fix)");
+    slow_poll_warn_step.dependOn(&run_slow_poll_warn_tests.step);
+
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator

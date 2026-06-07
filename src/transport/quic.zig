@@ -290,6 +290,14 @@ fn waitForServerWriterProgress(stream: *QuicStream, blocked_retries: usize, obse
     }
 }
 
+/// Decide whether a slow-poll warning should fire for a cycle of `cycle_ns`.
+/// Pure: fires when the cycle exceeds `threshold_ns` AND at least
+/// `min_interval_ns` has elapsed since `last_warn_ns` (rate limit).
+pub fn shouldWarnSlowPoll(cycle_ns: u64, threshold_ns: u64, last_warn_ns: u64, now_ns: u64, min_interval_ns: u64) bool {
+    if (cycle_ns <= threshold_ns) return false;
+    return (now_ns -% last_warn_ns) >= min_interval_ns;
+}
+
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
@@ -348,6 +356,9 @@ pub const QuicTransport = struct {
     /// would-block loop for another iteration. Surface via the
     /// `quic_poll_overrun_total` gauge.
     poll_overrun_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Last wall-clock ns a slow-poll warning was emitted (rate limiting).
+    /// See shouldWarnSlowPoll and observePollCycle. Updated lock-free via CAS.
+    slow_poll_last_warn_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Heap-allocated QUIC config; owns the inline cert/key DER byte slices.
     quic_config: ?*VendorQuicConfig = null,
 
@@ -722,6 +733,24 @@ pub const QuicTransport = struct {
         observeMaxAtomic(&self.poll_pto_dirty_max_ns, stats.pto_dirty_ns);
         if (cycle_ns > overrun_threshold_ns) {
             _ = self.poll_overrun_total.fetchAdd(1, .monotonic);
+        }
+        // Slow-poll WARNING (bug 2026-06-07): surface multi-second poll cycles in
+        // logs before the in-band liveness probe times out. 1s threshold,
+        // rate-limited to one line / 5s so sustained load can't flood the log.
+        const slow_threshold_ns: u64 = 1 * std.time.ns_per_s;
+        if (cycle_ns > slow_threshold_ns) {
+            const now_ns = monoNsRaw();
+            const last = self.slow_poll_last_warn_ns.load(.acquire);
+            if (shouldWarnSlowPoll(cycle_ns, slow_threshold_ns, last, now_ns, 5 * std.time.ns_per_s)) {
+                if (self.slow_poll_last_warn_ns.cmpxchgStrong(last, now_ns, .acq_rel, .acquire) == null) {
+                    tlog.warn("QUIC poll cycle slow — query path degraded (sustained-load liveness-kill risk)", &.{
+                        Attr.uint("cycle_ms", cycle_ns / std.time.ns_per_ms),
+                        Attr.uint("recv_process_ms", stats.recv_process_ns / std.time.ns_per_ms),
+                        Attr.uint("timer_process_ms", stats.timer_process_ns / std.time.ns_per_ms),
+                        Attr.uint("packets", @intCast(stats.packets_processed)),
+                    });
+                }
+            }
         }
     }
 
