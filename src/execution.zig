@@ -1491,9 +1491,16 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     // (e.g. a prior DROP that left the on-disk dir): treat an
                     // existing engine as success when IF NOT EXISTS, else surface.
                     fts_index_ops.Error.FulltextIndexExists => if (!ci.if_not_exists) return err,
-                    // No FTS on this graph (init soft-failed): the catalog row
-                    // still records the index; search will report it missing.
-                    fts_index_ops.Error.FulltextUnavailable => {},
+                    // FTS could not be initialised for this graph (genuine init
+                    // failure — getGlobalAdapter null or getOrCreateGraph failed).
+                    // The catalog row above still records the index (SHOW source of
+                    // truth), but the engine is absent and search will report it
+                    // missing. Surface it loudly (std.debug.print reaches stdout/
+                    // stderr on the serve path, unlike log.warn) so this is never a
+                    // silent success. See docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md
+                    fts_index_ops.Error.FulltextUnavailable => {
+                        std.debug.print("[fts] WARNING: CREATE INDEX '{s}' recorded in catalog but the fulltext engine is UNAVAILABLE for this graph — search will return no results\n", .{index_name});
+                    },
                     else => return err,
                 };
             }
