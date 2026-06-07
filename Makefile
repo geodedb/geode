@@ -1566,6 +1566,15 @@ test-cluster-netns: build
 	@echo "Running distinct-IP netns cluster replication regression..."
 	sudo tests/cluster/netns_cluster_replication_test.sh zig-out/bin/geode
 
+# CPU-constrained QUIC sustained-load reproduction / Phase-2 validation gate for
+# docs/bugs/2026-06-07-unresponsive-under-sustained-query-load-liveness-kill-503.md.
+# Manual diagnostic (needs systemd-run user-scope CPU control; ~2 min). Measures
+# the in-band RETURN 1 probe vs the out-of-band /health endpoint under load.
+.PHONY: repro-quic-liveness
+repro-quic-liveness: build
+	@echo "Running CPU-constrained QUIC sustained-load repro (in-band probe vs out-of-band /health)..."
+	GEODE=zig-out/bin/geode tests/quic/quic_sustained_load_repro.sh
+
 # External mermaid integration test (uses @mermaid-js/mermaid-cli to
 # verify --format mermaid output is real, parseable Mermaid).
 .PHONY: test-mermaid-integration

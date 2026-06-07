@@ -1392,6 +1392,23 @@ pub fn main() !void {
             Attr.int("port", port),
             Attr.string("endpoint", "/metrics"),
         });
+        log.info("Out-of-band liveness endpoint available (use for k8s livenessProbe instead of in-band 'RETURN 1' query)", &.{
+            Attr.int("port", port),
+            Attr.string("liveness_endpoint", "/health"),
+            Attr.string("note", "GET http://<host>:$GEODE_METRICS_PORT/health returns 200 {\"status\":\"ok\"} on a dedicated thread, independent of the QUIC query path; bind address controlled by GEODE_METRICS_BIND (default 127.0.0.1)"),
+        });
+        // Repro-caught (2026-06-07 QUIC liveness-kill bug): the structured
+        // `log.info` lines above do NOT reach stdout/stderr on the serve path
+        // (same sink gap as the first-boot admin-password breadcrumb). Emit a
+        // reliable `[startup]` line via std.debug.print — the mechanism every
+        // other startup phase uses — so operators and k8s liveness configs can
+        // discover the out-of-band /health URL in `kubectl logs` / `docker
+        // logs` without reading source. This is what makes the bug-doc §9
+        // probe-split actually adoptable.
+        const metrics_bind_env = getEnvVarOwned(gpa, "GEODE_METRICS_BIND") catch null;
+        const metrics_bind = if (metrics_bind_env) |b| b else "127.0.0.1";
+        std.debug.print("[startup] out-of-band liveness ready: GET http://{s}:{d}/health (k8s livenessProbe; off the QUIC query path) — Prometheus /metrics on the same port\n", .{ metrics_bind, port });
+        if (metrics_bind_env) |b| gpa.free(b);
     }
     defer metrics_server.shutdownGlobalMetrics(gpa);
 

@@ -1,6 +1,12 @@
 # Bug: geode goes unresponsive under sustained parallel **query** load → liveness-probe SIGKILL (137) → pod restart → cluster-wide API **503s**
 
-**Status:** **OPEN.** Reproduced repeatedly on `geodedb/geode:0.6.23` (single-node
+**Status:** **PARTIALLY RESOLVED (outage mitigated; durable fix scoped) — 2026-06-07.**
+The headline harm (liveness-kill → cluster-wide 503) is mitigated by the out-of-band
+`/health` liveness endpoint (§9) and the new slow-poll warning makes the degradation
+observable before a kill (§10). The durable QUIC-core contention fix (`Endpoint.mu`
+rework + safe stream reaping) is **scoped and load-test-gated** in
+`docs/superpowers/plans/2026-06-07-quic-sustained-load-liveness-kill.md` — see §10.
+Originally reproduced repeatedly on `geodedb/geode:0.6.23` (single-node
 QA, 2026-06-07). Under sustained parallel *read* load (≈11 concurrent QUIC
 connections from one API replica + a Playwright e2e suite), geode's QUIC
 event loop degrades so badly — multi-**second** per-packet processing and
@@ -158,6 +164,127 @@ Until the geode-side fix lands, the outage is mitigated (not eliminated) by:
 - Clients during repro: 1× divelife-api replica, 2× divelife-pds replica,
   Playwright e2e (2 workers). `quic_active_connections=11` at peak.
 - Date: 2026-06-07.
+
+## 9. Resolution (geode side) — out-of-band liveness endpoint
+
+geode already serves `GET /health` on the metrics HTTP server
+(`src/monitoring/metrics_server.zig`, `serveHealth`). This endpoint:
+
+- Returns `HTTP/1.1 200 OK` with body `{"status":"ok"}` (15 bytes, static).
+- Runs on its **own OS thread** (the metrics server accept loop), completely
+  independent of the QUIC event loop and the `Endpoint.mu` poll lock. A
+  saturated query path cannot delay or block it.
+- Is activated by setting `GEODE_METRICS_PORT=<port>` at server startup. The
+  bind address defaults to `127.0.0.1`; set `GEODE_METRICS_BIND=0.0.0.0` to
+  make it reachable from outside the pod.
+- As of 2026-06-07 (`feat(server): advertise out-of-band /health liveness
+  endpoint at startup`), geode logs the URL at startup so operators can
+  discover it without reading source:
+
+  ```
+  level=info msg="Out-of-band liveness endpoint available ..." liveness_endpoint=/health port=<N>
+  ```
+
+**Recommended k8s probe split:**
+
+```yaml
+# Liveness — cheap, out-of-band.  Fails only if the process is truly dead.
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 9091          # GEODE_METRICS_PORT value
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 4
+
+# Readiness — in-band RETURN 1.  A slow-but-alive pod drops out of
+# Endpoints but is NOT killed; it recovers when load subsides.
+readinessProbe:
+  exec:
+    command:
+    - geode
+    - query
+    - --server=localhost:3141
+    - --insecure-tls-skip-verify
+    - -U geode
+    - -P
+    - $(GEODE_ADMIN_PASSWORD)
+    - --timeout=5
+    - RETURN 1
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 8
+  failureThreshold: 3
+```
+
+This separates "is the process alive?" (liveness, off the hot path) from "is
+the query path accepting work right now?" (readiness, in-band). A pod that is
+slow under load fails readiness and sheds traffic, but is not SIGKILLed, so
+it can drain and recover without a 503-inducing restart.
+
+The durable QUIC-side fix (poll-loop fairness / `Endpoint.mu` rework, §5) is
+still required to eliminate the contention that causes the slowness in the
+first place.
+
+## 10. Status / fix landed (2026-06-07)
+
+Worked under `/bug:fix` + `superpowers:writing-plans` + `superpowers:subagent-driven-development`
+on branch `bug/quic-sustained-load-liveness-kill`. Plan:
+`docs/superpowers/plans/2026-06-07-quic-sustained-load-liveness-kill.md`.
+
+**Landed (Phase 1 — bounded, low-risk, unit-tested):**
+
+1. **Out-of-band liveness advertised at startup** (commit `391870d7`, §5 bullet 2 / §9). geode
+   already serves a static `200 {"status":"ok"}` at `/health` on `GEODE_METRICS_PORT`, on its own
+   OS thread, independent of the QUIC poll loop. Startup now logs the URL so operators adopt the
+   §9 probe split (cheap out-of-band liveness; in-band `RETURN 1` as readiness only). **This
+   removes the liveness-kill → 503 amplification** — a busy-but-progressing pod sheds traffic via
+   readiness instead of being SIGKILLed.
+2. **Slow-poll warning + metric** (commit `63c02d14`, §5 bullet 5). `observePollCycle` emits a
+   rate-limited (1 s threshold, 5 s window) `WARN "QUIC poll cycle slow — query path degraded"`
+   with the dominant sub-phase, so the degradation is visible in logs *before* a kill. Unit test:
+   `tests/test_quic_slow_poll_warning.zig`. (Confirmed firing 10× under the repro below.)
+3. **Liveness breadcrumb actually reaches stdout/stderr** (commit on branch). A CPU-constrained
+   repro (below) caught that `391870d7`'s advertisement used `log.info`, which does NOT surface on
+   the serve path — the same sink gap that hid the first-boot admin-password breadcrumb. Replaced
+   with a reliable `std.debug.print("[startup] out-of-band liveness ready: GET …/health …")`.
+   Regression: `tests/test_liveness_endpoint_breadcrumb.zig`.
+
+**Empirical validation (repro harness `tests/quic/quic_sustained_load_repro.sh`, `make
+repro-quic-liveness`).** CPU-constrained (CPUQuota=200%, N=16, 2000 nodes), the in-band `RETURN 1`
+probe climbs to **2.7–3.4 s then times out (>8 s) repeatedly** while the out-of-band `/health`
+stays at **~18 ms throughout** — i.e. Phase 1's probe split provably prevents the SIGKILL.
+`quic_poll_cycle_max_ns` hits **3.3–4.0 s** and `quic_first_stream_packet_process_max_ns` hits
+**18.8 s** (single heavy 1500-row result), confirming the §4.1 "one expensive packet
+head-of-line-blocks the loop" mechanism. This harness is the Phase 2 acceptance gate.
+
+**Scoped, load-test-gated (Phase 2 — durable QUIC-core fix), with source evidence it must not be
+rushed:**
+
+- The root cause is the coarse `Endpoint.mu` (`~/src/devnw/zig/quic/src/quic/endpoint.zig:512`)
+  held across poll packet-processing **and** `acceptStream` (§4.1). The durable fix bounds
+  per-poll work / splits the lock + adds per-connection fairness + safe stream reaping.
+- **Stream reaping (§5 bullet 4) cannot be done safely as a watchdog force-close today**:
+  `QuicStream.close` (`transport.zig:741`) is env-gated to *avoid vendor close by default to
+  reduce teardown races*; cross-thread close races `quic_stream_id` against a concurrent `read()`;
+  and the proto-reader registry **deliberately never aborts** a possibly-mid-transaction stream
+  (`proto_reader_registry.zig:25-27`). The blocking read path *already* self-reaps at 300 s
+  (`quic_connection_handler.zig:1293`); the observed 5.4 h leak is in the no-cap cooperative
+  scheduler path and must be reaped by the scheduler thread that owns the stream.
+- Phase 2 is therefore gated behind a **CPU-constrained concurrency reproduction harness**
+  (cgroup v2 / `systemd-run --property=CPUQuota=400%` + `tests/e2e_quic_high_concurrency.zig` or
+  the harness Go loadtest + a probe stream) that proves the failing baseline and validates the fix
+  with no regression in `test-quic-high-concurrency-e2e`. Details in the plan's Phase 2 section.
+
+**Downstream assessment:**
+
+- `~/src/devnw/zig` (vendored QUIC lib): this is where the durable Phase 2 fix lands
+  (`endpoint.zig` lock work + `transport.zig` per-stream close synchronization). Scoped, not yet
+  changed — load-test-gated as above.
+- `../geode-client-zig`: **no change required.** This is a server-side transport/contention bug;
+  the §9 resolution is a k8s probe-config split against the existing server `/health`, needing no
+  client API change.
 
 ## 8. Cross-references
 

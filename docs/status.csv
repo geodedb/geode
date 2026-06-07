@@ -2066,6 +2066,7 @@ REQ-GQL-074,Network Transport,QUICTLS,TESTED,,,wire,2025-09-22,tests/canary_quic
 REQ-GQL-074,Network Transport,QUICTLSComprehensive,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICTLSConfig,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,BENCHED,,,wire,2025-09-22,tests/benchmark_quic_frame_latency_variance.zig
+REQ-GQL-074,Network Transport,SlowPollWarning,TESTED,,,wire,2026-06-07,tests/test_quic_slow_poll_warning.zig
 REQ-GQL-074,QUIC Transport,ClientHandshakeStallRegression,TESTED,,,transport,2026-04-16,tests/test_quic_handshake_stall_regression.sh
 REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,,,transport,2026-05-25,tests/test_quic_condition_timedwait_cadence.zig
 REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
