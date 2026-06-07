@@ -1,6 +1,12 @@
 # Bug: geode goes unresponsive under sustained parallel **query** load → liveness-probe SIGKILL (137) → pod restart → cluster-wide API **503s**
 
-**Status:** **OPEN.** Reproduced repeatedly on `geodedb/geode:0.6.23` (single-node
+**Status:** **PARTIALLY RESOLVED (outage mitigated; durable fix scoped) — 2026-06-07.**
+The headline harm (liveness-kill → cluster-wide 503) is mitigated by the out-of-band
+`/health` liveness endpoint (§9) and the new slow-poll warning makes the degradation
+observable before a kill (§10). The durable QUIC-core contention fix (`Endpoint.mu`
+rework + safe stream reaping) is **scoped and load-test-gated** in
+`docs/superpowers/plans/2026-06-07-quic-sustained-load-liveness-kill.md` — see §10.
+Originally reproduced repeatedly on `geodedb/geode:0.6.23` (single-node
 QA, 2026-06-07). Under sustained parallel *read* load (≈11 concurrent QUIC
 connections from one API replica + a Playwright e2e suite), geode's QUIC
 event loop degrades so badly — multi-**second** per-packet processing and
@@ -220,6 +226,52 @@ it can drain and recover without a 503-inducing restart.
 The durable QUIC-side fix (poll-loop fairness / `Endpoint.mu` rework, §5) is
 still required to eliminate the contention that causes the slowness in the
 first place.
+
+## 10. Status / fix landed (2026-06-07)
+
+Worked under `/bug:fix` + `superpowers:writing-plans` + `superpowers:subagent-driven-development`
+on branch `bug/quic-sustained-load-liveness-kill`. Plan:
+`docs/superpowers/plans/2026-06-07-quic-sustained-load-liveness-kill.md`.
+
+**Landed (Phase 1 — bounded, low-risk, unit-tested):**
+
+1. **Out-of-band liveness advertised at startup** (commit `391870d7`, §5 bullet 2 / §9). geode
+   already serves a static `200 {"status":"ok"}` at `/health` on `GEODE_METRICS_PORT`, on its own
+   OS thread, independent of the QUIC poll loop. Startup now logs the URL so operators adopt the
+   §9 probe split (cheap out-of-band liveness; in-band `RETURN 1` as readiness only). **This
+   removes the liveness-kill → 503 amplification** — a busy-but-progressing pod sheds traffic via
+   readiness instead of being SIGKILLed.
+2. **Slow-poll warning + metric** (commit `63c02d14`, §5 bullet 5). `observePollCycle` emits a
+   rate-limited (1 s threshold, 5 s window) `WARN "QUIC poll cycle slow — query path degraded"`
+   with the dominant sub-phase, so the degradation is visible in logs *before* a kill. Unit test:
+   `tests/test_quic_slow_poll_warning.zig`.
+
+**Scoped, load-test-gated (Phase 2 — durable QUIC-core fix), with source evidence it must not be
+rushed:**
+
+- The root cause is the coarse `Endpoint.mu` (`~/src/devnw/zig/quic/src/quic/endpoint.zig:512`)
+  held across poll packet-processing **and** `acceptStream` (§4.1). The durable fix bounds
+  per-poll work / splits the lock + adds per-connection fairness + safe stream reaping.
+- **Stream reaping (§5 bullet 4) cannot be done safely as a watchdog force-close today**:
+  `QuicStream.close` (`transport.zig:741`) is env-gated to *avoid vendor close by default to
+  reduce teardown races*; cross-thread close races `quic_stream_id` against a concurrent `read()`;
+  and the proto-reader registry **deliberately never aborts** a possibly-mid-transaction stream
+  (`proto_reader_registry.zig:25-27`). The blocking read path *already* self-reaps at 300 s
+  (`quic_connection_handler.zig:1293`); the observed 5.4 h leak is in the no-cap cooperative
+  scheduler path and must be reaped by the scheduler thread that owns the stream.
+- Phase 2 is therefore gated behind a **CPU-constrained concurrency reproduction harness**
+  (cgroup v2 / `systemd-run --property=CPUQuota=400%` + `tests/e2e_quic_high_concurrency.zig` or
+  the harness Go loadtest + a probe stream) that proves the failing baseline and validates the fix
+  with no regression in `test-quic-high-concurrency-e2e`. Details in the plan's Phase 2 section.
+
+**Downstream assessment:**
+
+- `~/src/devnw/zig` (vendored QUIC lib): this is where the durable Phase 2 fix lands
+  (`endpoint.zig` lock work + `transport.zig` per-stream close synchronization). Scoped, not yet
+  changed — load-test-gated as above.
+- `../geode-client-zig`: **no change required.** This is a server-side transport/contention bug;
+  the §9 resolution is a k8s probe-config split against the existing server `/health`, needing no
+  client API change.
 
 ## 8. Cross-references
 

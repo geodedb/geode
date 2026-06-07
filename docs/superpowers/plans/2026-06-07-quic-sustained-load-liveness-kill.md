@@ -126,7 +126,37 @@ git add src/transport/quic.zig tests/test_quic_slow_poll_warning.zig build.zig
 git commit -m "feat(quic): rate-limited slow-poll warning before liveness-kill (2026-06-07 bug)"
 ```
 
-### Task 2: Reap wedged/idle proto_reader streams
+### Task 2: Reap wedged/idle proto_reader streams — **DEFERRED to Phase 2 (evidence below)**
+
+> **Status (2026-06-07): NOT implemented in Phase 1. Moved to Phase 2.** Source-level
+> investigation showed the watchdog force-close sketched below is **not safe** in the
+> current vendored QUIC wrapper and would reintroduce known teardown races. Concrete evidence:
+>
+> 1. **The blocking read path already self-reaps.** `BufferedProtoReader.nextMessage`
+>    (`src/server/quic_connection_handler.zig:1293`) caps would-block iterations at
+>    `max_would_block_attempts = 300000` (300 s, "matches QUIC idle timeout") → returns
+>    `error.Timeout`, unwinding the handler and closing its stream. The blocking path is
+>    already bounded; no watchdog reap is needed for it.
+> 2. **`QuicStream.close` is deliberately a near-no-op by default.**
+>    `~/src/devnw/zig/quic/src/quic/transport.zig:741` only issues a wire `api.closeStream`
+>    when `GEODE_QUIC_FORCE_STREAM_CLOSE=1`; otherwise it just nulls `quic_stream_id`. The
+>    in-tree comment: *"avoid vendor close by default to reduce teardown races."* The
+>    maintainers already hit close-races here and chose to avoid vendor close.
+> 3. **Cross-thread close is a data race.** `close()` nulls `self.quic_stream_id` while a
+>    handler thread's `read()` reads it, with no per-stream lock. A watchdog-thread force-close
+>    races the handler — exactly the teardown race (2) avoids.
+> 4. **The registry deliberately never aborts** (`src/server/proto_reader_registry.zig:25-27`):
+>    *"a wedged handler may be mid-transaction, so the watchdog never aborts a stuck stream.
+>    Recovery remains pod restart."* Force-reaping contradicts this deliberate safety choice.
+> 5. **The 5.4 h leak is in the cooperative-scheduler path** (`nextMessageNonBlocking`,
+>    `:1261`, which has *no* would-block cap). A safe reap for it must be performed by the
+>    scheduler thread that *owns* the stream (no cross-thread race) AND distinguish
+>    between-requests idle (safe to close) from mid-request (must not abort) — a change to the
+>    perf-critical, high-fanout-tuned cooperative scheduler that requires load-test validation.
+>
+> **Conclusion:** safe stream reaping requires per-stream close synchronization in the vendored
+> wrapper (transport.zig) + a scheduler-owned reap path — this is Phase 2 concurrency work,
+> gated behind a load-test repro. The original sketch is retained below for reference only.
 
 Today the per-stream stall is *detected and logged* ("restart pod to recover") but the stream is never closed — a 5.4 h leaked localhost probe stream was observed. Force-close streams idle beyond a hard bound so leaked health-probe streams cannot accumulate.
 
@@ -195,7 +225,34 @@ Design directions (from triage + the acceptor-wedge §6):
 1. **Bound packets per poll call.** `endpoint.zig` poll currently drains all ready datagrams under `mu`. Add a `max_packets_per_poll` budget so the lock is released between batches, letting `acceptStream` and other streams interleave.
 2. **Split the accept path off `Endpoint.mu`.** Move the accepted-connection/stream queues behind their own mutex so `acceptStream` does not contend with packet processing.
 3. **Per-connection fairness** on the poll path so one busy connection cannot starve others or the health path.
-4. Verify with a concurrency load test (N parallel streams + a probe stream) asserting the probe stream's round-trip stays bounded while a slow stream runs.
+4. **Safe stream reaping (the moved Task 2).** Add per-stream close synchronization in
+   `~/src/devnw/zig/quic/src/quic/transport.zig` so `QuicStream.close` is race-free against a
+   concurrent `read()` (guard `quic_stream_id`), then either (a) let the cooperative
+   first-stream scheduler — which *owns* the stream — close streams idle-between-requests
+   beyond a generous bound (e.g. ≥600 s, well past the 300 s blocking cap and the QUIC idle
+   timeout), distinguishing between-requests idle from mid-request, or (b) make `close()`
+   safely callable from the watchdog. (a) is preferred (no cross-thread race).
+
+**Why this is gated, not auto-executed.** This is a concurrency rework of the vendored QUIC
+library that the entire DB + every client (`geode-client-zig`, etc.) depend on. The library
+already carries scar tissue from teardown races (the env-gated `close`, the `PollSync` enter/leave
+barrier, the 5 ms poll cadence comments). An unvalidated change here risks regressing handshake,
+teardown, or high-fanout throughput project-wide — violating the repo's own "no regressions in
+core operations" quality gate.
+
+**Prerequisite — a reproduction harness.** Before any Phase 2 code lands, build a local
+concurrency repro that drives the degradation deterministically:
+- Constrain geode's CPU to mimic the k8s `limits.cpu: 4` (cgroup v2 / `systemd-run
+  --property=CPUQuota=400%` — both available on the dev box) so the fast 56-core host does not
+  mask the contention.
+- Drive N≈11 sustained concurrent QUIC query streams (reuse `tests/e2e_quic_high_concurrency.zig`
+  as the driver, or the Go loadtest in `../geode-test-harness`) plus one low-rate **probe** stream.
+- Assert the failing baseline: under load, `quic_first_stream_packet_process_max_ns` and the
+  probe stream's `RETURN 1` round-trip climb into the multi-second range (and ideally the
+  slow-poll warning from Task 1 fires).
+- The Phase 2 fix is accepted only when this harness shows the probe round-trip stays bounded
+  while a slow stream runs, with no regression in the high-concurrency objective suite
+  (`test-quic-high-concurrency-e2e`).
 
 ---
 
