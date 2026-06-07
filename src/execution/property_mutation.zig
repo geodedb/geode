@@ -301,8 +301,23 @@ pub fn setNodePropertyFromValue(
     // from the node id inside the helper (no graph in scope here). Runs on the
     // executor/connection thread — the same thread that owns the fts engine
     // (verified: setNodePropertyFromValue is never called from bulkMergeNode or
-    // any worker thread). `.update` = delete-then-index (append-only engine).
-    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .update) catch |err| {
+    // any worker thread).
+    // `.create` (append-only) — NOT `.update`. The fts-storage engine adds a
+    // doc_id to `all_tombstones` on deleteDocument and NEVER removes it on a
+    // later indexDocument (the set is only rebuilt from segments on reopen/
+    // compaction). So `.update` (deleteNode-then-reindex on the SAME node_id)
+    // left the re-indexed document filtered out by search → the 2026-06-07
+    // "zero results" bug for live CREATE/SET. `.create` skips the tombstone so
+    // the document is immediately searchable.
+    //
+    // KNOWN RESIDUAL (tracked, not self-healing): a TRUE value change via SET on
+    // an already-indexed node leaves the OLD value's postings in place (no
+    // tombstone), so the node stays findable by the stale old value, and
+    // repeated SETs append-grow the index. Search-for-current-value is correct;
+    // reclaiming stale postings needs an engine-level un-tombstone-on-reindex
+    // (or a compaction trigger) — see
+    // docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md.
+    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .create) catch |err| {
         log.warn("fts maintain (SET) failed for node {d} prop '{s}': {}", .{ node_id, key, err });
     };
 }

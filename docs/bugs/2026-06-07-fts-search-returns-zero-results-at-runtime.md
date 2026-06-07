@@ -57,6 +57,40 @@ The external `fts-storage` engine (v0.1.1, `build.zig.zon` `.fts_storage`) is li
 - Latest release line: `v0.6.23`. FTS GQL surface present and parsing in this image.
 - Date: 2026-06-07.
 
+## 7. Resolution (2026-06-07)
+
+Fixed on branch `bug/fts-search-zero-results` (plan:
+`docs/superpowers/plans/2026-06-07-fts-search-zero-results.md`). Two distinct root causes were
+found by a runtime diagnostic, both producing zero/silent results:
+
+1. **Index-first ordering (create-time / backfill path).** `createFulltextIndex`
+   (`src/execution/fts_index_ops.zig`) resolved the target graph with the find-only
+   `lookupManagedGraph`, which returns `GraphNotFound` when `CREATE INDEX … USING fulltext` is the
+   FIRST operation on a graph not yet lazily registered in the adapter's `engines` map. The error
+   (`FulltextUnavailable`) was **silently swallowed** in `src/execution.zig`, so `CREATE INDEX`
+   reported `00000` while no engine was created. **Fix:** use `getOrCreateGraph` (the same path
+   every write uses, which also initialises the graph's `fts_adapter`). The silent swallow now
+   emits a loud warning.
+
+2. **Live CREATE/SET path (tombstone).** The node write-maintenance hook for `SET`
+   (`src/execution/property_mutation.zig`) used `.update` = deleteNode-then-reindex. The fts-storage
+   engine adds a doc_id to `all_tombstones` on `deleteDocument` and **never removes it on a later
+   `indexDocument`** (the set is only rebuilt from segments on reopen/compaction; see
+   `engine.zig:974` + `search.zig:183` in the pinned `fts_storage` lib), so the re-indexed document
+   was filtered out by search. **Fix:** use `.create` (skip the tombstone) so a freshly written
+   node is immediately searchable.
+
+**Verification:** new index-first regression test in `tests/test_fts_e2e.zig` (FAILS before, PASSES
+after); isolated `zig build test-fts-e2e` step added. Also fixed a pre-existing `index_type` leak in
+the DROP INDEX catalog free path (`src/execution.zig`) that the new isolated leak-checked step
+surfaced.
+
+**Known residual (tracked):** a TRUE value change via `SET` on an already-indexed node leaves the
+OLD value's postings in place (no tombstone), so the node remains findable by the stale old value
+and repeated `SET`s append-grow the index. Search-for-current-value is correct (the reported bug is
+resolved); reclaiming stale postings needs an engine-level un-tombstone-on-reindex or a compaction
+trigger in the `fts_storage` library — a separate follow-up.
+
 ## 6. Cross-references
 
 - `docs/FULLTEXT_SEARCH.md` — the documented FTS surface (works syntactically; doesn't return results).

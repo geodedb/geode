@@ -55,10 +55,12 @@ pub fn createFulltextIndex(
 ) !void {
     const adapter = graph_store.getGlobalAdapter() orelse return Error.FulltextUnavailable;
 
-    // Resolve the ManagedGraph that owns the fts adapter for this graph. Use the
-    // test-friendly lookup (brief mutex, no lock acquisition) — backfill reads
-    // node properties through the global store, not through this handle.
-    const mg = adapter.lookupManagedGraph(graph_name) catch return Error.FulltextUnavailable;
+    // Resolve (creating/opening if needed) the ManagedGraph that owns the fts
+    // adapter for this graph. CREATE INDEX may be the FIRST op on a graph (before
+    // any node write registered it in `engines`), so use getOrCreateGraph — the
+    // same path every write uses — instead of the find-only lookupManagedGraph,
+    // which returned GraphNotFound and silently disabled the index.
+    const mg = adapter.getOrCreateGraph(graph_name) catch return Error.FulltextUnavailable;
     const fa = mg.fts_adapter orelse return Error.FulltextUnavailable;
 
     // Create the engine. Treat "already exists" per IF NOT EXISTS.
