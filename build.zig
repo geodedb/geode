@@ -1271,6 +1271,21 @@ pub fn build(b: *std.Build) void {
     const cert_provided_step = b.step("test-cert-provided", "Run explicit-cert-honored regression (provided --cert not discarded)");
     cert_provided_step.dependOn(&run_cert_provided_tests.step);
 
+    // Regression for docs/bugs/2026-06-06-admin-password-only-in-data-dir-file-not-startup-logs.md
+    // First boot must emit a secret-free breadcrumb to stdout/stderr pointing at
+    // <data-dir>/.geode_admin_password (so log-scraping harnesses + operators can
+    // discover the generated password) WITHOUT ever printing the secret. Spawns a
+    // real ./zig-out/bin/geode with a clean env (SKIPs if the binary is missing).
+    const first_boot_pw_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_first_boot_admin_password_breadcrumb.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    first_boot_pw_tests.root_module.link_libc = true;
+    const run_first_boot_pw_tests = b.addRunArtifact(first_boot_pw_tests);
+    const first_boot_pw_step = b.step("test-first-boot-admin-breadcrumb", "Run first-boot admin-password breadcrumb regression (secret-free, discoverable)");
+    first_boot_pw_step.dependOn(&run_first_boot_pw_tests.step);
+
     // Regression for docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
     // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13),
     // same cluster port, CA-signed TLS, asserting a single leader is elected and
