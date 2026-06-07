@@ -480,15 +480,29 @@ pub fn initialize(
                             const io_pw = std.Io.Threaded.global_single_threaded.io();
                             if (std.Io.Dir.cwd().createFile(io_pw, path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
                                 defer file.close(io_pw);
-                                file.writeStreamingAll(io_pw, result.password) catch |err| {
+                                if (file.writeStreamingAll(io_pw, result.password)) |_| {
+                                    // Discoverable, SECRET-FREE breadcrumb on stdout/stderr,
+                                    // visible at ALL log levels via std.debug.print (like the
+                                    // other `[startup]` lines), so operators watching container
+                                    // logs and log-scraping harnesses can find the first-boot
+                                    // credential. The GAP-0104/S3 fix correctly stopped logging
+                                    // the secret but left no pointer, silently breaking every
+                                    // consumer that scraped the old password line — see
+                                    // docs/bugs/2026-06-06-admin-password-only-in-data-dir-file-not-startup-logs.md.
+                                    // NEVER print result.password here.
+                                    std.debug.print(
+                                        "[startup] generated initial admin password written to {s} (mode 0600) — read it there or set GEODE_ADMIN_PASSWORD; change on first login\n",
+                                        .{path},
+                                    );
+                                    log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
+                                        Attr.string("path", path),
+                                    });
+                                } else |err| {
                                     log.warn("Failed to write generated admin password file", &.{
                                         Attr.string("path", path),
                                         Attr.string("error", @errorName(err)),
                                     });
-                                };
-                                log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
-                                    Attr.string("path", path),
-                                });
+                                }
                             } else |err| {
                                 log.err("Failed to create generated admin password file (operator must rotate via reset-password)", &.{
                                     Attr.string("path", path),

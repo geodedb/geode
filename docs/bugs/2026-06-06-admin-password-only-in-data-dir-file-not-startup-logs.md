@@ -1,6 +1,23 @@
 # Bug: first-boot admin password is written **only** to `<data-dir>/.geode_admin_password`, never to stdout/stderr — log-scraping credential retrieval silently breaks
 
-**Status:** **OPEN** (documentation / integration contract) — reported 2026-06-06 against geode `v0.6.13` (local `/usr/bin/geode`).
+**Status:** **RESOLVED** (2026-06-06) — reported against geode `v0.6.13`; fixed in
+`src/server/server_init.zig` (option 1 below). First boot now emits a
+discoverable, **secret-free** breadcrumb to stdout/stderr (via `std.debug.print`,
+visible at all log levels like the other `[startup]` lines):
+
+```
+[startup] generated initial admin password written to <data-dir>/.geode_admin_password (mode 0600) — read it there or set GEODE_ADMIN_PASSWORD; change on first login
+```
+
+The line is emitted only on the generate-and-persist path (no `GEODE_ADMIN_PASSWORD`
+/ `GEODE_DEFAULT_PASSWORD`) and only after the 0600 file write succeeds; the secret
+itself is still never logged. Regression:
+`tests/test_first_boot_admin_password_breadcrumb.zig` (`zig build
+test-first-boot-admin-breadcrumb`) spawns a real first-boot `geode serve` with a
+clean env and asserts (a) the breadcrumb points at the file and (b) the actual
+generated password never appears in stdout/stderr. Downstream harnesses can wait
+on the stable substring `generated initial admin password written to`, or
+(preferred for determinism) set `GEODE_ADMIN_PASSWORD` and skip generation.
 
 **Severity:** Medium. Not a crash and not a data-correctness bug, but it silently
 breaks every consumer/harness that obtains the auto-generated admin password by
