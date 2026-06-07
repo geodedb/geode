@@ -202,6 +202,31 @@ test "A4a FTS e2e: DROP INDEX removes the fulltext index from SHOW INDEXES" {
     }
 }
 
+test "A4a FTS e2e: CREATE INDEX *before* any node write (index-first) still indexes + searches" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    // 1. Create the fulltext index FIRST — before any :Doc node exists. This is
+    //    the index-first ordering that regressed: the graph is not yet in the
+    //    adapter's engines map, so the DDL must getOrCreate it (not find-only).
+    {
+        var r = try h.runQuery("CREATE INDEX idx_first FOR (d:Doc) ON (d.body) USING fulltext");
+        r.deinit(aa);
+    }
+    // 2. Now insert a node — the live-write maintenance hook must index it.
+    {
+        var r = try h.runQuery("CREATE (:Doc {body: 'the quick brown fox'})");
+        r.deinit(aa);
+    }
+    // 3. Search must return exactly the fox node (>= 1 row).
+    {
+        var res = try h.runQuery("CALL geode.fts.search('idx_first', 'fox')");
+        defer res.deinit(aa);
+        try testing.expect(res.rows.len >= 1);
+    }
+}
+
 /// Scan a SHOW INDEXES result for a row containing `name` in any string column.
 fn showIndexesContains(res: execution.ExecutionResult, name: []const u8) bool {
     for (res.rows) |row| {

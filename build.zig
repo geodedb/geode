@@ -1749,6 +1749,14 @@ pub fn build(b: *std.Build) void {
 
     // Storage migration removed (Phase 2: engine-backed persistence)
 
+    // Isolated FTS end-to-end step (also pulled into `zig build test` via all_tests.zig).
+    const fts_e2e_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fts_e2e.zig"), .target = target, .optimize = optimize }) });
+    fts_e2e_tests.root_module.addImport("geode", root_mod);
+    fts_e2e_tests.root_module.link_libc = true;
+    const run_fts_e2e_tests = b.addRunArtifact(fts_e2e_tests);
+    const fts_e2e_step = b.step("test-fts-e2e", "FTS end-to-end: CREATE INDEX (nodes-first AND index-first) + CALL geode.fts.search");
+    fts_e2e_step.dependOn(&run_fts_e2e_tests.step);
+
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
     match_call_tests.root_module.addImport("json", json_mod);
