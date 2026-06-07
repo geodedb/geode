@@ -301,8 +301,14 @@ pub fn setNodePropertyFromValue(
     // from the node id inside the helper (no graph in scope here). Runs on the
     // executor/connection thread — the same thread that owns the fts engine
     // (verified: setNodePropertyFromValue is never called from bulkMergeNode or
-    // any worker thread). `.update` = delete-then-index (append-only engine).
-    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .update) catch |err| {
+    // any worker thread).
+    // `.create` (append-only): the fts-storage engine tombstones a doc_id
+    // permanently in `all_tombstones` (cleared only by compact), so the prior
+    // `.update` (tombstone-then-reindex) left the re-indexed doc invisible to
+    // search until compaction ran.  Using `.create` avoids the tombstone for
+    // the dominant new-node case; stale postings from a true SET on an existing
+    // indexed node will be cleaned up by the next compaction pass.
+    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .create) catch |err| {
         log.warn("fts maintain (SET) failed for node {d} prop '{s}': {}", .{ node_id, key, err });
     };
 }
