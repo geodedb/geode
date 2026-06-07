@@ -1392,6 +1392,11 @@ pub fn main() !void {
             Attr.int("port", port),
             Attr.string("endpoint", "/metrics"),
         });
+        log.info("Out-of-band liveness endpoint available (use for k8s livenessProbe instead of in-band 'RETURN 1' query)", &.{
+            Attr.int("port", port),
+            Attr.string("liveness_endpoint", "/health"),
+            Attr.string("note", "GET http://<host>:$GEODE_METRICS_PORT/health returns 200 {\"status\":\"ok\"} on a dedicated thread, independent of the QUIC query path; bind address controlled by GEODE_METRICS_BIND (default 127.0.0.1)"),
+        });
     }
     defer metrics_server.shutdownGlobalMetrics(gpa);
 

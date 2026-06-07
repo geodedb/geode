@@ -159,6 +159,68 @@ Until the geode-side fix lands, the outage is mitigated (not eliminated) by:
   Playwright e2e (2 workers). `quic_active_connections=11` at peak.
 - Date: 2026-06-07.
 
+## 9. Resolution (geode side) — out-of-band liveness endpoint
+
+geode already serves `GET /health` on the metrics HTTP server
+(`src/monitoring/metrics_server.zig`, `serveHealth`). This endpoint:
+
+- Returns `HTTP/1.1 200 OK` with body `{"status":"ok"}` (15 bytes, static).
+- Runs on its **own OS thread** (the metrics server accept loop), completely
+  independent of the QUIC event loop and the `Endpoint.mu` poll lock. A
+  saturated query path cannot delay or block it.
+- Is activated by setting `GEODE_METRICS_PORT=<port>` at server startup. The
+  bind address defaults to `127.0.0.1`; set `GEODE_METRICS_BIND=0.0.0.0` to
+  make it reachable from outside the pod.
+- As of 2026-06-07 (`feat(server): advertise out-of-band /health liveness
+  endpoint at startup`), geode logs the URL at startup so operators can
+  discover it without reading source:
+
+  ```
+  level=info msg="Out-of-band liveness endpoint available ..." liveness_endpoint=/health port=<N>
+  ```
+
+**Recommended k8s probe split:**
+
+```yaml
+# Liveness — cheap, out-of-band.  Fails only if the process is truly dead.
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 9091          # GEODE_METRICS_PORT value
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 4
+
+# Readiness — in-band RETURN 1.  A slow-but-alive pod drops out of
+# Endpoints but is NOT killed; it recovers when load subsides.
+readinessProbe:
+  exec:
+    command:
+    - geode
+    - query
+    - --server=localhost:3141
+    - --insecure-tls-skip-verify
+    - -U geode
+    - -P
+    - $(GEODE_ADMIN_PASSWORD)
+    - --timeout=5
+    - RETURN 1
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 8
+  failureThreshold: 3
+```
+
+This separates "is the process alive?" (liveness, off the hot path) from "is
+the query path accepting work right now?" (readiness, in-band). A pod that is
+slow under load fails readiness and sheds traffic, but is not SIGKILLed, so
+it can drain and recover without a 503-inducing restart.
+
+The durable QUIC-side fix (poll-loop fairness / `Endpoint.mu` rework, §5) is
+still required to eliminate the contention that causes the slowness in the
+first place.
+
 ## 8. Cross-references
 
 - [2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md] — same
