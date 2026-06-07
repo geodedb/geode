@@ -244,7 +244,20 @@ on branch `bug/quic-sustained-load-liveness-kill`. Plan:
 2. **Slow-poll warning + metric** (commit `63c02d14`, §5 bullet 5). `observePollCycle` emits a
    rate-limited (1 s threshold, 5 s window) `WARN "QUIC poll cycle slow — query path degraded"`
    with the dominant sub-phase, so the degradation is visible in logs *before* a kill. Unit test:
-   `tests/test_quic_slow_poll_warning.zig`.
+   `tests/test_quic_slow_poll_warning.zig`. (Confirmed firing 10× under the repro below.)
+3. **Liveness breadcrumb actually reaches stdout/stderr** (commit on branch). A CPU-constrained
+   repro (below) caught that `391870d7`'s advertisement used `log.info`, which does NOT surface on
+   the serve path — the same sink gap that hid the first-boot admin-password breadcrumb. Replaced
+   with a reliable `std.debug.print("[startup] out-of-band liveness ready: GET …/health …")`.
+   Regression: `tests/test_liveness_endpoint_breadcrumb.zig`.
+
+**Empirical validation (repro harness `tests/quic/quic_sustained_load_repro.sh`, `make
+repro-quic-liveness`).** CPU-constrained (CPUQuota=200%, N=16, 2000 nodes), the in-band `RETURN 1`
+probe climbs to **2.7–3.4 s then times out (>8 s) repeatedly** while the out-of-band `/health`
+stays at **~18 ms throughout** — i.e. Phase 1's probe split provably prevents the SIGKILL.
+`quic_poll_cycle_max_ns` hits **3.3–4.0 s** and `quic_first_stream_packet_process_max_ns` hits
+**18.8 s** (single heavy 1500-row result), confirming the §4.1 "one expensive packet
+head-of-line-blocks the loop" mechanism. This harness is the Phase 2 acceptance gate.
 
 **Scoped, load-test-gated (Phase 2 — durable QUIC-core fix), with source evidence it must not be
 rushed:**

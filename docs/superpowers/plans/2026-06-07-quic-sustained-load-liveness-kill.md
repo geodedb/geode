@@ -240,19 +240,38 @@ barrier, the 5 ms poll cadence comments). An unvalidated change here risks regre
 teardown, or high-fanout throughput project-wide — violating the repo's own "no regressions in
 core operations" quality gate.
 
-**Prerequisite — a reproduction harness.** Before any Phase 2 code lands, build a local
-concurrency repro that drives the degradation deterministically:
-- Constrain geode's CPU to mimic the k8s `limits.cpu: 4` (cgroup v2 / `systemd-run
-  --property=CPUQuota=400%` — both available on the dev box) so the fast 56-core host does not
-  mask the contention.
-- Drive N≈11 sustained concurrent QUIC query streams (reuse `tests/e2e_quic_high_concurrency.zig`
-  as the driver, or the Go loadtest in `../geode-test-harness`) plus one low-rate **probe** stream.
-- Assert the failing baseline: under load, `quic_first_stream_packet_process_max_ns` and the
-  probe stream's `RETURN 1` round-trip climb into the multi-second range (and ideally the
-  slow-poll warning from Task 1 fires).
-- The Phase 2 fix is accepted only when this harness shows the probe round-trip stays bounded
-  while a slow stream runs, with no regression in the high-concurrency objective suite
-  (`test-quic-high-concurrency-e2e`).
+**Prerequisite — a reproduction harness (BUILT 2026-06-07).** The repro is committed at
+`tests/quic/quic_sustained_load_repro.sh` (`make repro-quic-liveness`). It CPU-constrains geode
+(`systemd-run --property=CPUQuota=<n>`), seeds nodes, drives N concurrent heavy-result query
+streams, and measures the in-band `RETURN 1` probe vs the out-of-band `/health` endpoint plus the
+QUIC poll metrics.
+
+**Confirmed failing baseline** (CPUQuota=200%, N=16, 2000 nodes, ReleaseSafe):
+
+| signal | observed under load |
+|---|---|
+| in-band `RETURN 1` probe | **2.7–3.4 s then repeated TIMEOUTS (>8 s)** ← the liveness-kill trigger |
+| out-of-band `/health` | **~18 ms throughout** ← Phase 1 mitigation empirically holds |
+| `quic_poll_cycle_max_ns` | **3.3–4.0 s** poll cycles |
+| `quic_first_stream_packet_process_max_ns` | **18.8 s** (heavy 1500-row result) |
+| dominant poll sub-phase | `quic_poll_recv_short_header_max_ns` **3.6 s** (heavy results) / timer+PTO (empty) |
+| wedged-stream idle | grows unbounded; 2375 `proto_reader stall` lines |
+| Phase 1 slow-poll WARN | fired **10×** — Task 1 confirmed firing before a kill |
+
+**Re-targeting note:** the dominant cost is **workload-dependent** — with realistic heavy-result
+queries it is *packet/first-stream-query processing* under the lock (validating plan direction #1,
+"bound per-poll/per-packet work", and the first-stream-query-under-lock concern), not `acceptStream`
+(direction #2 is secondary). With empty/light queries it shifts to timer/PTO/recv overhead. The
+durable fix must bound the work a single packet/stream can do while holding `Endpoint.mu`.
+
+**The repro also caught a Phase 1 defect** (now fixed, commit on this branch): `391870d7`'s
+out-of-band-liveness advertisement used `log.info`, which does not reach stdout/stderr on the serve
+path — so the breadcrumb never appeared. Replaced with a reliable `std.debug.print("[startup] …")`
+(regression: `tests/test_liveness_endpoint_breadcrumb.zig`).
+
+**Acceptance:** a Phase 2 fix is accepted only when this harness shows the in-band probe stays well
+under 8 s (no timeouts) and `quic_poll_cycle_max_ns` stays sub-second under the same load, with
+`/health` unchanged and **no regression** in `test-quic-high-concurrency-e2e`.
 
 ---
 
