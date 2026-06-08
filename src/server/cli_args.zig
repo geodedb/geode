@@ -41,6 +41,13 @@ pub const ServerConfig = struct {
     // bypass replacing the implicit auth-disabled short-circuit.
     insecure_allow_all: bool = false,
 
+    // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=Config; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
+    // GAP-0840: --strict-tenancy (or GEODE_STRICT_TENANCY=1). When true, a
+    // tenant-scoped operation whose resolved tenant_id is unset/empty/"default"
+    // is REJECTED with error.TenantScopeRequired instead of being silently
+    // treated as all-tenants. Default false (unchanged single-tenant behaviour).
+    strict_tenancy: bool = false,
+
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
 
@@ -210,6 +217,7 @@ pub fn printHelp() void {
     std.debug.print("  --peers <h:p,h:p,...>        Comma-separated list of cluster peers (cluster ports, not client ports)\n", .{});
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
+    std.debug.print("  --strict-tenancy             Reject tenant-scoped ops with no tenant scope (also GEODE_STRICT_TENANCY=1)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
@@ -403,6 +411,9 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         } else if (std.mem.eql(u8, arg, "--insecure-allow-all")) {
             // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
             config.insecure_allow_all = true;
+        } else if (std.mem.eql(u8, arg, "--strict-tenancy")) {
+            // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=CLIFlag; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
+            config.strict_tenancy = true;
         } else if (std.mem.eql(u8, arg, "--enable-fle") or std.mem.eql(u8, arg, "--enable-tde")) {
             // FLE/TDE are always available; flags accepted for compatibility
         } else if (std.mem.eql(u8, arg, "--tde-provider") and ai + 1 < args.len) {
@@ -417,6 +428,22 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
     if (config.listen_quic == null and config.listen_grpc == null) {
         config.listen_quic = "0.0.0.0:3141";
     }
+
+    // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=EnvVar; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
+    // GAP-0840: GEODE_STRICT_TENANCY=1 (truthy: "1"/"true"/"on", case-insensitive)
+    // enables strict tenancy as an alternative to --strict-tenancy. Either source
+    // turning it on wins (the CLI flag already set it above if present).
+    if (!config.strict_tenancy) {
+        if (posixGetenv("GEODE_STRICT_TENANCY")) |val| {
+            if (std.mem.eql(u8, val, "1") or
+                std.ascii.eqlIgnoreCase(val, "true") or
+                std.ascii.eqlIgnoreCase(val, "on"))
+            {
+                config.strict_tenancy = true;
+            }
+        }
+    }
+
     return config;
 }
 

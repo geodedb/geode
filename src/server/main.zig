@@ -929,6 +929,16 @@ pub fn main() !void {
         log.warn("SECURITY: Geode running with --insecure-allow-all: all authorization checks bypassed. NOT FOR PRODUCTION.", &.{});
     }
 
+    // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
+    // GAP-0840: --strict-tenancy / GEODE_STRICT_TENANCY=1 — wire the parsed flag
+    // into the shared tenancy decision. When set, a tenant-scoped operation with
+    // no concrete tenant scope (unset/empty/"default") is rejected with
+    // error.TenantScopeRequired instead of silently reading all tenants' data.
+    if (config.strict_tenancy) {
+        geode.tenancy.setStrictTenancy(true);
+        log.warn("SECURITY: Geode running with --strict-tenancy: tenant-scoped operations with no tenant scope (unset/empty/\"default\") will be REJECTED.", &.{});
+    }
+
     std.debug.print("[startup] user store initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // GPS Phase 4 (Task 4-4): bootstrap in-memory PolicyCatalog so that

@@ -2,6 +2,8 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+// GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
+const tenancy = @import("tenancy.zig");
 const value_types = @import("../value_types.zig");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
@@ -220,10 +222,11 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // Return unique node labels from the graph storage
             // GAP-0509: pass the session tenant filter so SHOW TABLES
             // only returns labels the current tenant actually uses.
-            const session_tenant: ?[]const u8 = if (context.tenant_id) |tid|
-                (if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) null else tid)
-            else
-                null;
+            // GAP-0840: route through the shared strict-tenancy decision so an
+            // unscoped/"default" SHOW TABLES is rejected in strict mode rather
+            // than leaking every tenant's label set (same footgun as the
+            // read paths).
+            const session_tenant: ?[]const u8 = try tenancy.resolveTenantFilter(context.tenant_id);
             const labels = read_store.listNodeLabels(allocator, session_tenant) catch &.{};
             defer {
                 for (labels) |label| {

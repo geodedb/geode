@@ -7,6 +7,8 @@ const property_mutation = @import("property_mutation.zig");
 // A4b: fulltext write-maintenance hook (delete postings on node DELETE).
 const fts_index_ops = @import("fts_index_ops.zig");
 const value_types = @import("../value_types.zig");
+// GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
+const tenancy = @import("tenancy.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -62,11 +64,12 @@ fn envFromContext(allocator: std.mem.Allocator, context: ExecutionContext) Env {
     };
 }
 
-fn tenantFilterFromContext(context: ExecutionContext) ?[]const u8 {
-    return if (context.tenant_id) |tid|
-        (if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) null else tid)
-    else
-        null;
+// GAP-0840: resolve the tenant filter via the shared strict-tenancy decision.
+// In strict mode an unscoped / empty / "default" tenant scope returns
+// error.TenantScopeRequired (rejecting the silent cross-tenant read) instead of
+// null (all-tenants); in the default non-strict mode behaviour is unchanged.
+fn tenantFilterFromContext(context: ExecutionContext) tenancy.TenancyError!?[]const u8 {
+    return tenancy.resolveTenantFilter(context.tenant_id);
 }
 
 /// REQ=REQ-MERGE-RELPROPS-001 ASPECT=MatchBoundEndpoints
@@ -2426,8 +2429,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     const read_store: *graph_store.GraphStore = store;
     const target_graph = current_graph orelse "default";
     // GAP-0509: Extract tenant filter from context for getNodesByLabels filtering.
-    // Null means no filtering (default tenant or unset).
-    const filter_tenant = tenantFilterFromContext(context);
+    // Null means no filtering (default tenant or unset). GAP-0840: in strict mode
+    // an unscoped/"default" scope is rejected with error.TenantScopeRequired.
+    const filter_tenant = try tenantFilterFromContext(context);
 
     // R8 (2026-04-22): open a per-statement engine txn so MERGE's
     // createNode + on_create property SETs (or on_match property SETs)
@@ -2797,7 +2801,8 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
     const read_store: *graph_store.GraphStore = store;
     // Filter by graph - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
-    const filter_tenant = tenantFilterFromContext(context);
+    // GAP-0840: strict mode rejects an unscoped/"default" tenant scope here.
+    const filter_tenant = try tenantFilterFromContext(context);
 
     // Track deleted node count
     var deleted_count: usize = 0;

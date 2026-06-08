@@ -2,6 +2,8 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+// GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
+const tenancy = @import("tenancy.zig");
 // GAP-0755: Per-query arena pool — executor scratch sites can opt in via
 // `query_arena.currentScratchAllocator()` when one is installed by the
 // transport handler. When unset (legacy / test paths), the fallback
@@ -84,19 +86,17 @@ const rls_types = @import("rls_types");
 const rls = @import("rls");
 const rls_value_bridge = @import("rls_value_bridge");
 
-// CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="PerTenantIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
-// GAP-0279: Get the tenant filter from the active ExecutionContext.
-// Returns null if no tenant scoping should be applied (backward compatible for
-// single-tenant deployments where tenant_id is "default" or unset).
-fn getSessionTenantFilter() ?[]const u8 {
-    if (execution.getActiveContext()) |ctx| {
-        if (ctx.tenant_id) |tid| {
-            // "default" means no filtering — backward compatible
-            if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) return null;
-            return tid;
-        }
-    }
-    return null;
+// CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="PerTenantIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-06-08
+// GAP-0279 / GAP-0840: Get the tenant filter from the active ExecutionContext.
+// Delegates to the shared strict-tenancy decision (tenancy.resolveTenantFilter):
+//   * default (non-strict) mode -> null for an unset/"default" tenant scope
+//     (backward compatible: no tenant scoping is applied), with a rate-limited
+//     WARN that isolation is disabled for the request;
+//   * strict mode -> error.TenantScopeRequired for an unscoped/empty/"default"
+//     scope, rejecting the silent cross-tenant read.
+fn getSessionTenantFilter() tenancy.TenancyError!?[]const u8 {
+    const maybe_tid = if (execution.getActiveContext()) |ctx| ctx.tenant_id else null;
+    return tenancy.resolveTenantFilter(maybe_tid);
 }
 
 // GAP-0279: Check if a node passes the tenant filter.
@@ -1358,7 +1358,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         defer rls_row_local.deinit();
         const store = graph_store.getGlobalStore(allocator);
         const filter_graph = current_graph orelse "default";
-        const filter_tenant = getSessionTenantFilter();
+        const filter_tenant = try getSessionTenantFilter();
 
         var chain_matches = std.ArrayList(std.ArrayList(u64)).empty;
         defer {
@@ -1666,7 +1666,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     // Get current graph from session context
     const filter_graph = if (context.session_state) |session| (session.graph orelse "default") else "default";
     // GAP-0279: Get tenant filter from session context
-    const filter_tenant = getSessionTenantFilter();
+    const filter_tenant = try getSessionTenantFilter();
 
     // Match each chain separately and collect bindings
     // GAP-0220 FIX: Use try for proper error propagation
@@ -1972,7 +1972,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
-    const filter_tenant = getSessionTenantFilter();
+    const filter_tenant = try getSessionTenantFilter();
 
     // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-13
     // Determine if we can push LIMIT down into the scan phase.
@@ -2622,7 +2622,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
-    const filter_tenant = getSessionTenantFilter();
+    const filter_tenant = try getSessionTenantFilter();
 
     // MatchBinding type for tracking variable->node mappings (named differently to avoid shadowing)
     const MatchBinding = struct {
@@ -3343,7 +3343,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
-    const filter_tenant = getSessionTenantFilter();
+    const filter_tenant = try getSessionTenantFilter();
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-002; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainExecution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
     // Step 1: Execute required chain (first chain) to get base bindings
@@ -5793,7 +5793,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // Graph to filter by - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
-    const filter_tenant = getSessionTenantFilter();
+    const filter_tenant = try getSessionTenantFilter();
 
     // Extract pattern information from MATCH using helper function
     const pattern_info = extractPatternInfo(q);
