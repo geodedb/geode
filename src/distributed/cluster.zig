@@ -1362,9 +1362,38 @@ pub const ClusterCoordinator = struct {
     }
 
     fn dispatchRaftFrameFromAdaptedStream(self: *ClusterCoordinator, prefix: anytype) !void {
-        const frame_res = try raft_consensus.readRaftFrame(self.allocator, prefix);
-        defer frame_res.deinit(self.allocator);
-        try self.applyDecodedRaftFrame(frame_res);
+        // 2026-06-08 raft multiplexed streams: a peer now sends ALL raft frames
+        // over ONE long-lived bidi stream (bounded per-peer stream usage, so
+        // heartbeats/votes are never dropped on OutOfStreams under write load).
+        // Read length-delimited frames until the peer closes/resets the stream.
+        //
+        // The first frame consumes `prefix`'s already-injected high byte;
+        // subsequent frames read straight from the inner stream (PrefixedStream
+        // injects its prefix only once). A closed/reset stream surfaces as
+        // `error.EndOfStream` (FIN reached + no buffered data) which ends the
+        // loop cleanly. `error.WouldBlock` is a transient quiet gap on a stream
+        // the peer still holds open — keep the loop parked rather than tearing
+        // the stream down (the connection handler's seen-stream dedup means a
+        // torn-down-then-re-queued stream_id would otherwise be dropped as a
+        // duplicate, wedging replication). The sender allocates a fresh
+        // stream_id when it reopens after a real error, so reopen is unaffected.
+        while (true) {
+            const frame_res = raft_consensus.readRaftFrame(self.allocator, prefix) catch |err| switch (err) {
+                error.EndOfStream => return, // peer closed/reopened the stream — normal
+                error.WouldBlock => {
+                    // Stream still open, just momentarily idle. Re-park.
+                    compat_sleepNs(2 * std.time.ns_per_ms);
+                    continue;
+                },
+                else => return err,
+            };
+            defer frame_res.deinit(self.allocator);
+            self.applyDecodedRaftFrame(frame_res) catch |err| {
+                // A single bad/late frame must not tear the whole stream down;
+                // log and keep reading (raft re-sends on its own cadence).
+                log.warn("raft frame apply failed; continuing stream", &.{Attr.string("error", @errorName(err))});
+            };
+        }
     }
 
     /// Apply security checks + dispatch a decoded raft frame.  Pulled
