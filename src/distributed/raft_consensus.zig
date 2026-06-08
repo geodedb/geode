@@ -412,7 +412,21 @@ pub const Transport = struct {
         /// prevents the race.
         client_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
+        /// 2026-06-08 raft multiplexed streams: ONE long-lived bidirectional
+        /// stream reused for every raft frame to this peer, so we never open a
+        /// stream per RPC (which exhausted per-peer bidi-stream credit under
+        /// write load and dropped heartbeats/votes → split-brain). Guarded by
+        /// `client_mutex` (same as every other client.* access — A6f). Lazily
+        /// opened on first send; closed+nulled on any write/open error and
+        /// reopened on the next send.
+        send_stream: ?*quic.QuicClientStream = null,
+
         fn deinit(self: *PeerConnection) void {
+            if (self.send_stream) |s| {
+                s.finish() catch {};
+                s.deinit();
+                self.send_stream = null;
+            }
             self.client.deinit();
             self.allocator.free(self.endpoint);
             self.allocator.destroy(self);
@@ -908,59 +922,59 @@ pub const Transport = struct {
         conn.client_mutex.lockUncancelable(io_send);
         defer conn.client_mutex.unlock(io_send);
 
-        const s = conn.client.getStream() catch |err| {
-            if (shouldEvictOnSendError(err)) {
-                // The cached connection is no longer usable (vendor library
-                // reports the underlying state is gone, peer reset, etc.).
-                // Evict it so the next send rebuilds from scratch.
-                log.warn("raft transport getStream failed; evicting cached peer connection", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("peer", peer.id),
-                });
-                self.evictPeerConnection(peer.id);
-            } else {
-                // Transient stream-credit backpressure (OutOfStreams/WouldBlock):
-                // the connection is healthy — keep it; this RPC is dropped and the
-                // next raft tick re-sends. debug-level to avoid log spam under load.
-                log.debug("raft transport getStream backpressure; keeping connection", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("peer", peer.id),
-                });
-            }
-            return err;
-        };
-        defer s.deinit();
-
+        // 2026-06-08 raft multiplexed streams: reuse ONE long-lived stream per
+        // peer instead of opening a fresh bidi stream per RPC. Lazily (re)open
+        // it; never finish() per RPC (that would close it). On error, close+null
+        // so the next send reopens — but only EVICT the connection for
+        // genuinely-fatal errors (shouldEvictOnSendError), never for transient
+        // backpressure (which per-RPC streams used to hit as OutOfStreams).
+        if (conn.send_stream == null) {
+            conn.send_stream = conn.client.getStream() catch |err| {
+                if (shouldEvictOnSendError(err)) {
+                    log.warn("raft transport open send_stream failed; evicting peer connection", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("peer", peer.id),
+                    });
+                    self.evictPeerConnection(peer.id);
+                } else {
+                    // Transient stream-credit backpressure (OutOfStreams/WouldBlock):
+                    // the connection is healthy — keep it; this RPC is dropped and the
+                    // next raft tick re-sends. debug-level to avoid log spam under load.
+                    log.debug("raft transport open send_stream backpressure; keeping connection", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("peer", peer.id),
+                    });
+                }
+                return err;
+            };
+        }
+        const s = conn.send_stream.?;
         writeRaftFrame(self.allocator, s, from, term, msg) catch |err| {
+            // The stream is now suspect — close+null it so the next send opens a
+            // fresh one (the receiver's frame loop ends on EndOfStream and the
+            // re-opened stream is re-accepted). Evict the whole connection only
+            // for fatal errors. CRITICAL: null `conn.send_stream` BEFORE any
+            // evictPeerConnection so PeerConnection.deinit does not double-free.
+            s.finish() catch {};
+            s.deinit();
+            conn.send_stream = null;
             if (shouldEvictOnSendError(err)) {
-                log.warn("raft transport writeRaftFrame failed; evicting cached peer connection", &.{
+                log.warn("raft transport writeRaftFrame failed; evicting peer connection", &.{
                     Attr.string("error", @errorName(err)),
                     Attr.uint("peer", peer.id),
                 });
                 self.evictPeerConnection(peer.id);
             } else {
-                log.debug("raft transport writeRaftFrame backpressure; keeping connection", &.{
+                log.debug("raft transport writeRaftFrame backpressure; reopening stream next send", &.{
                     Attr.string("error", @errorName(err)),
                     Attr.uint("peer", peer.id),
                 });
             }
             return err;
         };
-
-        // Task A6b: explicit FIN on the stream so the vendor library
-        // flushes the in-flight payload rather than emitting a
-        // RESET_STREAM when the stream destructor runs.  The connection
-        // itself stays alive — only the stream is closed.
-        s.finish() catch |err| {
-            log.warn("raft transport stream finish failed", &.{
-                Attr.string("error", @errorName(err)),
-                Attr.uint("peer", peer.id),
-            });
-        };
-        // Task A6e (2026-05-26): the previous code synchronously called
-        // `conn.client.poll(10)` here to flush the payload + FIN onto the
-        // wire.  The dedicated `client_poll_thread` now polls every cached
-        // peer client endpoint, so the bridge returns immediately.
+        // NOTE: no per-RPC finish()/deinit() — the stream stays open for the
+        // next frame. The dedicated client_poll_thread (A6e) flushes the write
+        // onto the wire; the bridge returns immediately.
     }
 
     /// Look up or construct a persistent peer connection.  The
