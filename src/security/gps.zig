@@ -40,6 +40,42 @@ pub fn isInsecureAllowAll() bool {
     return g_insecure_allow_all.load(.acquire);
 }
 
+// CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="InsecureAllowAllStartupBanner"; ASPECT=BannerText; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08
+// GAP-0842: prominent, unmistakable startup banner emitted when
+// --insecure-allow-all is set. The flag short-circuits gps.decide() for EVERY
+// request (see decide() below), which means tenant isolation, row-level
+// security (RLS), and field-level-encryption (FLE) authorization are ALL
+// disabled — every connection can read every tenant's data.
+//
+// We deliberately do NOT auto-refuse-to-start when multiple tenants' data is
+// present on disk: a tenant is a per-record string tag (graph_store.tenant_id),
+// NOT an on-disk directory (storage is laid out per-GRAPH at
+// {data_dir}/graphs/{uuid}/...), so "is more than one tenant present?" cannot
+// be answered without a full scan of every node/edge across every graph at
+// startup. That is neither cheap nor safe (it would force loading/decrypting
+// all graph data before the listener is up), so per the GAP-0842 guidance we
+// escalate to a prominent banner + documentation rather than inventing a
+// fragile heuristic. See docs/security/MULTI_TENANT_HARDENING.md.
+//
+// Returns a multi-line, comptime-constant banner suitable for logging or
+// printing to stderr at startup. Kept as a pure function so it is unit-testable
+// without standing up a server.
+pub fn insecureAllowAllBanner() []const u8 {
+    return (
+        \\========================================================================
+        \\  SECURITY WARNING: --insecure-allow-all IS ENABLED
+        \\------------------------------------------------------------------------
+        \\  ALL authorization checks are BYPASSED. This disables:
+        \\    * Tenant isolation  (every connection can read EVERY tenant's data)
+        \\    * Row-level security (RLS policies are NOT evaluated)
+        \\    * Field-level encryption (FLE) decrypt authorization
+        \\  NOT FOR PRODUCTION. Never set --insecure-allow-all on a deployment
+        \\  that holds more than one tenant's data. See
+        \\  docs/security/MULTI_TENANT_HARDENING.md.
+        \\========================================================================
+    );
+}
+
 pub const Action = enum {
     read,
     write,

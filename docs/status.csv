@@ -1132,6 +1132,11 @@ REQ-GAP-0737-INSECURE-GATE,ClusterInsecureRefusal,DefenseInDepth,TESTED,,,securi
 REQ-GAP-0741-VAULT-PATH-VALIDATE,VaultKeyPathValidation,InputSafety,TESTED,,,security,2026-04-16,src/security/vault_kms_provider.zig
 REQ-GAP-0838-CLUSTER-IDENTITY,DistributedMode,IdentityContractDiagnostic,TESTED,,,core,2026-06-02,src/server/cluster_identity.zig
 REQ-GAP-0838-DNS-SEARCH,ClusterPeerDNS,ResolvConfSearchExpansion,TESTED,,,transport,2026-06-02,src/transport/dns_search.zig
+REQ-GAP-0842-INSECURE-BANNER-001,InsecureAllowAllStartupBanner,BannerText,TESTED,,,security,2026-06-08,src/security/gps.zig
+REQ-GAP-0842-INSECURE-BANNER-001,InsecureAllowAllStartupBanner,Regression,TESTED,,,security,2026-06-08,tests/test_gap0842_insecure_allow_all_banner.zig
+REQ-GAP-0842-INSECURE-BANNER-001,InsecureAllowAllStartupBanner,Startup,TESTED,,,security,2026-06-08,src/server/main.zig
+REQ-GAP-0842-INSECURE-BANNER-001,MultiTenantHardeningDoc,DOCUMENTATION,TESTED,,,security,2026-06-08,docs/security/MULTI_TENANT_HARDENING.md
+REQ-GAP-0845-FLE-CALL-DOC-001,FLECallProcedureSurface,DOCUMENTATION,TESTED,,,security,2026-06-08,docs/FIELD_LEVEL_ENCRYPTION.md
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig

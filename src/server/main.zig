@@ -926,7 +926,16 @@ pub fn main() !void {
     const gps = geode.security.gps;
     if (config.insecure_allow_all) {
         gps.setInsecureAllowAll(true);
-        log.warn("SECURITY: Geode running with --insecure-allow-all: all authorization checks bypassed. NOT FOR PRODUCTION.", &.{});
+        // CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="InsecureAllowAllStartupBanner"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08
+        // GAP-0842: escalate the bypass notice from a single-line WARN to a
+        // prominent, unmistakable multi-line banner. The banner spells out that
+        // tenant isolation, RLS, and FLE authorization are ALL disabled so the
+        // condition cannot be missed in a crowded startup log. We do NOT
+        // auto-refuse-to-start on multi-tenant data because tenant membership is
+        // a per-record tag, not an on-disk directory — see the rationale in
+        // gps.insecureAllowAllBanner() and docs/security/MULTI_TENANT_HARDENING.md.
+        std.debug.print("\n{s}\n", .{gps.insecureAllowAllBanner()});
+        log.warn("SECURITY: Geode running with --insecure-allow-all: all authorization checks bypassed (tenant isolation, RLS, and FLE authz are ALL disabled). NOT FOR PRODUCTION. See docs/security/MULTI_TENANT_HARDENING.md.", &.{});
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08

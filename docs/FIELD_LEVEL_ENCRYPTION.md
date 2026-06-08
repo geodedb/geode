@@ -149,6 +149,130 @@ geode migrate encrypt --tenant T --field S.F --batch 1000
 
 ---
 
+## Managing FLE Schema via `CALL geode.fle.*` (Supported, Stable Surface — GAP-0845)
+
+<!-- CANARY: REQ=REQ-GAP-0845-FLE-CALL-DOC-001; FEATURE="FLECallProcedureSurface"; ASPECT=DOCUMENTATION; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/fle_decrypt_denied_placeholder.yml; OWNER=security; UPDATED=2026-06-08 -->
+
+> **The `CALL geode.fle.*` procedures are the supported, stable path for FLE
+> schema management.** First-class GQL FLE DDL (declaring `@encrypted` /
+> `@visible` / `@searchable` directly in `CREATE` / `ALTER` statements) is a
+> **future enhancement** and is **not** currently available — see
+> [`docs/GQL_AUTH_DDL.md`](GQL_AUTH_DDL.md) ("FLE DDL … not part of this
+> surface"). Until that lands, configure encrypted fields **only** through the
+> `CALL` procedures documented here. Downstream consumers (e.g. CaaST) should
+> depend on this surface, not on annotation DDL.
+
+These procedures use ISO/IEC 39075:2024 `CALL`-procedure form (the same shape as
+`CALL geode.fts.search` / `CALL geode.ts.*`); they ride the generic GQL rows
+wire protocol, so there is no client or proto change. Procedure names are
+case-insensitive (normalized to lowercase per RQ-0022).
+Implementation: [`src/execution/storage_dispatch.zig`](../src/execution/storage_dispatch.zig)
+(`fle_table`); access policy: [`src/execution/procedure_access.zig`](../src/execution/procedure_access.zig).
+
+### Procedure reference
+
+#### `CALL geode.fle.configureField(type_name, field_name [, config])`
+
+Configures (creates or updates) a field as FLE-encrypted in the FLE catalog.
+This is the write/declare path — the equivalent of an `@encrypted` annotation.
+
+| Argument | Type | Required | Notes |
+|----------|------|----------|-------|
+| `type_name` | STRING | yes | Node/edge label the field belongs to (e.g. `'Person'`). |
+| `field_name` | STRING | yes | Property name to encrypt (e.g. `'ssn'`). |
+| `config` | MAP | no | `{ algorithm: <str>, visibility: [<role>, ...] }`. |
+
+`config` keys actually read by the server:
+
+- `algorithm` — `'AES-256-GCM'` (default) or `'CHACHA20-POLY1305'`. Unknown
+  values fall back to `AES-256-GCM`.
+- `visibility` — list of role names permitted to decrypt the field (e.g.
+  `['admin']`). Other keys shown in older examples (`keyVersion`, etc.) are
+  accepted/ignored for forward-compatibility.
+
+Returns one row: `status` (STRING, `"configured"`).
+
+```gql
+CALL geode.fle.configureField('Person', 'ssn',
+  { algorithm: 'AES-256-GCM', visibility: ['pii_reader'] })
+RETURN 'configured' AS status;
+```
+
+#### `CALL geode.fle.getFieldConfig(type_name, field_name)`
+
+Reads the FLE configuration of a single field.
+
+Returns one row: `encrypted` (BOOL), `algorithm` (STRING, `"none"` when not
+encrypted), `searchable` (BOOL).
+
+```gql
+CALL geode.fle.getFieldConfig('Person', 'ssn');
+-- encrypted | algorithm   | searchable
+-- true      | aes256_gcm  | false
+```
+
+#### `CALL geode.fle.listEncryptedFields(type_name)`
+
+Lists all encrypted fields configured on a type.
+
+Returns one row per encrypted field: `field_name` (STRING), `algorithm`
+(STRING), `searchable` (BOOL).
+
+```gql
+CALL geode.fle.listEncryptedFields('Person');
+```
+
+### End-to-end example: declare → write → read with/without role
+
+This mirrors the regression harness spec
+[`fle_decrypt_denied_placeholder.yml`](../../geode-test-harness/geodetestlab-cli/specs/fle_decrypt_denied_placeholder.yml)
+(GAP-0301), which is run in CI.
+
+```gql
+-- 1. Declare the encrypted field (admin). Only the 'admin' role may decrypt.
+CALL geode.fle.configureField('Person', 'ssn',
+  { algorithm: 'AES-256-GCM', visibility: ['admin'] })
+RETURN 'configured' AS status;
+
+-- 2. Create a readonly user that is NOT granted decrypt access.
+CREATE USER pii_reader SET PASSWORD 'reader-pass-123' ROLE readonly;
+
+-- 3. Write a row (admin). The engine encrypts ssn transparently on write;
+--    the plaintext never lands on disk.
+CREATE (p:Person { user_id: 'P001', ssn: 'SECRET-123-45-6789', city: 'Denver' })
+RETURN p.user_id AS user_id;
+```
+
+```bash
+# 4a. Admin reads — sees decrypted plaintext (decrypt authorized).
+geode query -U geode -P "$GEODE_ADMIN_PASSWORD" \
+  "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn"
+#   ssn
+#   SECRET-123-45-6789
+
+# 4b. Readonly user reads — the ROW is visible (row_count matches admin), but
+#     the ssn field is REDACTED (e.g. <ENCRYPTED> / null / [REDACTED]).
+#     Field visibility != row visibility.
+geode query -U pii_reader -P reader-pass-123 \
+  "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn, p.city AS city"
+#   ssn          | city
+#   <ENCRYPTED>  | Denver
+```
+
+The unauthorized reader gets a redacted placeholder for `ssn` (never raw
+ciphertext, never plaintext) while still reading the non-encrypted `city`
+field and seeing the same row count as the admin — the decrypt gate is
+enforced per field, not per row.
+
+### Future enhancement
+
+First-class FLE DDL (honoring `@encrypted` / `@visible` / `@searchable` on
+`CREATE` / `ALTER`) is planned but **not** currently implemented. The `CALL
+geode.fle.*` surface above is the stable contract; do not depend on annotation
+DDL for encryption configuration.
+
+---
+
 ## Implementation Details
 
 ### Module Structure

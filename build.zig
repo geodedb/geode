@@ -4491,6 +4491,15 @@ pub fn build(b: *std.Build) void {
     const gap0840_step = b.step("test-gap0840-strict-tenancy", "GAP-0840 regression (opt-in strict-tenancy mode)");
     gap0840_step.dependOn(&run_gap0840_tests.step);
 
+    // GAP-0842: prominent --insecure-allow-all startup banner contract.
+    const gap0842_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0842_insecure_allow_all_banner.zig"), .target = target, .optimize = optimize });
+    gap0842_test_mod.addImport("geode", root_mod);
+    const gap0842_tests = b.addTest(.{ .root_module = gap0842_test_mod });
+    const run_gap0842_tests = b.addRunArtifact(gap0842_tests);
+    shardDep(test_step, &run_gap0842_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0842_step = b.step("test-gap0842-insecure-allow-all", "GAP-0842 regression (insecure-allow-all startup banner contract)");
+    gap0842_step.dependOn(&run_gap0842_tests.step);
+
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
     perf_b_test_mod.addImport("geode", root_mod);

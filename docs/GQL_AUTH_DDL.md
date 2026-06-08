@@ -177,7 +177,11 @@ create/revoke) are wired at startup in `server_init`.
 7. **`CREATE POLICY`, FLE DDL, and tenant DDL are not part of this surface.**
    Use `CALL geode.fle.*` for field-level encryption schema management and the
    RLS engine API for row-level security policies. Tenant provisioning is also
-   not available via GQL DDL.
+   not available via GQL DDL. The `CALL geode.fle.*` procedures are the
+   **supported, stable** surface for FLE schema management — see
+   [Managing FLE Schema via `CALL geode.fle.*`](FIELD_LEVEL_ENCRYPTION.md#managing-fle-schema-via-call-geodefle-supported-stable-surface--gap-0845)
+   in the FLE reference for the full procedure list and an end-to-end example
+   (GAP-0845).
 
 ### Future: `CREATE POLICY`
 
