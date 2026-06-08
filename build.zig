@@ -1347,6 +1347,19 @@ pub fn build(b: *std.Build) void {
     const liveness_breadcrumb_step = b.step("test-liveness-breadcrumb", "Run out-of-band /health liveness breadcrumb regression (2026-06-07 liveness-kill fix)");
     liveness_breadcrumb_step.dependOn(&run_liveness_breadcrumb_tests.step);
 
+    // Idle-server CPU regression: an idle geode (0 connections) must not spin the
+    // QUIC poll workers (was ~810% on a 16-worker release node / ~100% on the
+    // 1-worker debug build). SKIPs if ./zig-out/bin/geode is not built.
+    const idle_cpu_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_quic_idle_cpu.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    idle_cpu_tests.root_module.link_libc = true;
+    const run_idle_cpu_tests = b.addRunArtifact(idle_cpu_tests);
+    const idle_cpu_step = b.step("test-quic-idle-cpu", "Run idle-server poll-loop CPU regression (2026-06-08 idle-spin fix)");
+    idle_cpu_step.dependOn(&run_idle_cpu_tests.step);
+
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator
