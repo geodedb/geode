@@ -4473,6 +4473,19 @@ pub fn build(b: *std.Build) void {
     const gap0509_step = b.step("test-gap0509-tenant-isolation", "GAP-0509 regression (tenant isolation for MATCH and SHOW TABLES)");
     gap0509_step.dependOn(&run_gap0509_tests.step);
 
+    // GAP-0840 regression: opt-in strict-tenancy mode. The shared
+    // tenancy.resolveTenantFilter decision (delegated to by both
+    // crud_operations.tenantFilterFromContext and
+    // match_operations.getSessionTenantFilter) must reject unscoped/"default"
+    // tenant access when strict mode is enabled, and stay unchanged otherwise.
+    const gap0840_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0840_strict_tenancy.zig"), .target = target, .optimize = optimize });
+    gap0840_test_mod.addImport("geode", root_mod);
+    const gap0840_tests = b.addTest(.{ .root_module = gap0840_test_mod });
+    const run_gap0840_tests = b.addRunArtifact(gap0840_tests);
+    shardDep(test_step, &run_gap0840_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0840_step = b.step("test-gap0840-strict-tenancy", "GAP-0840 regression (opt-in strict-tenancy mode)");
+    gap0840_step.dependOn(&run_gap0840_tests.step);
+
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
     perf_b_test_mod.addImport("geode", root_mod);

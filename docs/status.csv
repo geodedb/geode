@@ -3554,6 +3554,9 @@ REQ-MULTI-TENANT-009,TenantQueryIsolation,UnitTest,TESTED,,,enterprise,2026-04-0
 REQ-MULTI-TENANT-FLE-001,FLE Multi-Tenancy,ExecutionContext,TESTED,,,security,2026-04-11,src/execution.zig
 REQ-MULTI-TENANT-FLE-002,FLE Multi-Tenancy,PerThreadTenant,IMPL,,,security,2026-04-01,src/fle_integration.zig
 REQ-MULTI-TENANT-QUOTA-001,PerTenantResourceQuotas,QuotaManager,TESTED,,,security,2026-04-01,src/security/tenant_quota.zig
+REQ-MULTI-TENANT-STRICT-001,StrictTenancyMode,LibExport,TESTED,,,security,2026-06-08,src/lib.zig
+REQ-MULTI-TENANT-STRICT-001,StrictTenancyMode,ProcessFlag,IMPL,,,security,2026-06-08,src/execution/tenancy.zig
+REQ-MULTI-TENANT-STRICT-001,StrictTenancyMode,Regression,TESTED,,,security,2026-06-08,tests/test_gap0840_strict_tenancy.zig
 REQ-MV-CANCEL-001,MVRefreshCancellation,Cancel,TESTED,,,mv,2026-01-09,src/query/enhanced_materialized_views.zig
 REQ-NESTING-REFACTOR-001,NestingReduction,HelperFunctions,TESTED,,,refactor,2026-01-30,src/execution/graph_algorithms.zig
 REQ-NESTING-REFACTOR-002,NestingReduction,LabelCheck,TESTED,,,refactor,2026-01-30,src/execution/graph_algorithms.zig

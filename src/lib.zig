@@ -753,6 +753,11 @@ pub const auth_dispatch = @import("execution/auth_dispatch.zig");
 // Re-export meta_dispatch so tests can call the executeDb*ForTest helpers without a
 // relative cross-module @import (which Zig 0.16 rejects for files outside the module path).
 pub const meta_dispatch = @import("execution/meta_dispatch.zig");
+// CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=LibExport; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
+// GAP-0840: re-export the strict-tenancy decision module so server startup can
+// set the process flag and integration tests can exercise resolveTenantFilter
+// directly (the two tenant-filter entry points delegate to it).
+pub const tenancy = @import("execution/tenancy.zig");
 // CANARY: REQ=REQ-LSP-SCHEMA-PROVIDER-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=LibExportSchemaChangeNotifier; STATUS=TESTED; TEST=src/cli/lsp/schema_provider_test.zig; OWNER=lsp; UPDATED=2026-05-14
 // Re-export schema_change_notifier so the LSP SchemaProvider can reach it via
 // the `geode` named module. Registering it as a separate build module would
