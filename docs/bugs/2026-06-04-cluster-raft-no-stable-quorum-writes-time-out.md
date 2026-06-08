@@ -176,6 +176,61 @@ closes; both are reliability hardening on top of the now-correct replication pat
 
 ---
 
+## ✅ VERIFIED on real Kubernetes (2026-06-08, geode `0.6.25`)
+
+Deployed `geodedb/geode:0.6.25` (binary confirmed to contain `af5188cd`, the
+write-routing gate) to the real arda 3-pod StatefulSet (distinct pod IPs across 3
+nodes, wildcard `0.0.0.0` cluster bind, CA-signed TLS, 2000m/4000m CPU), fresh
+PVCs. **The silent-divergence defect is fixed in real k8s:**
+
+- **Replication works.** A clean boot elects a stable leader (geode-2) + 2
+  followers, all `term=1`. A leader `CREATE (:RaftR1 {v:1}) RETURN 1 AS ok` (the
+  exact `…RETURN…` shape that previously diverged) and a bare `CREATE (:RaftR2)`
+  both read back `count=1` on **the leader and every reachable follower** (one
+  follower returned `count=1` immediately; the third caught up after a few seconds
+  of replication lag — `geode.raft_apply raft apply: replicated node create … graph=default`).
+- **Fail-closed gate works.** A `CREATE … RETURN 1` sent to a non-leader returns
+  `error_code 58000 ClusterNotLeader` (no silent local apply — `FollW` count stays
+  0 everywhere). `MERGE (...)` on the leader returns `58000 ClusterWriteNotReplicable`.
+- **Restart did not duplicate (#6 not reproduced here).** A same-IP `kubectl delete
+  pod` of a follower (PVC persists) read back `count=1` after rejoin — the
+  `count=2` duplication is specific to the *rescheduled-with-new-IP* path, not a
+  plain restart.
+
+### ⚠️ Root cause #5 (transport hardening) reproduces in real k8s — not just under synthetic CPU limits
+
+A 3-node cluster reaches a **stable leader + one stable follower (2/3 quorum,
+fully functional for writes/reads), but the THIRD node degrades to a stuck
+`candidate`** and becomes unavailable (its `:3141` queries return `ERR`/time out),
+even though replication to it had worked moments earlier. Over a steady-state
+window the **leader** logs, per ~120s:
+
+```
+geode-2 (leader):   OutOfStreams = 14   HandshakeError = 19
+geode-0 (follower):  0                   0
+geode-1 (stuck cand):0                   0          # term=1, never reverts to follower
+```
+
+`raft transport getStream failed; evicting cached peer connection error=OutOfStreams peer=3`
+and `QUIC poll cycle slow — query path degraded (sustained-load liveness-kill risk) cycle_ms≈1200`
+fire on the leader. So the leader's raft transport — **one QUIC stream per RPC**,
+a **single outbox-drain thread** serializing peer sends behind `waitForHandshake`,
+connection **evict-on-`OutOfStreams`/timeout** — exhausts streams to one peer under
+the combined heartbeat + AppendEntries load, starving that peer's heartbeats →
+election timeout → it parks as a candidate. The cluster keeps quorum and keeps
+replicating (the divergence fix holds), but it tolerates the degraded node like a
+permanent 1-node failure and would lose quorum if a second node degraded.
+
+This is the in-k8s confirmation the RE-RESOLVED note asked for ("reproduce under
+real k8s CPU limits"). The fix is the transport rework already named under #5:
+multiplex raft RPCs over a bounded set of long-lived QUIC streams per peer (stop
+opening one stream per RPC and evicting on `OutOfStreams`), and stop serializing
+all peer sends behind a single `waitForHandshake`-blocking drain. The
+`QUIC poll cycle slow` warning (added in the 0.6.25 sustained-load gate) is the
+built-in signal to assert against.
+
+---
+
 ## TL;DR
 
 After every TLS/identity prerequisite is satisfied and a leader is elected, the 3-node cluster **will not stay converged and will not commit writes**:
