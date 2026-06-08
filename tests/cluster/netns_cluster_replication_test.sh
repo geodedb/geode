@@ -126,7 +126,12 @@ chmod -R a+rX "$WORK"
 start_node() {
   local id=$1
   mkdir -p "$WORK/data$id"; chown "$RUNUSER" "$WORK/data$id" 2>/dev/null || true
-  $SUDO ip netns exec gt$id $SUDO -u "$RUNUSER" env HOSTNAME="geode-$id" \
+  # Privilege-drop to run geode as the non-root user inside the netns. Use a
+  # fixed `sudo -u` (NOT `$SUDO -u`): when the script itself is launched as root
+  # (e.g. `sudo tests/...` / the Makefile target) $SUDO is empty, and `$SUDO -u`
+  # would exec a bare "-u" as the command. `sudo -u` works both as-root and when
+  # the script self-elevates as a sudo-capable user.
+  $SUDO ip netns exec gt$id sudo -u "$RUNUSER" env HOSTNAME="geode-$id" \
     GEODE_CLUSTER_TOKEN="$TOKEN" GEODE_AUTH_HMAC_KEY="$HMAC" GEODE_PEERS="$PEERS" \
     GEODE_CLUSTER_PORT="4242" GEODE_CLUSTER_CA_CERT="$WORK/ca.crt" GEODE_ADMIN_PASSWORD="$ADMINPW" \
     "$BIN" serve --listen "0.0.0.0:3141" --cluster-port 4242 --peers "$PEERS" \
@@ -176,6 +181,60 @@ if [ "$f1_c" != "$lead_c" ] || [ "$f1_c" != "$f2_c" ]; then
 else
   echo "PASS A4: no divergence (all nodes agree: $lead_c)"
 fi
+
+# ---- A5: steady-state under sustained write load (k8s root cause #5) ----------
+#   Reproduces the transport stream-starvation: sustained heartbeat+AppendEntries
+#   load must NOT drive any node to a stuck `candidate`, and (the A1 fix) transient
+#   OutOfStreams backpressure must NOT churn peer-connection evictions/handshakes.
+#   On a fast host this may not reproduce the k8s CPU-limited pressure that
+#   triggers OutOfStreams pre-fix — but it asserts the contract holds post-fix and
+#   is a guard against regressing A1. Set LOAD_SECS/WRITERS higher to stress more.
+echo "== A5: steady-state under sustained write load (root cause #5) =="
+LID5=$(leaderof); [ -n "$LID5" ] || LID5=$LID
+LOAD_SECS=${LOAD_SECS:-45}; WRITERS=${WRITERS:-6}
+echo "  driving ${WRITERS} concurrent writers for ${LOAD_SECS}s against leader node$LID5..."
+load_end=$(( $(date +%s) + LOAD_SECS ))
+lpids=()
+for w in $(seq 1 "$WRITERS"); do
+  ( i=0; while [ "$(date +%s)" -lt "$load_end" ]; do
+      q "$LID5" "CREATE (:Load {w:$w, i:$i})" 8 >/dev/null 2>&1; i=$((i+1)); done ) &
+  lpids+=($!)
+done
+for p in "${lpids[@]}"; do wait "$p" 2>/dev/null; done
+sleep 5
+echo "  post-load raft states:"; for id in 1 2 3; do echo "    node$id: $(laststate $id)"; done
+cand=0; lead=0
+for id in 1 2 3; do
+  st=$(laststate $id)
+  echo "$st" | grep -q state=candidate && cand=$((cand+1))
+  echo "$st" | grep -q state=leader && lead=$((lead+1))
+done
+[ "$cand" = "0" ] || fail "A5 $cand node(s) parked as candidate under load (root cause #5)"
+[ "$lead" = "1" ] || fail "A5 expected exactly 1 leader after load, got $lead"
+evicts=0
+for id in 1 2 3; do
+  n=$(grep -ac "evicting cached peer connection" "$WORK/node$id.log" 2>/dev/null || true)
+  evicts=$((evicts + ${n:-0}))
+done
+echo "  evict-on-error log lines across cluster: $evicts (A1: transient OutOfStreams must NOT evict)"
+[ "$evicts" -le "${EVICT_MAX:-8}" ] || fail "A5 $evicts evictions (>${EVICT_MAX:-8}) — connection-evict churn under load (A1 regressed)"
+# Re-resolve the leader AFTER load (a benign re-election may have moved it / bumped
+# term). Followers may still be APPLYING the load backlog, so the post-load write
+# replicates with lag — POLL each node up to LF_CATCHUP_SECS for catch-up. The
+# bug under test is permanent candidate-parking (asserted above), not apply-lag;
+# this check verifies replication is not permanently STALLED.
+sleep 3; LIDF=$(leaderof); [ -n "$LIDF" ] || LIDF=$LID5
+echo "  post-load leader for final write: node$LIDF"
+q "$LIDF" 'CREATE (:LoadFinal {v:9})' 20 >/dev/null
+LF_CATCHUP_SECS=${LF_CATCHUP_SECS:-45}
+lf_ok=1
+for id in 1 2 3; do
+  c=0
+  for _ in $(seq 1 "$LF_CATCHUP_SECS"); do c=$(cnt $id LoadFinal); [ "$c" = "1" ] && break; sleep 1; done
+  [ "$c" = "1" ] || { fail "A5 node$id LoadFinal=$c after ${LF_CATCHUP_SECS}s — replication STALLED under load (not just lag)"; lf_ok=0; }
+  echo "  node$id LoadFinal=$c"
+done
+[ "$cand" = "0" ] && [ "$lead" = "1" ] && [ "$lf_ok" = "1" ] && echo "PASS A5: 1 leader, 0 candidates, evicts=$evicts, final write replicated to all 3 (post-load catch-up)"
 
 echo
 if [ "$FAILED" = "0" ]; then echo "RESULT: PASS"; exit 0; else echo "RESULT: FAIL"; exit 1; fi
