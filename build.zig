@@ -1364,6 +1364,23 @@ pub fn build(b: *std.Build) void {
     const cluster_propose_write_step = b.step("test-cluster-propose-write", "Run in-process 3-node propose-and-apply smoke test (A3d)");
     cluster_propose_write_step.dependOn(&run_cluster_propose_write_tests.step);
 
+    // Task A2 (2026-06-08 raft-transport-stream-starvation plan): per-peer
+    // non-blocking outbox drain isolation.  Drives the `send_override` hook
+    // with one message per peer {1,2,3} where peer 3's override blocks ~1s,
+    // and asserts peers 1 and 2 fire within ~150ms (NOT serialized behind
+    // peer 3).  Guards against a regression to the single serial drain that
+    // let one slow peer's handshake stall convergence (k8s root cause #5).
+    const raft_per_peer_drain_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_per_peer_drain.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_per_peer_drain_tests.root_module.addImport("geode", root_mod);
+    raft_per_peer_drain_tests.root_module.link_libc = true;
+    const run_raft_per_peer_drain_tests = b.addRunArtifact(raft_per_peer_drain_tests);
+    const raft_per_peer_drain_step = b.step("test-raft-per-peer-drain", "Run per-peer non-blocking outbox drain isolation test (A2)");
+    raft_per_peer_drain_step.dependOn(&run_raft_per_peer_drain_tests.step);
+
     // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
     // distributed cluster testing plan).  Brings up two real
     // ClusterCoordinators with their QUIC listeners on loopback,
