@@ -5447,11 +5447,19 @@ fn handleClientMessage(
                 const target = analysis.target orelse break :count_fast_path_blk;
                 if (target.* != .Query) break :count_fast_path_blk;
 
-                const fast_count_tenant: ?[]const u8 = blk: {
-                    if (exec_context.tenant_id) |tid| {
-                        if (!std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) break :blk tid;
-                    }
-                    break :blk null;
+                // GAP-0840: route the count fast-path tenant scope through the
+                // shared strict-tenancy decision rather than the inline
+                // `if tid==DEFAULT_TENANT_ID null else tid` footgun, which
+                // silently widened an unscoped/"default" session to ALL tenants
+                // for `count(*)`/label-count reads BEFORE the executor could
+                // reject it. In strict mode `resolveTenantFilter` returns
+                // `error.TenantScopeRequired`; surface it on the SAME wire-error
+                // path the regular executor uses (mapError → sendExecuteError)
+                // instead of swallowing it or propagating it up the stack.
+                const fast_count_tenant: ?[]const u8 = geode.tenancy.resolveTenantFilter(exec_context.tenant_id) catch |err| {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
                 };
 
                 // CANARY: REQ=REQ-QUIC-HC-146; FEATURE="QUIC High-Concurrency Reads"; ASPECT=GraphLockFreeLabelCount; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28

@@ -35,6 +35,8 @@ const allocateColumnStrings = execution.allocateColumnStrings;
 const match_operations = @import("match_operations.zig");
 const planned_read_runtime = @import("planned_read_runtime.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
+// GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
+const tenancy = @import("tenancy.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
 // Local type aliases
@@ -1601,12 +1603,14 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // `match_operations.countNodesFastPath` and
     // docs/audit/bugfix-shell-count-nodes-triage.md for the full rationale.
     const count_pushdown_graph = if (context.session_state) |session| session.graph orelse "default" else "default";
-    const count_pushdown_tenant = blk: {
-        if (context.tenant_id) |tid| {
-            if (!std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) break :blk tid;
-        }
-        break :blk null;
-    };
+    // GAP-0840: route the fast-path tenant scope through the shared strict-tenancy
+    // decision instead of computing it inline. The old inline
+    // `if tid==DEFAULT_TENANT_ID null else tid` footgun silently widened an
+    // unscoped/"default" session to ALL tenants for count/sum/avg/top-K. In
+    // strict mode `resolveTenantFilter` now returns `error.TenantScopeRequired`,
+    // and `try` propagates that rejection to the wire instead of leaking
+    // cross-tenant aggregates.
+    const count_pushdown_tenant = try tenancy.resolveTenantFilter(context.tenant_id);
     if (try match_operations.countNodesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
         return fast_result;
     }

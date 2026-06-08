@@ -144,6 +144,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
         error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
         error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
+        // GAP-0840: strict-tenancy rejected a tenant-scoped operation with no
+        // concrete tenant scope (unset/empty/"default"). Surface as a
+        // permission-denied class error rather than the generic internal fallback.
+        error.TenantScopeRequired => .{ .code = "42501", .message = "Tenant scope required: strict tenancy is enabled and this session has no concrete tenant scope" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },

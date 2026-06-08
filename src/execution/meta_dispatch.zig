@@ -23,6 +23,8 @@ const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 const language_metadata = @import("../gql/language_metadata.zig");
+// GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
+const tenancy = @import("tenancy.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -106,8 +108,13 @@ pub fn executeDbLabelsForTest(allocator: std.mem.Allocator, store: *graph_store.
 }
 
 fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    // Use the tenant-indexed helper; ctx.tenant_id == null → admin all-tenant view.
-    const labels = try store.listNodeLabels(allocator, ctx.tenant_id);
+    // GAP-0840: route through the shared strict-tenancy decision instead of
+    // passing raw ctx.tenant_id. An unscoped/"default" session would otherwise
+    // get the all-tenants metadata view; in strict mode this is rejected with
+    // error.TenantScopeRequired (propagated to the wire via the !ExecutionResult).
+    const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
+    // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
+    const labels = try store.listNodeLabels(allocator, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -149,8 +156,10 @@ pub fn executeDbRelationshipTypesForTest(allocator: std.mem.Allocator, store: *g
 }
 
 fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    // Use the tenant-indexed helper; ctx.tenant_id == null → admin all-tenant view.
-    const types = try store.listEdgeTypes(allocator, ctx.tenant_id);
+    // GAP-0840: route through the shared strict-tenancy decision (see executeDbLabels).
+    const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
+    // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
+    const types = try store.listEdgeTypes(allocator, filter_tenant);
     defer {
         for (types) |t| allocator.free(t);
         allocator.free(types);
@@ -208,9 +217,15 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     var ordered = std.ArrayList([]const u8).empty;
     defer ordered.deinit(allocator);
 
+    // GAP-0840: resolve once via the shared strict-tenancy decision and use the
+    // result for BOTH the node-side label/prop scans and the edge filter below.
+    // Strict mode rejects an unscoped/"default" session (error.TenantScopeRequired)
+    // rather than serving the all-tenants property-key view.
+    const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
+
     // --- Node property keys via the tenant-indexed PERF-C structures ---
     // 1. Get the labels visible to this tenant (or all if admin).
-    const labels = try store.listNodeLabels(allocator, ctx.tenant_id);
+    const labels = try store.listNodeLabels(allocator, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -218,7 +233,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
     // 2. For each label, collect the property keys indexed under that label+tenant.
     for (labels) |label| {
-        const keys = try store.listPropertiesForLabel(allocator, ctx.tenant_id, label);
+        const keys = try store.listPropertiesForLabel(allocator, filter_tenant, label);
         defer {
             for (keys) |k| allocator.free(k);
             allocator.free(keys);
@@ -239,7 +254,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     while (edge_iter.next()) |entry| {
         const edge = entry.value_ptr;
         // Honour tenant filter; null means admin sees everything.
-        if (ctx.tenant_id) |tid| {
+        if (filter_tenant) |tid| {
             if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
         }
         var prop_iter = edge.properties.iterator();
