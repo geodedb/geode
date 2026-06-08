@@ -2372,7 +2372,10 @@ test "quic non-transactional simple mutations use default fast paths" {
     defer allocator.free(content);
 
     try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-006") != null);
-    const block_start = std.mem.indexOf(u8, content, "if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null)") orelse return error.MissingDefaultFastPathBlock;
+    // 2026-06-08: the guard gained a `and ...getGlobalClusterCoordinator() == null`
+    // clause (skip the single-node fast path when clustered). Match the prefix
+    // (drop the trailing `)`) so this audit survives that and future clauses.
+    const block_start = std.mem.indexOf(u8, content, "if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null") orelse return error.MissingDefaultFastPathBlock;
     const block = content[block_start..@min(content.len, block_start + 1800)];
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_create") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkSimpleCreate") != null);
@@ -2521,7 +2524,10 @@ test "optimized server builds use high-concurrency allocator" {
     try testing.expect(std.mem.indexOf(u8, content, "REQ=REQ-QUIC-HC-009") != null);
     try testing.expect(std.mem.indexOf(u8, content, "const ServerAllocator = if (builtin.mode == .Debug)") != null);
     try testing.expect(std.mem.indexOf(u8, content, "std.heap.DebugAllocator") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "return std.heap.smp_allocator") != null);
+    // 2026-06-08: optimized server builds switched smp_allocator -> c_allocator
+    // (glibc per-thread arenas keep the parse/protobuf path lock-light; see the
+    // ServerAllocator comment in main.zig). Audit the current allocator.
+    try testing.expect(std.mem.indexOf(u8, content, "return std.heap.c_allocator") != null);
 }
 
 test "optimized quic stream pools are tunable for high fanout" {
@@ -2685,7 +2691,10 @@ test "quic high fanout e2e runs in single stream stress mode" {
     try testing.expect(std.mem.indexOf(u8, handler_content, "setMaxDetachedFirstStreamOwners") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-129") != null);
-    try testing.expect(std.mem.indexOf(u8, handler_content, "const first_stream_owner_stack_size = 2 * 1024 * 1024") != null);
+    // 2026-06-08: bumped 2 MiB -> 16 MiB so a legal 128-deep query's owner stack
+    // chain doesn't segfault before the depth guard (see the stack_size comment
+    // in quic_connection_handler.zig). Virtual reservation only; RSS unchanged.
+    try testing.expect(std.mem.indexOf(u8, handler_content, "const first_stream_owner_stack_size = 16 * 1024 * 1024") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-139") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, ".{ .stack_size = first_stream_owner_stack_size }, workerMain") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-140") != null);
