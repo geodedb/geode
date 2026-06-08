@@ -64,17 +64,37 @@ In `send`, replace the unconditional `evictPeerConnection` in the `getStream` an
 
 - [ ] **Step 4: Run the test, confirm PASS.** Commit: `fix(raft): don't evict peer connection on transient OutOfStreams backpressure`.
 
-### Task A2: De-serialize the outbox drain per-peer
+### Task A2: Per-peer non-blocking outbox drain — **NOW CRITICAL (k8s-confirmed 2026-06-08)**
 
-**Files:** `src/distributed/raft_consensus.zig` (`dispatchOutbox`, `:549`)
+> **k8s ground truth (v0.6.25-4-g1d691968, A1 deployed):** A1 eliminated the transport churn
+> (0 OutOfStreams/evicts/HandshakeErrors/slow-poll, was 14/19 per 120s) — **but the cluster now
+> can't converge at all**, with 0 transport errors: across two clean boots at least one node always
+> isolated (a partitioned leader at term=2 while the other two climbed to term 22+ without electing;
+> or a node stuck at term=0 never joining). **A1 traded "churn" for "stall."** Root cause of the
+> stall: the **single serial `outboxDrainLoop`** drains all peers' messages through `send`, and
+> `send → getOrCreatePeerConnection → waitForHandshake(1)` (1s) **blocks** on one slow/unreachable
+> peer at election time → votes/heartbeats to *every* peer stall → no leader is elected. The old
+> evict+re-handshake (removed by A1) had inadvertently pushed *some* frames through, which is how
+> 0.6.25 kept 2/3 replicating. So **A1 alone is a regression; A2 must land to restore convergence.**
 
-A slow/backpressured peer must not delay other peers' heartbeats. Group the drained snapshot by peer id and dispatch each peer's group independently so one peer's send latency is isolated. Per-peer `client_mutex` already serializes per-connection, so cross-peer concurrency is safe (different connections/mutexes); the `peers` map is `peers_mutex`-guarded.
+**Files:** `src/distributed/raft_consensus.zig` (the `Transport` outbox: fields ~341-357, `enqueueOutbound` ~485, `outboxDrainLoop`/`dispatchOutbox` ~549-604, `startOutboxDrain`/`stopOutboxDrain` ~611-628, `init`/`deinit`).
 
-- [ ] **Step 1: Write a unit test** asserting that, given queued messages for peers {1,2,3} where peer 3's `send_override` blocks/sleeps, peers 1 and 2 are still dispatched promptly (use the existing `send_override` hook + a per-peer dispatch-order/timestamp assertion). Confirm it FAILS against the current serial loop.
+**Design — per-peer queues + per-peer drain threads.** Replace the single `outbox` + single
+`outbox_thread` with one send queue + one dedicated drain thread **per peer**, so a blocking
+`send` (handshake/getStream/write) to a slow/down peer is isolated to that peer's thread and never
+stalls another peer's votes/heartbeats. Peers are stable for a cluster's lifetime (from the peer
+list), so the set of per-peer drains is fixed at `startOutboxDrain`.
 
-- [ ] **Step 2: Implement per-peer dispatch.** Partition `snap.items` by `entry.peer.id`; submit each peer's slice to the cluster thread pool (or spawn a bounded set of per-peer worker tasks). Keep ordering *within* a peer (raft requires in-order-ish heartbeat/AppendEntries per peer). Free each message after its send. Preserve the shutdown cancellation check.
+- A `PeerDrain` struct per peer: `{ mutex: std.Io.Mutex, queue: ArrayList(OutboundEntry), thread: ?std.Thread, shutdown: atomic bool }`, held in `peer_drains: AutoHashMap(u64, *PeerDrain)` guarded by a new leaf mutex (or reuse `peers_mutex` discipline — document lock order: never hold `peer_drains` mutex while sending).
+- `enqueueOutbound(peer, …)`: route to `peer_drains[peer.id]` (get-or-create under the mutex, spawn its drain thread on first use OR pre-create for all known peers at `startOutboxDrain`). Keep the existing **append_entries coalescing**, now *within* that peer's queue (simpler: scan only this peer's queue).
+- Per-peer drain loop: snapshot-and-swap its own queue under its mutex (mirroring the current `outboxDrainLoop`), then `send` each entry serially **to that one peer** (blocking is fine — isolated). 2 ms idle when empty. Honor `shutdown`.
+- `startOutboxDrain`/`stopOutboxDrain`/`deinit`: start/join/free all per-peer drains (join each thread before freeing its queue; drop queued messages via `freeOutboundMessage`). Preserve the global `outbox_shutdown` cancellation semantics.
+- `send` itself is unchanged (it already serializes per-connection via `client_mutex`); it just now runs on the owning peer's thread.
 
-- [ ] **Step 3: Run the test + the full distributed test suite. Commit:** `fix(raft): dispatch outbox per-peer so one backpressured peer can't starve others`.
+- [ ] **Step 1: Failing test.** Using the `send_override` hook, enqueue messages for peers {1,2,3} where peer 3's override sleeps ~1s; assert peers 1 and 2's overrides fire within ~100ms (not serialized behind peer 3). Confirm it FAILS on the current single-serial-drain.
+- [ ] **Step 2: Implement** the per-peer drain refactor above. Keep `flushOutboxBlocking` working for the in-process tests (flush all per-peer queues).
+- [ ] **Step 3: Validate non-regression** — `zig build test-cluster-3node-election`, `test-cluster-steady-state`, `test-cluster-propose-write`, the raft_consensus inline tests, and `make test-cluster-netns`. (None reproduce the k8s stall — they confirm the basic election/replication paths still work + no deadlock.) Commit: `fix(raft): per-peer non-blocking outbox drain so one peer's handshake can't stall convergence`.
+- [ ] **Step 4: Ground truth** — ship (merge to main) for the user's k8s re-deploy; confirm all 3 nodes converge + hold. If a node still isolates, proceed to Phase B.
 
 ### Task A3: Regression — netns 3-node steady-state under load
 
