@@ -496,3 +496,58 @@ peer can starve heartbeats to all peers → followers time out → flap. The
 per-peer outbox coalescing (#3.3) reduces the pressure but does not remove the
 blocking-handshake serialization. Scoped as a follow-up; verify under real k8s
 CPU limits before closing.
+
+---
+
+## ✅ ROOT CAUSE #5 RESOLVED (2026-06-08) — bounded multiplexed raft streams
+
+Root cause #5 ("leader-flap under CPU pressure / blocking-handshake send
+serialization") is fixed. Confirmed mechanism (via the netns faithful repro,
+`tests/cluster/netns_cluster_replication_test.sh` A5): `Transport.send` opened a
+**fresh QUIC bidi stream per RPC**. Under sustained write load, AppendEntries-with-
+entries exhausted the peer's `max_streams_bidi` credit → the next `getStream()`
+returned `OutOfStreams` → `send` **dropped the RPC**. When the dropped RPC was a
+heartbeat (empty AppendEntries) or RequestVote/Response, the control plane starved
+→ election timeout → term advance → **split-brain** (A5 baseline: node2 leader
+term=1, node3 leader term=2, node1 candidate; `LoadFinal=0`).
+
+**Fix (commits `77767dd1`, `e845b039`):** send ALL raft frames over **one bounded
+long-lived bidirectional stream per peer** (`PeerConnection.send_stream`, reused
+under `client_mutex`, never `finish()`'d per RPC; closed+nulled+reopened only on a
+real send error), and the receiver loops length-delimited frames
+(`dispatchRaftFrameFromAdaptedStream` reads until `EndOfStream`). Frames were
+already 4-byte length-prefixed, so no wire change. This bounds per-peer stream use
+to 1 → `OutOfStreams` can no longer drop control messages.
+
+**Evidence (netns A5, after fix):** A1–A4 PASS (election + at-rest CREATE /
+CREATE…RETURN replication + follower-write rejection); under 6 writers / 45s the
+**split-brain is gone** — exactly **1 leader, 0 candidates, 0 OutOfStreams, 0
+evict-on-error lines**. Adversarial code review confirmed no UAF/double-free,
+correct A6f lock discipline, and a bounded (non-busy-spin) WouldBlock re-park in
+the receiver loop (required so the receiver's `seen_streams` dedup does not wedge a
+re-queued stream_id). In-process raft tests (election/propose-write/per-peer-drain)
+and the 4 no-regression shards all pass.
+
+### ⚠️ Residual: A5 `LoadFinal` still fails — but on a DIFFERENT root cause (#2)
+
+With the split-brain eliminated, A5's final assertion (`LoadFinal` — the last write
+replicating under load) still fails, and triage shows it is **NOT** the raft
+transport: the leader logs show **0 OutOfStreams, 0 raft errors, replication
+flowing** throughout the load. The failure is **client-plane QUIC poll-loop
+saturation** — `proto_reader stall stream_id=0 peer=…:3141` (the test driver's
+client connection on port 3141, NOT the raft cluster transport on 4242) wedges
+under the 6-writer load, so the LoadFinal `CREATE` can't commit; accompanied by
+"QUIC poll cycle slow — query path degraded (sustained-load liveness-kill risk)".
+This is the **single-QUIC-poll-loop contention** bug tracked in
+`docs/bugs/2026-06-07-unresponsive-under-sustained-query-load-liveness-kill-503.md`
+(its scoped-but-unshipped Phase 2: `Endpoint.mu` rework + safe stream reaping) — a
+separate, deeper QUIC-core change to be done carefully on its own, NOT bundled here.
+
+### Minor follow-ups (non-blocking)
+
+- M1: add an explicit `self.shutdown` check at the top of the receiver frame loop
+  (`dispatchRaftFrameFromAdaptedStream`) for prompt teardown — currently it exits
+  indirectly via connection teardown (not a hang risk).
+- M2: a genuinely half-open dead peer holds a `connection_pool` worker until the
+  QUIC idle timeout reaps it (benign in a live cluster: heartbeats keep the stream
+  active far under the idle timeout).
