@@ -726,6 +726,22 @@ pub const Transport = struct {
 
     // SEC-D011: TLS-aware Raft transport matching cluster.zig:sendToNode pattern.
     // CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=TransportSend; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
+    /// k8s root cause #5: `error.OutOfStreams` (peer MAX_STREAMS_BIDI credit
+    /// momentarily exhausted — quic `methods_b.zig` returns it when
+    /// `opened_bidi >= peer_max_streams_bidi`) and `error.WouldBlock` are
+    /// TRANSIENT backpressure on a HEALTHY connection. Evicting the peer
+    /// connection over them forces a fresh TLS handshake on the next send AND
+    /// resets the stream credit — worsening the exhaustion and starving that
+    /// peer's heartbeats until it parks as a candidate. Drop the one message
+    /// instead (periodic heartbeats/AppendEntries re-send on the next tick) and
+    /// keep the connection. Only a genuinely-dead connection warrants eviction.
+    fn shouldEvictOnSendError(err: anyerror) bool {
+        return switch (err) {
+            error.OutOfStreams, error.WouldBlock => false,
+            else => true,
+        };
+    }
+
     pub fn send(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
         if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
         if (self.send_override) |override| {
@@ -760,24 +776,41 @@ pub const Transport = struct {
         defer conn.client_mutex.unlock(io_send);
 
         const s = conn.client.getStream() catch |err| {
-            // The cached connection is no longer usable (vendor library
-            // reports the underlying state is gone, peer reset, etc.).
-            // Evict it so the next send rebuilds from scratch.
-            log.warn("raft transport getStream failed; evicting cached peer connection", &.{
-                Attr.string("error", @errorName(err)),
-                Attr.uint("peer", peer.id),
-            });
-            self.evictPeerConnection(peer.id);
+            if (shouldEvictOnSendError(err)) {
+                // The cached connection is no longer usable (vendor library
+                // reports the underlying state is gone, peer reset, etc.).
+                // Evict it so the next send rebuilds from scratch.
+                log.warn("raft transport getStream failed; evicting cached peer connection", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("peer", peer.id),
+                });
+                self.evictPeerConnection(peer.id);
+            } else {
+                // Transient stream-credit backpressure (OutOfStreams/WouldBlock):
+                // the connection is healthy — keep it; this RPC is dropped and the
+                // next raft tick re-sends. debug-level to avoid log spam under load.
+                log.debug("raft transport getStream backpressure; keeping connection", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("peer", peer.id),
+                });
+            }
             return err;
         };
         defer s.deinit();
 
         writeRaftFrame(self.allocator, s, from, term, msg) catch |err| {
-            log.warn("raft transport writeRaftFrame failed; evicting cached peer connection", &.{
-                Attr.string("error", @errorName(err)),
-                Attr.uint("peer", peer.id),
-            });
-            self.evictPeerConnection(peer.id);
+            if (shouldEvictOnSendError(err)) {
+                log.warn("raft transport writeRaftFrame failed; evicting cached peer connection", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("peer", peer.id),
+                });
+                self.evictPeerConnection(peer.id);
+            } else {
+                log.debug("raft transport writeRaftFrame backpressure; keeping connection", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("peer", peer.id),
+                });
+            }
             return err;
         };
 
@@ -2567,6 +2600,20 @@ test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
     } else |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
     }
+}
+
+// k8s root cause #5 (2026-06-08): transient stream-credit backpressure must NOT
+// evict a healthy peer connection (evicting forces a TLS handshake + resets the
+// MAX_STREAMS credit → starves that peer's heartbeats → candidate parking).
+// CANARY: REQ=REQ-DIST-RAFT-A1-NO-EVICT-BACKPRESSURE; FEATURE="Raft transport backpressure"; ASPECT=SendErrorClassify; STATUS=TESTED; OWNER=distributed; UPDATED=2026-06-08
+test "raft_consensus: OutOfStreams/WouldBlock are transient (no evict); other errors evict" {
+    // Transient backpressure on a healthy connection — keep it.
+    try std.testing.expect(!Transport.shouldEvictOnSendError(error.OutOfStreams));
+    try std.testing.expect(!Transport.shouldEvictOnSendError(error.WouldBlock));
+    // Genuinely-dead connection — evict so the next send rebuilds.
+    try std.testing.expect(Transport.shouldEvictOnSendError(error.ConnectionReset));
+    try std.testing.expect(Transport.shouldEvictOnSendError(error.BrokenPipe));
+    try std.testing.expect(Transport.shouldEvictOnSendError(error.TransportShutdown));
 }
 
 // SEC-D011: Verify connectWithTLS compiles and selects the correct path.
