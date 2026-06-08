@@ -140,11 +140,24 @@ pub const ThreadPoolConfig = struct {
     /// long-lived server: 16 idle workers × 4000 wakes/s each = 64 k
     /// cross-CPU IPIs + TLB flushes/s on an otherwise idle box (see
     /// docs/performance/2026-04-19-qps-closure/step-1-profile.md, which
-    /// attributed ~26 % of samples to this spin storm). Default 10 ms
-    /// here — a submitter still wakes an idle worker via the condvar
-    /// signal path with zero added latency, but idle workers no longer
-    /// burn cycles.
-    idle_park_after_ns: u64 = 10_000_000,
+    /// attributed ~26 % of samples to this spin storm).
+    ///
+    /// 2026-06-08 idle-CPU fix: GAP-0807 set this to 10 ms assuming ~16
+    /// idle workers, but a real single-node server spins up ~800 pool
+    /// workers across all its pools (connection/stream/acceptor/grpc/
+    /// metrics/reaper/group-commit/audit/etc., several sized to CPU count
+    /// on a 56-core box). 800 workers × 100 wakes/s (10 ms) = ~80 k
+    /// futex round-trips/s = ~260 % CPU on a *completely idle* node
+    /// (profiled 2026-06-08; see tests/test_quic_idle_cpu.zig and
+    /// docs/bugs/2026-06-08-idle-node-810pct-cpu-poll-and-pool-spin.md).
+    /// Raise to 500 ms: 800 × 2/s = 1600 futex/s ≈ negligible. SAFE for
+    /// latency — a submitter wakes an idle worker via the condvar signal
+    /// path (notifySubmits) with zero added dispatch latency, and deinit
+    /// broadcasts the condvar so shutdown is not delayed; the timeout is
+    /// only the idle re-poll fallback. geode uses the global_queue
+    /// variant (no inter-worker stealing) so nothing relies on a fast
+    /// idle re-poll.
+    idle_park_after_ns: u64 = 500_000_000,
     /// How long `deinit` waits for in-flight tasks to drain before
     /// giving up and logging a warning.  Upstream default is 30 s —
     /// way too long for per-connection pools on a server where the

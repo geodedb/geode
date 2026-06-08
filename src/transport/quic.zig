@@ -230,6 +230,24 @@ pub const DEFAULT_PORT: u16 = 3141;
 // per-connection locks and starving endpoint polling under high fan-out.
 pub const server_handler_wait_for_poll_ns: u64 = 100 * std.time.ns_per_ms;
 
+// 2026-06-08 idle-CPU fix: poll-loop park duration when there are ZERO live
+// connections. The fast 500us active floor (below, in pollLoop) exists for
+// low-latency packet processing on LIVE connections; with no connections at all
+// nothing arrives on the poll path — new-connection Initials are serviced by the
+// accept loop on its own cadence — so the poll workers can park far longer. This
+// is the fix for the idle node burning ~810% CPU: 16 release poll workers each
+// spin pollOnce(0)+500us, and each pollOnce(0) is NOT cheap — under ReleaseSafe
+// (what prod ships) endpoint.pollWithStats stack-declares a 64×4096 = 256 KB
+// recv batch buffer `= undefined`, which the safety machinery 0xAA-fills on
+// EVERY call. So idle poll cost is dominated by that per-call fill, not the
+// syscall. 250ms => ~4 wakeups/s/worker: 16 × 4 × (256 KB fill) is negligible.
+// New-connection latency is unaffected: the accept loop (its own ~50ms cadence)
+// drains the first handshake packet and bumps active_connection_count, after
+// which the poll workers resume the 500us floor within <=250ms. See
+// tests/test_quic_idle_cpu.zig and the downstream quic-lib issue filed for the
+// 256 KB per-poll fill (which also taxes ACTIVE polling).
+pub const idle_poll_empty_park_ns: u64 = 250 * std.time.ns_per_ms;
+
 // CANARY: REQ=REQ-QUIC-HC-075; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ServerWriteWouldBlockRetry; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 //
 // Under response fan-out, nonblocking UDP sends can return WouldBlock when the
@@ -306,6 +324,12 @@ pub const QuicTransport = struct {
     connections: std.ArrayList(*QuicConnection),
     // GAP-0202: Mutex for thread-safe connection list access in async mode
     connections_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// 2026-06-08 idle-CPU fix: lock-free mirror of `connections.items.len`,
+    /// updated under `connections_mutex` at every add/remove site. Read by the
+    /// poll workers (`pollLoop`) to choose the idle park duration WITHOUT taking
+    /// `connections_mutex` on the hot path. A momentarily stale value is
+    /// harmless — worst case the poll cadence adjusts one cycle late.
+    active_connection_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     /// PERF-D / #816 follow-up: generation counter that is incremented every
     /// time a connection slot is freed (via `destroyConnection`'s swapRemove
     /// or via `drainPendingDestroy` completing a batch). The server's accept
@@ -703,7 +727,19 @@ pub const QuicTransport = struct {
             const cycle_ns = monoNsRaw() -% start_ns;
             self.observePollCycle(stats, cycle_ns, overrun_threshold_ns);
             if (stats.packets_processed == 0) {
-                compat_sleepNs(500 * std.time.ns_per_us);
+                // 2026-06-08 idle-CPU fix: when this cycle drained nothing, park.
+                // With ZERO live connections nothing will arrive on the poll path
+                // (new-connection Initials are serviced by the accept loop on its
+                // own cadence), so park long (idle_poll_empty_park_ns) instead of
+                // 500us — otherwise the 16 release poll workers each spin
+                // pollOnce(0)+500us = ~56% of a core = ~810% on an idle node.
+                // With >=1 live connection keep the 500us low-latency floor so
+                // active connections (even low-QPS ones) are never delayed.
+                const park_ns: u64 = if (self.active_connection_count.load(.monotonic) == 0)
+                    idle_poll_empty_park_ns
+                else
+                    500 * std.time.ns_per_us;
+                compat_sleepNs(park_ns);
             }
         }
         // Final poll to flush any remaining packets on shutdown
@@ -792,6 +828,8 @@ pub const QuicTransport = struct {
             self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             try self.connections.append(self.allocator, wrapper);
+            // 2026-06-08 idle-CPU fix: keep the lock-free count mirror current.
+            self.active_connection_count.store(self.connections.items.len, .monotonic);
             @import("otel_metrics").recordTransportConnectionOpened(.quic);
             return wrapper;
         }
@@ -918,6 +956,8 @@ pub const QuicTransport = struct {
                 self.allocator.destroy(wrapper);
                 return null;
             };
+            // 2026-06-08 idle-CPU fix: keep the lock-free count mirror current.
+            self.active_connection_count.store(self.connections.items.len, .monotonic);
             return wrapper;
         }
         return null;
@@ -946,6 +986,9 @@ pub const QuicTransport = struct {
             }
             idx += 1;
         }
+        // 2026-06-08 idle-CPU fix: keep the lock-free count mirror current so the
+        // poll workers back off to the idle cadence once the last connection goes.
+        self.active_connection_count.store(self.connections.items.len, .monotonic);
         self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // PERF-D / #816 follow-up: signal the admission control waiter that a

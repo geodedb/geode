@@ -73,6 +73,14 @@ pub const Store = struct {
         pool_ptr.* = try thread_pool.ThreadPool.init(allocator, .{
             .min_threads = 2,
             .max_threads = 4,
+            // 2026-06-08 idle-CPU fix: this is the EXT thread_pool (the engine's
+            // init signature requires *thread_pool.ThreadPool), so it does NOT
+            // inherit geode's wrapper default and would otherwise use the upstream
+            // 250µs idle park — 4 workers spinning at ~4000 wakes/s each on an idle
+            // server that never touches timeseries (the Store is created
+            // unconditionally at startup; see src/server/main.zig). Workers wake on
+            // task-submit signal regardless of this timeout, so park long.
+            .idle_park_after_ns = 500 * std.time.ns_per_ms,
         });
         errdefer pool_ptr.deinit();
 

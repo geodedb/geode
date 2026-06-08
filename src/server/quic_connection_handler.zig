@@ -169,6 +169,17 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
 const first_stream_owner_stack_size = 16 * 1024 * 1024;
 const default_detached_first_stream_owner_threads: u32 = if (builtin.mode == .Debug) 64 else 256;
 const first_stream_scheduler_idle_sweep_ns: u64 = 10 * std.time.ns_per_ms;
+// 2026-06-08 idle-CPU fix: when the scheduler has ZERO contexts (no active
+// streams), the 10ms idle sweep has nothing to do — shouldSweepIdleContextsLocked
+// returns false at contexts.len==0 — so 512 cooperative workers each waking every
+// 10ms is pure waste (~51k futex round-trips/s = the dominant idle-node CPU cost
+// after the QUIC poll-loop fix; profiled 2026-06-08, see
+// docs/bugs/2026-06-08-idle-node-810pct-cpu-poll-and-pool-spin.md). enqueueReady
+// bumps ready_generation + futexWakes (and shutdown broadcasts), so new work
+// wakes a worker immediately regardless of this timeout; the missed-wake sweep it
+// gates is only meaningful when contexts already exist. Park this long instead of
+// the 10ms sweep cadence whenever there are no contexts: 512 × 1/s = ~512 futex/s.
+const first_stream_scheduler_idle_park_ns: u64 = 1 * std.time.ns_per_s;
 const first_stream_scheduler_turn_delay_per_excess_ns: u64 = 2 * std.time.ns_per_us;
 const first_stream_scheduler_turn_delay_cap_ns: u64 = std.time.ns_per_ms;
 const first_stream_mutation_offload_worker_cap: usize = if (builtin.mode == .Debug) 8 else 64;
@@ -3226,10 +3237,20 @@ pub const FirstStreamScheduler = struct {
             }
 
             const observed = self.ready_generation.load(.acquire);
+            // 2026-06-08 idle-CPU fix: read the context count while still holding
+            // the lock so the timeout choice is consistent. With no contexts the
+            // 10ms sweep is a no-op, so park long (see
+            // first_stream_scheduler_idle_park_ns); with contexts present keep the
+            // 10ms sweep cadence for the missed-wake recovery path above.
+            const has_contexts = self.contexts.items.len != 0;
             self.mutex.unlock(io);
 
+            const wait_ns: u64 = if (has_contexts)
+                first_stream_scheduler_idle_sweep_ns
+            else
+                first_stream_scheduler_idle_park_ns;
             const timeout: std.Io.Timeout = .{ .duration = .{
-                .raw = std.Io.Duration.fromNanoseconds(first_stream_scheduler_idle_sweep_ns),
+                .raw = std.Io.Duration.fromNanoseconds(wait_ns),
                 .clock = .awake,
             } };
             io.futexWaitTimeout(u32, &self.ready_generation.raw, observed, timeout) catch |err| switch (err) {
