@@ -1157,6 +1157,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/server/cli_args.zig"),
         .target = target,
         .optimize = optimize,
+        // cli_args uses std.c.getenv (Zig 0.16 removed std.posix.getenv — see the
+        // posixGetenv wrapper in cli_args.zig) for env vars like GEODE_STRICT_TENANCY,
+        // so any test artifact compiling it must link libc. Set it on the shared
+        // module so both cli_args_cluster_tests and custom_tests (all_tests.zig) link it.
+        .link_libc = true,
     });
     cli_args_mod.addImport("config", config_mod);
     cli_args_mod.addImport("build_options", build_options_mod);
