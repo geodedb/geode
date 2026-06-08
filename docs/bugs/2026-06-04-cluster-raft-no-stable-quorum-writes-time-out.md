@@ -231,6 +231,50 @@ built-in signal to assert against.
 
 ---
 
+## ⚠️ Phase 1 of the #5 fix on real k8s (2026-06-08, `dev` = `v0.6.25-4-g1d691968`)
+
+Tested the dev build that contains **Phase 1** of the stream-starvation fix
+(`0d66594d fix(raft): don't evict peer connection on transient OutOfStreams
+backpressure`, per `c4906117 docs(plan): phased fix …`) on the real arda 3-pod
+cluster.
+
+- **Phase 1 does what it says — the transport churn is GONE.** Across multiple
+  steady-state windows, **0** `OutOfStreams`, **0** `evicting cached peer`, **0**
+  `HandshakeError`, **0** `QUIC poll cycle slow` on all three pods (was
+  `OutOfStreams=14`/`HandshakeError=19` per 120s on 0.6.25). The evict-loop is
+  fixed.
+- **But the cluster now fails to converge at all — a regression in outcome.**
+  Across two clean fresh-PVC boots it never reached a healthy 3-node state, and at
+  least one node was always isolated **with 0 transport errors**:
+  - boot 1: `geode-1` a partitioned leader stuck at `term=2` while `geode-0`
+    (candidate) and `geode-2` climbed terms together to **22+** without electing a
+    leader between themselves (and never delivering the higher term to the stuck
+    `geode-1`);
+  - boot 2: `geode-2` leader `term=1`, `geode-1` stuck `candidate term=1`,
+    `geode-0` stuck `candidate term=0` (never advanced — never joined).
+  No functional quorum, no replication possible. 0.6.25 (without Phase 1) was
+  strictly *better* here: it formed a stable leader + 1 follower and replicated to
+  2/3 (degraded, but usable).
+- **Likely cause — Phase 1 traded "churn" for "stall".** Without eviction, a
+  stream-exhausted / wedged peer connection is now *kept*, and — because the
+  stream-multiplexing phase isn't in yet (still one stream per RPC, single
+  `waitForHandshake`-blocking outbox drain) — raft frames to that peer **silently
+  stall** instead of churning. The old evict+re-handshake at least pushed *some*
+  frames through (that's how 0.6.25 kept 2/3 replicating); now a peer simply stops
+  getting heartbeats/votes and isolates, with nothing logged (no error, no
+  eviction). So Phase 1 is necessary but not sufficient: the later phase — a
+  **bounded set of long-lived multiplexed QUIC streams per peer** with a
+  non-blocking drain (don't serialize all sends behind `waitForHandshake`, and
+  refresh a genuinely-wedged connection on a liveness signal rather than on
+  `OutOfStreams`) — is what actually has to deliver the frames.
+
+Repro is deterministic (the *which* node isolates varies per boot; *that* one
+isolates does not). Reproduce in the netns harness by exhausting a peer's stream
+budget under sustained AppendEntries load and asserting all three nodes hold a
+single leader + a leader write reaches both followers.
+
+---
+
 ## TL;DR
 
 After every TLS/identity prerequisite is satisfied and a leader is elected, the 3-node cluster **will not stay converged and will not commit writes**:
