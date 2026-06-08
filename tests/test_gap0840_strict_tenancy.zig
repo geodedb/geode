@@ -232,6 +232,54 @@ test "GAP-0840 (bypass): strict mode REJECTS unscoped top-K ordered fast-path" {
     );
 }
 
+// ===========================================================================
+// Over-rejection regression (GAP-0840 narrowing).
+//
+// 177af0b8 placed `resolveTenantFilter(context.tenant_id)` UNCONDITIONALLY at
+// the top of `executeQueryWithContext`, BEFORE checking whether the query
+// touches graph data. In strict mode that wrongly rejected tenant-AGNOSTIC,
+// store-free scalar queries (`RETURN 1`, the `RETURN 1 AS x` liveness probe)
+// with error.TenantScopeRequired — even though they read NO tenant-scoped data.
+//
+// Strict mode must reject tenant-scoped GRAPH-DATA reads without a tenant, NOT
+// tenant-agnostic scalar queries. These cases drive a real parser + executor
+// through `executeStatementWithContext` with an UNSET session tenant under
+// strict mode and assert the scalar RETURN SUCCEEDS (returns its row).
+//
+// Pre-fix (unconditional resolve) these FAIL with error.TenantScopeRequired
+// (RED). Post-fix (resolve gated on `q.match.chains.len > 0`) they SUCCEED
+// (GREEN). Real parser, real executor — no mocks.
+// ===========================================================================
+
+test "GAP-0840 (over-reject): strict mode ALLOWS store-free RETURN 1 AS x" {
+    defer resetTenancyFlag();
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    // Strict ON + UNSET session tenant. `RETURN 1 AS x` has no MATCH chain and
+    // reads no tenant-scoped data, so it must NOT be rejected.
+    tenancy.setStrictTenancy(true);
+    var res = try h.runQuery("RETURN 1 AS x");
+    defer res.deinit(h.arena.allocator());
+
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expectEqual(@as(usize, 1), res.rows[0].len);
+    try testing.expectEqual(@as(i64, 1), res.rows[0][0].Int);
+}
+
+test "GAP-0840 (over-reject): strict mode ALLOWS bare RETURN 1" {
+    defer resetTenancyFlag();
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    tenancy.setStrictTenancy(true);
+    var res = try h.runQuery("RETURN 1");
+    defer res.deinit(h.arena.allocator());
+
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expectEqual(@as(i64, 1), res.rows[0][0].Int);
+}
+
 test "GAP-0840 (no-regress): non-strict mode still serves unscoped count fast-path" {
     defer resetTenancyFlag();
     resetTenancyFlag(); // explicitly OFF

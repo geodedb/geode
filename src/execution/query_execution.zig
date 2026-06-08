@@ -1603,29 +1603,45 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // `match_operations.countNodesFastPath` and
     // docs/audit/bugfix-shell-count-nodes-triage.md for the full rationale.
     const count_pushdown_graph = if (context.session_state) |session| session.graph orelse "default" else "default";
-    // GAP-0840: route the fast-path tenant scope through the shared strict-tenancy
-    // decision instead of computing it inline. The old inline
-    // `if tid==DEFAULT_TENANT_ID null else tid` footgun silently widened an
-    // unscoped/"default" session to ALL tenants for count/sum/avg/top-K. In
-    // strict mode `resolveTenantFilter` now returns `error.TenantScopeRequired`,
-    // and `try` propagates that rejection to the wire instead of leaking
-    // cross-tenant aggregates.
-    const count_pushdown_tenant = try tenancy.resolveTenantFilter(context.tenant_id);
-    if (try match_operations.countNodesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
-        return fast_result;
-    }
-    // GAP-0811 Task 2.2: property-aggregate fast-path
-    // (`sum/avg/min/max(p.<key>)`) — skips materializeNode and reads only
-    // the aggregated property (plus optional WHERE property).
-    if (try match_operations.propertyAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
-        return fast_result;
-    }
-    // GAP-0812 Task 3.1: bounded-heap streaming top-K for
-    // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> LIMIT K` — walks the
-    // label posting list once with a K-bounded heap over the ordered
-    // property, skipping materialize-every-node + full-sort + trim.
-    if (try match_operations.topKOrderedFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
-        return fast_result;
+    // GAP-0840: the count / property-aggregate / top-K fast paths below all read
+    // tenant-scoped GRAPH DATA, and each requires `q.match.chains.len == 1` (a
+    // MATCH over a label) as a precondition — see
+    // `analyzeCountFastPath` / `propertyAggregateFastPath` / `topKOrderedFastPath`
+    // in match_operations.zig. We therefore resolve the tenant scope through the
+    // shared strict-tenancy decision ONLY when the query actually has a MATCH
+    // pattern (graph-data access), gating the whole fast-path block on
+    // `q.match.chains.len > 0`.
+    //
+    // This narrowing fixes GAP-0840 over-rejection: a tenant-AGNOSTIC, store-free
+    // query (`RETURN 1`, the `RETURN 1 AS x` liveness probe, any bare scalar
+    // RETURN) has NO MATCH chain, so it must NOT call `resolveTenantFilter` and
+    // must NOT be rejected in strict mode.
+    //
+    // It does NOT reopen the bypass that 177af0b8 closed: the gate is precisely
+    // the precondition that lets any fast path fire (without a MATCH chain all
+    // three `*FastPath` calls return null anyway), so every genuine
+    // count/sum/avg/min/max/top-K read over a label still flows through
+    // `resolveTenantFilter` and `try`-propagates `error.TenantScopeRequired` in
+    // strict mode. The normal (non-fast-path) MATCH read remains guarded by
+    // `getSessionTenantFilter` -> `resolveTenantFilter` downstream.
+    if (q.match.chains.len > 0) {
+        const count_pushdown_tenant = try tenancy.resolveTenantFilter(context.tenant_id);
+        if (try match_operations.countNodesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
+        // GAP-0811 Task 2.2: property-aggregate fast-path
+        // (`sum/avg/min/max(p.<key>)`) — skips materializeNode and reads only
+        // the aggregated property (plus optional WHERE property).
+        if (try match_operations.propertyAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
+        // GAP-0812 Task 3.1: bounded-heap streaming top-K for
+        // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> LIMIT K` — walks the
+        // label posting list once with a K-bounded heap over the ordered
+        // property, skipping materialize-every-node + full-sort + trim.
+        if (try match_operations.topKOrderedFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
     }
 
     // REQ-RLS-DDL-001 / GAP-0510: planned_read_runtime.executeIfSupported is
