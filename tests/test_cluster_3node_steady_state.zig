@@ -186,6 +186,81 @@ fn lastState(buf: []const u8, id: usize) struct { role: ?[]const u8, term: i64 }
     return .{ .role = role, .term = term };
 }
 
+/// Robust teardown: SIGTERM each node, then keep draining its stdout+stderr
+/// pipe while polling for exit, with a SIGKILL fallback after a deadline.  This
+/// avoids the teardown deadlock where `Child.kill` (SIGTERM + a BLOCKING wait4,
+/// no SIGKILL fallback in Zig 0.16) hangs forever because the node can't finish
+/// its graceful shutdown while a logging thread is blocked on a full pipe that
+/// nobody is draining.  Reaps each child so no zombie is left.
+/// Non-blocking reap. Returns true once `pid` has been collected.  The raw
+/// linux `waitpid` returns the child pid on a successful reap, 0 when the child
+/// is still alive (WNOHANG), or a negative errno otherwise.
+fn tryReap(pid: i32, flags: u32) bool {
+    var status: u32 = undefined;
+    const rc = std.os.linux.waitpid(pid, &status, flags);
+    return @as(isize, @bitCast(rc)) > 0;
+}
+
+fn teardownNodes(children: []std.process.Child, captures: []Capture, spawned: usize, gpa: std.mem.Allocator, io: std.Io) void {
+    // Phase 1: SIGTERM and keep draining pipes so a node's graceful-shutdown
+    // logging never blocks on a full pipe.  Poll (non-blocking) for exit.
+    for (children[0..spawned]) |*ch| {
+        if (ch.id) |pid| std.posix.kill(pid, std.posix.SIG.TERM) catch {};
+    }
+    const term_deadline = nowMillis() + 5_000;
+    while (nowMillis() < term_deadline) {
+        drainAll(captures, children, gpa, io);
+        var all_gone = true;
+        for (children[0..spawned]) |*ch| {
+            if (ch.id == null) continue;
+            if (tryReap(ch.id.?, std.os.linux.W.NOHANG)) {
+                ch.id = null; // reaped
+            } else {
+                all_gone = false;
+            }
+        }
+        if (all_gone) break;
+        sleepMs(100);
+    }
+    // Phase 2: SIGKILL + blocking reap anything that ignored SIGTERM.
+    for (children[0..spawned]) |*ch| {
+        if (ch.id) |pid| {
+            std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            _ = tryReap(pid, 0);
+            ch.id = null;
+        }
+    }
+    // Close the inherited pipe FDs so the test process leaks none.
+    for (children[0..spawned]) |*ch| {
+        if (ch.stdout) |f| {
+            f.close(io);
+            ch.stdout = null;
+        }
+        if (ch.stderr) |f| {
+            f.close(io);
+            ch.stderr = null;
+        }
+        if (ch.stdin) |f| {
+            f.close(io);
+            ch.stdin = null;
+        }
+    }
+}
+
+/// Continuously drain every node's stdout+stderr pipe.  CRITICAL: the three
+/// `--log-level info` nodes keep logging throughout the replication phases; if
+/// the harness ever stops reading, a node's pipe buffer (64 KiB) fills, its
+/// logging thread blocks in `pipe_write`, and the whole node stalls — which both
+/// spuriously fails replication AND wedges teardown (`ch.kill` → `do_wait` while
+/// the node can't exit on a blocked pipe).  Call this inside every sleep in the
+/// replication/hold loops, not just startup.
+fn drainAll(captures: []Capture, children: []std.process.Child, gpa: std.mem.Allocator, io: std.Io) void {
+    for (children, 0..) |*ch, i| {
+        if (ch.stdout) |f| captures[i].drain(gpa, io, f);
+        if (ch.stderr) |f| captures[i].drain(gpa, io, f);
+    }
+}
+
 /// Index of the node whose last observed raft state is "leader", or null.
 fn currentLeaderIdx(captures: []const Capture) ?usize {
     var idx: ?usize = null;
@@ -217,13 +292,15 @@ fn assertReplicatesToHealthyFollowers(
     gpa: std.mem.Allocator,
     io: std.Io,
     aa: std.mem.Allocator,
-    captures: []const Capture,
+    captures: []Capture,
+    children: []std.process.Child,
     label: []const u8,
     create_q: []const u8,
 ) !void {
     const read_q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN count(n) AS c", .{label});
     var attempt: usize = 0;
     const li: usize = while (attempt < 12) : (attempt += 1) {
+        drainAll(captures, children, gpa, io);
         const idx = currentLeaderIdx(captures) orelse {
             sleepMs(500);
             continue;
@@ -259,6 +336,7 @@ fn assertReplicatesToHealthyFollowers(
     var poll: usize = 0;
     while (poll < 18) : (poll += 1) {
         sleepMs(1000);
+        drainAll(captures, children, gpa, io);
         var got: usize = 0;
         for (0..3) |fi| {
             if (fi == li or !isNodeHealthy(captures, fi)) continue;
@@ -303,10 +381,14 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
 
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;
-    defer for (children[0..spawned]) |*ch| ch.kill(io);
-
     var captures: [3]Capture = .{ .{}, .{}, .{} };
+    // Free the capture buffers LAST (registered first → runs last, LIFO).
     defer for (&captures) |*c| c.buf.deinit(gpa);
+    // Robust teardown (drains pipes while terminating, SIGKILL fallback) so a
+    // node blocked on a full log pipe can't wedge `Child.kill`'s blocking wait.
+    // Registered last → runs FIRST, so it can still drain into the (not-yet-
+    // freed) capture buffers.
+    defer teardownNodes(&children, &captures, spawned, gpa, io);
 
     for (0..3) |i| {
         const ip = NODE_IPS[i];
@@ -441,7 +523,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     // catches the re-open's "leader-only" divergence. The write is sent to the
     // CURRENT leader (re-resolved, retry on a leadership move) so the assertion
     // measures replication, not a leadership race.
-    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, "ReplTest", "CREATE (:ReplTest {v:1})");
+    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, &children, "ReplTest", "CREATE (:ReplTest {v:1})");
 
     // Phase 4 — REPLICATION OF A `CREATE ... RETURN` (re-open regression).
     // A `CREATE (...) RETURN ...` reaches the executor via the query path, which
@@ -451,7 +533,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     // (crud_operations.zig::clusterReplicateNodeCreate) now replicates a
     // RETURN-create through Raft and evaluates the constant RETURN. Assert it
     // lands on every healthy follower.
-    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, "ReplRet", "CREATE (:ReplRet {v:2}) RETURN 1");
+    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, &children, "ReplRet", "CREATE (:ReplRet {v:2}) RETURN 1");
 
     // Phase 5 — FOLLOWER WRITES MUST FAIL CLOSED (re-open regression). A write
     // sent to a FOLLOWER previously fell through to that follower's local store
@@ -476,6 +558,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     };
     defer gpa.free(rej_out);
     sleepMs(1500);
+    drainAll(&captures, &children, gpa, io);
     // The follower must NOT have applied the write locally (the divergence bug).
     const fr_read = runQuery(gpa, io, aa, follower_ip, "MATCH (n:FollowerReject) RETURN count(n) AS c") catch return error.FollowerWriteProbeFailed;
     defer gpa.free(fr_read);

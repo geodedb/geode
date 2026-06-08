@@ -282,9 +282,10 @@ pub const RpcClient = struct {
     }
 };
 
-/// Task A6e (2026-05-26 plan): one queued outbound raft RPC.  Owned by
-/// `Transport.outbox`; freed by `freeOutboundMessage` once the dispatch
-/// thread has written it to the wire (or determined the peer is
+/// Task A6e (2026-05-26 plan), repartitioned per-peer by A2 (2026-06-08): one
+/// queued outbound raft RPC.  Owned by the destination peer's
+/// `Transport.PeerDrain.queue`; freed by `freeOutboundMessage` once that peer's
+/// drain thread has written it to the wire (or determined the peer is
 /// permanently unreachable).
 pub const OutboundEntry = struct {
     peer: Peer,
@@ -320,41 +321,47 @@ pub const Transport = struct {
     peers: std.AutoHashMap(u64, *PeerConnection) = undefined,
     peers_initialized: bool = false,
 
-    /// Task A6e (2026-05-26 distributed cluster testing plan):
-    /// Outbound message queue.  The raft library's `sendMsg` vtable
-    /// callback fires synchronously from inside `inner.step()` /
-    /// `inner.tick()` while the wrapper's `inner_mutex` is held; if
-    /// `sendMsg` performs blocking QUIC I/O (handshake, write, poll)
-    /// inline, the mutex stays held for the entire round-trip and the
-    /// inbound dispatch thread can't deliver vote / heartbeat responses
-    /// until the next tick releases the lock.  Subprocess election
-    /// runs (live-fire 2026-05-26) showed nodes stuck in candidate/
-    /// follower churn for 30s+ with terms climbing 1 → 9 because the
-    /// receive thread was starved.
+    /// Task A6e (2026-05-26 distributed cluster testing plan), reworked into
+    /// PER-PEER queues by Task A2 (2026-06-08 raft-transport-stream-starvation
+    /// plan).  The raft library's `sendMsg` vtable callback fires synchronously
+    /// from inside `inner.step()` / `inner.tick()` while the wrapper's
+    /// `inner_mutex` is held; if `sendMsg` performs blocking QUIC I/O inline the
+    /// mutex stays held for the entire round-trip and the inbound dispatch
+    /// thread can't deliver vote / heartbeat responses until the next tick.  So
+    /// each outbound message is enqueued (cheap copy) and drained OUTSIDE the
+    /// inner_mutex on a dedicated worker thread.
     ///
-    /// The fix: enqueue each outbound message here from the bridge
-    /// (cheap — just a copy of the geode `Message`) and drain on a
-    /// dedicated worker thread that runs OUTSIDE the inner_mutex.
-    /// `Transport.send` (and the underlying QUIC write + poll) only
-    /// touches `outbox_mutex`, so the raft loop never has to wait on
-    /// network I/O while holding raft state locks.
-    outbox_mutex: std.Io.Mutex = std.Io.Mutex.init,
-    outbox: std.ArrayList(OutboundEntry) = .empty,
-    outbox_initialized: bool = false,
+    /// A2 (k8s root cause #5): a SINGLE serial drain thread sends every peer's
+    /// messages through `send`, and `send → getOrCreatePeerConnection →
+    /// waitForHandshake(1)` can BLOCK ~1s on one slow/unreachable peer.  At
+    /// election time that serial blocking stalls votes/heartbeats to EVERY peer
+    /// → no leader is elected → the cluster can't converge.  The fix is one send
+    /// queue + one dedicated drain thread PER peer, so a blocking send to a slow
+    /// peer is isolated to that peer's thread and never delays another peer's
+    /// votes/heartbeats.  Peers are stable for a cluster's lifetime, so the
+    /// per-peer drains are created lazily on first enqueue and live until
+    /// `stopOutboxDrain` / `deinit`.
+    ///
+    /// Lock ordering: `peer_drains_mutex` (the map guard) is a LEAF lock held
+    /// only for brief get-or-create lookups + the one-time thread spawn — it is
+    /// NEVER held while doing a network `send`/handshake (the drain loop
+    /// releases its own per-peer `PeerDrain.mutex` before calling `send`, and
+    /// never touches the map mutex on the hot path).  Each `PeerDrain.mutex` is
+    /// likewise a leaf lock guarding only that peer's queue snapshot-and-swap.
+    peer_drains_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    peer_drains: std.AutoHashMap(u64, *PeerDrain) = undefined,
+    peer_drains_initialized: bool = false,
 
-    /// Task A6e: dedicated outbox-drain thread.  Spawned by
-    /// `startOutboxDrain` (called from `ClusterCoordinator.start` once
-    /// the cluster QUIC listener is up) and joined by `stopOutboxDrain`
-    /// before `Transport.deinit` runs.  The thread polls the outbox on
-    /// a tight loop (Zig 0.16 dropped `Condition.timedWait`, so we use
-    /// a 1ms nanosleep between snapshots — vastly cheaper than the
-    /// previous 10-30 ms / tick inner_mutex stall, and the actual
-    /// wakeup latency on a queued message is dominated by the QUIC
-    /// poll cadence anyway).  Decoupled from the raft tick so that
-    /// even a 100 ms TLS handshake on first connect doesn't stall
-    /// election progress.
-    outbox_thread: ?std.Thread = null,
+    /// Global cancellation flag for ALL per-peer drain threads.  Set by
+    /// `stopOutboxDrain` / `deinit`; checked by `enqueueOutbound` (reject new
+    /// work), each per-peer drain loop, and `send` (reject after shutdown).
+    /// `startOutboxDrain` is the lifecycle gate: while false, lazy per-peer
+    /// drains may be created on enqueue.
     outbox_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// True between `startOutboxDrain` and `stopOutboxDrain`.  Gates lazy
+    /// per-peer drain creation so a stray enqueue before start / after stop
+    /// never spawns an orphaned thread.
+    outbox_running: bool = false,
 
     /// Task A6e: dedicated client-side poll thread.  The QUIC vendor
     /// library buffers outbound bytes until `poll()` is invoked on the
@@ -425,42 +432,66 @@ pub const Transport = struct {
         }
     };
 
+    /// Task A2 (2026-06-08): a single peer's send queue + dedicated drain
+    /// thread.  One of these exists per destination peer for the cluster's
+    /// lifetime (created lazily on first enqueue, joined+freed at shutdown).
+    /// Its `mutex` is a LEAF lock guarding only the queue snapshot-and-swap; it
+    /// is released before the drain loop calls `send`, so a blocking send to
+    /// this peer never holds any lock and never delays another peer's drain.
+    pub const PeerDrain = struct {
+        mutex: std.Io.Mutex = std.Io.Mutex.init,
+        queue: std.ArrayList(OutboundEntry) = .empty,
+        thread: ?std.Thread = null,
+        /// Per-peer shutdown.  Set (alongside the global `outbox_shutdown`) by
+        /// `stopOutboxDrain`/`deinit` so the loop exits promptly.
+        shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        /// Back-pointer so the spawned thread can reach `Transport.send` and the
+        /// global `outbox_shutdown` without a separate context allocation.
+        transport: *Transport = undefined,
+        peer_id: u64 = 0,
+    };
+
     pub fn init(allocator: Allocator) Transport {
         return .{
             .allocator = allocator,
             .peers_mutex = std.Io.Mutex.init,
             .peers = std.AutoHashMap(u64, *PeerConnection).init(allocator),
             .peers_initialized = true,
-            .outbox_mutex = std.Io.Mutex.init,
-            .outbox = .empty,
-            .outbox_initialized = true,
-            .outbox_thread = null,
+            .peer_drains_mutex = std.Io.Mutex.init,
+            .peer_drains = std.AutoHashMap(u64, *PeerDrain).init(allocator),
+            .peer_drains_initialized = true,
             .outbox_shutdown = std.atomic.Value(bool).init(false),
+            .outbox_running = false,
             .client_poll_thread = null,
             .client_poll_shutdown = std.atomic.Value(bool).init(false),
         };
     }
 
     pub fn deinit(self: *Transport) void {
-        // Task A6e: stop the dispatch threads BEFORE we tear down the
-        // peer map.  Both threads read `self.peers` (outbox via
-        // `getOrCreatePeerConnection`, client poll via direct iteration)
-        // so freeing entries while they were still running would race.
+        // Task A6e/A2: stop the dispatch threads BEFORE we tear down the peer
+        // map.  Both the per-peer drain threads (`getOrCreatePeerConnection`)
+        // and the client poll thread (direct `self.peers` iteration) touch the
+        // connection pool, so freeing entries while they ran would race.
+        // `stopOutboxDrain` joins every per-peer drain thread, drains+frees its
+        // queue, and removes+frees its `PeerDrain` — leaving the map empty.
         self.stopOutboxDrain();
         self.stopClientPoll();
 
-        // Task A6e: drop any messages still sitting in the outbox.
-        // Conversion-allocated slices inside each `Message` (today only
-        // `append_entries.entries`) are freed via `freeOutboundMessage`.
-        if (self.outbox_initialized) {
+        if (self.peer_drains_initialized) {
             const io = std.Io.Threaded.global_single_threaded.io();
-            self.outbox_mutex.lockUncancelable(io);
-            for (self.outbox.items) |*entry| {
-                freeOutboundMessage(self.allocator, entry.msg);
+            self.peer_drains_mutex.lockUncancelable(io);
+            // stopOutboxDrain already joined+freed every PeerDrain, but defend
+            // against a deinit without a matching start (the map is then empty).
+            var it = self.peer_drains.iterator();
+            while (it.next()) |entry| {
+                const pd = entry.value_ptr.*;
+                for (pd.queue.items) |*qe| freeOutboundMessage(self.allocator, qe.msg);
+                pd.queue.deinit(self.allocator);
+                self.allocator.destroy(pd);
             }
-            self.outbox.deinit(self.allocator);
-            self.outbox_initialized = false;
-            self.outbox_mutex.unlock(io);
+            self.peer_drains.deinit();
+            self.peer_drains_initialized = false;
+            self.peer_drains_mutex.unlock(io);
         }
 
         if (self.peers_initialized) {
@@ -478,36 +509,84 @@ pub const Transport = struct {
         self.server = null;
     }
 
-    /// Task A6e: append an outbound message to the queue.  Called from
-    /// the bridge `sendImpl` while the wrapper's `inner_mutex` is held.
-    /// Cheap — just a hashmap-free vec append under `outbox_mutex`.
-    /// The actual QUIC write happens later on the dispatch thread.
+    /// Task A2: get-or-create the `PeerDrain` for `peer_id`, spawning its
+    /// dedicated drain thread when the transport is running.  Holds
+    /// `peer_drains_mutex` only for the map lookup/insert + the (fast,
+    /// non-blocking) thread spawn — NEVER across a network send.  Returns null
+    /// only after `stopOutboxDrain` has flipped `outbox_shutdown`, in which case
+    /// the caller drops the message (the raft library re-sends next tick).
+    ///
+    /// The PeerDrain (queue) is created even before `startOutboxDrain` so the
+    /// synchronous `snapshotOutbox`/`flushOutboxBlocking` path (and the in-
+    /// process A5 test) can enqueue+flush without a running thread; the thread
+    /// is spawned lazily once `outbox_running` is set (here, or retroactively by
+    /// `startOutboxDrain` for any pre-created drains).
+    fn getOrCreatePeerDrain(self: *Transport, peer_id: u64) !?*PeerDrain {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peer_drains_mutex.lockUncancelable(io);
+        defer self.peer_drains_mutex.unlock(io);
+        // Re-check under the lock so we never spawn a drain that
+        // `stopOutboxDrain` (which also takes the map mutex) won't join.
+        if (self.outbox_shutdown.load(.acquire)) return null;
+
+        const pd = self.peer_drains.get(peer_id) orelse blk: {
+            const fresh = try self.allocator.create(PeerDrain);
+            errdefer self.allocator.destroy(fresh);
+            fresh.* = .{
+                .queue = .empty,
+                .thread = null,
+                .shutdown = std.atomic.Value(bool).init(false),
+                .transport = self,
+                .peer_id = peer_id,
+            };
+            try self.peer_drains.put(peer_id, fresh);
+            break :blk fresh;
+        };
+
+        // Spawn the dedicated drain thread on first use while running.  Spawning
+        // is fast and takes no geode lock, so doing it under `peer_drains_mutex`
+        // does not violate the "no send under the map mutex" rule.
+        if (self.outbox_running and pd.thread == null) {
+            pd.shutdown.store(false, .release);
+            pd.thread = try std.Thread.spawn(.{}, peerDrainEntry, .{@as(?*anyopaque, @ptrCast(pd))});
+        }
+        return pd;
+    }
+
+    /// Task A6e/A2: append an outbound message to the OWNING PEER's queue.
+    /// Called from the bridge `sendImpl` while the wrapper's `inner_mutex` is
+    /// held — cheap: a get-or-create lookup + a vec append under that peer's
+    /// leaf mutex.  The actual QUIC write happens later on that peer's drain
+    /// thread, isolated from every other peer.
+    ///
+    /// Lifecycle contract: producers (the raft loop) must be quiesced before
+    /// `stopOutboxDrain` frees the per-peer drains — `ClusterCoordinator.stop`
+    /// guarantees this by joining `raft_pool` before calling `stopOutboxDrain`.
+    /// (Same invariant the single-outbox design relied on.)
     pub fn enqueueOutbound(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
         if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.outbox_mutex.lockUncancelable(io);
-        defer self.outbox_mutex.unlock(io);
-        if (self.outbox_shutdown.load(.acquire)) return error.TransportShutdown;
+        const pd = (try self.getOrCreatePeerDrain(peer.id)) orelse return error.TransportShutdown;
 
-        // Coalesce AppendEntries per peer (2026-06-04 cluster write-replication
-        // BLOCKER).  The raft tick enqueues an AppendEntries to every peer on a
-        // short cadence; if the dedicated drain thread can't keep up (e.g. a
-        // multi-peer cluster, or a peer paying a slow QUIC handshake), the
-        // outbox grows an unbounded backlog of stale heartbeats.  A freshly
-        // PROPOSED entry's AppendEntries is enqueued at the TAIL of that
-        // backlog and is drained/encoded minutes later — or never before the
-        // leader steps down — so the write never replicates even though the
-        // raft library produced it correctly.  AppendEntries is idempotent and
-        // cumulative: a newer one to peer X strictly supersedes any older
-        // still-pending one (it reflects the current log + commit index), so we
-        // replace the pending entry in place rather than append.  This bounds
-        // the outbox to ~one AppendEntries per peer and guarantees the entry
-        // a leader just proposed is the one on the wire next tick.  Votes,
-        // responses and snapshots are never coalesced — each is distinct.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        pd.mutex.lockUncancelable(io);
+        defer pd.mutex.unlock(io);
+
+        // Coalesce AppendEntries within THIS peer's queue (2026-06-04 cluster
+        // write-replication BLOCKER).  The raft tick enqueues an AppendEntries
+        // to every peer on a short cadence; if this peer's drain thread can't
+        // keep up (e.g. it is paying a slow QUIC handshake), the queue would
+        // grow an unbounded backlog of stale heartbeats and a freshly PROPOSED
+        // entry's AppendEntries would sit at the TAIL, draining minutes later —
+        // or never before the leader steps down.  AppendEntries is idempotent
+        // and cumulative: a newer one to this peer strictly supersedes any older
+        // still-pending one, so we replace it in place.  This bounds the queue
+        // to ~one AppendEntries.  Votes, responses and snapshots are distinct
+        // and never coalesced.  (Now a per-peer scan — strictly smaller than
+        // the old global scan.)
         switch (msg) {
             .append_entries => {
-                for (self.outbox.items) |*existing| {
-                    if (existing.peer.id == peer.id and existing.msg == .append_entries) {
+                for (pd.queue.items) |*existing| {
+                    if (existing.msg == .append_entries) {
                         freeOutboundMessage(self.allocator, existing.msg);
                         existing.* = .{ .peer = peer, .from = from, .term = term, .msg = msg };
                         return;
@@ -517,35 +596,51 @@ pub const Transport = struct {
             else => {},
         }
 
-        try self.outbox.append(self.allocator, .{ .peer = peer, .from = from, .term = term, .msg = msg });
-        // Dispatch thread polls every 1 ms so we don't need a condvar
-        // signal here; the wakeup latency floor (1 ms) is still 10×
-        // faster than the pre-A6e synchronous-poll path (10 ms / send).
+        try pd.queue.append(self.allocator, .{ .peer = peer, .from = from, .term = term, .msg = msg });
+        // The peer's drain thread polls every 2 ms, so no condvar signal is
+        // needed; the wakeup-latency floor stays well under the heartbeat
+        // budget (50 ms).
     }
 
-    /// Task A6e: snapshot-and-swap drain.  Used by the dedicated
-    /// dispatch thread to pull a batch out of the outbox without
-    /// holding `outbox_mutex` for the duration of each network write.
-    /// Returns an owned slice that the caller must `deinit` and whose
-    /// `msg` fields must be freed via `freeOutboundMessage` after
-    /// dispatch.  Callers running on the raft-loop hot path should
-    /// instead let the background thread handle drain; this entry
-    /// point exists so test scaffolding (and in-process drain) can
-    /// flush synchronously.
+    /// Task A6e/A2: snapshot-and-swap the combined backlog across ALL per-peer
+    /// queues.  Used by the synchronous test/in-process path via
+    /// `flushOutboxBlocking` (and the legacy A5b dispatch test).  Returns an
+    /// owned slice the caller must `deinit` and whose `msg` fields must be freed
+    /// via `freeOutboundMessage`.  Production code lets each peer's drain thread
+    /// do the work; this entry point exists so tests can flush synchronously.
     pub fn snapshotOutbox(self: *Transport) std.ArrayList(OutboundEntry) {
         const io = std.Io.Threaded.global_single_threaded.io();
-        self.outbox_mutex.lockUncancelable(io);
-        defer self.outbox_mutex.unlock(io);
-        const snap = self.outbox;
-        self.outbox = .empty;
+        var snap: std.ArrayList(OutboundEntry) = .empty;
+        if (!self.peer_drains_initialized) return snap;
+        self.peer_drains_mutex.lockUncancelable(io);
+        defer self.peer_drains_mutex.unlock(io);
+        var it = self.peer_drains.iterator();
+        while (it.next()) |entry| {
+            const pd = entry.value_ptr.*;
+            pd.mutex.lockUncancelable(io);
+            for (pd.queue.items) |qe| {
+                // On OOM here we'd leak the queued msg; appendBounded would be
+                // worse (silent drop). Use a best-effort append and free on
+                // failure to keep the no-double-free invariant.
+                snap.append(self.allocator, qe) catch |err| {
+                    freeOutboundMessage(self.allocator, qe.msg);
+                    log.debug("snapshotOutbox append failed; dropping queued msg", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
+            // We moved ownership of every entry into `snap` (or freed it), so
+            // clear the queue without re-freeing.
+            pd.queue.clearRetainingCapacity();
+            pd.mutex.unlock(io);
+        }
         return snap;
     }
 
-    /// Task A6e: dispatch one outbox snapshot inline.  Used by the
-    /// background drain thread and also by the synchronous test path
-    /// via `flushOutboxBlocking`.  Each entry's `msg` is freed after
-    /// the send attempt regardless of outcome — the raft library will
-    /// retry on its next tick if the send failed.
+    /// Task A6e: dispatch one outbox snapshot inline.  Used by each per-peer
+    /// drain loop and by the synchronous test path via `flushOutboxBlocking`.
+    /// Each entry's `msg` is freed after the send attempt regardless of outcome
+    /// — the raft library re-sends on its next tick if the send failed.
     pub fn dispatchOutbox(self: *Transport, snap: *std.ArrayList(OutboundEntry)) void {
         for (snap.items) |entry| {
             // Shutdown is a cancellation boundary.  Once SIGTERM has reached
@@ -568,34 +663,32 @@ pub const Transport = struct {
         snap.deinit(self.allocator);
     }
 
-    /// Task A6e: synchronous helper used by tests (and by the
-    /// in-process A5 election test) that want to flush queued
-    /// messages without depending on the background drain thread.
-    /// Production code always lets `outbox_thread` do the work.
+    /// Task A6e: synchronous helper used by tests (and by the in-process A5
+    /// election test) that want to flush queued messages without depending on
+    /// the background drain threads.  Drains every per-peer queue serially.
+    /// Production code always lets the per-peer drain threads do the work.
     pub fn flushOutboxBlocking(self: *Transport) void {
         var snap = self.snapshotOutbox();
         self.dispatchOutbox(&snap);
     }
 
-    fn outboxDrainLoop(self: *Transport) void {
+    /// Task A2: one peer's drain loop.  Snapshot-and-swap THIS peer's queue
+    /// under its own leaf mutex, release the mutex, then `send` each entry
+    /// serially to this one peer (blocking on a slow handshake is fine — it is
+    /// isolated to this thread).  2 ms idle when the queue is empty.  Honors
+    /// both the per-peer `shutdown` and the global `outbox_shutdown`.
+    fn peerDrainLoop(self: *Transport, pd: *PeerDrain) void {
         const io = std.Io.Threaded.global_single_threaded.io();
-        while (!self.outbox_shutdown.load(.acquire)) {
-            // Snapshot under the lock; release before dispatching so
-            // producers (the raft tick / handleMessage / stepInner
-            // paths) never wait on QUIC I/O.
-            self.outbox_mutex.lockUncancelable(io);
-            const snap = self.outbox;
-            self.outbox = .empty;
+        while (!pd.shutdown.load(.acquire) and !self.outbox_shutdown.load(.acquire)) {
+            pd.mutex.lockUncancelable(io);
+            const snap = pd.queue;
+            pd.queue = .empty;
             const have_work = snap.items.len > 0;
-            self.outbox_mutex.unlock(io);
+            pd.mutex.unlock(io);
             if (have_work) {
                 var snap_mut = snap;
                 self.dispatchOutbox(&snap_mut);
             } else {
-                // Empty: free the zero-cap arraylist (no-op) and idle.
-                // 2 ms idle interval is well under the heartbeat
-                // budget (50 ms) while keeping the dispatch thread
-                // off-CPU when no messages are queued.
                 var empty_mut = snap;
                 empty_mut.deinit(self.allocator);
                 compat_sleep(2 * std.time.ns_per_ms);
@@ -603,29 +696,69 @@ pub const Transport = struct {
         }
     }
 
-    fn outboxDrainEntry(ctx: ?*anyopaque) void {
-        const self: *Transport = @ptrCast(@alignCast(ctx.?));
-        self.outboxDrainLoop();
+    fn peerDrainEntry(ctx: ?*anyopaque) void {
+        const pd: *PeerDrain = @ptrCast(@alignCast(ctx.?));
+        pd.transport.peerDrainLoop(pd);
     }
 
     pub fn startOutboxDrain(self: *Transport) !void {
-        if (self.outbox_thread != null) return;
+        // Flip the running gate so `getOrCreatePeerDrain` will spawn per-peer
+        // drain threads on first enqueue.  Also spawn a thread for any drain
+        // already created pre-start (e.g. an early enqueue that only built the
+        // queue), so no queued backlog is left without a draining thread.
         self.outbox_shutdown.store(false, .release);
-        // Use std.Thread directly because we want a single dedicated
-        // worker (the existing `pooled.ThreadPool` would also work, but
-        // the raft transport sits below the cluster layer that owns
-        // those pools — keeping the thread native avoids a circular
-        // dependency on cluster.zig and matches the lifecycle of
-        // `client_poll_thread` below).
-        self.outbox_thread = try std.Thread.spawn(.{}, outboxDrainEntry, .{@as(?*anyopaque, @ptrCast(self))});
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peer_drains_mutex.lockUncancelable(io);
+        defer self.peer_drains_mutex.unlock(io);
+        self.outbox_running = true;
+        var it = self.peer_drains.iterator();
+        while (it.next()) |entry| {
+            const pd = entry.value_ptr.*;
+            if (pd.thread == null) {
+                pd.shutdown.store(false, .release);
+                pd.thread = try std.Thread.spawn(.{}, peerDrainEntry, .{@as(?*anyopaque, @ptrCast(pd))});
+            }
+        }
     }
 
     pub fn stopOutboxDrain(self: *Transport) void {
-        if (self.outbox_thread) |t| {
-            self.outbox_shutdown.store(true, .release);
-            t.join();
-            self.outbox_thread = null;
+        // Signal global cancellation FIRST so every per-peer loop sees it (and
+        // `getOrCreatePeerDrain` refuses to spawn new drains).
+        self.outbox_shutdown.store(true, .release);
+        if (!self.peer_drains_initialized) return;
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peer_drains_mutex.lockUncancelable(io);
+        defer self.peer_drains_mutex.unlock(io);
+        self.outbox_running = false;
+
+        // Join + free every per-peer drain.  Holding `peer_drains_mutex` across
+        // the joins is safe: the drain loops are pure leaf consumers that never
+        // take this (or any other) geode lock, so there is no lock-order
+        // inversion and no deadlock.  Because `outbox_shutdown` was set BEFORE we
+        // took this mutex, `getOrCreatePeerDrain` can no longer hand out (or
+        // create) a drain — so no NEW producer can reach a `pd`.  Join BEFORE
+        // freeing each queue so the drain loop has fully unwound (no
+        // use-after-free); then briefly take `pd.mutex` around the queue
+        // teardown to close the window against a producer that grabbed `pd`
+        // just before shutdown and is still appending under `pd.mutex`.  Finally
+        // drop any messages still queued (the loop may have exited mid-backlog).
+        var it = self.peer_drains.iterator();
+        while (it.next()) |entry| {
+            const pd = entry.value_ptr.*;
+            pd.shutdown.store(true, .release);
+            if (pd.thread) |t| {
+                t.join();
+                pd.thread = null;
+            }
+            pd.mutex.lockUncancelable(io);
+            for (pd.queue.items) |*qe| freeOutboundMessage(self.allocator, qe.msg);
+            pd.queue.deinit(self.allocator);
+            pd.mutex.unlock(io);
+            self.allocator.destroy(pd);
         }
+        // Drop all (now-freed) entries from the map without re-iterating.
+        self.peer_drains.clearRetainingCapacity();
     }
 
     fn clientPollLoop(self: *Transport) void {
