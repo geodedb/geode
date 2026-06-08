@@ -2459,3 +2459,20 @@ Phase-4 sync of the `/codepros:audit` LSP pipeline. Inputs: `/tmp/lsp-audit-phas
 | GAP-0818 | MCP-LSP bridge RLS pre-condition documented | `01ca2480` | Partial (enforcement → #795) |
 | GAP-0819 | MCP input chokepoint (1 MiB cap, UTF-8, nested comments) | `c090763b` | Closed |
 | GAP-0832 | Residual unsafe field access at `server.zig:220-221` (SEC-004 follow-up) | n/a | Open (filed as quality follow-up) |
+
+## 2026-06-08 — CaaST multi-tenant integration findings (Tenancy & FLE)
+
+Downstream findings from the CaaST platform's multi-tenant integration against Geode, verified against `main` source on 2026-06-08. Full evidence, impact, and recommended corrections are in [CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md](CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md). GitLab is the source of truth — file issues and reconcile IDs when actioned.
+
+| Gap-ID | Issue | Severity | Domain | Summary | Status |
+|---|---|---|---|---|---|
+| GAP-0838 | tbd | High | `Domain::tenancy::hierarchy` | `HierarchyManager` (`rls_core.zig:2086-2162`) is dead code, keyed on `u64`, never bridged to string `tenant_id`; only tests populate it | Open |
+| GAP-0839 | tbd | High | `Domain::tenancy::lifecycle` | No tenant provisioning surface — no `CREATE TENANT` DDL, no `geode tenant` CLI, `admin_tenant` (`gps.zig:54`) unwired, `setQuota` tests-only (GAP-0289) | Open |
+| GAP-0840 | tbd | High | `Domain::tenancy::isolation` | `tenant_id="default"`/empty → nil filter sees ALL tenants (`crud_operations.zig:54-60`) — silent cross-tenant leak footgun | Open |
+| GAP-0841 | tbd | High | `Domain::tenancy::client-parity` | Go client `hello()` (`geode-client-go/conn.go:341-352`) sets neither `tenant_id` nor `role`; vendored proto missing `role=8`; pb.go has no `Role` | Open |
+| GAP-0842 | tbd | Medium | `Domain::tenancy::authz` | `--insecure-allow-all` (`gps.zig:160-172`) bypasses tenant isolation; needs production-config docs / fail-closed guard | Open (doc) |
+| GAP-0843 | tbd | Medium | `Domain::fle::tde` | Per-tenant TDE funcs `encryptForTenant`/`decryptForTenant` (`tde.zig:462,486`) are unwired dead code; page path uses one master key (extends GAP-0290) | Open |
+| GAP-0844 | tbd | Medium | `Domain::fle::concurrency` | FLE tenant correctness relies on per-thread set/clear (`fle_integration.zig:57-138`) + a `GEODE_CURRENT_ROLE` global override; async executor would reopen GAP-0285 | Open |
+| GAP-0845 | tbd | Low | `Domain::fle::ddl` | FLE schema not settable via GQL DDL — `CALL geode.fle.*` only (`GQL_AUTH_DDL.md:177-180`) | Open (doc) |
+
+**Verified-resolved during this pass (no action — recorded for traceability):** GAP-0294 (fail-open RLS) confirmed fail-closed at `rls_enhanced.zig:114-126,558-559`; GAP-0287 (broken CIDR) confirmed correct at `rls_enhanced.zig:695-748`. Both remain closed in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
