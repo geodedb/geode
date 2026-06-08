@@ -363,19 +363,20 @@ test "TestFLE_Catalog_CorruptedCatalogShouldFail" {
 // -----------------------------------------------------------------------------
 // Verify environment variable handling is secure
 
-// CANARY: REQ=REQ-FLE-ENFORCE-020; FEATURE="FLEEnforcement"; ASPECT=EnvVarRoleOverride; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// CANARY: REQ=REQ-FLE-ENFORCE-020; FEATURE="FLEEnforcement"; ASPECT=EnvVarRoleOverride; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-06-08
 test "TestFLE_EnvVar_RoleOverrideShouldBeRestricted" {
-    // GEODE_CURRENT_ROLE environment variable allows role override
-    // fle_integration.zig:57-70
+    // RESOLVED (GAP-0844, 2026-06-08): the GEODE_CURRENT_ROLE process-global
+    // env override was REMOVED from getCurrentUserRole() entirely. The
+    // per-thread role map (set on HELLO, cleared on close) is now the single
+    // source of truth, so no process-wide env var can mask a connection's
+    // authenticated role in a shared multi-tenant process. The override was
+    // only ever a crutch for the old subprocess-spawning CLI test path
+    // (eliminated by the unified-binary architecture); test-only role injection
+    // now goes through the per-thread setCurrentUserRole() setter.
     //
-    // This is useful for testing but DANGEROUS in production
-    // Should be restricted to:
-    // 1. Only in test/development mode
-    // 2. Require explicit opt-in configuration
-    // 3. Log all role overrides for audit
-
-    // TODO: Add production mode check that ignores GEODE_CURRENT_ROLE
-
+    // The behavioral regression lives next to the code it guards:
+    //   src/fle_integration.zig -> test "GAP-0844: GEODE_CURRENT_ROLE env does
+    //   not override per-thread role" (run via `zig build test-gap0844`).
     try testing.expect(true); // Documentation test
 }
 

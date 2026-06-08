@@ -60,7 +60,27 @@ pub fn setHasEncryptedFields(has_fields: bool) void {
 // connections would overwrite each other's role, enabling cross-tenant FLE
 // decryption (CVSS 8.5). Now keyed by thread ID so each connection handler
 // thread maintains its own independent role state.
-// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-001; FEATURE="FLERoleIsolation"; ASPECT=PerThreadRole; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
+//
+// GAP-0844 (deferred secondary): binding tenant/role to the request/execution
+// context (`execution.ExecutionContext`) instead of the OS thread would make
+// FLE isolation survive a future async / work-stealing executor that moves a
+// request across threads mid-flight. We DEFER that here, deliberately, because:
+//   (1) Under the current synchronous one-thread-per-connection executor this
+//       per-thread model is correct — it is fragility, not a live bug.
+//   (2) `execution.g_active_context` (the obvious place to read role/tenant
+//       from) is ITSELF a `threadlocal` (execution.zig:521), so merely moving
+//       the FLE role/tenant onto it would add churn WITHOUT removing the
+//       OS-thread coupling. The fragility only truly disappears when the
+//       executor stops being one-thread-per-connection AND the context is
+//       passed explicitly (not via a threadlocal) into every FLE consumer
+//       (~12 getCurrentUserRole/getCurrentTenantId call sites across
+//       graph_store.zig, value_utilities.zig, fle_hooks.zig, rewrite.zig) and
+//       the request boundaries in quic_connection_handler.zig / grpc_server.zig
+//       set an `fle_user_role: ?[]const u8` on the context. That is a
+//       cross-cutting execution-model refactor, out of scope for this gap.
+// The PRIMARY GAP-0844 fix (removing the GEODE_CURRENT_ROLE process-global env
+// override from getCurrentUserRole) IS applied — see that function below.
+// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-001; FEATURE="FLERoleIsolation"; ASPECT=PerThreadRole; STATUS=TESTED; OWNER=security; UPDATED=2026-06-08
 var per_thread_roles: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(std.heap.c_allocator);
 
 /// Set the current user role for RBAC checks (per-thread, safe for concurrent connections).
@@ -108,17 +128,18 @@ pub fn getCurrentTenantId() []const u8 {
     return per_thread_tenants.get(std.Thread.getCurrentId()) orelse "default";
 }
 
-/// Get the current user role.
-/// Checks environment variable GEODE_CURRENT_ROLE first (non-allocating via std.posix.getenv),
-/// then falls back to per-thread role state.
-/// P4 fix: uses std.posix.getenv instead of getEnvVarOwned to avoid heap allocation leak.
+/// Get the current user role for FLE RBAC checks.
+///
+/// GAP-0844: the per-thread role map is the SINGLE source of truth. The old
+/// implementation read the process-global env var `GEODE_CURRENT_ROLE` BEFORE
+/// the per-thread map, which let one process-wide env var silently override the
+/// authenticated role of EVERY connection in a shared multi-tenant process —
+/// a cross-tenant FLE isolation hole that bypassed the per-thread isolation
+/// GAP-0285 established. The env var was only ever a crutch for the old
+/// subprocess-spawning CLI test path (eliminated by the unified-binary
+/// architecture); tests that need to set a role out-of-band use the per-thread
+/// `setCurrentUserRole` setter directly. The override is removed entirely.
 pub fn getCurrentUserRole() ?[]const u8 {
-    // Check environment variable first (for CLI testing across process boundaries).
-    // std.posix.getenv returns a slice into the process environment block -- no allocation.
-    if (std.c.getenv("GEODE_CURRENT_ROLE")) |env_ptr| {
-        return std.mem.span(env_ptr);
-    }
-    // Fall back to per-thread role
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return per_thread_roles.get(std.Thread.getCurrentId());
@@ -718,6 +739,52 @@ test "clearCurrentThreadState removes per-thread role and tenant" {
         try testing.expect(per_thread_roles.get(std.Thread.getCurrentId()) == null);
         try testing.expect(per_thread_tenants.get(std.Thread.getCurrentId()) == null);
     }
+}
+
+// GAP-0844: The process-global env var GEODE_CURRENT_ROLE must NOT override the
+// per-thread role in the production getCurrentUserRole() path. Previously
+// getCurrentUserRole() read GEODE_CURRENT_ROLE *before* the per-thread map, so a
+// single process-wide env var could mask every connection's authenticated role
+// — a cross-tenant FLE isolation hole in a shared multi-tenant process. The
+// per-thread map (set on HELLO, cleared on close) is now the single source of
+// truth. This test sets the env var to a different value than the per-thread
+// role and asserts the per-thread role wins.
+// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-003; FEATURE="FLERoleIsolation"; ASPECT=NoEnvOverride; STATUS=TESTED; OWNER=security; UPDATED=2026-06-08
+test "GAP-0844: GEODE_CURRENT_ROLE env does not override per-thread role" {
+    const testing = std.testing;
+
+    // Set the dangerous process-global override to a value that, under the old
+    // behavior, would mask whatever the per-thread map says.
+    const set_rc = setenvForTest("GEODE_CURRENT_ROLE", "env_admin");
+    try testing.expectEqual(@as(c_int, 0), set_rc);
+    defer _ = unsetenvForTest("GEODE_CURRENT_ROLE");
+
+    // Authenticated connection role established via the per-thread setter
+    // (the same API the QUIC HELLO path uses).
+    setCurrentUserRole("tenant_user");
+    defer clearCurrentThreadState();
+
+    // The per-thread role MUST win. The env var must be ignored entirely in the
+    // production path.
+    const role = getCurrentUserRole() orelse return error.RoleNotSet;
+    try testing.expectEqualStrings("tenant_user", role);
+
+    // And with NO per-thread role set, the env var must NOT resurrect a role:
+    // getCurrentUserRole() falls through to the (empty) per-thread map and
+    // returns null, NOT "env_admin". Fail-secure: no role = deny.
+    clearCurrentThreadState();
+    try testing.expect(getCurrentUserRole() == null);
+}
+
+// libc setenv/unsetenv shims for the GAP-0844 env-override test. std.posix.setenv
+// was removed in Zig 0.16; std.c provides the non-allocating libc entry points.
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+fn setenvForTest(name: [*:0]const u8, value: [*:0]const u8) c_int {
+    return setenv(name, value, 1);
+}
+fn unsetenvForTest(name: [*:0]const u8) c_int {
+    return unsetenv(name);
 }
 
 // GAP-0515: Thread reuse isolation regression test.

@@ -1123,6 +1123,25 @@ pub fn build(b: *std.Build) void {
     const acceptor_bail_step = b.step("test-acceptor-bail", "Run acceptor-shutdown bail-deadline regression (connection-burst wedge)");
     acceptor_bail_step.dependOn(&run_acceptor_bail_tests.step);
 
+    // GAP-0844: focused runner for the FLE role-isolation regression. Roots
+    // src/fle_integration.zig directly so its inline tests are test-discovered
+    // (Zig 0.16 only discovers tests in the test ROOT file plus files reached
+    // through the root's test reference graph — a plain runtime `@import` of
+    // fle_integration from graph_store.zig does NOT pull its inline tests in).
+    // Filters to the GAP-0844 test. These inline tests also run as part of
+    // `test` via graph_store_unit_tests' transitive analysis of the module.
+    const gap0844_test_mod = b.createModule(.{ .root_source_file = b.path("src/fle_integration.zig"), .target = target, .optimize = optimize });
+    gap0844_test_mod.addImport("logging", logging_mod);
+    gap0844_test_mod.addImport("fle_aead", fle_aead_mod);
+    gap0844_test_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    gap0844_test_mod.addImport("fle_key_types", fle_key_types_mod);
+    gap0844_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    gap0844_test_mod.link_libc = true; // setenv/unsetenv + std.c.getenv
+    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{"GAP-0844"} });
+    const run_gap0844_tests = b.addRunArtifact(gap0844_tests);
+    const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role)");
+    gap0844_step.dependOn(&run_gap0844_tests.step);
+
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
     custom_tests.root_module.addImport("auth_lib", auth_ext_mod);
@@ -2553,6 +2572,12 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_lib_unit_tests.step, 10, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ext_builtins_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_exe_unit_tests.step, 8, test_shard_loads, test_shard_index);
+    // GAP-0844: the FLE role-isolation regression lives as an inline test in
+    // src/fle_integration.zig. In Zig 0.16 a runtime `@import` of that file from
+    // graph_store.zig does NOT pull its inline tests into the graph_store test
+    // root, so this dedicated artifact (rooted at fle_integration.zig) is the
+    // path that actually runs the GAP-0844 test under `zig build test` / CI.
+    shardDep(test_step, &run_gap0844_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gql_unit_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_conformance_patch_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_iso_conformance_tests.step, 6, test_shard_loads, test_shard_index);

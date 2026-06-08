@@ -43,13 +43,19 @@ def run_geode_command(cmd_args):
             env=test_env,
         )
 
-        # If this was a "user assume --role" command, set the environment variable
+        # NOTE (GAP-0844, 2026-06-08): the GEODE_CURRENT_ROLE env override was
+        # REMOVED from geode's production getCurrentUserRole() path because a
+        # single process-wide env var could mask every connection's role in a
+        # shared process (cross-tenant FLE isolation hole). This legacy
+        # standalone script (orphaned; points at a stale binary path and is not
+        # wired into any Makefile/CI target) therefore can no longer drive a
+        # role via the env var. Role state is per-connection (set on HELLO over
+        # QUIC). Kept here only as historical record; do not re-add the override.
         if len(cmd_args) >= 3 and cmd_args[0] == "user" and cmd_args[1] == "assume":
             for i, arg in enumerate(cmd_args):
                 if arg == "--role" and i + 1 < len(cmd_args):
                     role = cmd_args[i + 1]
-                    test_env["GEODE_CURRENT_ROLE"] = role
-                    print(f"     (Set GEODE_CURRENT_ROLE={role})")
+                    print(f"     (NOTE: GEODE_CURRENT_ROLE override removed in GAP-0844; role '{role}' not applied)")
                     break
 
         return result.stdout, result.stderr, result.returncode

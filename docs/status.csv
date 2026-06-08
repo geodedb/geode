@@ -992,7 +992,7 @@ REQ-FLE-ENFORCE-016,FLEEnforcement,KeySecureZeroing,TESTED,,,security,2026-01-28
 REQ-FLE-ENFORCE-017,FLEEnforcement,KeyVersionTracking,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-018,FLEEnforcement,CatalogPermissionsPersisted,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-019,FLEEnforcement,CatalogIntegrityCheck,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-ENFORCE-020,FLEEnforcement,EnvVarRoleOverride,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-020,FLEEnforcement,EnvVarRoleOverride,TESTED,,,security,2026-06-08,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-021,FLEEnforcement,BlindIndexDeterministic,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-022,FLEEnforcement,BlindIndexNotReversible,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-023,FLEEnforcement,BlindIndexAccessControl,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
@@ -1032,8 +1032,9 @@ REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,src/e
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-PRODMODE-002,FLEProductionMode,TestModeFlag,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-ROLE-ISOLATION-001,FLERoleIsolation,PerThreadRole,TESTED,,,security,2026-04-01,src/fle_integration.zig
+REQ-FLE-ROLE-ISOLATION-001,FLERoleIsolation,PerThreadRole,TESTED,,,security,2026-06-08,src/fle_integration.zig
 REQ-FLE-ROLE-ISOLATION-002,FLERoleIsolation,ThreadCleanup,TESTED,,,security,2026-04-05,src/fle_integration.zig
+REQ-FLE-ROLE-ISOLATION-003,FLERoleIsolation,NoEnvOverride,TESTED,,,security,2026-06-08,src/fle_integration.zig
 REQ-FLE-ROLE-ISOLATION-003,FLERoleIsolation,QUICCleanup,TESTED,,,security,2026-04-05,src/server/quic_connection_handler.zig
 REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,GrpcCleanup,IMPL,,,security,2026-04-05,src/transport/grpc_server.zig
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,,,security,2026-01-10,src/fle_integration.zig
