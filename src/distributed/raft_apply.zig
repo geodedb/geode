@@ -161,48 +161,53 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
                 return result;
             }
 
-            // Legacy/opaque path: create an unlabelled node (keyed by the raft
-            // log index for restart idempotency) and attach the raw data as a
-            // property so the round-trip is observable in tests.
-            const labels = &[_][]const u8{};
-            const node_id = raft_index;
-            store.createNodeWithId(node_id, labels, graph_name) catch |err| switch (err) {
-                // Re-applying this committed entry on top of the persisted store.
-                error.NodeAlreadyExists => {},
-                else => return err,
-            };
-
-            if (gm.data.len > 0) {
-                try store.setNodeProperty(
-                    node_id,
-                    "_raft_data",
-                    graph_store_mod.PropertyValue{ .String = gm.data },
-                );
+            // GNC2 multi-create (slice A): up to N nodes + M edges from one
+            // committed entry, ids derived positionally from the raft log index
+            // (cross-node identical, restart-idempotent — see cluster_replication).
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-EDGE-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyEdgeCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+            if (cluster_replication.isMultiCreatePayload(gm.data)) {
+                const touched = try cluster_replication.applyMultiCreatePayload(allocator, store, gm.data, raft_index);
+                log.info("raft apply: replicated multi create (edge create)", &.{
+                    Attr.uint("entities", touched),
+                    Attr.string("graph", graph_name),
+                });
+                // Return the first derived node id (mirrors the GNC1 contract) so
+                // a caller that re-reads after apply has a stable handle.
+                const result = try allocator.alloc(u8, 8);
+                std.mem.writeInt(u64, result[0..8], cluster_replication.deriveMultiNodeId(raft_index, 0), .little);
+                return result;
             }
 
-            log.info("raft apply: created node via graph_mutation", &.{
-                Attr.uint("node_id", node_id),
+            // Unknown create payload version: FAIL-LOUD, never create junk data.
+            // The pre-slice-A code created a bogus unlabelled `_raft_data` node
+            // here, which diverged real graph state on a mixed-version cluster.
+            // We log-and-skip with a counter instead (returning an error would
+            // only spam apply_errors — an unknown magic is not transient).
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-EDGE-CREATE; FEATURE="DistributedCluster"; ASPECT=MixedVersionFailLoud; STATUS=TESTED; TEST=tests/test_raft_apply.zig; OWNER=distributed; UPDATED=2026-06-09
+            log.err("raft apply: unknown create payload version — skipping (no junk data)", &.{
                 Attr.string("graph", graph_name),
+                Attr.uint("data_len", gm.data.len),
+                Attr.uint("raft_index", raft_index),
             });
-
-            // Return the created node ID as a little-endian u64.
-            const result = try allocator.alloc(u8, 8);
-            std.mem.writeInt(u64, result[0..8], node_id, .little);
-            return result;
+            return allocator.alloc(u8, 0);
         },
 
         .delete => {
-            // MVP: log and skip — full delete routing requires node ID parsing.
-            log.warn("raft apply: graph_mutation delete not fully wired, skipping", &.{
+            // Slice A: delete replication is a follow-up slice. Skip explicitly,
+            // distinguishing an unknown payload version from a not-yet-wired op.
+            log.warn("raft apply: graph_mutation delete not wired in this slice (unknown/unsupported payload) — skipping", &.{
                 Attr.string("graph", graph_name),
+                Attr.uint("data_len", gm.data.len),
             });
             return allocator.alloc(u8, 0);
         },
 
         .update, .merge => {
-            // MVP: log and skip.
-            log.warn("raft apply: graph_mutation update/merge not fully wired, skipping", &.{
+            // Slice A: update/merge replication is a follow-up slice. Skip
+            // explicitly, naming the unknown-payload-version posture.
+            log.warn("raft apply: graph_mutation update/merge not wired in this slice (unknown/unsupported payload) — skipping", &.{
                 Attr.string("graph", graph_name),
+                Attr.uint("data_len", gm.data.len),
             });
             return allocator.alloc(u8, 0);
         },
@@ -336,48 +341,86 @@ test "applyCommand: schema_change without store returns StoreNotAvailable" {
     try std.testing.expectError(error.StoreNotAvailable, result);
 }
 
-test "applyCommand: graph_mutation create with store creates node keyed by raft index" {
+test "applyCommand: unknown create payload version is skipped (no junk node)" {
+    // Slice A mixed-version safety: a create command whose data carries NO known
+    // magic (GNC1/GNC2) must be skipped fail-loud — it must NOT mint a bogus
+    // `_raft_data` node (the pre-slice-A divergence hazard). The graph is still
+    // ensured (idempotent), but no node is created.
     const allocator = std.testing.allocator;
     var store = try GraphStore.init(allocator);
     defer store.deinit();
 
-    const result = try applyCommand(allocator, &store, .{ .graph_mutation = .{
-        .graph = "test_graph",
-        .mutation_type = .create,
-        .data = "hello",
-        .txn_id = null,
-    } }, 42);
+    const result = try applyCommand(allocator, &store, .{
+        .graph_mutation = .{
+            .graph = "test_graph",
+            .mutation_type = .create,
+            .data = "hello", // no GNC1/GNC2 magic
+            .txn_id = null,
+        },
+    }, 42);
     defer allocator.free(result);
 
-    // Result should contain the raft-index-derived u64 node ID.
-    try std.testing.expectEqual(@as(usize, 8), result.len);
-    const node_id = std.mem.readInt(u64, result[0..8], .little);
-    try std.testing.expectEqual(@as(u64, 42), node_id);
+    // Skipped: empty result, NO node created.
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
 
-    // Verify the graph was created
+    // The target graph is still ensured (idempotent).
     try std.testing.expect(store.graphs.contains("test_graph"));
 }
 
-test "applyCommand: re-applying the same committed legacy create is idempotent" {
+test "applyCommand: re-applying an unknown create payload stays a no-op (creates nothing)" {
     const allocator = std.testing.allocator;
     var store = try GraphStore.init(allocator);
     defer store.deinit();
 
-    const cmd: Command = .{ .graph_mutation = .{
-        .graph = "test_graph",
-        .mutation_type = .create,
-        .data = "hello",
-        .txn_id = null,
-    } };
+    const cmd: Command = .{
+        .graph_mutation = .{
+            .graph = "test_graph",
+            .mutation_type = .create,
+            .data = "hello", // unknown payload version
+            .txn_id = null,
+        },
+    };
 
     const r1 = try applyCommand(allocator, &store, cmd, 9);
     defer allocator.free(r1);
     const r2 = try applyCommand(allocator, &store, cmd, 9);
     defer allocator.free(r2);
 
-    // Both applies report the same raft-index-derived id; only one node exists.
-    try std.testing.expectEqual(std.mem.readInt(u64, r1[0..8], .little), std.mem.readInt(u64, r2[0..8], .little));
-    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    // Both applies skip the unknown payload; the store never gains a node.
+    try std.testing.expectEqual(@as(usize, 0), r1.len);
+    try std.testing.expectEqual(@as(usize, 0), r2.len);
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+}
+
+test "applyCommand: GNC2 edge-create command applies 2 nodes + 1 edge" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const cr = @import("cluster_replication.zig");
+    const la = [_][]const u8{"E"};
+    const nodes = [_]cr.NodeSpec{ .{ .labels = &la, .props = &.{} }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]cr.EdgeSpec{
+        .{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "LINKS", .props = &.{} },
+    };
+    const payload = try cr.serializeMultiCreate(allocator, "test_graph", &nodes, &edges);
+    defer allocator.free(payload);
+
+    const result = try applyCommand(allocator, &store, .{ .graph_mutation = .{
+        .graph = "test_graph",
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } }, 30);
+    defer allocator.free(result);
+
+    // Returns the first derived node id.
+    try std.testing.expectEqual(@as(usize, 8), result.len);
+    try std.testing.expectEqual(cr.deriveMultiNodeId(30, 0), std.mem.readInt(u64, result[0..8], .little));
+
+    try std.testing.expectEqual(@as(usize, 2), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 1), store.edges.count());
 }
 
 test "applyCommand: schema_change create_graph creates graph" {

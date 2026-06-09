@@ -1821,10 +1821,27 @@ fn clusterReplicateNodeCreate(
 ) !ExecutionResult {
     const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
-    // Only a single standalone node pattern (no relationship hops) is replicable here.
+    // Only a single chain is replicable in this slice.
     if (pattern.chains.len != 1) return error.ClusterWriteNotReplicable;
     const chain = pattern.chains[0];
-    if (chain.hops.len != 0) return error.ClusterWriteNotReplicable;
+
+    // Slice A: a single-chain CREATE WITH relationship hops
+    // (`CREATE (a)-[:R]->(b)...`) replicates as a deterministic GNC2 multi-create.
+    // Delegate to the edge path, which fails closed for any shape it cannot
+    // serialize (non-scalar props, etc.). A constant/param RETURN is honored
+    // there; a RETURN that references a created var fails closed.
+    if (chain.hops.len != 0) {
+        return clusterReplicateEdgeCreate(
+            allocator,
+            coord,
+            chain,
+            return_clause,
+            param_names,
+            param_values,
+            current_graph,
+        );
+    }
+
     const node = chain.head orelse return error.ClusterWriteNotReplicable;
 
     const env = Env{
@@ -1881,6 +1898,185 @@ fn clusterReplicateNodeCreate(
     // Block until the entry is applied locally. Apply happens on quorum commit
     // (replicated to a majority); a timeout means the write did not durably
     // replicate, so surface it rather than claim success.
+    try coord.waitForApplied(idx, 5000);
+
+    if (ret_result) |r| {
+        ret_result = null; // ownership transferred to the caller
+        return r;
+    }
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+/// Build the ordered, deduplicated node-spec list + edge-spec list for a single
+/// CREATE chain with relationship hops, evaluating every node/edge property into
+/// a replicable scalar. Named nodes that recur across hops collapse to one
+/// positional spec; anonymous nodes always get a fresh position. Returns
+/// `error.ClusterWriteNotReplicable` for any shape outside the slice (a
+/// non-scalar property, a variable-length hop). Endpoints are encoded as
+/// `.position` references into the node list (all nodes here are NEW).
+///
+/// `node_specs`/`edge_specs`/their backing label & prop arrays are arena-style
+/// allocations off `allocator` (the per-statement allocator); the serializer
+/// deep-copies into the payload, so they can be freed by the caller's arena.
+fn buildEdgeCreateSpecs(
+    allocator: std.mem.Allocator,
+    chain: ast.Chain,
+    env: Env,
+    node_specs: *std.ArrayList(cluster_replication.NodeSpec),
+    edge_specs: *std.ArrayList(cluster_replication.EdgeSpec),
+) !void {
+    // Map a node variable name -> its assigned position in node_specs.
+    var name_to_pos = std.StringHashMap(u32).init(allocator);
+    defer name_to_pos.deinit();
+
+    const Helper = struct {
+        fn evalProps(
+            a: std.mem.Allocator,
+            e: Env,
+            props_opt: ?[]ast.Property,
+        ) ![]cluster_replication.Prop {
+            const plist = props_opt orelse return &.{};
+            var out = try a.alloc(cluster_replication.Prop, plist.len);
+            for (plist, 0..) |p, i| {
+                const val = eval.evalExpr(a, p.value.*, e) catch return error.ClusterWriteNotReplicable;
+                const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                out[i] = .{ .key = p.key, .value = pv };
+            }
+            return out;
+        }
+    };
+
+    // Register (or look up) a node pattern, returning its position. A named node
+    // already seen reuses its position (and does NOT re-add props — the first
+    // occurrence in the chain owns them, matching local-create semantics where
+    // the bound var is reused).
+    const Register = struct {
+        fn run(
+            a: std.mem.Allocator,
+            e: Env,
+            np: ast.NodePattern,
+            specs: *std.ArrayList(cluster_replication.NodeSpec),
+            map: *std.StringHashMap(u32),
+        ) !u32 {
+            if (np.name) |nm| {
+                if (map.get(nm)) |pos| return pos;
+            }
+            const pos: u32 = @intCast(specs.items.len);
+            const labels = try a.dupe([]const u8, np.labels);
+            const props = try Helper.evalProps(a, e, np.props);
+            try specs.append(a, .{ .labels = labels, .props = props });
+            if (np.name) |nm| try map.put(nm, pos);
+            return pos;
+        }
+    };
+
+    for (chain.hops) |hop| {
+        // Variable-length / quantified hops are not replicable in this slice.
+        if (hop.rel.min_len != null or hop.rel.max_len != null)
+            return error.ClusterWriteNotReplicable;
+
+        const left_pos = try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
+        const right_pos = try Register.run(allocator, env, hop.right, node_specs, &name_to_pos);
+
+        if (node_specs.items.len > cluster_replication.MAX_MULTI_NODES)
+            return error.ClusterWriteNotReplicable;
+
+        // Direction: store edges are directed left->right. `.left` reverses the
+        // endpoints; `.undirected` is stored left->right (matching treats it as
+        // a directionless adjacency).
+        const from_pos = if (hop.rel.dir == .left) right_pos else left_pos;
+        const to_pos = if (hop.rel.dir == .left) left_pos else right_pos;
+
+        const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
+        const eprops = try Helper.evalProps(allocator, env, hop.rel.props);
+
+        try edge_specs.append(allocator, .{
+            .from = .{ .position = from_pos },
+            .to = .{ .position = to_pos },
+            .edge_type = rel_type,
+            .props = eprops,
+        });
+        if (edge_specs.items.len > cluster_replication.MAX_MULTI_EDGES)
+            return error.ClusterWriteNotReplicable;
+    }
+}
+
+/// Replicate an eligible single-chain `CREATE (a)-[:R]->(b)...` (relationship
+/// hops) through Raft as a deterministic GNC2 multi-create, and return its
+/// result. Called ONLY when this node is the cluster leader. The create is
+/// proposed to the Raft log (never written locally) and applied deterministically
+/// on every node (node/edge ids derived from the committed log index).
+///
+/// Returns `error.ClusterWriteNotReplicable` for any shape this slice does not
+/// replicate (a non-scalar/param property, a variable-length hop, more than
+/// MAX_MULTI_* entities, or a RETURN clause that references a created variable),
+/// so the write fails closed instead of being applied leader-local.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-EDGE-CREATE; FEATURE="DistributedCluster"; ASPECT=LeaderProposeEdgeCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+fn clusterReplicateEdgeCreate(
+    allocator: std.mem.Allocator,
+    coord: *cluster_mod.ClusterCoordinator,
+    chain: ast.Chain,
+    return_clause: ?ast.ReturnClause,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    current_graph: ?[]const u8,
+) !ExecutionResult {
+    const env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+
+    // Evaluate the RETURN projection BEFORE proposing so a non-replicable RETURN
+    // (one that references a created node/edge variable, which is unbound here)
+    // fails closed without writing anything. Constant/param RETURNs evaluate fine.
+    var ret_result: ?ExecutionResult = null;
+    errdefer if (ret_result) |*r| r.deinit(allocator);
+    if (return_clause) |rc| {
+        if (rc.items.len > 0) {
+            ret_result = executeReturnClauseWithEnv(allocator, rc, env) catch
+                return error.ClusterWriteNotReplicable;
+        }
+    }
+
+    var node_specs = std.ArrayList(cluster_replication.NodeSpec).empty;
+    defer node_specs.deinit(allocator);
+    var edge_specs = std.ArrayList(cluster_replication.EdgeSpec).empty;
+    defer edge_specs.deinit(allocator);
+
+    try buildEdgeCreateSpecs(allocator, chain, env, &node_specs, &edge_specs);
+
+    const graph = current_graph orelse "default";
+    const payload = cluster_replication.serializeMultiCreate(
+        allocator,
+        graph,
+        node_specs.items,
+        edge_specs.items,
+    ) catch |err| switch (err) {
+        cluster_replication.CodecError.UnsupportedPropertyType,
+        cluster_replication.CodecError.CorruptPayload,
+        => return error.ClusterWriteNotReplicable,
+        else => return err,
+    };
+    defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+    const cmd = raft_consensus.Command{ .graph_mutation = .{
+        .graph = graph,
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } };
+    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+        error.NotLeader => return error.ClusterNotLeader,
+        else => return err,
+    };
+    // Block until the entry is applied locally (apply happens on quorum commit).
     try coord.waitForApplied(idx, 5000);
 
     if (ret_result) |r| {

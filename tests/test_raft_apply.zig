@@ -6,6 +6,7 @@ const PropertyValue = graph_store.PropertyValue;
 const raft_apply = geode.distributed.raft_apply;
 const raft_consensus = geode.distributed.raft_consensus;
 const Command = raft_consensus.Command;
+const cr = geode.distributed.cluster_replication;
 
 // CANARY: REQ=REQ-GQL-RAFT-APPLY; FEATURE="Raft Apply Callback"; ASPECT=IntegrationTest; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-04-09
 
@@ -64,26 +65,56 @@ test "unhandled command types return empty without error" {
     try std.testing.expectEqual(@as(usize, 0), r4.len);
 }
 
-test "graph_mutation create with store creates node and returns node ID" {
+test "graph_mutation create with unknown payload version is skipped (no junk node)" {
+    // Slice A mixed-version safety: an opaque (no-magic) create payload must be
+    // skipped fail-loud rather than minting a bogus `_raft_data` node.
     const allocator = std.testing.allocator;
     var store = try GraphStore.init(allocator);
     defer store.deinit();
 
+    const result = try raft_apply.applyCommand(allocator, &store, .{
+        .graph_mutation = .{
+            .graph = "raft_test",
+            .mutation_type = .create,
+            .data = "test_payload", // no GNC1/GNC2 magic
+            .txn_id = null,
+        },
+    }, 17);
+    defer allocator.free(result);
+
+    // Skipped: empty result, no node created.
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+
+    // Graph was still implicitly ensured.
+    try std.testing.expect(store.graphs.contains("raft_test"));
+}
+
+test "graph_mutation GNC2 edge create with store replicates 2 nodes + 1 edge" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const la = [_][]const u8{"E"};
+    const nodes = [_]cr.NodeSpec{ .{ .labels = &la, .props = &.{} }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]cr.EdgeSpec{
+        .{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "LINKS", .props = &.{} },
+    };
+    const payload = try cr.serializeMultiCreate(allocator, "raft_test", &nodes, &edges);
+    defer allocator.free(payload);
+
     const result = try raft_apply.applyCommand(allocator, &store, .{ .graph_mutation = .{
         .graph = "raft_test",
         .mutation_type = .create,
-        .data = "test_payload",
+        .data = payload,
         .txn_id = null,
-    } }, 17);
+    } }, 21);
     defer allocator.free(result);
 
-    // Result is the raft-index-derived u64 node ID.
     try std.testing.expectEqual(@as(usize, 8), result.len);
-    const node_id = std.mem.readInt(u64, result[0..8], .little);
-    try std.testing.expectEqual(@as(u64, 17), node_id);
-
-    // Graph was implicitly created
-    try std.testing.expect(store.graphs.contains("raft_test"));
+    try std.testing.expectEqual(cr.deriveMultiNodeId(21, 0), std.mem.readInt(u64, result[0..8], .little));
+    try std.testing.expectEqual(@as(usize, 2), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 1), store.edges.count());
 }
 
 test "graph_mutation without store returns StoreNotAvailable" {
@@ -146,4 +177,84 @@ test "applyCallbackFn works via module-level g_store" {
     const result = try raft_apply.applyCallbackFn(allocator, .noop, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+// ---------------------------------------------------------------------------
+// Slice A: GNC2 multi-id derivation + id-band collision sweep (public API).
+// These mirror the in-file cluster_replication.zig tests but run under the
+// `test-raft-apply` step (which roots THIS file) so the sweep is always
+// exercised in the slice-A loop, not only under the full sharded `test`.
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-EDGE-CREATE; FEATURE="DistributedCluster"; ASPECT=IdBandCollisionSweep; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-06-09
+test "GNC2 id-band sweep: GNC1 plain ids never collide with GNC2-derived ids" {
+    // Conservative lower bound on the time-based id floor (graph_store encodes
+    // now_ms << 16; now_ms >= 1.5e12 for any realistic deploy date).
+    const time_floor: u64 = @as(u64, 1_500_000_000_000) << 16;
+    const max_index: u64 = 100_000;
+
+    var idx: u64 = 1;
+    while (idx <= max_index) : (idx += 1) {
+        // Every GNC2 node/edge id is in the high band (>= MULTI_ID_BASE), so it
+        // can never equal a plain GNC1 id (= some raft index' < max_index).
+        var k: usize = 0;
+        while (k < cr.MAX_MULTI_NODES) : (k += 1) {
+            const nid = cr.deriveMultiNodeId(idx, k);
+            try std.testing.expect(nid >= cr.MULTI_ID_BASE);
+            try std.testing.expect(nid < time_floor);
+            try std.testing.expect(nid > max_index); // disjoint from plain GNC1 ids
+        }
+        var j: usize = 0;
+        while (j < cr.MAX_MULTI_EDGES) : (j += 1) {
+            const eid = cr.deriveMultiEdgeId(idx, j);
+            try std.testing.expect(eid >= cr.MULTI_ID_BASE);
+            try std.testing.expect(eid < time_floor);
+            // Edge lane strictly above the node lane within the per-index window.
+            try std.testing.expect(eid >= cr.deriveMultiNodeId(idx, cr.MAX_MULTI_NODES - 1) + 1);
+        }
+        // Per-index 64-wide windows are disjoint and monotone.
+        try std.testing.expect(cr.deriveMultiEdgeId(idx, cr.MAX_MULTI_EDGES - 1) < cr.deriveMultiNodeId(idx + 1, 0));
+    }
+}
+
+test "GNC2 two stores apply identical payload -> identical derived ids" {
+    const allocator = std.testing.allocator;
+    var s1 = try GraphStore.init(allocator);
+    defer s1.deinit();
+    var s2 = try GraphStore.init(allocator);
+    defer s2.deinit();
+
+    const la = [_][]const u8{"X"};
+    const nodes = [_]cr.NodeSpec{ .{ .labels = &la, .props = &.{} }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]cr.EdgeSpec{
+        .{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "R", .props = &.{} },
+    };
+    const payload = try cr.serializeMultiCreate(allocator, "default", &nodes, &edges);
+    defer allocator.free(payload);
+
+    _ = try cr.applyMultiCreatePayload(allocator, &s1, payload, 99);
+    _ = try cr.applyMultiCreatePayload(allocator, &s2, payload, 99);
+
+    const e0 = cr.deriveMultiEdgeId(99, 0);
+    try std.testing.expect(s1.edges.contains(e0) and s2.edges.contains(e0));
+    try std.testing.expectEqual(@as(usize, 2), s1.nodes.count());
+    try std.testing.expectEqual(@as(usize, 2), s2.nodes.count());
+}
+
+test "GNC2 unknown-magic apply via applyCommand creates nothing" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    // A payload with neither GNC1 nor GNC2 magic must be skipped (no junk).
+    const result = try raft_apply.applyCommand(allocator, &store, .{ .graph_mutation = .{
+        .graph = "g",
+        .mutation_type = .create,
+        .data = "ZZZZ-not-a-known-version",
+        .txn_id = null,
+    } }, 5);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 0), store.edges.count());
 }

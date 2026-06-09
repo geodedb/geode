@@ -2864,6 +2864,8 @@ pub fn build(b: *std.Build) void {
     const raft_apply_tests = b.addTest(.{ .root_module = raft_apply_test_mod });
     const run_raft_apply_tests = b.addRunArtifact(raft_apply_tests);
     shardDep(test_step, &run_raft_apply_tests.step, 1, test_shard_loads, test_shard_index);
+    const raft_apply_step = b.step("test-raft-apply", "Run Raft apply callback command-routing tests (GAP-0520 + slice-A edge create)");
+    raft_apply_step.dependOn(&run_raft_apply_tests.step);
 
     // Root cause #6 follow-up: durable raft hard-state (currentTerm/votedFor) +
     // log across a process restart. A FileStorage-backed RaftNode must restore
