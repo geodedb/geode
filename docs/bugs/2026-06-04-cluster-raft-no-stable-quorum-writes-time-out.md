@@ -682,3 +682,30 @@ rescheduled to a new IP; evicting stale connection old_ip=… new_ip=… peer=�
   required for recovery here (the ~3 s reaper evicts well before a write hard-blocks
   on a healthy host), but for k8s faithfulness the raft outbound write should carry
   a heartbeat-scaled deadline so a drain thread never parks 60 s on a wedged peer.
+
+### ✅ Verified on real k8s (2026-06-09, `dev` = `v0.6.26-2-gc1a95a4`) — membership churn survives; #6 confirmed
+
+Deployed to the real arda 3-pod StatefulSet. The membership re-resolution fix
+**works on real k8s** — the cluster now survives the cases that were fatal on
+`f653bdb`:
+
+- **Leader restart self-heals.** `kubectl delete pod` of the leader → a clean
+  re-election (term 1 → 2) and **all three reconverge** (geode-0 leader,
+  geode-1/geode-2 followers, `term=2`, stable), then a new leader write
+  (`CREATE (:Heal) RETURN 1`) replicates to **all three** (`Heal=1` everywhere).
+  On `f653bdb` this left all three `candidate`/no-leader for 80s+.
+- **Late-joiner + follower restart rejoin.** The initially-late geode-2 joined as a
+  follower and got the replicated row; a follower restart came back at `term=1`
+  (sees the cluster term — vs stuck `term=0` before) and was pulled in by the next
+  election. Replication to all three at rest is confirmed.
+
+**Root cause #6 now surfaces, exactly as predicted above.** Every restart
+duplicates already-committed rows: after geode-2 and geode-1 were each restarted,
+a single earlier `CREATE (:M1 {v:1})` reads back **`count=2` (`v=[1,1]`)** on both
+**restarted** nodes but **`count=1`** on the never-restarted leader (geode-0). So
+on restart the node re-applies the leader's committed log on top of its already
+persisted graph store (no `raft_log.bin` / `InMemoryStorage`, non-idempotent
+apply). This is now the top blocker for a production k8s cluster — wire
+`FileStorage` + applied-index/snapshot coordination so a restarted node does not
+re-apply entries it already has. (Verify with the membership-churn harness:
+restart a node, assert the replicated row count is **unchanged**, not doubled.)
