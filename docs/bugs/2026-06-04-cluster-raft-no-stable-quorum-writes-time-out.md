@@ -709,3 +709,104 @@ apply). This is now the top blocker for a production k8s cluster — wire
 `FileStorage` + applied-index/snapshot coordination so a restarted node does not
 re-apply entries it already has. (Verify with the membership-churn harness:
 restart a node, assert the replicated row count is **unchanged**, not doubled.)
+
+---
+
+## ✅ RESOLVED (2026-06-09) — root cause #6: restart re-apply no longer duplicates rows
+
+The restart-duplication defect is fixed **entirely in geode** (no raft library
+change, no `build.zig.zon` bump). A faithful, deterministic netns reproduction was
+built FIRST and confirmed RED on the pre-fix binary, then GREEN after the fix.
+
+### Root cause (confirmed by the explorer, not just inference)
+
+Three facts composed into the duplicate:
+
+1. The live cluster `RaftNode` backs consensus with `raft_lib.InMemoryStorage`
+   (`raft_consensus.zig`), so the raft log + applied-index are lost on restart and
+   reset to 0.
+2. The GNC1 replicated-create payload **carries no node id** — the apply path
+   (`cluster_replication.applyNodeCreatePayload`) called `createNodeWithGraph`,
+   which mints a **fresh wall-clock `generateTimeBasedId()`** on every apply. (The
+   module comment claiming a "monotonic, deterministic counter" was stale/wrong —
+   each node already minted *different* ids for the same replicated node, a latent
+   cross-node divergence.)
+3. The raft library resets `applied = snapshot_index` on init (0 with no
+   snapshot), so after a restart **every committed entry is re-delivered** to the
+   apply callback. Re-applying a create with a fresh id → a **second node** →
+   `count=2` / `v=[1,1]` (the real-k8s symptom).
+
+### Fix — idempotent apply keyed by the committed Raft log index
+
+The deliberate decision was **not** to take the report's suggested
+`FileStorage` + snapshot/compaction path: the pinned raft library
+(`v0.1.5`) **never auto-drives `InstallSnapshot`** — `node.zig`'s
+`buildAppendEntries` returns `null` on `StorageError.Compacted` and falls through
+to an empty heartbeat, and `buildInstallSnapshotMessages` has no caller — so
+compacting the leader's log would **strand any lagging follower**. A persisted
+applied-index *watermark* also has a crash window (an entry checkpointed into the
+graph store but not yet in the watermark would re-apply and duplicate).
+
+Instead, the fix makes apply **idempotent**, which is strictly more robust and
+closes the crash window: derive the replicated node's id from the committed
+entry's **Raft log index**, which is globally unique and **identical on every
+node** (Raft Log Matching Property). Then:
+
+- **Cross-node determinism (bonus fix):** every node mints the *same* id for a
+  given committed entry — the latent divergence above is also fixed.
+- **Restart idempotency (the fix):** re-applying committed entry `N` →
+  `createNodeWithId(N, …)` → the id already exists in the **persisted** graph store
+  → `error.NodeAlreadyExists` → no-op (properties idempotently overwrite, which
+  also repairs a partial first-apply). **The persisted graph store is the dedup
+  oracle** — no snapshot, no watermark, no FileStorage required for correctness.
+
+Collision-safety: `generateTimeBasedId()` ids are `≈ now_ms<<16` (≥ ~1e17); raft
+indices are small integers, so the two id spaces never collide, and
+`createNodeWithId` only advances `next_node_id` when `id >= next_node_id`.
+
+Changes (minimal): `raft_consensus.zig` (`apply_callback` gains the committed
+`entry.index`); `raft_apply.zig` + `cluster_replication.zig` (thread the index;
+`createNodeWithId` + idempotent property set on both the GNC1 and legacy paths);
+`graph_store.zig` (`createNodeWithIdInternal` now does the existence check
+*before* creating the storage-adapter slot — previously a re-create on an existing
+id leaked a phantom adapter slot, a latent bug that would itself have re-duplicated
+on reload).
+
+### Evidence
+
+- **Reproduction / regression harness:** `tests/cluster/netns_cluster_membership_churn_test.sh`
+  gained an **M4** phase + `assert_no_duplicate`: seed `CREATE (:M4dup {v:1})`,
+  confirm it replicates to all 3, restart a follower **in place with its PVC
+  preserved** (the exact re-apply trigger), then assert the row reads back
+  **EXACTLY 1 on every node** (sampled repeatedly to catch a jump to 2). RED on the
+  pre-fix binary (`count=2`), GREEN after.
+- **In-process regression:** `tests/test_raft_apply_restart_idempotent.zig` —
+  re-applying the same committed create yields ONE node (was 2, RED→GREEN);
+  deterministic `id == raft_index`; distinct indices → distinct nodes (no
+  over-dedup); property idempotency. Plus a new in-file idempotency test in
+  `tests/test_raft_apply.zig`.
+- **Full clean netns churn run (`make test-cluster-netns-churn`, in isolation):**
+  `M1` (staggered start) PASS, `M2` (follower restart, NEW IP) PASS, `M3` (leader
+  restart, NEW IP) PASS, `M4` (in-place restart, PVC preserved)
+  `PASS no-dup: M4dup count is EXACTLY 1 on all 3 nodes after restart` →
+  `RESULT: PASS`. The membership-churn fix (`c1a95a48`, M1–M3) is **not regressed**.
+- **No regression:** `test-cluster-propose-write`, `test-cluster-3node-election`,
+  `test-raft-per-peer-drain`, `test-cluster-steady-state`,
+  `test-raft-envelope-roundtrip`, `test-drainready-dispatch`, and the full sharded
+  `zig build test` all pass; `zig fmt` clean.
+
+### Still open (characterized, secondary — NOT data divergence)
+
+- **No durable raft log / hard-state (FileStorage).** The cluster `RaftNode` still
+  uses `InMemoryStorage`, so a restarted node forgets its term/vote and re-receives
+  the leader's committed log. With the idempotent apply this is **correct but
+  wasteful** — it re-applies (as no-ops) `O(committed log)` entries on every
+  restart and weakens election safety across restart (a restarted node could vote
+  twice in a term in theory). Wiring the library's crash-safe `FileStorage`
+  (`raft_persistent.zig` is an orphaned starting point) for durable log + hard
+  state is the next hardening. The re-apply storm needs `FileStorage` **plus** a
+  safe applied watermark or snapshot, which is blocked on the library's
+  `InstallSnapshot`-not-auto-driven gap above — design carefully.
+- **Edge / delete / merge replication idempotency.** Those mutations are still
+  `ClusterWriteNotReplicable`; when they become replicable they need the same
+  raft-index-keyed idempotency.
