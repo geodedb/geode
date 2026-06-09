@@ -797,16 +797,89 @@ on reload).
 
 ### Still open (characterized, secondary — NOT data divergence)
 
-- **No durable raft log / hard-state (FileStorage).** The cluster `RaftNode` still
-  uses `InMemoryStorage`, so a restarted node forgets its term/vote and re-receives
-  the leader's committed log. With the idempotent apply this is **correct but
-  wasteful** — it re-applies (as no-ops) `O(committed log)` entries on every
-  restart and weakens election safety across restart (a restarted node could vote
-  twice in a term in theory). Wiring the library's crash-safe `FileStorage`
-  (`raft_persistent.zig` is an orphaned starting point) for durable log + hard
-  state is the next hardening. The re-apply storm needs `FileStorage` **plus** a
-  safe applied watermark or snapshot, which is blocked on the library's
-  `InstallSnapshot`-not-auto-driven gap above — design carefully.
+- ~~**No durable raft log / hard-state (FileStorage).**~~ **RESOLVED 2026-06-09**
+  — see section below.
+- **Re-apply storm efficiency.** With FileStorage now wiring durable log +
+  hard-state, a restarted node still re-applies (as no-ops) `O(committed log)`
+  entries before catching up, because the pinned raft library (`v0.1.5`) **never
+  auto-drives `InstallSnapshot`** — `node.zig`'s `buildAppendEntries` returns
+  `null` on `StorageError.Compacted` and there is no caller of
+  `buildInstallSnapshotMessages`. A safe applied-watermark + snapshot path would
+  eliminate the storm; design carefully given the crash-window. Tracked as a
+  follow-up (does not affect correctness — the no-op applies are safe).
 - **Edge / delete / merge replication idempotency.** Those mutations are still
   `ClusterWriteNotReplicable`; when they become replicable they need the same
   raft-index-keyed idempotency.
+
+---
+
+## ✅ RESOLVED (2026-06-09) — FileStorage follow-up: durable raft hard-state + log
+
+The "no durable raft log / hard-state" follow-up from the root-cause-#6 section
+is now fixed. `RaftNode` storage is a tagged union: `null` storage_dir keeps the
+prior `InMemoryStorage` path (all 16 in-process test callers + the raft.zig shim
+are unchanged); a non-null `storage_dir` roots the pinned raft library's
+crash-safe `FileStorage` at `<data_dir>/raft` (hard_state tmp+fsync+rename,
+entries.wal, exclusive .lock flock). The library restores term/vote on init and
+persists them on every change automatically.
+
+### What was broken
+
+A restarted `RaftNode` backed by `InMemoryStorage` forgot `currentTerm`/`votedFor`
+(Raft election-safety violation — could double-vote in one term, risking two
+concurrent leaders) and lost its raft log entirely (the leader re-shipped every
+committed entry from index 1 on every restart). The "no raft log file on disk" in
+the original report was exactly this.
+
+### Fix
+
+- `RaftNode.storage_backing`: tagged union `{ in_memory: *InMemoryStorage, file:
+  *FileStorage }`. Both variants are heap-allocated and owned by `RaftNode`;
+  `deinit` frees the correct one (FileStorage.deinit releases the .lock flock).
+- New `RaftNode.initWithStorageDir(…, storage_dir: ?[]const u8)`: `null` →
+  `InMemoryStorage` (unchanged behavior); non-null → `FileStorage` at that path.
+  `init` and `initWithClock` are unchanged thin wrappers (`null` dir).
+- **Flock retry**: a 15s bounded retry bridges the graceful-shutdown handoff
+  window (the OS flock releases the instant the holder exits, even on SIGKILL;
+  the retry window covers normal SIGTERM→drain). A genuinely-live holder (operator
+  misconfiguration or leaked kernel lock) returns `error.RaftStorageDirLocked`
+  with a clear log message. Previously any raft-init error was mislabeled
+  `InvalidNodeId`.
+- **Plumbing**: `Config.data_dir` → `cluster_bootstrap.maybeStart(data_dir)` →
+  `main.zig` passes the configured data dir. All test callsites pass `null` and
+  are untouched.
+
+### Netns churn harness improvements
+
+`restart_in_place` now reaps the prior process (SIGTERM → 5s grace → SIGKILL →
+`waitpid`) **before** starting the replacement. This faithfully models k8s
+termination/PVC-remount ordering and exposed the **separate pre-existing
+hung-SIGTERM-shutdown bug** (thread-pool `deinit` timeout): the prior incarnation
+hangs in shutdown, holding the `.lock` flock until reaped by SIGKILL. The bounded
+retry (above) bridges this. `assert_raft_state_persisted` (M1) verifies
+`hard_state` + `entries.wal` exist on disk after the cluster starts.
+
+### Evidence
+
+- **Unit test RED→GREEN**: `tests/test_raft_hardstate_durability.zig` — a
+  `FileStorage`-backed node driven to term 5, `deinit`'d, re-init'd on the same
+  dir restores `currentTerm==5`. With `InMemoryStorage` (before fix) the term
+  resets to 0 and the assertion FAILS (RED). With `FileStorage` (after fix) the
+  persisted hard-state is loaded and the assertion PASSES (GREEN). The
+  `initWithStorageDir(null)` path (in-memory) is also tested — term stays 0 and
+  `tick()` does not crash.
+- **On-disk artifacts confirmed**: `entries.wal` and `hard_state` written under
+  `<data_dir>/raft/` for all three cluster nodes during the integration test run.
+- **Netns churn M1–M4 all PASS**: on-disk raft files present (M1 new assert),
+  membership churn unregressed (M2–M3), M4 in-place restart reloads durable state
+  with replicated row count EXACTLY 1 on all 3 nodes.
+- **Build**: `zig build` clean; `zig fmt` passes; all pre-commit hooks pass.
+
+### Remaining secondary follow-ups
+
+- Re-apply storm efficiency (see above — blocked on InstallSnapshot gap in the
+  pinned raft lib; correctness is unaffected).
+- Edge/delete/merge replication idempotency (unchanged from prior section).
+- Hung-SIGTERM-shutdown bug (separate issue — thread-pool `deinit` timeout on
+  graceful stop; tracked in liveness-kill doc; the flock retry makes it safe but
+  it should be fixed independently).
