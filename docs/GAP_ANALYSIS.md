@@ -1,29 +1,61 @@
 # Gap Analysis
 
-Last updated: 2026-05-30
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)** + **Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542)** + **2026-05-15 audit Phase 4 (GAP-0833 through GAP-0837)** + **DiveLife QA 3-node cluster deployment audit (2026-05-30, GAP-0838)** + **GAP-0838 cross-pod re-test on geode 0.6.12 (2026-06-02): STILL FAILS — unresolved, see `docs/superpowers/plans/2026-06-02-gap0838-0.6.12-cross-pod-retest.md`**
+Last updated: 2026-06-09
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261-0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270-0272 closure (2026-03-30) + multi-tenancy system audit (2026-04-01, 16-agent pipeline) + performance-review implementation audit (2026-04-09, un-pushed commit stack) + perf gap closure (2026-04-10, GAP-0519 through GAP-0525) + Requirements audit (2026-04-14) + Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542) + 2026-05-15 audit Phase 4 (GAP-0833 through GAP-0837) + DiveLife QA 3-node cluster deployment audit (2026-05-30, GAP-0838) + GAP-0838 cross-pod re-test on geode 0.6.12 (2026-06-02: still fails) + full docs/specs/source/dependency reconciliation (2026-06-09).
 
 ## Summary
 
-- **Total open gaps:** 9
-- **Critical:** 2 (GAP-0256 blocked, **GAP-0838** — cross-pod cluster TLS handshake fails; re-confirmed unresolved on geode 0.6.12, 2026-06-02)
-- **High:** 2 (GAP-0526, GAP-0527)
-- **Medium:** 2 (GAP-0528, GAP-0514 residual, **GAP-0542 won't do** — extraction follow-up)
-- **Low:** 2 (GAP-0529, GAP-0509 residual)
-- **Blocked (external dependency):** 4 (GAP-0246, GAP-0247, GAP-0256, GAP-0526)
-- **Won't Do:** 2 (GAP-0258, **GAP-0542** — extraction deferred per plan)
-- **Closed (2026-05-15):** GAP-0833 (#801), GAP-0836 (#805), GAP-0837 (#807) — docs hygiene cleanup commit `8b950c07`; **Won't-Do (2026-05-15):** GAP-0834 (#802), GAP-0835 (#803) — LDAP/OIDC delisted in `docs/USER_AUTH.md` + `docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md`, commit `50fa6510`
-- **Closed (2026-04-16):** GAP-0538 (#710), GAP-0539 (#711), GAP-0540 (#712), GAP-0541 (#713) — 14 gap commits from waves 1-3 (`81dc475d..f9daea3a`); Won't-Do on GAP-0542 (extraction over CI-diff check)
-- **Opened (2026-04-16):** GAP-0538 (#710) → Closed, GAP-0539 (#711) → Closed, GAP-0540 (#712) → Closed, GAP-0541 (#713) → Closed, GAP-0542 (#714) → Won't-Do
-- **Opened (2026-04-14):** GAP-0526, GAP-0527, GAP-0528, GAP-0529
-- **Closed (2026-04-10):** GAP-0519 (posting-list intersection verified), GAP-0520 (dead materializing wrappers removed), GAP-0521 (GROUP BY at practical optimum), GAP-0522 (full-scan diagnostics added), GAP-0523 (ReadView adapter gate removed), GAP-0524 (storage APIs documented, partial), GAP-0525 (micro-benchmarks added)
-- **Closed (2026-04-05):** GAP-0500, GAP-0501, GAP-0502, GAP-0503, GAP-0504, GAP-0508, SEC-04..SEC-27 (17 critical security), R4, performance items #675/#681/#683/#688/#692/#695, migration security SEC-MIG-06/07/09/10/11, quality Q13/Q15/Q17/Q18, #696 dead imports
-- **Closed (2026-04-01):** ALL 17 multi-tenancy gaps (GAP-0279 through GAP-0295), GAP-0255 (savepoint/transport parity)
-- **Opened (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
-- **Closed (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
-- **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
-- **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
-- **Opened (2026-05-30):** GAP-0838 (cross-pod raft cluster TLS handshake fails — Critical)
+This top register is authoritative as of 2026-06-09. Historical sections below are retained for traceability; when an older section conflicts with this register, use this register. The 2026-06-09 audit also normalizes duplicate CaaST IDs: GAP-0838 remains the cross-pod cluster failure, and CaaST tenancy/FLE residuals are tracked as GAP-0846 through GAP-0854.
+
+- **Total open/partial gaps:** 37
+- **Critical:** 4 (GAP-0256, GAP-0818, GAP-0838, GAP-0854)
+- **High:** 7 (GAP-0816, GAP-0817, GAP-0846, GAP-0848, GAP-0849, GAP-0855, GAP-0858)
+- **Medium:** 17
+- **Low:** 9
+- **Current dependency state:** `../geode-client-zig` was pulled to `9ba815e`, but this repo still pins `geode-client-zig` to `e66fdf5`/`v0.2.11` in `build.zig.zon`; `/home/benji/src/devnw/zig/fts-storage` is current at `908c1f5`; `/home/benji/src/devnw/zig/timeseries-storage` has a newer script-only commit (`33d5ef9`) while this repo pins `e5ecd21`; `/home/benji/src/devnw/zig/zcap` is current; `encrypted-fs` and `zcap2` under `~/src/devnw/zig` are not git repositories.
+- **Retired from open count after revalidation:** LDAP/OIDC user-directory claims were delisted (GAP-0246/GAP-0247 historical only); orphan transaction stream-close cleanup is implemented in `src/server/server_state.zig:400-481`; the external KMS client now has Vault/AWS HTTP implementations even though `docs/DESIGN_TDE_KMS.md` still contains stale "stub" language.
+
+### Current open/partial gap register (2026-06-09)
+
+| Gap-ID | Severity | Area | Current evidence | Required completion |
+|---|---|---|---|---|
+| GAP-0256 | Critical | Supply chain / release | Release signing and SBOM publication remain blocked/open in historical register; local SBOM tooling exists but release artifacts are not proven signed and published. | Add release-pipeline SBOM generation, artifact signing, verification docs, and CI enforcement. |
+| GAP-0514 | Medium | Governance | CANARY coverage still has residual IMPL/untested governance debt from Phase 1B-4 follow-up. | Re-run `make status-generate`, reconcile stale markers, and move implemented features to TESTED/BENCHED/COMPLETE only with matching tests. |
+| GAP-0516 | Medium | MCP | MCP resource subscription support remains intentionally absent (`src/mcp/server.zig` returns `MethodNotFound` for subscribe/unsubscribe). | Either implement subscriptions or document the protocol subset and make capability reporting/tests prove it. |
+| GAP-0816 | High | LSP lifecycle | `$/cancelRequest` is not handled, so long-running LSP work cannot be cancelled. | Add a request table, cancellation propagation, `-32800` responses, and conformance coverage. |
+| GAP-0817 | High | LSP lifecycle | LSP initialization lacks `positionEncoding` negotiation, risking UTF-8/UTF-16 position drift. | Negotiate and store encoding per client and cover multi-byte ranges in tests. |
+| GAP-0818 | Critical | LSP / multi-tenancy | LSP feature providers still lack enforced caller identity; documentation precondition landed, but enforcement is partial. | Thread tenant/user/session context through completion, hover, and definition providers; add leak regression tests. |
+| GAP-0820 | Medium | LSP workspace | LSP `workspace/*` family is absent. | Implement folders, symbols, configuration/applyEdit as advertised or trim capabilities. |
+| GAP-0821 | Medium | LSP workspace | `textDocument/rename` and `prepareRename` are not implemented. | Implement rename analysis/edit generation or remove advertised support. |
+| GAP-0822 | Medium | LSP diagnostics | `textDocument/codeAction` quick fixes are not implemented. | Add code-action provider and tests for diagnostics to edits. |
+| GAP-0823 | Low | LSP semantic tokens | `textDocument/inlayHint` for inferred types is not implemented. | Implement hints or keep feature unadvertised with tests. |
+| GAP-0824 | Low | LSP lifecycle | `willSave`, `willSaveWaitUntil`, and `didSave` are absent. | Add save lifecycle handlers or explicit non-support contract. |
+| GAP-0825 | Low | LSP transport | Content-Length/JSON transport conformance tests are missing. | Add protocol framing tests for stdin/stdout transport. |
+| GAP-0826 | Low | LSP performance | LSP performance and stress test pack is missing. | Add stress cases for large schemas/documents and cancellation interaction. |
+| GAP-0827 | Low | LSP conformance | LSP 3.17 protocol conformance pack is missing. | Add or import a protocol conformance suite. |
+| GAP-0828 | Low | LSP lifecycle | DocumentStore reopen leak remains acknowledged but not tracked by a regression. | Add reopen/deinit regression and leak-detected test. |
+| GAP-0829 | Medium | LSP docs | LSP docs and resolved-gap notes still drift from actual feature state. | Update `LSP_IMPLEMENTATION.md` and resolved register to match shipped handlers. |
+| GAP-0830 | Low | MCP/LSP bridge | `src/mcp/lsp.zig` bridge lacks design doc, REQ-DOC issue, and CANARY for bridge contract. | Add bridge contract doc, CANARY marker, and governance test. |
+| GAP-0831 | Medium | LSP governance | Capability-vs-handler truthfulness guard is missing. | Add a structural test that advertised capabilities have wired handlers. |
+| GAP-0832 | Low | LSP quality | Residual unsafe field access at `src/cli/lsp/server.zig:220-221` remains a quality follow-up. | Replace unsafe access with validated decode path and regression coverage. |
+| GAP-0838 | Critical | Distributed cluster | Cross-pod Raft peer TLS/handshake failure was re-confirmed on geode 0.6.12; loopback harness coverage is insufficient. | Prove three non-loopback nodes form quorum in Kubernetes/CI, including TLS peer SAN/SNI handling and restart acceptance. |
+| GAP-0846 | High | Tenancy hierarchy | `HierarchyManager` is now string-keyed and registry-populated, but live query/RLS read paths still do not consult hierarchy for parent/descendant access. | Enforce `canAccessTenant` semantics in all tenant-filtered reads and add cross-tenant hierarchy leak tests. |
+| GAP-0847 | Medium | Tenant lifecycle | `CALL geode.tenant.*`, durable registry, and CLI exist, but GQL tenant DDL and cascade data deletion on tenant drop are missing; `docs/security/MULTI_TENANT_HARDENING.md` still says there is no registry/CLI. | Add standard tenant DDL or document CALL-only scope, implement safe drop semantics, and update hardening docs. |
+| GAP-0848 | High | Tenant isolation | Strict tenancy is opt-in; default mode still treats unset/empty/default tenant as unscoped/all tenants. | Make strict tenancy the multi-tenant default or add a production guard that refuses permissive mode unless explicitly overridden. |
+| GAP-0849 | High | Client parity | Zig client upstream now sends `tenant_id` and `role` in HELLO (`9ba815e`), but this repo pins older `e66fdf5`; Go client parity remains stale per CaaST findings. | Update `build.zig.zon` and lock/hash, then align Go client proto/HELLO role and tenant fields. |
+| GAP-0850 | Medium | Authz hardening | `--insecure-allow-all` bypasses tenant isolation/RLS/FLE; banner/docs exist, but there is no refuse-to-start production guard. | Add environment/build-mode guard with explicit break-glass override and tests. |
+| GAP-0851 | Medium | TDE / tenancy | Page encryption and per-tenant helper tests exist, but at-rest page/WAL/backup encryption still uses shared master-key model; per-tenant page segregation is deferred. | Finish per-tenant key hierarchy/page tagging/backup restore workflow or narrow production claims. |
+| GAP-0852 | Medium | FLE context | Env-role override is removed and context-preferring role helper exists, but many graph/planner call sites still use per-thread role/tenant fallback; tenant fallback remains `"default"`. | Migrate FLE enforcement to request context for role and tenant, remove unsafe defaults, and add concurrent request regressions. |
+| GAP-0853 | Low | FLE DDL | FLE policy/catalog is configurable only through `CALL geode.fle.*`; no standard GQL DDL exists. | Add GQL DDL or explicitly document CALL procedures as the supported administrative surface. |
+| GAP-0854 | Critical | FLE / audit chain | `CALL geode.fle.configureField` can corrupt the auth/audit hash chain and produce `AuthChainTampered` on restart per CaaST reproduction across 0.6.13-0.6.18. | Route FLE catalog mutations through signed append/update path or exclude them from the chain; add restart regression. |
+| GAP-0855 | High | Streaming / CDC sinks | Kafka and webhook sinks still contain explicit transport stubs returning `KafkaTransportNotImplemented` / `WebhookTransportNotImplemented`. | Implement real broker/HTTP delivery, retries, auth/TLS, and end-to-end sink specs. |
+| GAP-0856 | Medium | Distributed query | Distributed/federated query transport returns `error.Unsupported` for `EXPLAIN` and `PROFILE`. | Serialize distributed explain/profile payloads or disable advertised remote support. |
+| GAP-0857 | Medium | Embedded library API | `src/lib.zig` still reports embedded server mode unavailable and `runServerWithArgs()` returns `EmbeddingError.NotImplemented`. | Implement embedded server runner or remove/clearly gate server embedding API claims. |
+| GAP-0858 | High | GPS policy DDL | `CREATE POLICY`/`DROP POLICY` persist through `__geode_security`, but `ALTER POLICY` is in-memory only and lost on restart. | Add durable ALTER write-through and restart regression for enable/disable/rename changes. |
+| GAP-0859 | Medium | GQL / recursive CTE | Docs still say recursive CTE execution is unimplemented, while source has an IMPL fixpoint executor and the recursive E2E test is commented/stale. | Reconcile docs, enable real recursive CTE tests, and promote CANARY status only after passing coverage. |
+| GAP-0860 | Medium | Test status / geodetestlab | `docs/KNOWN_TEST_ISSUES.md` still documents extended-runner failures, load timeouts, skipped language areas, and stale January/May status. | Establish a current canonical test baseline and update `TODO.md`, `KNOWN_TEST_ISSUES.md`, and status artifacts from the same run. |
+| GAP-0861 | Medium | Documentation claims | README/CLAUDE/GQL compliance docs still make broad 100%/production-ready/all-phases-complete claims that conflict with open gaps and stale test status. | Rebaseline product/compliance claims against current tests, specs, and open gaps; downgrade unsupported areas. |
+| GAP-0862 | Medium | Backup / restore validation | Legacy backup shell tests accept `NotImplemented` for backup, restore, S3, point-in-time, validation, and metadata flows, so they do not prove the advertised surface. | Replace permissive patterns with failing assertions, split implemented vs unsupported backup features, and add restore data-integrity checks. |
 
 ## 2026-05-30 DiveLife QA 3-node cluster deployment audit
 
@@ -2460,19 +2492,22 @@ Phase-4 sync of the `/codepros:audit` LSP pipeline. Inputs: `/tmp/lsp-audit-phas
 | GAP-0819 | MCP input chokepoint (1 MiB cap, UTF-8, nested comments) | `c090763b` | Closed |
 | GAP-0832 | Residual unsafe field access at `server.zig:220-221` (SEC-004 follow-up) | n/a | Open (filed as quality follow-up) |
 
-## 2026-06-08 — CaaST multi-tenant integration findings (Tenancy & FLE)
+## 2026-06-08/09 - CaaST multi-tenant integration findings (Tenancy & FLE)
 
-Downstream findings from the CaaST platform's multi-tenant integration against Geode, verified against `main` source on 2026-06-08. Full evidence, impact, and recommended corrections are in [CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md](CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md). GitLab is the source of truth — file issues and reconcile IDs when actioned.
+Downstream findings from the CaaST platform's multi-tenant integration against Geode, verified against `main` source on 2026-06-08 and reconciled again on 2026-06-09 after dependency pulls. Full evidence, impact, and recommended corrections are in [CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md](CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md). GitLab is the source of truth - file issues and reconcile IDs when actioned.
+
+The source CaaST note originally proposed GAP-0838 through GAP-0845. This ledger reserves GAP-0838 for the distributed cross-pod Raft failure, so the CaaST residuals are normalized here as GAP-0846 through GAP-0854.
 
 | Gap-ID | Issue | Severity | Domain | Summary | Status |
 |---|---|---|---|---|---|
-| GAP-0838 | tbd | High | `Domain::tenancy::hierarchy` | `HierarchyManager` (`rls_core.zig:2086-2162`) is dead code, keyed on `u64`, never bridged to string `tenant_id`; only tests populate it | Open |
-| GAP-0839 | tbd | High | `Domain::tenancy::lifecycle` | No tenant provisioning surface — no `CREATE TENANT` DDL, no `geode tenant` CLI, `admin_tenant` (`gps.zig:54`) unwired, `setQuota` tests-only (GAP-0289) | Open |
-| GAP-0840 | tbd | High | `Domain::tenancy::isolation` | `tenant_id="default"`/empty → nil filter sees ALL tenants (`crud_operations.zig:54-60`) — silent cross-tenant leak footgun | Open |
-| GAP-0841 | tbd | High | `Domain::tenancy::client-parity` | Go client `hello()` (`geode-client-go/conn.go:341-352`) sets neither `tenant_id` nor `role`; vendored proto missing `role=8`; pb.go has no `Role` | Open |
-| GAP-0842 | tbd | Medium | `Domain::tenancy::authz` | `--insecure-allow-all` (`gps.zig:160-172`) bypasses tenant isolation; needs production-config docs / fail-closed guard | Open (doc) |
-| GAP-0843 | tbd | Medium | `Domain::fle::tde` | Per-tenant TDE funcs `encryptForTenant`/`decryptForTenant` (`tde.zig:462,486`) are unwired dead code; page path uses one master key (extends GAP-0290) | Open |
-| GAP-0844 | tbd | Medium | `Domain::fle::concurrency` | PRIMARY FIXED: `GEODE_CURRENT_ROLE` process-global override REMOVED from `getCurrentUserRole` (`fle_integration.zig`) — per-thread map is now the single source of truth; regression `zig build test-gap0844`. SECONDARY (bind role/tenant to request context vs OS thread) DEFERRED — forward-looking only, not a live bug under one-thread-per-connection; `g_active_context` is itself threadlocal so a contained version doesn't exist. | Partial (primary closed; secondary deferred) |
-| GAP-0845 | tbd | Low | `Domain::fle::ddl` | FLE schema not settable via GQL DDL — `CALL geode.fle.*` only (`GQL_AUTH_DDL.md:177-180`) | Open (doc) |
+| GAP-0846 | tbd | High | `Domain::tenancy::hierarchy` | Primary string-keying/population defect is fixed: `HierarchyManager` is string-keyed and tenant creation can populate it. Residual gap remains because live query/RLS evaluation still does not consult hierarchy for every read. | Open |
+| GAP-0847 | tbd | Medium | `Domain::tenancy::lifecycle` | `CALL geode.tenant.*`, durable registry, admin-tenant gate, quota set, and `geode tenant` CLI now exist. Residual gaps: no standard `CREATE/DROP TENANT` GQL DDL, drop removes lifecycle record only, and `docs/security/MULTI_TENANT_HARDENING.md` still says no registry/CLI exists. | Open |
+| GAP-0848 | tbd | High | `Domain::tenancy::isolation` | Strict-tenancy mode exists and is tested, but default mode still treats unset/empty/default tenant as unscoped/all tenants. | Open |
+| GAP-0849 | tbd | High | `Domain::tenancy::client-parity` | Zig client upstream now sends `tenant_id` and `role` in HELLO (`../geode-client-zig` at `9ba815e`), but this repo still pins `e66fdf5`/`v0.2.11`; Go client parity remains stale per downstream findings. | Open |
+| GAP-0850 | tbd | Medium | `Domain::tenancy::authz` | `--insecure-allow-all` bypasses tenant isolation/RLS/FLE; banner and docs exist, but there is no production refuse-to-start guard. | Open |
+| GAP-0851 | tbd | Medium | `Domain::fle::tde` | Page encryption and per-tenant helper tests exist, but page/WAL/backup paths remain shared-master-key until per-tenant storage/key design is finished. Extends GAP-0290. | Open |
+| GAP-0852 | tbd | Medium | `Domain::fle::concurrency` | Primary env override defect is fixed: `GEODE_CURRENT_ROLE` is removed from `getCurrentUserRole`. Residual gap remains because many call sites still fall back to per-thread role/tenant and tenant defaults to `"default"` instead of request context. | Partial |
+| GAP-0853 | tbd | Low | `Domain::fle::ddl` | FLE schema/policy is set through `CALL geode.fle.*`; no standard GQL DDL exists. | Open |
+| GAP-0854 | tbd | Critical | `Domain::fle::audit-chain` | `CALL geode.fle.configureField` can corrupt the auth/audit hash chain and produce `AuthChainTampered` on restart; reproduced by CaaST across 0.6.13, 0.6.16, 0.6.17/latest, and 0.6.18. | Open |
 
-**Verified-resolved during this pass (no action — recorded for traceability):** GAP-0294 (fail-open RLS) confirmed fail-closed at `rls_enhanced.zig:114-126,558-559`; GAP-0287 (broken CIDR) confirmed correct at `rls_enhanced.zig:695-748`. Both remain closed in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
+**Verified-resolved during this pass (no action - recorded for traceability):** GAP-0294 (fail-open RLS) confirmed fail-closed at `rls_enhanced.zig:114-126,558-559`; GAP-0287 (broken CIDR) confirmed correct at `rls_enhanced.zig:695-748`; original GAP-0846 hierarchy string-keying and tenant-registry population sub-findings are now fixed but the hierarchy enforcement gap remains open as GAP-0846. These closed historical gaps remain closed in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
