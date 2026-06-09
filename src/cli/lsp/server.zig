@@ -28,6 +28,13 @@ const graph_store = geode.graph_store;
 const Transport = transport.Transport;
 const DocumentStore = document.DocumentStore;
 
+/// GAP-0832: re-export the transport module so out-of-tree test files
+/// (tests/test_gap0832_lsp_decode.zig) that root the LSP server through the
+/// `lsp_server` named build module can construct a `Transport.initNoop(..)`
+/// without a relative `@import("transport.zig")` (which would register the
+/// file in a second module and trip Zig 0.16's module-diamond check).
+pub const transport_mod = transport;
+
 pub const ServerCapabilities = struct {
     textDocumentSync: i32 = 1, // Full sync
     hoverProvider: bool = true,
@@ -326,6 +333,82 @@ pub const Server = struct {
         return try json_helpers.getString(text_document, "uri");
     }
 
+    /// GAP-0832: validated JSON-RPC envelope. `decodeEnvelope` produces
+    /// one of these from an already-parsed `std.json.Value`, replacing the
+    /// pre-fix `parsed.value.object` / `m.string` chain that panicked on a
+    /// non-object root or a non-string `method`.
+    pub const Envelope = struct {
+        /// The `method` string. Always non-null for a well-formed JSON-RPC
+        /// message that we should dispatch (a message without `method` is a
+        /// response, which an LSP *server* never receives — we drop it).
+        method: []const u8,
+        /// The request id. Non-null ⇒ Request; null ⇒ Notification.
+        id: ?std.json.Value,
+        /// The `params` member, forwarded untouched to the handler (handlers
+        /// validate their own param shape via json_helpers).
+        params: ?std.json.Value,
+    };
+
+    /// GAP-0832: result of decoding the envelope. `drop` means the payload
+    /// is structurally valid JSON but not a dispatchable client→server
+    /// message (e.g. a response object, or a notification we don't route)
+    /// and should be silently ignored per JSON-RPC 2.0 §5 (servers MUST NOT
+    /// reply to malformed notifications). `bad_request` carries the id (if
+    /// any) so the caller can emit a JSON-RPC -32600 error response.
+    pub const DecodeResult = union(enum) {
+        envelope: Envelope,
+        drop,
+        bad_request: ?std.json.Value,
+    };
+
+    /// GAP-0832: pure, allocation-free validator for the top-level
+    /// JSON-RPC envelope. Pulled out of `handleMessage` so the
+    /// malformed-input matrix (non-object root, non-string method,
+    /// missing method) is unit-testable without a transport.
+    ///
+    /// CANARY: REQ=REQ-LSP-SEC-004; FEATURE="EnvelopeValidatedDecode"; ASPECT=SafeUnwrap; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+    ///
+    /// Rules (JSON-RPC 2.0 / LSP 3.17 §3):
+    ///   - root MUST be an object → otherwise -32600 (Invalid Request).
+    ///   - `method`, when present, MUST be a string → otherwise -32600.
+    ///   - a message with no `method` is a response (servers ignore) → drop.
+    ///   - `id`, when present, is forwarded verbatim (string|number|null per
+    ///     spec); its absence selects the notification path.
+    pub fn decodeEnvelope(value: std.json.Value) DecodeResult {
+        if (value != .object) return .{ .bad_request = null };
+        const root = value.object;
+
+        const method_v = root.get("method") orelse {
+            // No method member: this is a response, not a request or
+            // notification. LSP servers do not consume responses; drop it.
+            return .drop;
+        };
+        if (method_v != .string) {
+            // Present but wrong-typed method ⇒ Invalid Request. Preserve
+            // the id (if any, and only if it's a valid id type) so the
+            // error response can be correlated by the client.
+            return .{ .bad_request = idOrNull(root.get("id")) };
+        }
+
+        return .{ .envelope = .{
+            .method = method_v.string,
+            .id = idOrNull(root.get("id")),
+            .params = root.get("params"),
+        } };
+    }
+
+    /// GAP-0832: normalize the `id` member. Per JSON-RPC 2.0 §4 an id is a
+    /// String, Number, or Null; anything else (object/array/bool) is not a
+    /// valid id and is treated as absent so we never echo an attacker-
+    /// controlled structured value back as the response id.
+    fn idOrNull(maybe_id: ?std.json.Value) ?std.json.Value {
+        const id = maybe_id orelse return null;
+        return switch (id) {
+            .string, .integer, .float, .null => id,
+            else => null,
+        };
+    }
+
     pub fn handleMessage(self: *Server, message_text: []const u8) !void {
         // LSP-SEC-003: reject deeply nested or oversized payloads BEFORE
         // entering the recursive parser. checkJsonDepth is O(n), allocation-free,
@@ -338,18 +421,30 @@ pub const Server = struct {
         var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, message_text, .{});
         defer parsed.deinit();
 
-        const root = parsed.value.object;
-        const method = if (root.get("method")) |m| m.string else null;
-        const id = root.get("id");
-
-        if (method) |m| {
-            if (id != null) {
-                // Request
-                try self.handleRequest(m, id.?, root.get("params"));
-            } else {
-                // Notification
-                try self.handleNotification(m, root.get("params"));
-            }
+        // GAP-0832: validated decode. The pre-fix code did
+        // `parsed.value.object` (panic on non-object root) and `m.string`
+        // (panic on non-string method). Both are now structurally
+        // validated; a malformed envelope yields a JSON-RPC -32600 error
+        // response (when an id is present) or is dropped per JSON-RPC §5.
+        switch (decodeEnvelope(parsed.value)) {
+            .drop => return,
+            .bad_request => |maybe_id| {
+                if (maybe_id) |id| {
+                    try self.sendError(
+                        id,
+                        @intFromEnum(protocol.ErrorCode.InvalidRequest),
+                        "Invalid Request: malformed JSON-RPC envelope",
+                    );
+                }
+                return;
+            },
+            .envelope => |env| {
+                if (env.id) |id| {
+                    try self.handleRequest(env.method, id, env.params);
+                } else {
+                    try self.handleNotification(env.method, env.params);
+                }
+            },
         }
     }
 
@@ -966,17 +1061,18 @@ pub const Server = struct {
             return;
         };
 
-        const text_doc = p.object.get("textDocument") orelse {
-            try self.sendResult(id, .null);
+        // GAP-0832: validated decode. The pre-fix code unwrapped
+        // `p.object.get("textDocument").object.get("uri").string` with no
+        // type checks — a non-object root, a non-object textDocument, or a
+        // non-string uri each panicked. Route through the shared safe
+        // extractor and answer InvalidParams (-32602) on a bad shape so the
+        // client unblocks instead of crashing the server.
+        const uri = self.extractTextDocumentUri(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
             return;
         };
 
-        const uri = text_doc.object.get("uri") orelse {
-            try self.sendResult(id, .null);
-            return;
-        };
-
-        const doc = self.documents.get(uri.string) orelse {
+        const doc = self.documents.get(uri) orelse {
             try self.sendResult(id, .null);
             return;
         };

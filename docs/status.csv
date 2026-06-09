@@ -3206,6 +3206,8 @@ REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/tr
 REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport_test.zig
 REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers.zig
 REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers_test.zig
+REQ-LSP-SEC-004,EnvelopeValidatedDecode,SafeUnwrap,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
+REQ-LSP-SEC-004,EnvelopeValidatedDecode,SafeUnwrap,TESTED,,,lsp,2026-06-09,tests/test_gap0832_lsp_decode.zig
 REQ-LSP-SEC-004,JsonHelpers,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers.zig
 REQ-LSP-SEC-004,JsonHelpers,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers_test.zig
 REQ-LSP-SEC-004,JsonHelpersWired,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/server_invalid_params_test.zig

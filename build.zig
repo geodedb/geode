@@ -4958,6 +4958,29 @@ pub fn build(b: *std.Build) void {
     const gap0818_step = b.step("test-gap0818", "GAP-0818: LSP providers enforce caller tenant identity (cross-tenant leak regression)");
     gap0818_step.dependOn(&run_gap0818_tests.step);
 
+    // GAP-0832: validated decode for the LSP JSON-RPC request envelope.
+    // Roots the regression file through a single module at server.zig
+    // (exposed as `lsp_server`) so the test reaches `Server.decodeEnvelope`,
+    // `handleMessage`, and the re-exported `transport_mod` without a second
+    // module rooted at transport.zig (which would trip Zig 0.16's
+    // "file exists in modules X and X0" diamond). Same wiring as the
+    // lsp_server_e2e module: server.zig needs the `geode` and
+    // `schema_introspection` named imports, plus libc for the auth path's
+    // crypto.random / catalog data-dir resolution.
+    const gap0832_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0832_server_mod.addImport("geode", root_mod);
+    gap0832_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0832_server_mod.link_libc = true;
+    const gap0832_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0832_lsp_decode.zig"), .target = target, .optimize = optimize });
+    gap0832_test_mod.addImport("lsp_server", gap0832_server_mod);
+    gap0832_test_mod.addImport("geode", root_mod);
+    gap0832_test_mod.link_libc = true;
+    const gap0832_tests = b.addTest(.{ .root_module = gap0832_test_mod });
+    const run_gap0832_tests = b.addRunArtifact(gap0832_tests);
+    shardDep(test_step, &run_gap0832_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0832_step = b.step("test-gap0832", "GAP-0832: validated decode for malformed LSP JSON-RPC request envelopes");
+    gap0832_step.dependOn(&run_gap0832_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
