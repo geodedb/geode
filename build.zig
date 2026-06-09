@@ -1401,6 +1401,24 @@ pub fn build(b: *std.Build) void {
     const cluster_propose_write_step = b.step("test-cluster-propose-write", "Run in-process 3-node propose-and-apply smoke test (A3d)");
     cluster_propose_write_step.dependOn(&run_cluster_propose_write_tests.step);
 
+    // FAILING reproduction tests (TDD red phase) for the cluster write-
+    // replication gaps triaged 2026-06-09: edge CREATE, DELETE/DETACH DELETE,
+    // MERGE, and the ungated MATCH...SET silent-divergence regression all fail
+    // to replicate in a Raft cluster (only pure single-node CREATE does today).
+    // Spawns three real `geode serve` subprocesses on distinct loopback IPs with
+    // CA-signed peer TLS (same fixture as test-cluster-steady-state) and asserts
+    // each mutation converges on every healthy follower.  SKIPs if the geode
+    // binary is missing (run `zig build` first) or openssl is unavailable.
+    const cluster_replicable_mut_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_replicable_mutations.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_replicable_mut_tests.root_module.link_libc = true;
+    const run_cluster_replicable_mut_tests = b.addRunArtifact(cluster_replicable_mut_tests);
+    const cluster_replicable_mut_step = b.step("test-cluster-replicable-mutations", "Run 3-node subprocess edge/delete/merge/SET replication regression (2026-06-09 gaps)");
+    cluster_replicable_mut_step.dependOn(&run_cluster_replicable_mut_tests.step);
+
     // Task A2 (2026-06-08 raft-transport-stream-starvation plan): per-peer
     // non-blocking outbox drain isolation.  Drives the `send_override` hook
     // with one message per peer {1,2,3} where peer 3's override blocks ~1s,
@@ -2609,6 +2627,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0838_cluster_tls_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cert_provided_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cluster_replicable_mut_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_acceptor_watchdog_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
