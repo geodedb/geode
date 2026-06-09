@@ -52,6 +52,73 @@ pub fn isStrictTenancy() bool {
     return g_strict_tenancy.load(.acquire);
 }
 
+// CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=ConfigResolution; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
+//
+// GAP-0848: make strict tenancy the DEFAULT in a multi-tenant deployment.
+//
+// GAP-0840 made strict tenancy purely opt-in, which left the dangerous default:
+// a multi-tenant deployment that forgot `--strict-tenancy` still treated an
+// unset/empty/"default" tenant as "all tenants" — a silent cross-tenant leak.
+//
+// This resolver flips that. When the deployment is detected as multi-tenant
+// (see `tenant_registry.hasNonDefaultTenant`) and strict tenancy was NOT
+// explicitly configured, the effective mode resolves to STRICT. Operators who
+// genuinely want the legacy permissive behaviour in a multi-tenant deployment
+// must opt back in loudly via `GEODE_PERMISSIVE_TENANCY=1`. Explicitly-set
+// strict always stays strict, and single-tenant deployments are completely
+// unaffected (effective == explicit).
+//
+// Decision table (explicit_strict, multi_tenant, permissive_override) -> effective:
+//   (true,  *,     *    ) -> strict      (operator asked for strict)
+//   (false, false, *    ) -> permissive  (single-tenant: unchanged legacy)
+//   (false, true,  false) -> strict      (AUTO-STRICT: the GAP-0848 fix)
+//   (false, true,  true ) -> permissive  (explicit break-glass opt-out)
+//
+// Pure function: every input is a parameter so it is unit-testable in a Debug
+// binary with no global/registry/env state. The startup call site in
+// `src/server/main.zig` supplies the live values and then calls
+// `setStrictTenancy(effective)`.
+
+/// The reason an effective strict-tenancy decision was reached, for honest
+/// startup logging.
+pub const StrictResolution = enum {
+    /// Strict because the operator explicitly configured it.
+    explicit_strict,
+    /// Permissive in a single-tenant deployment (legacy default, unchanged).
+    single_tenant_permissive,
+    /// Strict auto-enabled because a multi-tenant deployment was detected and
+    /// strict was not explicitly configured (the GAP-0848 fix).
+    auto_strict_multi_tenant,
+    /// Permissive in a multi-tenant deployment because the operator explicitly
+    /// opted out via GEODE_PERMISSIVE_TENANCY (loud warning at the call site).
+    explicit_permissive_override,
+};
+
+/// Resolve the effective strict-tenancy mode at startup.
+///
+///   * `explicit_strict`     — `--strict-tenancy` / `GEODE_STRICT_TENANCY=1` was set.
+///   * `multi_tenant`        — `tenant_registry.hasNonDefaultTenant()`.
+///   * `permissive_override` — `GEODE_PERMISSIVE_TENANCY` is truthy.
+///
+/// Returns the effective strict boolean plus the reason for logging.
+pub fn resolveEffectiveStrictTenancy(
+    explicit_strict: bool,
+    multi_tenant: bool,
+    permissive_override: bool,
+) struct { strict: bool, reason: StrictResolution } {
+    if (explicit_strict) {
+        return .{ .strict = true, .reason = .explicit_strict };
+    }
+    if (!multi_tenant) {
+        return .{ .strict = false, .reason = .single_tenant_permissive };
+    }
+    // Multi-tenant, strict not explicitly configured.
+    if (permissive_override) {
+        return .{ .strict = false, .reason = .explicit_permissive_override };
+    }
+    return .{ .strict = true, .reason = .auto_strict_multi_tenant };
+}
+
 // Rate-limiter for the non-strict "tenant isolation disabled" warning so we log
 // it once-ish instead of per request/row. We only need a coarse "have we warned
 // recently" gate; an atomic bool flipped on first warn is sufficient and never

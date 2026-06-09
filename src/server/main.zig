@@ -860,6 +860,28 @@ fn tuneServerMalloc() void {
 // adds every tenant whose parent is already present (or has no parent), until a
 // pass makes no progress (any residue is an orphaned parent reference, which we
 // log and skip rather than fail server startup over).
+// CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
+// GAP-0848: resolve and apply the effective strict-tenancy mode. Reads the
+// GEODE_PERMISSIVE_TENANCY break-glass opt-out, delegates the decision to the
+// pure resolver in `tenancy.zig`, applies it, and logs the reason honestly.
+fn applyEffectiveStrictTenancy(gpa: std.mem.Allocator, explicit_strict: bool, multi_tenant: bool) void {
+    const permissive_override = envBool(gpa, "GEODE_PERMISSIVE_TENANCY", false);
+    const decision = geode.tenancy.resolveEffectiveStrictTenancy(explicit_strict, multi_tenant, permissive_override);
+    geode.tenancy.setStrictTenancy(decision.strict);
+    switch (decision.reason) {
+        .explicit_strict => {}, // already logged where the explicit flag was applied
+        .single_tenant_permissive => {}, // single-tenant: legacy behaviour, no noise
+        .auto_strict_multi_tenant => log.warn(
+            "SECURITY: multi-tenant deployment detected (>=1 non-default tenant registered) — strict tenancy AUTO-ENABLED (GAP-0848). Tenant-scoped operations with no concrete tenant scope (unset/empty/\"default\") will be REJECTED. To force the legacy permissive behaviour, set GEODE_PERMISSIVE_TENANCY=1.",
+            &.{},
+        ),
+        .explicit_permissive_override => log.warn(
+            "SECURITY: multi-tenant deployment detected but GEODE_PERMISSIVE_TENANCY=1 is set — strict tenancy DISABLED. A tenant-scoped operation with no concrete tenant scope will read ALL tenants' data (cross-tenant leak). Remove GEODE_PERMISSIVE_TENANCY or enable --strict-tenancy to close this.",
+            &.{},
+        ),
+    }
+}
+
 fn rehydrateTenantDerivedState(
     gpa: std.mem.Allocator,
     reg: *geode.tenant_registry.TenantRegistry,
@@ -1038,6 +1060,13 @@ pub fn main() !void {
     // into the shared tenancy decision. When set, a tenant-scoped operation with
     // no concrete tenant scope (unset/empty/"default") is rejected with
     // error.TenantScopeRequired instead of silently reading all tenants' data.
+    //
+    // GAP-0848: the FINAL effective strict-tenancy decision is resolved AFTER the
+    // tenant registry is hydrated (see the `applyEffectiveStrictTenancy` call
+    // below), because auto-strict needs the "multi-tenant?" signal from the
+    // registry. We still apply the explicit flag here so strict is active as
+    // early as possible when the operator asked for it; the post-hydration
+    // resolution is a no-op when explicit strict is already on (explicit wins).
     if (config.strict_tenancy) {
         geode.tenancy.setStrictTenancy(true);
         log.warn("SECURITY: Geode running with --strict-tenancy: tenant-scoped operations with no tenant scope (unset/empty/\"default\") will be REJECTED.", &.{});
@@ -1855,6 +1884,15 @@ pub fn main() !void {
         // "parent must exist" invariant holds for hierarchies built in order;
         // any out-of-order parent is retried until the set stabilizes.
         rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
+
+        // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
+        // GAP-0848: resolve the FINAL effective strict-tenancy mode now that the
+        // tenant registry is hydrated. In a multi-tenant deployment (>=1
+        // non-default tenant registered) strict tenancy auto-enables unless the
+        // operator explicitly opted out with GEODE_PERMISSIVE_TENANCY=1. Explicit
+        // --strict-tenancy / GEODE_STRICT_TENANCY (already applied above) always
+        // wins; single-tenant deployments keep the legacy permissive behaviour.
+        applyEffectiveStrictTenancy(gpa, config.strict_tenancy, tenant_reg.hasNonDefaultTenant());
 
         // GAP-0280: Initialize a server-wide timeseries Store so that
         // timeseries.value() calls in the QUIC/gRPC execution path return

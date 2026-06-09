@@ -242,6 +242,25 @@ pub const TenantRegistry = struct {
         return self.tenants.count();
     }
 
+    // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=MultiTenantSignal; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
+    /// GAP-0848: the "this deployment is multi-tenant" signal. Returns true when
+    /// the registry holds at least one tenant whose id is NOT the implicit
+    /// `"default"` sentinel. A registered non-default tenant is the most truthful
+    /// O(n) signal that an operator has provisioned real tenants (via
+    /// `CALL geode.tenant.create`, which is the only way a record lands here), so
+    /// permissive (null=all-tenants) resolution would be a cross-tenant leak.
+    /// The literal `"default"` tenant is excluded so that a single-tenant
+    /// deployment that happened to register `"default"` does not flip the signal.
+    pub fn hasNonDefaultTenant(self: *TenantRegistry) bool {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        var it = self.tenants.iterator();
+        while (it.next()) |entry| {
+            if (!std.mem.eql(u8, entry.key_ptr.*, "default")) return true;
+        }
+        return false;
+    }
+
     /// Copy a tenant's record into `out` (caller-owned dupes of id/parent). The
     /// caller must free `out.tenant_id` and `out.parent` (if non-null) with
     /// `caller_allocator`. Returns TenantNotFound if absent.

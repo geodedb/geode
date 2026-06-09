@@ -152,6 +152,45 @@ tenants. Pair it with the `--insecure-allow-all` ban above:
 See [`src/execution/tenancy.zig`](../../src/execution/tenancy.zig) and the
 regression suite [`tests/test_gap0840_strict_tenancy.zig`](../../tests/test_gap0840_strict_tenancy.zig).
 
+### Strict tenancy is the DEFAULT in multi-tenant deployments (GAP-0848)
+
+GAP-0840 made strict tenancy purely **opt-in**, which left the dangerous default
+intact: a deployment that had provisioned real tenants but forgot
+`--strict-tenancy` still treated an unset/empty/`"default"` tenant as
+"all tenants" — a silent cross-tenant leak. GAP-0848 flips that default.
+
+**Detection signal.** A deployment is considered **multi-tenant** when the
+durable tenant registry holds **at least one tenant whose id is not the implicit
+`"default"` sentinel** (`tenant_registry.hasNonDefaultTenant`). The registry is
+the single place a tenant record is created — only `CALL geode.tenant.create`
+writes one — so a registered non-default tenant is the most truthful, O(n)
+signal that an operator has actually provisioned tenants. (This is intentionally
+distinct from the "tenant data present on disk" question, which is not cheaply
+answerable — see the GAP-0850 section above.)
+
+**Effective-mode resolution** (evaluated at startup, after the registry is
+hydrated):
+
+| Explicit `--strict-tenancy` | Multi-tenant signal | `GEODE_PERMISSIVE_TENANCY` | Effective mode |
+|---|---|---|---|
+| set | any | any | **strict** (operator asked) |
+| unset | no | any | permissive (single-tenant, legacy — unchanged) |
+| unset | yes | unset | **strict (auto-enabled — the GAP-0848 fix)** |
+| unset | yes | set | permissive (explicit break-glass opt-out, loud warning) |
+
+**Break-glass opt-out.** An operator who genuinely needs the legacy permissive
+behaviour in a multi-tenant deployment must set `GEODE_PERMISSIVE_TENANCY=1`.
+The server then logs a loud SECURITY warning that a missing tenant scope will
+read **all** tenants' data. Single-tenant deployments are completely unaffected.
+
+The decision is a pure, unit-testable resolver
+(`tenancy.resolveEffectiveStrictTenancy(explicit_strict, multi_tenant, permissive_override)`
+in [`src/execution/tenancy.zig`](../../src/execution/tenancy.zig)); the startup
+call site `applyEffectiveStrictTenancy` in `src/server/main.zig` supplies the
+live registry signal and `GEODE_PERMISSIVE_TENANCY`, applies the result via
+`setStrictTenancy`, and logs the reason. Regression cover:
+[`tests/test_gap0848_tenancy_default.zig`](../../tests/test_gap0848_tenancy_default.zig).
+
 ## Tenant hierarchy (GAP-0838) — string-keyed, populate-able
 
 The tenant `HierarchyManager`
