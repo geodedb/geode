@@ -6030,6 +6030,28 @@ pub fn build(b: *std.Build) void {
     const gap0858_step = b.step("test-gap0858", "Run GAP-0858 durable ALTER POLICY persistence regression (enable/disable/rename survive restart)");
     gap0858_step.dependOn(&run_gap0858_tests.step);
 
+    // GAP-0850: refuse-to-start guard for --insecure-allow-all in production.
+    // Pure config-validation function (gps.validateInsecureMode) — release/prod
+    // conditions refuse startup unless the break-glass override is set.
+    const gap0850_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0850_insecure_guard.zig"), .target = target, .optimize = optimize });
+    gap0850_test_mod.addImport("geode", root_mod);
+    const gap0850_tests = b.addTest(.{ .root_module = gap0850_test_mod });
+    const run_gap0850_tests = b.addRunArtifact(gap0850_tests);
+    shardDep(test_step, &run_gap0850_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0850_step = b.step("test-gap0850", "Run GAP-0850 --insecure-allow-all production refuse-to-start guard regression");
+    gap0850_step.dependOn(&run_gap0850_tests.step);
+
+    // GAP-0848: strict tenancy auto-default in multi-tenant deployments.
+    // Pure config-resolution function (tenancy.resolveEffectiveStrictTenancy) —
+    // a multi-tenant signal flips strict on unless GEODE_PERMISSIVE_TENANCY=1.
+    const gap0848_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0848_tenancy_default.zig"), .target = target, .optimize = optimize });
+    gap0848_test_mod.addImport("geode", root_mod);
+    const gap0848_tests = b.addTest(.{ .root_module = gap0848_test_mod });
+    const run_gap0848_tests = b.addRunArtifact(gap0848_tests);
+    shardDep(test_step, &run_gap0848_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
+    gap0848_step.dependOn(&run_gap0848_tests.step);
+
     // GPS Phase 4 (Task 4-6): policy-catalog evaluation in decide().
     const gps_policy_evaluation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_evaluation.zig"), .target = target, .optimize = optimize });
     gps_policy_evaluation_test_mod.addImport("geode", root_mod);

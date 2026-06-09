@@ -993,6 +993,32 @@ pub fn main() !void {
     // When set, gps.decide() short-circuits all authorization checks and returns
     // allow for every request. Explicit WARN log makes the bypass observable.
     const gps = geode.security.gps;
+    // CANARY: REQ=REQ-GAP-0850-INSECURE-GUARD-001; FEATURE="InsecureAllowAllProductionGuard"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0850_insecure_guard.zig; OWNER=security; UPDATED=2026-06-09
+    // GAP-0850: refuse to start with --insecure-allow-all under production
+    // conditions (release build OR GEODE_ENV=production) unless the operator
+    // sets the explicit break-glass override. Runs BEFORE listeners bind so a
+    // misconfigured production deployment never accepts a single request with
+    // authorization fully bypassed. The pure guard lives in gps.zig so it is
+    // unit-testable without a live server.
+    {
+        const env_production = if (posixGetenv("GEODE_ENV")) |v|
+            std.ascii.eqlIgnoreCase(v, "production")
+        else
+            false;
+        const insecure_override = envBool(gpa, gps.insecure_override_env, false);
+        gps.validateInsecureMode(
+            config.insecure_allow_all,
+            builtin.mode != .Debug,
+            env_production,
+            insecure_override,
+        ) catch {
+            log.err(
+                "SECURITY: refusing to start — --insecure-allow-all is set under production conditions (release build or GEODE_ENV=production). This bypasses ALL authorization (tenant isolation, RLS, FLE). To override for an explicit break-glass recovery, set " ++ gps.insecure_override_env ++ "=1. See docs/security/MULTI_TENANT_HARDENING.md.",
+                &.{},
+            );
+            std.process.exit(1);
+        };
+    }
     if (config.insecure_allow_all) {
         gps.setInsecureAllowAll(true);
         // CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="InsecureAllowAllStartupBanner"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08

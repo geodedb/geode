@@ -76,6 +76,60 @@ pub fn insecureAllowAllBanner() []const u8 {
     );
 }
 
+// CANARY: REQ=REQ-GAP-0850-INSECURE-GUARD-001; FEATURE="InsecureAllowAllProductionGuard"; ASPECT=StartupGuard; STATUS=TESTED; TEST=tests/test_gap0850_insecure_guard.zig; OWNER=security; UPDATED=2026-06-09
+// GAP-0850: refuse-to-start guard for --insecure-allow-all in production.
+//
+// GAP-0842 added a prominent startup banner + docs for --insecure-allow-all,
+// but nothing PREVENTED it from being enabled on a production deployment. This
+// guard escalates that to a hard refuse-to-start when production conditions are
+// detected, with an explicit break-glass override for the rare legitimate
+// recovery scenario.
+//
+// "Production conditions" are intentionally OR'd so either signal is sufficient:
+//   * `is_release` — a non-Debug optimize build (release-safe/fast/small). A
+//     debug build is assumed to be a developer/test workstation.
+//   * `env_production` — `GEODE_ENV=production` (case-insensitive) set in the
+//     environment, which operators can assert independently of the build mode.
+//
+// Break-glass override: `GEODE_INSECURE_ALLOW_ALL_I_UNDERSTAND=1`. The verbose,
+// unmistakable variable name is deliberate — it cannot be set by accident and
+// documents acknowledgement of the bypass in the deployment manifest. When the
+// override is present the guard permits startup (the GAP-0842 banner still
+// fires loudly elsewhere).
+//
+// Kept as a pure function (mode/env/override are PARAMETERS, not read from the
+// process here) so it is fully unit-testable in a Debug test binary without
+// mutating real environment state. The startup call site in
+// `src/server/main.zig` supplies the live values.
+pub const InsecureModeError = error{InsecureAllowAllRefusedInProduction};
+
+/// Name of the break-glass override environment variable. Exported so the
+/// startup fatal-log message and tests reference the exact same string.
+pub const insecure_override_env = "GEODE_INSECURE_ALLOW_ALL_I_UNDERSTAND";
+
+/// Validate that `--insecure-allow-all` is permitted under the current
+/// conditions. Returns `error.InsecureAllowAllRefusedInProduction` when the
+/// flag is enabled AND a production condition holds AND the break-glass
+/// override is not set. All other combinations return cleanly.
+///
+///   * `insecure_allow_all` — the parsed `--insecure-allow-all` flag.
+///   * `is_release`        — `builtin.mode != .Debug` at the call site.
+///   * `env_production`    — `GEODE_ENV` resolves to "production".
+///   * `override`          — `GEODE_INSECURE_ALLOW_ALL_I_UNDERSTAND` is truthy.
+pub fn validateInsecureMode(
+    insecure_allow_all: bool,
+    is_release: bool,
+    env_production: bool,
+    override: bool,
+) InsecureModeError!void {
+    if (!insecure_allow_all) return; // flag off — nothing to guard.
+    if (override) return; // explicit break-glass acknowledgement.
+    if (is_release or env_production) {
+        return error.InsecureAllowAllRefusedInProduction;
+    }
+    // Debug build, non-production env, flag on: allowed (dev/test).
+}
+
 pub const Action = enum {
     read,
     write,

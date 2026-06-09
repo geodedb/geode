@@ -77,11 +77,51 @@ condition cannot be missed in a crowded startup log:
 The banner text is produced by `gps.insecureAllowAllBanner()` and pinned by
 [`tests/test_gap0842_insecure_allow_all_banner.zig`](../../tests/test_gap0842_insecure_allow_all_banner.zig).
 
-### Why there is no auto-refuse-to-start guard
+### Production refuse-to-start guard (GAP-0850)
 
-Geode does **not** refuse to start with `--insecure-allow-all` when "more than
-one tenant's data is present on disk", because that condition cannot be detected
-cheaply or safely:
+As of GAP-0850, Geode **refuses to start** with `--insecure-allow-all` under
+**production conditions**, before any listener binds. The guard fires when the
+flag is set AND either of the following holds:
+
+- the binary is a **release build** (`builtin.mode != .Debug`, i.e.
+  release-safe / release-fast / release-small), or
+- **`GEODE_ENV=production`** (case-insensitive) is set in the environment.
+
+On a refusal the server logs a fatal SECURITY message naming the override and
+exits non-zero — it never accepts a single request with authorization bypassed.
+
+#### Break-glass override
+
+For the rare legitimate recovery scenario (e.g. an operator deliberately needs
+the bypass on a release binary in an isolated environment), set the explicit
+override:
+
+```
+GEODE_INSECURE_ALLOW_ALL_I_UNDERSTAND=1
+```
+
+The verbose, unmistakable variable name is deliberate — it cannot be set by
+accident and documents acknowledgement of the bypass in the deployment manifest.
+With the override present the server starts and the prominent GAP-0842 banner
+above still fires loudly.
+
+A **Debug build with a non-production environment** (developer / test
+workstation) is permitted without the override, so local testing of the bypass
+is unaffected.
+
+The decision is a pure, unit-testable function
+(`gps.validateInsecureMode(insecure_allow_all, is_release, env_production, override)`
+in [`src/security/gps.zig`](../../src/security/gps.zig)); the startup call site
+in `src/server/main.zig` supplies the live build mode, `GEODE_ENV`, and override
+values. Regression cover:
+[`tests/test_gap0850_insecure_guard.zig`](../../tests/test_gap0850_insecure_guard.zig).
+
+### Why there is no *multi-tenant-data-on-disk* auto-refuse
+
+The GAP-0850 guard keys off the **deployment posture** (build mode / `GEODE_ENV`),
+not the data. Geode deliberately does **not** additionally refuse to start with
+`--insecure-allow-all` based on "more than one tenant's data is present on disk",
+because that condition cannot be detected cheaply or safely:
 
 - A tenant is a **per-record string tag** (`graph_store.tenant_id`, default
   `"default"`), **not** an on-disk directory. Storage is laid out **per graph**
@@ -92,13 +132,11 @@ cheaply or safely:
   TDE-protected pages) before the listener is even up. That is expensive and
   fragile.
 
-Inventing a heuristic here would create false negatives (missing the very
-multi-tenant case it was meant to catch) and false positives (refusing to start
-a legitimately single-tenant deployment). Per the GAP-0842 guidance we instead
-escalate to the prominent banner above plus this document, and rely on
-strict-tenancy mode (GAP-0840) as the runtime control. If a future tenant
-registry (GAP-0839) makes distinct-tenant detection O(1), an opt-in
-refuse-to-start guard with an explicit override flag can be revisited.
+Inventing a data-scan heuristic here would create false negatives (missing the
+very multi-tenant case it was meant to catch) and false positives (refusing to
+start a legitimately single-tenant deployment). The posture-based GAP-0850 guard
+plus the prominent banner plus strict-tenancy mode (GAP-0840) are the controls
+we rely on instead.
 
 ## Strict-tenancy mode (GAP-0840) — the complementary control
 
