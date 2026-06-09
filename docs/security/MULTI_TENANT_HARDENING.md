@@ -191,6 +191,23 @@ live registry signal and `GEODE_PERMISSIVE_TENANCY`, applies the result via
 `setStrictTenancy`, and logs the reason. Regression cover:
 [`tests/test_gap0848_tenancy_default.zig`](../../tests/test_gap0848_tenancy_default.zig).
 
+> **Serve-ordering (2026-06-09 follow-up).** `applyEffectiveStrictTenancy` — along
+> with the tenant registry hydration and the per-tenant quota manager it depends
+> on — now runs **before** the gRPC serve paths in `src/server/main.zig`, not just
+> before the QUIC loop. Previously this state was initialized inside the
+> `if (listen_quic)` block, so a gRPC-only deployment (`grpc_server.start()`) or
+> the gRPC serve task in combined mode began accepting requests with strict
+> tenancy unresolved and no quota manager published (gRPC handlers consult
+> `getGlobalQuotaManager()`). Both gRPC and QUIC now inherit the resolved
+> strict-tenancy mode and the hydrated registry before the first request is
+> served.
+>
+> **Env parsing.** `GEODE_PERMISSIVE_TENANCY` (and the GAP-0850
+> `GEODE_INSECURE_ALLOW_ALL_I_UNDERSTAND` break-glass override) are parsed
+> **case-insensitively** (`TRUE`, `On`, `Yes` all work), matching
+> `GEODE_STRICT_TENANCY` — a break-glass flag set in upper/mixed case must not
+> silently fall through to the secure default.
+
 ## Tenant hierarchy (GAP-0838) — string-keyed, populate-able
 
 The tenant `HierarchyManager`

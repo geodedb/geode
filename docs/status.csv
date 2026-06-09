@@ -4355,7 +4355,7 @@ REQ-SEC-RLS-WIRE-012,RLS Expression Wiring,ServerInitLabelEngine,IMPL,,,security
 REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,ExecContextWiring,IMPL,,,security,2026-04-06,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,UsernameRowAccess,IMPL,,,security,2026-04-06,src/security/rls_core.zig
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,MatchLabelDeny,IMPL,,,security,2026-04-06,src/execution/match_operations.zig
-REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,ServerInitExprEngine,IMPL,,,security,2026-04-06,src/server/main.zig
+REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,ServerInitExprEngine,IMPL,,,security,2026-06-09,src/server/main.zig
 REQ-SEC-RLS-WIRE-015,RLS Expression Wiring,MatchExprEval,IMPL,,,security,2026-04-09,src/execution/match_operations.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-TIMEOUT-001,Security,SessionTimeout,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
@@ -4705,7 +4705,7 @@ REQ-TEMPORAL-ARITH-001,TemporalArithmeticModule,Extraction,TESTED,,,eval,2026-04
 REQ-TEMPORAL-PROP-001,TemporalPropertyFiltering,Temporal,TESTED,,,temporal,2026-01-25,src/temporal/time_travel.zig
 REQ-TENANT-LIFECYCLE-001,TenantRegistry,DurableRegistry,TESTED,,,security,2026-06-08,src/security/tenant_registry.zig
 REQ-TENANT-LIFECYCLE-002,CALL geode.tenant.* native tenant lifecycle surface,Dispatch,TESTED,,,security,2026-06-08,src/execution/procedure_registry.zig
-REQ-TENANT-LIFECYCLE-003,TenantRegistryServerWiring,ServerInit,IMPL,,,security,2026-06-08,src/server/main.zig
+REQ-TENANT-LIFECYCLE-003,TenantRegistryServerWiring,ServerInit,IMPL,,,security,2026-06-09,src/server/main.zig
 REQ-TEST-ASSERT-001,Testing,AssertionTesting,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-TEST-COVERAGE-001,TESTING,Coverage,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-TEST-E2E-001,Testing,E2ETesting,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

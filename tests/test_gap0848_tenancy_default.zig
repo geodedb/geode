@@ -21,8 +21,32 @@ const std = @import("std");
 const geode = @import("geode");
 const tenancy = geode.tenancy;
 const tenant_registry = geode.tenant_registry;
+const graph_store = geode.graph_store;
 
 const testing = std.testing;
+
+// ── Default-tenant sentinel sharing (GAP-0848 follow-up) ────────────────────
+//
+// The multi-tenant signal (`hasNonDefaultTenant`) and the strict-tenancy
+// resolver's "is this a concrete scope?" check must exclude the SAME
+// default-tenant id, or the auto-strict default could trip on a scope the
+// resolver still treats as concrete (or vice versa). The leaf
+// `tenant_registry` module intentionally does not import the heavy graph_store
+// module, so it carries its own `DEFAULT_TENANT_ID` mirror kept in lock-step
+// by a comptime assertion in tenancy.zig. Pin both the value and the equality
+// here so the intent is regression-visible, not just a build-time invariant.
+
+test "DEFAULT_TENANT_ID: registry mirror equals graph_store constant" {
+    try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, tenant_registry.DEFAULT_TENANT_ID);
+    try testing.expectEqualStrings("default", tenant_registry.DEFAULT_TENANT_ID);
+}
+
+test "hasNonDefaultTenant: excludes exactly DEFAULT_TENANT_ID (not just literal)" {
+    var reg = tenant_registry.TenantRegistry.init(testing.allocator);
+    defer reg.deinit();
+    try reg.create(tenant_registry.DEFAULT_TENANT_ID, null);
+    try testing.expect(!reg.hasNonDefaultTenant());
+}
 
 // ── Multi-tenant detection signal ──────────────────────────────────────────
 

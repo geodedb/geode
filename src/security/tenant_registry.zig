@@ -30,6 +30,17 @@ const logging = @import("logging");
 const log = logging.scoped("tenant_registry");
 const Attr = logging.Attr;
 
+/// GAP-0848 follow-up: the implicit/sentinel tenant id used when a request has
+/// no concrete tenant scope. This MUST equal `graph_store.DEFAULT_TENANT_ID`
+/// (the constant `tenancy.isConcreteScope` compares against) — `hasNonDefaultTenant`
+/// excludes exactly this id so the multi-tenant signal matches the strict-tenancy
+/// resolver's notion of "no concrete scope". The two definitions are kept in sync
+/// by a `comptime` assertion in `src/execution/tenancy.zig` (which has both this
+/// module and graph_store in scope) rather than importing the heavy graph_store
+/// module into this leaf registry. `tenant_registry.zig` is built standalone by
+/// the `test-tenant-registry` target and intentionally depends only on `logging`.
+pub const DEFAULT_TENANT_ID = "default";
+
 /// Zig 0.16 compat: std.time.milliTimestamp was removed. Wall-clock millis.
 fn nowMillis() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
@@ -245,18 +256,21 @@ pub const TenantRegistry = struct {
     // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=MultiTenantSignal; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
     /// GAP-0848: the "this deployment is multi-tenant" signal. Returns true when
     /// the registry holds at least one tenant whose id is NOT the implicit
-    /// `"default"` sentinel. A registered non-default tenant is the most truthful
-    /// O(n) signal that an operator has provisioned real tenants (via
+    /// `DEFAULT_TENANT_ID` sentinel. A registered non-default tenant is the most
+    /// truthful O(n) signal that an operator has provisioned real tenants (via
     /// `CALL geode.tenant.create`, which is the only way a record lands here), so
     /// permissive (null=all-tenants) resolution would be a cross-tenant leak.
-    /// The literal `"default"` tenant is excluded so that a single-tenant
+    /// The `DEFAULT_TENANT_ID` tenant is excluded so that a single-tenant
     /// deployment that happened to register `"default"` does not flip the signal.
+    /// `DEFAULT_TENANT_ID` mirrors `graph_store.DEFAULT_TENANT_ID`, the same
+    /// constant `tenancy.isConcreteScope` compares against (drift is caught by a
+    /// comptime assertion in `src/execution/tenancy.zig`).
     pub fn hasNonDefaultTenant(self: *TenantRegistry) bool {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         var it = self.tenants.iterator();
         while (it.next()) |entry| {
-            if (!std.mem.eql(u8, entry.key_ptr.*, "default")) return true;
+            if (!std.mem.eql(u8, entry.key_ptr.*, DEFAULT_TENANT_ID)) return true;
         }
         return false;
     }

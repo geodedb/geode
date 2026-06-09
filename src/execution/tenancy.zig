@@ -29,9 +29,26 @@
 
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
+const tenant_registry = @import("../security/tenant_registry.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("tenancy");
+
+// GAP-0848 follow-up: keep the multi-tenant signal and the strict-tenancy
+// resolver in lock-step. `tenant_registry.hasNonDefaultTenant()` decides "is
+// this multi-tenant?" by excluding `tenant_registry.DEFAULT_TENANT_ID`, while
+// `isConcreteScope` (below) decides "does this request have a concrete scope?"
+// by comparing against `graph_store.DEFAULT_TENANT_ID`. Those two ideas of "the
+// default tenant" MUST be the same string or the auto-strict default could trip
+// on a scope the resolver still treats as concrete (or vice versa). The
+// tenant_registry leaf module intentionally does not import the heavy graph_store
+// module, so this is the single place that has both in scope — assert equality
+// at comptime here so any future drift is a build error, not a silent leak.
+comptime {
+    if (!std.mem.eql(u8, tenant_registry.DEFAULT_TENANT_ID, graph_store.DEFAULT_TENANT_ID)) {
+        @compileError("tenant_registry.DEFAULT_TENANT_ID must equal graph_store.DEFAULT_TENANT_ID (GAP-0848 multi-tenant signal / strict-tenancy resolver must share the default-tenant sentinel)");
+    }
+}
 
 /// Returned when strict-tenancy mode is enabled and a tenant-scoped operation
 /// is attempted without a concrete (non-"default", non-empty) tenant scope.
