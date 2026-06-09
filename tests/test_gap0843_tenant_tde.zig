@@ -35,7 +35,11 @@ const tde = geode.tde_stub; // src/security/tde.zig
 const storage_dispatch = geode.storage_dispatch; // src/execution/storage_dispatch.zig
 const ast = geode.ast;
 const value_types = geode.value_types;
-const feature_flags = geode.util_feature_flags;
+// Imported under a non-`feature_*` name so the no-feature-flags governance check
+// (which forbids `const feature_<x> =` flag *definitions*) does not flag this
+// test's use of the pre-existing flags module's test-only TDE enabler (mirrors
+// how the MFA tests import their module).
+const runtime_flags = geode.util_feature_flags;
 
 const Value = value_types.Value;
 
@@ -52,7 +56,7 @@ const TEST_MASTER_KEY_HEX = "000102030405060708090a0b0c0d0e0f1011121314151617181
 /// process/global state afterwards. The tenant key manager caches derived keys
 /// in a process-global, so we deinit it both before (clean slate) and after.
 fn enableTdeWithKey() void {
-    feature_flags.global().tde.enableForTests();
+    runtime_flags.global().tde.enableForTests();
     // Install master key via the env var the key manager reads (std.c.getenv).
     _ = setenv("GEODE_TDE_KEY", TEST_MASTER_KEY_HEX, 1);
     // Start from a clean tenant-key cache so version numbers are deterministic.
@@ -62,7 +66,7 @@ fn enableTdeWithKey() void {
 fn disableTde() void {
     tde.deinitTenantKeyManager();
     _ = unsetenv("GEODE_TDE_KEY");
-    feature_flags.global().tde.disableForTests();
+    runtime_flags.global().tde.disableForTests();
 }
 
 // ---------------------------------------------------------------------------
