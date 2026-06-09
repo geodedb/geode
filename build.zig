@@ -2846,6 +2846,21 @@ pub fn build(b: *std.Build) void {
     const run_raft_apply_tests = b.addRunArtifact(raft_apply_tests);
     shardDep(test_step, &run_raft_apply_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // Root cause #6: restart re-apply idempotency — re-applying a committed
+    // replicated create must NOT duplicate the node. Regression for
+    // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+    const raft_apply_idem_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_apply_restart_idempotent.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_apply_idem_test_mod.addImport("geode", root_mod);
+    const raft_apply_idem_tests = b.addTest(.{ .root_module = raft_apply_idem_test_mod });
+    const run_raft_apply_idem_tests = b.addRunArtifact(raft_apply_idem_tests);
+    shardDep(test_step, &run_raft_apply_idem_tests.step, 1, test_shard_loads, test_shard_index);
+    const raft_apply_idem_step = b.step("test-raft-apply-restart-idempotent", "Regression: restart re-apply must not duplicate replicated creates (root cause #6)");
+    raft_apply_idem_step.dependOn(&run_raft_apply_idem_tests.step);
+
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");

@@ -45,7 +45,7 @@ SUBNET="${NETNS_TEST_SUBNET:-10.90.0}"
 BR=gchurnbr0
 NS_NODES="1 2 3"
 NS_ALL="1 2 3 53"
-PHASES="${PHASES:-M1 M2 M3}"
+PHASES="${PHASES:-M1 M2 M3 M4}"
 # Node IPs start at $SUBNET.1<id> (.11/.12/.13); a reschedule moves a node to
 # $SUBNET.2<id> (.21/.22/.23). DNS is $SUBNET.153, bridge gw is $SUBNET.1.
 ns_ip() { echo "$SUBNET.1$1"; }      # original pod IP for node $1
@@ -214,6 +214,48 @@ wait_leader() { local to=${1:-30} t lid; for t in $(seq 1 "$to"); do lid=$(leade
 # poll node $1 for label $2 count==1 within $3 seconds
 wait_cnt1() { local id=$1 lbl=$2 to=${3:-30} t c; for t in $(seq 1 "$to"); do c=$(cnt $id $lbl); [ "$c" = "1" ] && return 0; sleep 1; done; return 1; }
 
+# ---- root cause #6: restart re-apply must NOT duplicate the replicated row ----
+# docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md root
+# cause #6: a node that restarts re-applies the leader's committed log on top of
+# its ALREADY-PERSISTED graph store. The GNC1 replicated-create payload carries
+# no node id, so applyNodeCreatePayload mints a fresh generateTimeBasedId() on
+# every apply -> the SAME committed create becomes a DUPLICATE node. Confirmed on
+# real k8s as count=2 / v=[1,1] after a pod restart with its PVC intact.
+#
+# `wait_cnt1` short-circuits on the FIRST count==1 sample, so it cannot see a
+# subsequent jump to 2. This helper asserts the count is EXACTLY 1 on EVERY node
+# AND holds steady at 1 (never 2) across several consecutive samples — RED by
+# construction against the unfixed binary, which duplicates on the re-apply.
+# $1 = label of the seeded row.
+assert_no_duplicate() {
+  local lbl=$1 id c t bad=0
+  for id in $NS_NODES; do
+    # The row must already be present (assert_cluster_healthy waited for ==1).
+    for t in $(seq 1 6); do
+      c=$(cnt $id $lbl)
+      if [ "$c" != "1" ]; then
+        fail "root-cause-#6 node$id has count=$c for $lbl (expected EXACTLY 1) — restart re-applied the committed create and duplicated the row"
+        bad=1; break
+      fi
+      sleep 1
+    done
+  done
+  [ "$bad" = "0" ] && echo "  PASS no-dup: $lbl count is EXACTLY 1 on all 3 nodes after restart (no re-apply duplicate)"
+}
+
+# Restart node $1 IN PLACE (keep its data-dir / persisted store), modelling a
+# k8s pod restart where the PVC follows the pod. The restarted node re-applies
+# the leader's committed log on top of its persisted store — the exact trigger
+# for the root-cause-#6 duplicate. (reschedule_node wipes the data-dir to model
+# a move to a NEW node; this one deliberately does NOT, to exercise re-apply.)
+restart_in_place() {
+  local id=$1
+  [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
+  PID[$id]=""; sleep 3
+  start_node $id
+  echo "  restarted node$id in place (data-dir preserved -> re-applies committed log)"
+}
+
 run_phase() { case " $PHASES " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 # Reschedule node $1 to a NEW IP, modelling a k8s pod reschedule:
@@ -341,6 +383,42 @@ if run_phase M3; then
     assert_cluster_healthy M3
   fi
   echo "  M3 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
+fi
+
+# =============================================================================
+# M4: in-place node restart (PVC preserved) must NOT duplicate the replicated
+#   row. This reproduces root cause #6 of
+#   docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md:
+#   the restarted node re-applies the leader's committed log on top of its
+#   already-persisted graph store; on the unfixed binary the GNC1 create is
+#   re-minted with a fresh id => the seeded row becomes count=2 (v=[1,1] on k8s).
+#   RED by construction against the unfixed binary.
+# =============================================================================
+if run_phase M4; then
+  echo "== M4: in-place restart must not duplicate the replicated row (root cause #6) =="
+  for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] || start_node $id; done
+  LID=$(wait_leader 40) || fail "M4 no leader for 3-node cluster in 40s"
+  if [ -n "${LID:-}" ]; then
+    # Seed exactly one row and confirm it replicated to all 3 BEFORE the restart.
+    q "$LID" 'CREATE (:M4dup {v:1})' 20 >/dev/null
+    DUP_OK=1
+    for id in $NS_NODES; do
+      wait_cnt1 $id M4dup 40 || { fail "M4 seed CREATE (:M4dup) did not replicate to node$id (count=$(cnt $id M4dup))"; DUP_OK=0; }
+    done
+    if [ "$DUP_OK" = "1" ]; then
+      # Restart a follower IN PLACE (PVC preserved): it re-applies the committed
+      # M4dup create on top of its persisted store. Pick a follower != leader.
+      RID=""; for id in $NS_NODES; do [ "$id" != "$LID" ] && { RID=$id; break; }; done
+      echo "  leader=node$LID; restarting follower node$RID in place (PVC preserved)"
+      restart_in_place "$RID"
+      wait_state "$RID" follower 45 || fail "M4 restarted node$RID never rejoined (state=$(roleof $RID))"
+      # After the restart + log re-apply settles, the row must be EXACTLY 1 on
+      # EVERY node — count=2 anywhere is the re-apply duplicate (root cause #6).
+      sleep 5
+      assert_no_duplicate M4dup
+    fi
+  fi
+  echo "  M4 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
 fi
 
 echo

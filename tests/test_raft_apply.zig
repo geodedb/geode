@@ -11,14 +11,14 @@ const Command = raft_consensus.Command;
 
 test "noop command returns empty result" {
     const allocator = std.testing.allocator;
-    const result = try raft_apply.applyCommand(allocator, null, .noop);
+    const result = try raft_apply.applyCommand(allocator, null, .noop, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
 test "write command returns empty result (MVP)" {
     const allocator = std.testing.allocator;
-    const result = try raft_apply.applyCommand(allocator, null, .{ .write = "key=value" });
+    const result = try raft_apply.applyCommand(allocator, null, .{ .write = "key=value" }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
@@ -31,7 +31,7 @@ test "unhandled command types return empty without error" {
         .change_type = .add_server,
         .server_id = 42,
         .server_endpoint = "10.0.0.1",
-    } });
+    } }, 1);
     defer allocator.free(r1);
     try std.testing.expectEqual(@as(usize, 0), r1.len);
 
@@ -41,7 +41,7 @@ test "unhandled command types return empty without error" {
         .last_included_term = 1,
         .size_bytes = 0,
         .checksum = 0,
-    } });
+    } }, 1);
     defer allocator.free(r2);
     try std.testing.expectEqual(@as(usize, 0), r2.len);
 
@@ -51,7 +51,7 @@ test "unhandled command types return empty without error" {
         .shard_id = 0,
         .write_set = "",
         .metadata = "",
-    } });
+    } }, 1);
     defer allocator.free(r3);
     try std.testing.expectEqual(@as(usize, 0), r3.len);
 
@@ -59,7 +59,7 @@ test "unhandled command types return empty without error" {
     const r4 = try raft_apply.applyCommand(allocator, null, .{ .txn_decide = .{
         .xid = 1,
         .commit = true,
-    } });
+    } }, 1);
     defer allocator.free(r4);
     try std.testing.expectEqual(@as(usize, 0), r4.len);
 }
@@ -74,13 +74,13 @@ test "graph_mutation create with store creates node and returns node ID" {
         .mutation_type = .create,
         .data = "test_payload",
         .txn_id = null,
-    } });
+    } }, 17);
     defer allocator.free(result);
 
-    // Result is a u64 node ID
+    // Result is the raft-index-derived u64 node ID.
     try std.testing.expectEqual(@as(usize, 8), result.len);
     const node_id = std.mem.readInt(u64, result[0..8], .little);
-    try std.testing.expect(node_id > 0);
+    try std.testing.expectEqual(@as(u64, 17), node_id);
 
     // Graph was implicitly created
     try std.testing.expect(store.graphs.contains("raft_test"));
@@ -93,7 +93,7 @@ test "graph_mutation without store returns StoreNotAvailable" {
         .mutation_type = .create,
         .data = "",
         .txn_id = null,
-    } });
+    } }, 1);
     try std.testing.expectError(error.StoreNotAvailable, result);
 }
 
@@ -107,7 +107,7 @@ test "schema_change create_graph then drop_graph" {
         .operation = .create_graph,
         .graph = "ephemeral",
         .schema = "",
-    } });
+    } }, 1);
     defer allocator.free(r1);
     try std.testing.expect(store.graphs.contains("ephemeral"));
 
@@ -116,7 +116,7 @@ test "schema_change create_graph then drop_graph" {
         .operation = .drop_graph,
         .graph = "ephemeral",
         .schema = "",
-    } });
+    } }, 2);
     defer allocator.free(r2);
     try std.testing.expect(!store.graphs.contains("ephemeral"));
 }
@@ -143,7 +143,7 @@ test "applyCallbackFn works via module-level g_store" {
     raft_apply.setGlobalStore(&store);
     defer raft_apply.resetGlobalStore();
 
-    const result = try raft_apply.applyCallbackFn(allocator, .noop);
+    const result = try raft_apply.applyCallbackFn(allocator, .noop, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }

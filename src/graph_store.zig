@@ -2244,6 +2244,14 @@ pub const GraphStore = struct {
         mark_dirty: bool,
         persist_adapter: bool,
     ) !void {
+        // Existence check BEFORE any storage-adapter slot creation: an
+        // idempotent re-create (e.g. a restarted Raft node replaying a
+        // committed entry whose node id already lives in the persisted store)
+        // must return `error.NodeAlreadyExists` WITHOUT leaking a phantom
+        // adapter slot. See cluster_replication.applyNodeCreatePayload.
+        try self.ensureGraph(graph_name);
+        if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
+
         const adapter_node: ?struct {
             vt: AdapterVTable,
             slot_id: u64,
@@ -2254,9 +2262,6 @@ pub const GraphStore = struct {
                 .slot_id = try vt.createNodeFn(vt.ctx, graph_name, labels),
             };
         } else null;
-
-        try self.ensureGraph(graph_name);
-        if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
 
         if (adapter_node) |persisted_node| {
             persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, node_id) catch |err| {

@@ -10,9 +10,13 @@
 //     locally). See crud_operations.tryClusterReplicateCreate.
 //   * On EVERY node (leader + followers), the Raft apply callback decodes the
 //     payload and replays it via the store's normal create/setProperty path.
-//     Because all nodes apply committed entries in Raft log order from an
-//     identical initial state, node-id assignment (a monotonic counter) is
-//     deterministic and every node converges to the same graph.
+//     The replicated node's id is derived from the committed entry's Raft log
+//     index, which is globally unique and IDENTICAL on every node (Raft Log
+//     Matching Property). This makes apply BOTH cross-node deterministic (all
+//     nodes mint the same id for a given committed entry) AND restart-idempotent
+//     (re-applying a committed entry hits an id that already exists in the
+//     persisted store → `error.NodeAlreadyExists` → no-op, no duplicate row).
+//     The persisted graph store is the dedup oracle.
 //
 // Only literal-valued single-node creates are encoded here; anything else falls
 // back to the existing (single-node) local path in the executor, so this is a
@@ -154,11 +158,17 @@ const Reader = struct {
     }
 };
 
-/// Deterministically apply a node-create payload to `store`. Used by the Raft
-/// apply callback on every node. The store deep-copies labels/keys/values, so
-/// the borrowed slices into `data` (a transient committed log entry) are safe.
-/// Returns the assigned node id.
-pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !u64 {
+/// Deterministically apply a node-create payload to `store`, using `node_id`
+/// (the committed Raft log index) as the node's id. Used by the Raft apply
+/// callback on every node. The store deep-copies labels/keys/values, so the
+/// borrowed slices into `data` (a transient committed log entry) are safe.
+///
+/// Idempotent: if the node id already exists in the persisted store (a restarted
+/// node replaying a committed entry on top of its persisted graph), the create
+/// is a no-op and the property writes idempotently overwrite — which also
+/// repairs a partial first-apply that created the node but crashed mid-props.
+/// Returns the node id.
+pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8, node_id: u64) !u64 {
     if (!isNodeCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC.len };
 
@@ -174,7 +184,11 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     var li: usize = 0;
     while (li < nlabels) : (li += 1) try labels.append(allocator, try r.str16());
 
-    const node_id = try store.createNodeWithGraph(labels.items, graph);
+    store.createNodeWithId(node_id, labels.items, graph) catch |err| switch (err) {
+        // Already created by a prior apply of THIS committed entry — idempotent.
+        error.NodeAlreadyExists => {},
+        else => return err,
+    };
 
     const nprops = try r.readU16();
     var pi: usize = 0;
@@ -216,8 +230,8 @@ test "node-create payload round-trips through serialize -> apply" {
 
     try std.testing.expect(isNodeCreatePayload(payload));
 
-    const node_id = try applyNodeCreatePayload(a, &store, payload);
-    try std.testing.expect(node_id > 0);
+    const node_id = try applyNodeCreatePayload(a, &store, payload, 7);
+    try std.testing.expectEqual(@as(u64, 7), node_id);
     try std.testing.expect(store.graphs.contains("g1"));
 
     // The node carries the replicated properties.
@@ -226,7 +240,7 @@ test "node-create payload round-trips through serialize -> apply" {
     try std.testing.expectEqual(true, (store.getNodeProperty(node_id, "active").?).Bool);
 }
 
-test "two nodes applied in order get deterministic sequential ids" {
+test "two committed entries get deterministic raft-index-derived ids on every node" {
     const a = std.testing.allocator;
     var s1 = try GraphStore.init(a);
     defer s1.deinit();
@@ -239,13 +253,17 @@ test "two nodes applied in order get deterministic sequential ids" {
     const p1 = try serializeNodeCreate(a, "default", &labels, &.{});
     defer a.free(p1);
 
-    // Apply the same ordered log to two independent stores → identical ids.
-    const a0 = try applyNodeCreatePayload(a, &s1, p0);
-    const a1 = try applyNodeCreatePayload(a, &s1, p1);
-    const b0 = try applyNodeCreatePayload(a, &s2, p0);
-    const b1 = try applyNodeCreatePayload(a, &s2, p1);
+    // The committed log indices are identical on every node (Log Matching
+    // Property), so each node mints the SAME id for a given committed entry —
+    // and that id IS the raft index.
+    const a0 = try applyNodeCreatePayload(a, &s1, p0, 5);
+    const a1 = try applyNodeCreatePayload(a, &s1, p1, 6);
+    const b0 = try applyNodeCreatePayload(a, &s2, p0, 5);
+    const b1 = try applyNodeCreatePayload(a, &s2, p1, 6);
     try std.testing.expectEqual(a0, b0);
     try std.testing.expectEqual(a1, b1);
+    try std.testing.expectEqual(@as(u64, 5), a0);
+    try std.testing.expectEqual(@as(u64, 6), a1);
     try std.testing.expect(a1 != a0);
 }
 
@@ -263,5 +281,5 @@ test "truncated payload is rejected, not crashed" {
     const labels = [_][]const u8{"N"};
     const full = try serializeNodeCreate(a, "g", &labels, &.{.{ .key = "k", .value = .{ .Int = 1 } }});
     defer a.free(full);
-    try std.testing.expectError(CodecError.CorruptPayload, applyNodeCreatePayload(a, &store, full[0 .. full.len - 3]));
+    try std.testing.expectError(CodecError.CorruptPayload, applyNodeCreatePayload(a, &store, full[0 .. full.len - 3], 1));
 }

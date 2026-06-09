@@ -56,9 +56,11 @@ pub fn resetGlobalStore() void {
 // ---------------------------------------------------------------------------
 
 /// Function-pointer-compatible callback for `RaftNode.apply_callback`.
-/// Delegates to `applyCommand` using the module-level `g_store`.
-pub fn applyCallbackFn(allocator: Allocator, cmd: Command) anyerror![]u8 {
-    return applyCommand(allocator, g_store, cmd);
+/// Delegates to `applyCommand` using the module-level `g_store`. `raft_index`
+/// is the committed entry's globally-unique, cross-node-identical log index,
+/// used to derive a deterministic, restart-idempotent node id.
+pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anyerror![]u8 {
+    return applyCommand(allocator, g_store, cmd, raft_index);
 }
 
 // ---------------------------------------------------------------------------
@@ -68,10 +70,12 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command) anyerror![]u8 {
 // CANARY: REQ=REQ-GQL-RAFT-APPLY; FEATURE="Raft Apply Callback"; ASPECT=CommandRouting; STATUS=TESTED; TEST="applyCommand: noop returns empty slice"; OWNER=distributed; UPDATED=2026-04-10
 
 /// Route a committed Raft `Command` to the appropriate graph-store mutation.
+/// `raft_index` is the committed entry's log index — used to derive a
+/// deterministic, restart-idempotent node id for replicated creates.
 ///
 /// Returns a result payload (caller-owned).  For most MVP paths this is an
 /// empty slice allocated from `allocator`; the caller must free it.
-pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command) ![]u8 {
+pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command, raft_index: u64) ![]u8 {
     switch (command) {
         // ---- no-op: nothing to apply ----
         .noop => {
@@ -90,7 +94,7 @@ pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command)
 
         // ---- graph mutation: dispatch to store ----
         .graph_mutation => |gm| {
-            return applyGraphMutation(allocator, store, gm);
+            return applyGraphMutation(allocator, store, gm, raft_index);
         },
 
         // ---- schema change: dispatch to store ----
@@ -122,7 +126,7 @@ pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command)
 // Graph mutation handler
 // ---------------------------------------------------------------------------
 
-fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMutation) ![]u8 {
+fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMutation, raft_index: u64) ![]u8 {
     const store = store_opt orelse {
         log.err("raft apply: graph_mutation received but no store registered", &.{});
         return error.StoreNotAvailable;
@@ -139,13 +143,15 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
     switch (gm.mutation_type) {
         .create => {
             // Cluster write replication (GNC1 payload): decode the serialized
-            // single-node create and replay it deterministically. Because every
-            // node applies committed entries in Raft log order from an identical
-            // initial state, node-id assignment is deterministic and all nodes
-            // converge. See cluster_replication.zig.
-            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            // single-node create and replay it deterministically. The node id is
+            // the committed entry's Raft log index, which is globally unique and
+            // identical on every node — so apply is cross-node deterministic AND
+            // restart-idempotent (re-applying a committed entry hits an id that
+            // already exists in the persisted store and is skipped). See
+            // cluster_replication.zig.
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyNodeCreate; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-09
             if (cluster_replication.isNodeCreatePayload(gm.data)) {
-                const node_id = try cluster_replication.applyNodeCreatePayload(allocator, store, gm.data);
+                const node_id = try cluster_replication.applyNodeCreatePayload(allocator, store, gm.data, raft_index);
                 log.info("raft apply: replicated node create", &.{
                     Attr.uint("node_id", node_id),
                     Attr.string("graph", graph_name),
@@ -155,10 +161,16 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
                 return result;
             }
 
-            // Legacy/opaque path: create an unlabelled node and attach the raw
-            // data as a property so the round-trip is observable in tests.
+            // Legacy/opaque path: create an unlabelled node (keyed by the raft
+            // log index for restart idempotency) and attach the raw data as a
+            // property so the round-trip is observable in tests.
             const labels = &[_][]const u8{};
-            const node_id = try store.createNodeWithGraph(labels, graph_name);
+            const node_id = raft_index;
+            store.createNodeWithId(node_id, labels, graph_name) catch |err| switch (err) {
+                // Re-applying this committed entry on top of the persisted store.
+                error.NodeAlreadyExists => {},
+                else => return err,
+            };
 
             if (gm.data.len > 0) {
                 try store.setNodeProperty(
@@ -246,14 +258,14 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
 
 test "applyCommand: noop returns empty slice" {
     const allocator = std.testing.allocator;
-    const result = try applyCommand(allocator, null, .noop);
+    const result = try applyCommand(allocator, null, .noop, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
 test "applyCommand: write returns empty slice (MVP)" {
     const allocator = std.testing.allocator;
-    const result = try applyCommand(allocator, null, .{ .write = "key=value" });
+    const result = try applyCommand(allocator, null, .{ .write = "key=value" }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
@@ -264,7 +276,7 @@ test "applyCommand: config_change returns empty slice" {
         .change_type = .add_server,
         .server_id = 42,
         .server_endpoint = "10.0.0.1",
-    } });
+    } }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
@@ -276,7 +288,7 @@ test "applyCommand: snapshot_pointer returns empty slice" {
         .last_included_term = 1,
         .size_bytes = 0,
         .checksum = 0,
-    } });
+    } }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
@@ -288,7 +300,7 @@ test "applyCommand: txn_prepare returns empty slice" {
         .shard_id = 0,
         .write_set = "",
         .metadata = "",
-    } });
+    } }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
@@ -298,7 +310,7 @@ test "applyCommand: txn_decide returns empty slice" {
     const result = try applyCommand(allocator, null, .{ .txn_decide = .{
         .xid = 1,
         .commit = true,
-    } });
+    } }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
@@ -310,7 +322,7 @@ test "applyCommand: graph_mutation without store returns StoreNotAvailable" {
         .mutation_type = .create,
         .data = "test",
         .txn_id = null,
-    } });
+    } }, 1);
     try std.testing.expectError(error.StoreNotAvailable, result);
 }
 
@@ -320,11 +332,11 @@ test "applyCommand: schema_change without store returns StoreNotAvailable" {
         .operation = .create_graph,
         .graph = "new_graph",
         .schema = "",
-    } });
+    } }, 1);
     try std.testing.expectError(error.StoreNotAvailable, result);
 }
 
-test "applyCommand: graph_mutation create with store creates node" {
+test "applyCommand: graph_mutation create with store creates node keyed by raft index" {
     const allocator = std.testing.allocator;
     var store = try GraphStore.init(allocator);
     defer store.deinit();
@@ -334,16 +346,38 @@ test "applyCommand: graph_mutation create with store creates node" {
         .mutation_type = .create,
         .data = "hello",
         .txn_id = null,
-    } });
+    } }, 42);
     defer allocator.free(result);
 
-    // Result should contain a u64 node ID
+    // Result should contain the raft-index-derived u64 node ID.
     try std.testing.expectEqual(@as(usize, 8), result.len);
     const node_id = std.mem.readInt(u64, result[0..8], .little);
-    try std.testing.expect(node_id > 0);
+    try std.testing.expectEqual(@as(u64, 42), node_id);
 
     // Verify the graph was created
     try std.testing.expect(store.graphs.contains("test_graph"));
+}
+
+test "applyCommand: re-applying the same committed legacy create is idempotent" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "test_graph",
+        .mutation_type = .create,
+        .data = "hello",
+        .txn_id = null,
+    } };
+
+    const r1 = try applyCommand(allocator, &store, cmd, 9);
+    defer allocator.free(r1);
+    const r2 = try applyCommand(allocator, &store, cmd, 9);
+    defer allocator.free(r2);
+
+    // Both applies report the same raft-index-derived id; only one node exists.
+    try std.testing.expectEqual(std.mem.readInt(u64, r1[0..8], .little), std.mem.readInt(u64, r2[0..8], .little));
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
 }
 
 test "applyCommand: schema_change create_graph creates graph" {
@@ -355,7 +389,7 @@ test "applyCommand: schema_change create_graph creates graph" {
         .operation = .create_graph,
         .graph = "my_graph",
         .schema = "",
-    } });
+    } }, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 
@@ -373,7 +407,7 @@ test "applyCommand: schema_change create_graph is idempotent" {
         .operation = .create_graph,
         .graph = "idem_graph",
         .schema = "",
-    } });
+    } }, 1);
     defer allocator.free(r1);
 
     // Create again — should not error
@@ -381,7 +415,7 @@ test "applyCommand: schema_change create_graph is idempotent" {
         .operation = .create_graph,
         .graph = "idem_graph",
         .schema = "",
-    } });
+    } }, 2);
     defer allocator.free(r2);
 }
 
@@ -397,7 +431,7 @@ test "applyCommand: schema_change drop_graph drops graph" {
         .operation = .drop_graph,
         .graph = "temp_graph",
         .schema = "",
-    } });
+    } }, 1);
     defer allocator.free(result);
 
     try std.testing.expect(!store.graphs.contains("temp_graph"));
@@ -426,7 +460,7 @@ test "applyCallbackFn delegates to applyCommand via g_store" {
     defer resetGlobalStore();
 
     // Use the function-pointer-compatible callback
-    const result = try applyCallbackFn(allocator, .noop);
+    const result = try applyCallbackFn(allocator, .noop, 1);
     defer allocator.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }

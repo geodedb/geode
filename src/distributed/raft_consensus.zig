@@ -1982,7 +1982,7 @@ pub const RaftNode = struct {
     transport: ?*Transport,
 
     // Callbacks
-    apply_callback: ?*const fn (allocator: Allocator, cmd: Command) anyerror![]u8,
+    apply_callback: ?*const fn (allocator: Allocator, cmd: Command, raft_index: u64) anyerror![]u8,
 
     // Statistics
     stats: Statistics,
@@ -2337,7 +2337,10 @@ pub const RaftNode = struct {
                 if (self.apply_callback) |callback| {
                     const cmd = deserializeCommand(entry.data) catch Command{ .write = entry.data };
                     // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ErrorLogging; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
-                    _ = callback(self.allocator, cmd) catch |err| {
+                    // Pass the committed entry's globally-unique, cross-node-identical
+                    // log index so the apply layer can derive a deterministic,
+                    // restart-idempotent node id (Raft Log Matching Property).
+                    _ = callback(self.allocator, cmd, entry.index) catch |err| {
                         log.err("Raft apply_callback failed — committed entry not applied", &.{
                             Attr.string("error", @errorName(err)),
                             Attr.uint("entry_index", entry.index),
