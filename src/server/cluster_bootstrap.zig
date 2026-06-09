@@ -40,6 +40,11 @@ pub const Error = error{
     MissingNodeId,
     InvalidNodeId,
     InvalidPeerSpec,
+    /// The durable raft storage directory (`<data_dir>/raft`) is already locked
+    /// by a live process (FileStorage exclusive `.lock` flock). Surfaced
+    /// distinctly so the operator sees a real "already running / stale lock"
+    /// diagnosis instead of a misleading InvalidNodeId.
+    RaftStorageDirLocked,
     OutOfMemory,
 };
 
@@ -166,6 +171,7 @@ pub fn maybeStart(
     cli_peers: []const []const u8,
     cluster_cert_path: ?[]const u8,
     cluster_key_path: ?[]const u8,
+    data_dir: ?[]const u8,
 ) Error!?Bootstrap {
     // Standalone mode: no cluster token, nothing to do.
     const cluster_token = env.get("GEODE_CLUSTER_TOKEN") orelse return null;
@@ -317,6 +323,10 @@ pub fn maybeStart(
         // (A6).  Empty string lets the QuicTransport defaults apply.
         .cert_path = cluster_cert_path orelse "",
         .key_path = cluster_key_path orelse "",
+        // Root durable raft hard-state + log at <data_dir>/raft (FileStorage)
+        // when the server has a data directory. Null falls back to in-memory
+        // (non-durable) raft state — ClusterCoordinator.init logs a warn.
+        .data_dir = data_dir,
     };
 
     // ClusterCoordinator.init returns a value (not a pointer); allocate
@@ -326,6 +336,14 @@ pub fn maybeStart(
 
     coord.* = cluster.ClusterCoordinator.init(allocator, node_id, cfg) catch |err| switch (err) {
         error.OutOfMemory => return Error.OutOfMemory,
+        // The durable raft dir is held by another live process (or a stale
+        // lock from a crashed peer). Surface this DISTINCTLY: the operator
+        // needs a "raft data dir locked" diagnosis, not a misleading
+        // "invalid node id". Log the offending path before propagating.
+        error.RaftStorageDirLocked => {
+            std.log.err("cluster: raft storage dir '{s}/raft' is locked by another process (FileStorage .lock); refusing to start. Stop the other node or clear a stale lock.", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageDirLocked;
+        },
         // ClusterCoordinator.init can return errors from raft init,
         // graph_store init, nonce tracker init, etc.  We surface the
         // raft-rejected-id case as InvalidNodeId; everything else

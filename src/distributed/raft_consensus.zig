@@ -1968,11 +1968,22 @@ pub const RaftNode = struct {
 
     // External raft library node
     inner: raft_lib.RaftNode,
-    // Heap-allocated so the Storage vtable interface (which captures
-    // &storage_ptr.*) remains valid for the RaftNode's lifetime. A previous
-    // version held this as an inline value, which dangled the moment
-    // RaftNode.init returned. See A4d of the distributed cluster testing plan.
-    storage_ptr: *raft_lib.InMemoryStorage,
+    // Heap-allocated, OWNED storage backing whose Storage vtable interface
+    // (which captures the backing pointer) remains valid for the RaftNode's
+    // lifetime. A previous version held this as an inline value, which dangled
+    // the moment RaftNode.init returned. See A4d of the distributed cluster
+    // testing plan.
+    //
+    // The variant is chosen at construction: `.in_memory` (today's behavior,
+    // and the in-process test path) loses hard-state/log on restart; `.file`
+    // (production, when a `storage_dir` is supplied) persists currentTerm /
+    // votedFor / the raft log via the pinned raft library's crash-safe
+    // FileStorage, so a restarted node restores its hard-state (Raft
+    // election-safety) instead of resetting term/vote to zero.
+    storage_backing: union(enum) {
+        in_memory: *raft_lib.InMemoryStorage,
+        file: *raft_lib.FileStorage,
+    },
 
     // Configuration
     peers: []Peer,
@@ -2000,12 +2011,31 @@ pub const RaftNode = struct {
         return initWithClock(allocator, id, peers, election_timeout_ms, &RealClock.instance);
     }
 
-    pub fn initWithClock(
+    /// Construct a RaftNode whose raft hard-state (currentTerm/votedFor) and log
+    /// are rooted at a per-node on-disk directory when `storage_dir` is non-null,
+    /// or held purely in memory when it is null.
+    ///
+    /// * `storage_dir == null` → heap-allocate a `raft_lib.InMemoryStorage`
+    ///   (today's behavior, and the in-process test path). Hard-state and log
+    ///   are lost on restart.
+    /// * `storage_dir != null` → heap-allocate a `raft_lib.FileStorage` rooted
+    ///   at that dir. The library creates the full dir path and opens a Dir
+    ///   handle (it does NOT retain the `storage_dir` slice, so the caller may
+    ///   free it once this returns) and takes an exclusive `.lock` flock. If a
+    ///   live process already holds that lock, `FileStorage.init` returns
+    ///   `error.WouldBlock` which we surface as `error.RaftStorageDirLocked`
+    ///   (do NOT mislabel as InvalidNodeId). The persisted hard-state + log
+    ///   survive a process restart so a re-initialized node restores its
+    ///   currentTerm / votedFor (Raft election-safety).
+    ///
+    /// The chosen backing pointer is OWNED by the returned RaftNode and freed in
+    /// `deinit`; `FileStorage.deinit` releases the flock.
+    pub fn initWithStorageDir(
         allocator: Allocator,
         id: u64,
         peers: []Peer,
         election_timeout_ms: u64,
-        _: *const Clock,
+        storage_dir: ?[]const u8,
     ) !*RaftNode {
         const node = try allocator.create(RaftNode);
         // If any subsequent init step fails (most notably raft_lib.RaftNode.init
@@ -2022,17 +2052,66 @@ pub const RaftNode = struct {
             peer_ids[i] = peer.id;
         }
 
-        // Heap-allocate storage so the Storage interface pointer that
-        // raft_lib.RaftNode.init captures (via storage_ptr.storage()) remains
-        // valid for the lifetime of the RaftNode. The previous version held
-        // storage as a stack-local `var`, so the interface pointer dangled the
-        // moment this function returned — surfacing as `OutOfMemory` on the
+        // Heap-allocate the chosen storage backing so the Storage interface
+        // pointer that raft_lib.RaftNode.init captures (via backing.storage())
+        // remains valid for the lifetime of the RaftNode. A previous version
+        // held storage as a stack-local `var`, so the interface pointer dangled
+        // the moment this function returned — surfacing as `OutOfMemory` on the
         // first advance and then `ReadyNotAdvanced` indefinitely once
         // ClusterCoordinator.start() became reachable (A4b/A4c).
-        const storage_ptr = try allocator.create(raft_lib.InMemoryStorage);
-        errdefer allocator.destroy(storage_ptr);
-        storage_ptr.* = raft_lib.InMemoryStorage.init(allocator);
-        errdefer storage_ptr.deinit();
+        const StorageBacking = @FieldType(RaftNode, "storage_backing");
+        var backing: StorageBacking = undefined;
+        if (storage_dir) |dir| {
+            const file_ptr = try allocator.create(raft_lib.FileStorage);
+            errdefer allocator.destroy(file_ptr);
+            // The dir's exclusive `.lock` flock is held by whatever process last
+            // opened it. On an IN-PLACE restart (k8s pod restart with a
+            // preserved PVC, modelled by the netns churn test's M4), the
+            // *previous* incarnation may still be finishing its SIGTERM-driven
+            // shutdown when the replacement boots, so its flock lingers for a
+            // brief handoff window. An OS flock is released automatically the
+            // instant the holder exits (even on SIGKILL / crash), so a bounded
+            // retry reliably bridges that window without risking a true
+            // two-writers situation. We fail with a clear error only if the
+            // lock is STILL held after the budget — that means a genuinely live
+            // peer owns the dir (operator misconfiguration) or a kernel that
+            // leaked the lock, neither of which a longer wait would fix.
+            const lock_retry_budget_ns: u64 = 15 * std.time.ns_per_s;
+            const lock_retry_step_ns: u64 = 250 * std.time.ns_per_ms;
+            var waited_ns: u64 = 0;
+            file_ptr.* = while (true) {
+                break raft_lib.FileStorage.init(allocator, dir) catch |err| switch (err) {
+                    error.WouldBlock => {
+                        if (waited_ns >= lock_retry_budget_ns) {
+                            // Predecessor never released the flock within budget.
+                            return error.RaftStorageDirLocked;
+                        }
+                        compat_sleep(lock_retry_step_ns);
+                        waited_ns += lock_retry_step_ns;
+                        continue;
+                    },
+                    else => return err,
+                };
+            };
+            backing = .{ .file = file_ptr };
+        } else {
+            const mem_ptr = try allocator.create(raft_lib.InMemoryStorage);
+            errdefer allocator.destroy(mem_ptr);
+            mem_ptr.* = raft_lib.InMemoryStorage.init(allocator);
+            backing = .{ .in_memory = mem_ptr };
+        }
+        // From here on the backing is live (FileStorage holds a flock); any
+        // failure must deinit + destroy the correct variant to release it.
+        errdefer switch (backing) {
+            inline else => |p| {
+                p.deinit();
+                allocator.destroy(p);
+            },
+        };
+
+        const storage_iface = switch (backing) {
+            inline else => |p| p.storage(),
+        };
 
         const heartbeat_tick: u32 = 1;
         const election_tick: u32 = @intCast(@max(2, election_timeout_ms / 50));
@@ -2045,7 +2124,7 @@ pub const RaftNode = struct {
             .pre_vote = true,
         };
 
-        const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage_ptr.storage());
+        const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage_iface);
 
         node.* = RaftNode{
             .allocator = allocator,
@@ -2054,7 +2133,7 @@ pub const RaftNode = struct {
             .current_term = 0,
             .inner_mutex = std.Io.Mutex.init,
             .inner = inner,
-            .storage_ptr = storage_ptr,
+            .storage_backing = backing,
             .peers = peers,
             .election_timeout_ms = election_timeout_ms,
             .transport = null,
@@ -2067,11 +2146,29 @@ pub const RaftNode = struct {
         return node;
     }
 
+    pub fn initWithClock(
+        allocator: Allocator,
+        id: u64,
+        peers: []Peer,
+        election_timeout_ms: u64,
+        _: *const Clock,
+    ) !*RaftNode {
+        // In-process / test path: in-memory storage backing (no durability).
+        return initWithStorageDir(allocator, id, peers, election_timeout_ms, null);
+    }
+
     pub fn deinit(self: *RaftNode) void {
         self.state = .shutdown;
         self.inner.deinit();
-        self.storage_ptr.deinit();
-        self.allocator.destroy(self.storage_ptr);
+        // Deinit + destroy the OWNED storage backing variant. FileStorage.deinit
+        // releases the exclusive `.lock` flock so the dir can be re-opened by a
+        // subsequent (e.g. restarted) node.
+        switch (self.storage_backing) {
+            inline else => |p| {
+                p.deinit();
+                self.allocator.destroy(p);
+            },
+        }
         self.pending_responses.deinit();
     }
 

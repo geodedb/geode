@@ -2846,6 +2846,22 @@ pub fn build(b: *std.Build) void {
     const run_raft_apply_tests = b.addRunArtifact(raft_apply_tests);
     shardDep(test_step, &run_raft_apply_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // Root cause #6 follow-up: durable raft hard-state (currentTerm/votedFor) +
+    // log across a process restart. A FileStorage-backed RaftNode must restore
+    // its term after deinit + re-init on the same dir. Regression for
+    // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+    const raft_hardstate_dur_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_hardstate_durability.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_hardstate_dur_test_mod.addImport("geode", root_mod);
+    const raft_hardstate_dur_tests = b.addTest(.{ .root_module = raft_hardstate_dur_test_mod });
+    const run_raft_hardstate_dur_tests = b.addRunArtifact(raft_hardstate_dur_tests);
+    shardDep(test_step, &run_raft_hardstate_dur_tests.step, 1, test_shard_loads, test_shard_index);
+    const raft_hardstate_dur_step = b.step("test-raft-hardstate-durability", "Regression: raft hard-state must be durable across a process restart (FileStorage)");
+    raft_hardstate_dur_step.dependOn(&run_raft_hardstate_dur_tests.step);
+
     // Root cause #6: restart re-apply idempotency — re-applying a committed
     // replicated create must NOT duplicate the node. Regression for
     // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.

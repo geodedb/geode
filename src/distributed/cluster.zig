@@ -691,11 +691,28 @@ pub const ClusterCoordinator = struct {
         // which doesn't even type-check (init returns a pointer, not a
         // value).  As with resolvePeers above, this path was never reached
         // from production until the A3 test forced full type resolution.
-        const raft = try RaftNode.init(
+        //
+        // Durable raft state: when the operator supplies a data_dir, root the
+        // raft hard-state + log at `<data_dir>/raft` via FileStorage so a
+        // restarted node restores currentTerm / votedFor (Raft election-safety)
+        // instead of resetting to term 0. FileStorage opens a Dir handle at
+        // init and does NOT retain the path slice, so we free `raft_dir`
+        // immediately after `initWithStorageDir` returns. A null data_dir keeps
+        // the legacy in-memory (non-durable) backing.
+        const raft_dir: ?[]u8 = if (config.data_dir) |d|
+            try std.fmt.allocPrint(allocator, "{s}/raft", .{d})
+        else
+            null;
+        defer if (raft_dir) |p| allocator.free(p);
+        if (raft_dir == null) {
+            std.log.warn("cluster: no data_dir configured — raft hard-state/log is NON-DURABLE (in-memory); a restarted node forgets its term/vote (election-safety risk)", .{});
+        }
+        const raft = try RaftNode.initWithStorageDir(
             allocator,
             node_id,
             peers,
             config.election_timeout_ms,
+            raft_dir,
         );
         // raft.deinit() does not touch raft.peers (see deinit above, which
         // frees peers separately), so this unwind composes with the peers
@@ -2404,6 +2421,16 @@ pub const ClusterCoordinator = struct {
         /// TLS private key path mirroring `cert_path`.  Same lifetime story:
         /// caller owns the backing memory.
         key_path: []const u8 = "",
+        /// Server data directory. When non-null, `ClusterCoordinator.init`
+        /// roots the durable raft hard-state + log at `<data_dir>/raft` via
+        /// the pinned raft library's crash-safe FileStorage, so a restarted
+        /// node restores its currentTerm / votedFor (Raft election-safety)
+        /// rather than resetting term/vote to zero. Null keeps the legacy
+        /// in-memory (non-durable) backing. Stored by reference — caller owns
+        /// the backing memory (same convention as `cert_path` / `key_path`);
+        /// `init` only borrows it to build the `<data_dir>/raft` path and frees
+        /// that derived path before returning (FileStorage does not retain it).
+        data_dir: ?[]const u8 = null,
     };
 
     pub const PeerConfig = struct {

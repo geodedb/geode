@@ -1403,6 +1403,10 @@ pub fn main() !void {
             // in Zig 0.16 — networkLoop hard-fatals.  Task A6 (2026-05-25).
             cert_path,
             key_path,
+            // Durable raft hard-state + log live under <data_dir>/raft via
+            // FileStorage when the server has a data directory; null falls back
+            // to non-durable in-memory raft state.
+            data_dir,
         ) catch |err| {
             log.err("Cluster bootstrap failed; refusing to start", &.{Attr.string("error", @errorName(err))});
             return err;

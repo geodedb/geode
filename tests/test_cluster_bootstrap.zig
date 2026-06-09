@@ -38,7 +38,7 @@ test "maybeStart returns null when GEODE_CLUSTER_TOKEN is absent" {
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
-    const result = try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null);
+    const result = try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null);
     try std.testing.expect(result == null);
 }
 
@@ -51,7 +51,7 @@ test "maybeStart token-only mode: token set, no node_id, no peers -> null" {
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
     try env.put("GEODE_CLUSTER_TOKEN", "abc");
-    const result = try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null);
+    const result = try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null);
     try std.testing.expectEqual(@as(?cluster_bootstrap.Bootstrap, null), result);
 }
 
@@ -63,7 +63,7 @@ test "maybeStart errors when peers set but node_id missing" {
     defer env.deinit();
     try env.put("GEODE_CLUSTER_TOKEN", "abc");
     try env.put("GEODE_PEERS", "127.0.0.1:5001");
-    const result = cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null);
+    const result = cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null);
     try std.testing.expectError(error.MissingNodeId, result);
 }
 
@@ -73,7 +73,7 @@ test "maybeStart errors when node_id is not a number" {
     defer env.deinit();
     try env.put("GEODE_CLUSTER_TOKEN", "abc");
     try env.put("GEODE_NODE_ID", "not-a-number");
-    const result = cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null);
+    const result = cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null);
     try std.testing.expectError(error.InvalidNodeId, result);
 }
 
@@ -90,7 +90,7 @@ test "maybeStart starts a coordinator when env is complete (single node, no peer
     try env.put("GEODE_CLUSTER_TOKEN", "tok-single");
     try env.put("GEODE_NODE_ID", "1");
     try env.put("GEODE_CLUSTER_PORT", "14242"); // high port to avoid conflict
-    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null)) orelse return error.TestExpectedNonNull;
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null)) orelse return error.TestExpectedNonNull;
     defer bs.deinit();
     try std.testing.expectEqual(@as(u64, 1), bs.coordinator.node_id);
     try std.testing.expectEqual(@as(u16, 14242), bs.coordinator.cluster_port);
@@ -111,7 +111,7 @@ test "maybeStart parses 2-peer cluster from GEODE_PEERS" {
     try env.put("GEODE_NODE_ID", "10");
     try env.put("GEODE_CLUSTER_PORT", "14243");
     try env.put("GEODE_PEERS", "127.0.0.1:14244,127.0.0.1:14245");
-    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null)) orelse return error.TestExpectedNonNull;
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null)) orelse return error.TestExpectedNonNull;
     defer bs.deinit();
     // ClusterCoordinator.raft.peers should have 2 entries
     try std.testing.expectEqual(@as(usize, 2), bs.coordinator.raft.peers.len);
@@ -129,7 +129,7 @@ test "maybeStart: CLI peers override GEODE_PEERS env" {
     try env.put("GEODE_CLUSTER_PORT", "14246");
     try env.put("GEODE_PEERS", "127.0.0.1:9999"); // would be 1 peer
     const cli_peers = [_][]const u8{ "127.0.0.1:14247", "127.0.0.1:14248" };
-    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &cli_peers, null, null)) orelse return error.TestExpectedNonNull;
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &cli_peers, null, null, null)) orelse return error.TestExpectedNonNull;
     defer bs.deinit();
     try std.testing.expectEqual(@as(usize, 2), bs.coordinator.raft.peers.len);
 }
@@ -210,7 +210,7 @@ test "maybeStart: derives node_id from $HOSTNAME when GEODE_NODE_ID is unset (k8
     // Self entry uses the pod hostname (position 1); the other two are loopback
     // so the coordinator's background connect attempts have somewhere to go.
     try env.put("GEODE_PEERS", "geode-0:14250,127.0.0.1:14251,127.0.0.1:14252");
-    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null)) orelse return error.TestExpectedNonNull;
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null)) orelse return error.TestExpectedNonNull;
     defer bs.deinit();
     // node_id derived as 1 from the $HOSTNAME match (geode-0 at position 1).
     try std.testing.expectEqual(@as(u64, 1), bs.coordinator.raft.id);
@@ -230,7 +230,7 @@ test "maybeStart: $HOSTNAME position overrides a mismatched GEODE_NODE_ID (the k
     try env.put("HOSTNAME", "geode-1"); // pod is geode-1 -> position 2
     try env.put("GEODE_NODE_ID", "1"); // MISCONFIGURED (the silent-hang bug)
     try env.put("GEODE_PEERS", "127.0.0.1:14254,geode-1:14253,127.0.0.1:14255");
-    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null)) orelse return error.TestExpectedNonNull;
+    var bs = (try cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, null)) orelse return error.TestExpectedNonNull;
     defer bs.deinit();
     // Despite GEODE_NODE_ID=1, the hostname position (2) wins so votes are counted.
     try std.testing.expectEqual(@as(u64, 2), bs.coordinator.raft.id);

@@ -243,20 +243,75 @@ assert_no_duplicate() {
   [ "$bad" = "0" ] && echo "  PASS no-dup: $lbl count is EXACTLY 1 on all 3 nodes after restart (no re-apply duplicate)"
 }
 
+# Fully terminate node $1 and WAIT until its process has actually exited, so its
+# FileStorage exclusive `.lock` flock (under {data_dir}/raft) is released before
+# any replacement starts on the SAME data-dir. The OS releases an flock the
+# instant the holder exits (even on SIGKILL), so reaping is what frees the lock.
+#
+# This models a real k8s pod restart: the kubelet SIGKILLs a pod that does not
+# exit within terminationGracePeriodSeconds, and a StatefulSet's RWO PVC is only
+# (re)mounted onto the replacement pod once the old pod has FULLY terminated — so
+# a same-PVC restart never races a still-live writer. geode's SIGTERM shutdown
+# can hang (separate, pre-existing liveness-kill / idle-spin bug: the log shows
+# "thread-pool deinit timed out" while the process keeps spinning); without this
+# reap that lingering process would still hold the flock and the replacement
+# would (correctly) refuse to start with RaftStorageDirLocked. Reaping reproduces
+# the k8s termination ordering so M4 actually exercises durable FileStorage
+# reload rather than a same-host two-writers race the product rightly forbids.
+kill_and_reap() {
+  local id=$1 t pat="geode serve .*--data-dir $WORK/data$id "
+  # SIGTERM first (graceful flush attempt), then give it a few seconds.
+  [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
+  for t in $(seq 1 5); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
+  # Force-kill any survivor (geode + its sudo wrappers); SIGKILL is uncatchable,
+  # so the kernel reaps it and releases the flock. Then WAIT until truly gone.
+  $SUDO pkill -9 -f "$pat" 2>/dev/null
+  for t in $(seq 1 15); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
+  PID[$id]=""
+}
+
 # Restart node $1 IN PLACE (keep its data-dir / persisted store), modelling a
 # k8s pod restart where the PVC follows the pod. The restarted node re-applies
 # the leader's committed log on top of its persisted store — the exact trigger
-# for the root-cause-#6 duplicate. (reschedule_node wipes the data-dir to model
-# a move to a NEW node; this one deliberately does NOT, to exercise re-apply.)
+# for the root-cause-#6 duplicate — and (with the FileStorage fix) reloads its
+# durable raft hard-state + log. The prior process is fully reaped first so its
+# FileStorage flock is released (see kill_and_reap). (reschedule_node wipes the
+# data-dir to model a move to a NEW node; this one deliberately does NOT.)
 restart_in_place() {
   local id=$1
-  [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
-  PID[$id]=""; sleep 3
+  kill_and_reap "$id"
   start_node $id
-  echo "  restarted node$id in place (data-dir preserved -> re-applies committed log)"
+  echo "  restarted node$id in place (data-dir preserved, prior process reaped -> re-applies committed log)"
 }
 
 run_phase() { case " $PHASES " in *" $1 "*) return 0;; *) return 1;; esac; }
+
+# ---- raft hard-state + log DURABILITY on disk (FileStorage active) -----------
+# Follow-up to root cause #6 / fix design /tmp/raft-filestorage-design.md: the
+# live cluster RaftNode must back the embedded raft library with the crash-safe
+# raft_lib.FileStorage (rooted at {data_dir}/raft) instead of InMemoryStorage,
+# so currentTerm/votedFor + the raft log survive a process restart. FileStorage's
+# on-disk layout is {data_dir}/raft/hard_state (20B term/votedFor/crc) and
+# {data_dir}/raft/entries.wal (the raft log WAL).
+#
+# This asserts those files EXIST for at least one running node — directly
+# refuting the bug report's "no raft_log.bin / no raft log file present".
+# RED by construction against the UNFIXED binary: InMemoryStorage writes nothing
+# under {data_dir}/raft, so neither file ever appears. GREEN once FileStorage is
+# wired. (Checks every node, passes if ANY one has both files — a node must have
+# advanced its hard-state at least once, which it does as soon as it joins.)
+assert_raft_state_persisted() {
+  local tag=$1 id found=0
+  for id in $NS_NODES; do
+    [ -n "${PID[$id]:-}" ] || continue
+    if [ -f "$WORK/data$id/raft/hard_state" ] && [ -f "$WORK/data$id/raft/entries.wal" ]; then
+      echo "  PASS $tag: node$id persisted raft FileStorage on disk ($WORK/data$id/raft/{hard_state,entries.wal})"
+      found=1
+      break
+    fi
+  done
+  [ "$found" = "0" ] && fail "$tag no node has {data_dir}/raft/hard_state AND entries.wal on disk — raft is still InMemoryStorage (hard-state + log NOT durable across restart)"
+}
 
 # Reschedule node $1 to a NEW IP, modelling a k8s pod reschedule:
 #  - kill it, flush its old IP, bring it up on the toggled prefix (.1X<->.2X),
@@ -340,6 +395,10 @@ if run_phase M1; then
       fail "M1 late node3 never became follower (state=$(roleof 3) term=$(termof 3)) — parked, never joined"
     fi
   fi
+  # FileStorage durability check: by now nodes have elected + replicated, so at
+  # least one has advanced + persisted its raft hard-state to disk. RED against
+  # the unfixed InMemoryStorage binary (no {data_dir}/raft files exist).
+  assert_raft_state_persisted M1
   echo "  M1 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
 fi
 
