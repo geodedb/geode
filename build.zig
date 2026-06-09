@@ -5955,6 +5955,20 @@ pub fn build(b: *std.Build) void {
     const gps_policy_persistence_step = b.step("test-gps-policy-persistence", "Run GPS policy persistence round-trip tests (persist/drop/hydrate in __geode_security)");
     gps_policy_persistence_step.dependOn(&run_gps_policy_persistence_tests.step);
 
+    // GAP-0854: FLE configureField must not corrupt the __geode_security HMAC
+    // chain. Needs auth_graph_manager (named module) like the GPS persistence
+    // test above, plus the geode root module for graph_store/fle_integration/
+    // storage_dispatch. link_libc for the FLE catalog/TDE env-var access.
+    const gap0854_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0854_fle_chain.zig"), .target = target, .optimize = optimize });
+    gap0854_test_mod.addImport("geode", root_mod);
+    gap0854_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    gap0854_test_mod.link_libc = true;
+    const gap0854_tests = b.addTest(.{ .root_module = gap0854_test_mod });
+    const run_gap0854_tests = b.addRunArtifact(gap0854_tests);
+    shardDep(test_step, &run_gap0854_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0854_step = b.step("test-gap0854", "Run GAP-0854 FLE configureField auth-chain integrity regression (restart-safe)");
+    gap0854_step.dependOn(&run_gap0854_tests.step);
+
     // GPS Phase 4 (Task 4-6): policy-catalog evaluation in decide().
     const gps_policy_evaluation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_evaluation.zig"), .target = target, .optimize = optimize });
     gps_policy_evaluation_test_mod.addImport("geode", root_mod);

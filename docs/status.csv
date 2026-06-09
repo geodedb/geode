@@ -988,6 +988,7 @@ REQ-FLE-009,FieldLevelEncryption,BulkEncryption,TESTED,,,security,2026-01-15,tes
 REQ-FLE-010,FieldLevelEncryption,EncryptionMetadata,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,TESTED,,,security,2026-01-15,src/admin/fle_commands.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,,,security,2026-01-15,src/gql/ast.zig
+REQ-FLE-AUTHCHAIN-001,FLE AuthChain Integrity,ConfigureFieldRestart,TESTED,,,security,2026-06-09,tests/test_gap0854_fle_chain.zig
 REQ-FLE-BATCH-001,FLE Batch Re-encryption,ProgressTracking,TESTED,,,security,2026-01-16,src/admin/fle_commands.zig
 REQ-FLE-BI-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/crypto/hmac.zig
 REQ-FLE-BI-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/index/blind_index.zig

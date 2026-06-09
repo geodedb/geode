@@ -238,6 +238,24 @@ fn isInternalPersistedPropertyKey(key: []const u8) bool {
         std.mem.eql(u8, key, INTERNAL_EDGE_ID_PROPERTY_KEY);
 }
 
+/// Name of the internal HMAC-chained security graph (auth users/roles/
+/// permissions/policies/grants). Must mirror `SECURITY_GRAPH_NAME` in
+/// `src/storage/user_storage.zig` and `src/security/auth_graph_manager.zig`.
+pub const SECURITY_GRAPH_NAME = "__geode_security";
+
+/// GAP-0854: FLE field encryption must NEVER touch the internal
+/// `__geode_security` graph. Its nodes carry common labels (`User`, `Role`)
+/// that collide with application labels, so a user-configured FLE field such
+/// as `('User','email')` would otherwise FLE-encrypt the security graph's own
+/// User-node properties. The auth HMAC chain is computed over the plaintext
+/// record fields at write time, so an FLE-rewritten property breaks
+/// `verifyChain` on the next boot (`error.AuthChainTampered`) and bricks the
+/// server. The security graph is already protected at rest by TDE, so excluding
+/// it from FLE is both correct and complete.
+fn isSecurityGraphName(graph_name: []const u8) bool {
+    return std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME);
+}
+
 fn encodePersistedPublicId(buf: *[16]u8, public_id: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{x:0>16}", .{public_id}) catch unreachable;
 }
@@ -3088,11 +3106,14 @@ pub const GraphStore = struct {
         const effective_value = switch (value) {
             .String => |s| blk: {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
-                    const node_type: []const u8 = if (self.nodes.get(node_id)) |n|
+                    const maybe_node = self.nodes.get(node_id);
+                    const node_type: []const u8 = if (maybe_node) |n|
                         (if (n.labels.len > 0) n.labels[0] else "Unknown")
                     else
                         "Unknown";
-                    if (fle_integration.fieldRequiresEncryption(node_type, key)) {
+                    // GAP-0854: never FLE-encrypt the internal security graph.
+                    const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
+                    if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
                         const fle_ctx = fle_integration.EncryptionContext{
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
@@ -3275,11 +3296,14 @@ pub const GraphStore = struct {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
-                    const node_type: []const u8 = if (self.nodes.get(node_id)) |n|
+                    const maybe_node = self.nodes.get(node_id);
+                    const node_type: []const u8 = if (maybe_node) |n|
                         (if (n.labels.len > 0) n.labels[0] else "Unknown")
                     else
                         "Unknown";
-                    if (fle_integration.fieldRequiresEncryption(node_type, key)) {
+                    // GAP-0854: never FLE-encrypt the internal security graph.
+                    const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
+                    if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
                         const fle_ctx = fle_integration.EncryptionContext{
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
@@ -3317,6 +3341,12 @@ pub const GraphStore = struct {
 
             // Fast path: skip FLE decryption when no encryption is configured.
             if (!fle_integration.hasEncryptedFields()) return value;
+
+            // GAP-0854: the internal security graph is never FLE-encrypted (see
+            // setNodeProperty), so it must never be run through FLE decryption
+            // either — its `hmac`/`username`/`email` values are stored as
+            // plaintext and feed the auth HMAC chain verbatim.
+            if (isSecurityGraphName(node.graph_name)) return value;
 
             // Field-Level Encryption: decrypt string values if encrypted
             switch (value) {
