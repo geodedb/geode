@@ -21,6 +21,7 @@ CaaST is a multi-tenant compliance platform that uses Geode as its graph backend
 | GAP-0843 | FLE | At-rest TDE is not per-tenant; per-tenant key functions exist but are **unwired dead code**; page path uses one master key | Medium | Partial (2026-06-08) — page handler now real; per-tenant key funcs tested building blocks; per-page per-tenant TDE deferred to GAP-0290 | Wire `encryptForTenant`/`decryptForTenant` (or per-tenant-group keys) into the storage/page TDE path. |
 | GAP-0844 | FLE | FLE tenant correctness depends on per-thread set/clear discipline (+ a process-global env override) | Medium | Open | Bind tenant/role to the request context, not the OS thread; remove/guard the `GEODE_CURRENT_ROLE` override. |
 | GAP-0845 | FLE | FLE schema is not settable via standard GQL DDL — `CALL geode.fle.*` is the only path | Low | Open (doc) | Add first-class FLE DDL, or document the `CALL` workflow as the supported, stable path. |
+| GAP-0846 | FLE | `geode.fle.configureField` corrupts the `__geode_security` audit hash-chain → next server restart fails `AuthChainTampered` and exits 1 (ALL versions 0.6.13–0.6.18) | **Critical** | Open | Sign/append FLE catalog mutations into the audit chain (or exclude FLE-config events from chain verification) so a server with FLE configured can restart. |
 
 ### Verified-resolved (no longer true — recorded for traceability)
 
@@ -159,8 +160,42 @@ These two are explicitly **dropped** from the open findings because the current 
 - **Impact on CaaST:** CaaST defines its schema (including which fields are encrypted) as part of its migration/DDL flow. Because FLE field configuration lives behind `CALL geode.fle.*` rather than DDL, CaaST cannot declare encrypted fields in the same place as the rest of its schema; encryption config drifts into a separate, procedural code path that is easy to miss when a new encrypted field is added.
 - **Recommended correction:** Either add first-class FLE DDL (e.g. column/field annotations honored by `CREATE`/`ALTER`), or formally document `CALL geode.fle.*` as the **supported, stable** path for FLE schema management — including the full procedure list and an end-to-end example — so downstream consumers can depend on it.
 
+### GAP-0846 — `geode.fle.configureField` corrupts the `__geode_security` audit hash-chain → next restart fails `AuthChainTampered`
+
+- **Severity:** **Critical** (makes FLE unusable in any deployment that ever restarts the server)
+- **Area:** FLE / audit-chain integrity / durability
+- **Discovered:** 2026-06-09, reproduced against the published `geodedb/geode` image on **every available tag** — `0.6.13`, `0.6.16`, `0.6.17` (current `latest`), `0.6.18`. Not a regression; standing across versions.
+- **Symptom:** After `CALL geode.fle.configureField(<label>,<field>,{algorithm:'AES-256-GCM'})` is run against a server, the **next** server boot loads `__geode_security` and aborts:
+
+  ```
+  info(graph_storage_adapter): opened existing graph '__geode_security' (property index loaded from disk)
+  error: AuthChainTampered
+  ```
+
+  and the process exits 1. Once any FLE field is configured on a data volume, the server can never restart on that volume.
+- **Reproduction (minimal):**
+
+  ```sh
+  docker run -d --name ge -e GEODE_ADMIN_PASSWORD=pw -e GEODE_MASTER_KEY=$(printf 'k%.0s' {1..48}) \
+    -e GEODE_FLE_ENABLED=true geodedb/geode:latest serve --data-dir /data
+  # wait for ready, then:
+  docker exec ge geode query --server 127.0.0.1:3141 --insecure-tls-skip-verify -U geode -P pw \
+    "CALL geode.fle.configureField('User','email',{algorithm:'AES-256-GCM'})"
+  docker stop ge && docker start ge
+  docker logs ge | grep AuthChainTampered   # -> error: AuthChainTampered
+  ```
+
+- **Isolation (what is and isn't the cause):**
+  - A plain server with ordinary graph writes (`CREATE (n:Foo …)`) restarts **cleanly** — restart itself is fine.
+  - The failure appears the moment an FLE field is configured, **independent of `geode fle grant-plaintext`** — it reproduces with configure-only, no grant.
+  - It is **not** fixed by pinning the audit signing keys: setting `GEODE_AUDIT_PUB`/`GEODE_AUDIT_SEC` (the documented production recommendation) silences the "keys stored as files" warning but the chain still fails verification after a configure.
+  - There is **no `serve` flag** to disable or repair audit-chain verification (`geode serve --help` exposes only `--audit`/`--audit-syslog`/`--audit-file`/`--audit-eventlog`).
+  - Inference: `configureField` mutates `__geode_security` (an FLE-policy/audit event) via a path that is **not** appended-and-signed into the same hash chain the server verifies at boot, so on reload the chain's recomputed digest no longer matches.
+- **Impact on CaaST (severe):** This makes geode-native FLE-at-rest **unusable** for CaaST. The documented FLE bootstrap (configure a field on a short-lived server → stop → `geode fle grant-plaintext` offline → start the real server) bricks the container on its very first bootstrap restart, and even runtime per-tenant FLE (configuring fields when a tenant is provisioned) would brick the next geode restart. There is also no working alternative: the plaintext grant is an **offline-only** CLI op (no `--server` flag; needs the server down), but any configure-then-restart is exactly what trips the chain. CaaST has therefore had to **disable FLE-at-rest by default** (secrets stored as ordinary, unencrypted properties) until this is fixed — a material downgrade of the at-rest security posture the per-tenant-TRK design was built to provide. (Tenant *isolation* via the native `tenant_id` row filter is unaffected; only field encryption is.)
+- **Recommended correction:** Route FLE catalog/policy mutations (`configureField`, and likely `grant-plaintext`) through the **same signed append path** that ordinary `__geode_security` writes use, so the boot-time hash-chain verification covers them; OR explicitly exclude FLE-config/policy records from the verified chain (treating the FLE catalog as separate state) so they cannot invalidate it. Either way, a server with FLE configured must be able to restart. Add a regression test that configures a field, restarts, and asserts a clean boot. Secondary: provide an **online**, chained equivalent of `geode fle grant-plaintext` (e.g. `CALL geode.fle.grantPlaintext(...)` or a `GRANT READ_PLAINTEXT …` DDL) so the FLE bootstrap never needs an offline, server-down mutation of `__geode_security` at all.
+
 ---
 
 ## Cross-reference
 
-These findings are tracked in `docs/GAP_ANALYSIS.md` (proposed GAP-0838 … GAP-0845). Verified-resolved items (GAP-0287, GAP-0294) remain closed in `docs/GAP_ANALYSIS_RESOLVED.md` and are recorded here only to document that the stale "still open" claims were checked and found false.
+These findings are tracked in `docs/GAP_ANALYSIS.md` (proposed GAP-0838 … GAP-0846). **GAP-0846 (FLE configureField → AuthChainTampered on restart, Critical) was added 2026-06-09** from a follow-up CaaST deploy and is the highest-priority item — it blocks FLE-at-rest entirely on every released version. Verified-resolved items (GAP-0287, GAP-0294) remain closed in `docs/GAP_ANALYSIS_RESOLVED.md` and are recorded here only to document that the stale "still open" claims were checked and found false.
