@@ -786,11 +786,16 @@ pub const DropPolicyStatement = struct {
 };
 
 /// AST node for: ALTER POLICY <name> SET ENABLED true|false
-/// Phase 7 supports only enable/disable; expression-source update is done via DROP + CREATE.
-// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyAST; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+///            or ALTER POLICY <name> RENAME TO <new_name>
+/// Enable/disable and rename are durable (GAP-0858); expression-source update
+/// is still done via DROP + CREATE.
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyAST; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-06-09
 pub const AlterPolicyStatement = struct {
     name: []const u8,
     set_enabled: ?bool = null,
+    // GAP-0858: ALTER POLICY <name> RENAME TO <new_name>. Null when the
+    // statement only toggles ENABLED.
+    rename_to: ?[]const u8 = null,
 };
 
 // Query introspection statements

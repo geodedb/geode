@@ -6706,9 +6706,19 @@ pub const Parser = struct {
     }
 
     // Parse ALTER POLICY <name> SET ENABLED true|false
-    // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+    //    or ALTER POLICY <name> RENAME TO <new_name>
+    // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-06-09
     fn parseAlterPolicy(self: *Parser) ParserError!ast.Statement {
         const name = try self.parseName();
+
+        // GAP-0858: RENAME TO <new_name> branch (durable rename).
+        if (self.softKw("RENAME")) {
+            self.advance(); // RENAME
+            _ = try self.expect(.TO);
+            const new_name = try self.parseName();
+            return .{ .AlterPolicy = .{ .name = name, .rename_to = new_name } };
+        }
+
         _ = try self.expect(.SET);
         if (!self.softKw("ENABLED")) return self.unexpected("expected ENABLED after ALTER POLICY <name> SET");
         self.advance(); // ENABLED

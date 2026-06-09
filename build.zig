@@ -5992,6 +5992,21 @@ pub fn build(b: *std.Build) void {
     const gap0854_step = b.step("test-gap0854", "Run GAP-0854 FLE configureField auth-chain integrity regression (restart-safe)");
     gap0854_step.dependOn(&run_gap0854_tests.step);
 
+    // GAP-0858: durable ALTER POLICY write-through to __geode_security. Mirrors
+    // the GPS persistence test wiring (geode root + auth_graph_manager +
+    // policy_persistence named modules). Drives persist -> alter -> re-hydrate
+    // (simulated restart) and asserts enable/disable + rename survive while the
+    // HMAC chain stays green and no stale old-name record remains.
+    const gap0858_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0858_alter_policy_persist.zig"), .target = target, .optimize = optimize });
+    gap0858_test_mod.addImport("geode", root_mod);
+    gap0858_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    gap0858_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const gap0858_tests = b.addTest(.{ .root_module = gap0858_test_mod });
+    const run_gap0858_tests = b.addRunArtifact(gap0858_tests);
+    shardDep(test_step, &run_gap0858_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0858_step = b.step("test-gap0858", "Run GAP-0858 durable ALTER POLICY persistence regression (enable/disable/rename survive restart)");
+    gap0858_step.dependOn(&run_gap0858_tests.step);
+
     // GPS Phase 4 (Task 4-6): policy-catalog evaluation in decide().
     const gps_policy_evaluation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_evaluation.zig"), .target = target, .optimize = optimize });
     gps_policy_evaluation_test_mod.addImport("geode", root_mod);

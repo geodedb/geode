@@ -158,14 +158,34 @@ pub const PolicyCatalog = struct {
         return self.policies.items;
     }
 
-    // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=PolicyCatalogAlter; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+    // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=PolicyCatalogAlter; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
     /// Update mutable fields of an existing policy in-place.
+    /// `set_enabled` toggles the enabled flag; `rename_to` reassigns the policy
+    /// name (the old name is freed and replaced — no stale entry remains).
     /// Returns error.PolicyNotFound when no matching entry exists.
+    /// Returns error.PolicyAlreadyExists when `rename_to` collides with another
+    /// existing policy name.
     /// Bumps the policy version and invalidates the decision cache after any mutation.
-    pub fn alterPolicy(self: *PolicyCatalog, name: []const u8, set_enabled: ?bool) !void {
+    pub fn alterPolicy(self: *PolicyCatalog, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) !void {
+        // Reject a rename that would collide with a different existing policy.
+        if (rename_to) |new_name| {
+            if (!std.mem.eql(u8, new_name, name)) {
+                for (self.policies.items) |*other| {
+                    if (std.mem.eql(u8, other.name, new_name)) return error.PolicyAlreadyExists;
+                }
+            }
+        }
+
         for (self.policies.items) |*p| {
             if (std.mem.eql(u8, p.name, name)) {
                 if (set_enabled) |e| p.enabled = e;
+                if (rename_to) |new_name| {
+                    if (!std.mem.eql(u8, new_name, p.name)) {
+                        const new_dupe = try self.allocator.dupe(u8, new_name);
+                        self.allocator.free(p.name);
+                        p.name = new_dupe;
+                    }
+                }
                 _ = policy_version.incrementPolicyVersion();
                 if (decision_cache.getGlobalCache()) |c| c.invalidateAll();
                 return;
@@ -211,10 +231,19 @@ pub const PersistFn = *const fn (ctx: *anyopaque, spec: PolicySpec) anyerror!voi
 /// Called with the policy name before removePolicy. Errors are non-fatal.
 pub const DropFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror!void;
 
+// CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterWriteThroughHook; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
+/// GAP-0858: called after alterPolicy mutates the in-memory catalog so the
+/// enable/disable + rename change is written through to __geode_security.
+/// `name` is the CURRENT (pre-rename) policy name used to locate the durable
+/// record; `set_enabled` and `rename_to` mirror the alterPolicy arguments.
+/// Errors are non-fatal and logged by the server.
+pub const AlterFn = *const fn (ctx: *anyopaque, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) anyerror!void;
+
 pub const WriteThroughHooks = struct {
     ctx: *anyopaque,
     persist: PersistFn,
     drop: DropFn,
+    alter: AlterFn,
 };
 
 var g_hooks: ?WriteThroughHooks = null;

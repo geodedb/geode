@@ -1034,6 +1034,49 @@ pub const AuthGraphManager = struct {
         self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
     }
 
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicy; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
+    /// GAP-0858: durable ALTER POLICY write-through. Locates the policy by its
+    /// current name, applies the enable/disable and/or rename mutation by
+    /// re-persisting the record under the SAME policy id (an in-place update of
+    /// the existing :Policy node — no stale node remains under the old name),
+    /// recomputes the record HMAC, and reseals the chain.
+    /// Returns error.PolicyNotFound when no matching policy exists.
+    pub fn alterPolicy(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        name: []const u8,
+        set_enabled: ?bool,
+        rename_to: ?[]const u8,
+    ) !void {
+        const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
+        const existing = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
+
+        // Resolve the post-mutation field values, defaulting to the durable
+        // record's current values so an unspecified mutation is preserved.
+        const new_enabled = set_enabled orelse existing.enabled;
+        const new_name = rename_to orelse existing.getName();
+
+        // Re-persist under the SAME id so upsertPolicyNode reuses the existing
+        // node (in-place rename/toggle — no duplicate, no stale old-name node).
+        try self.storage.persistPolicy(.{
+            .policy_id = policy_id,
+            .name = new_name,
+            .description = existing.getDescription(),
+            .graph = existing.getGraph(),
+            .table = existing.getTable(),
+            .operation = existing.operation,
+            .permissive = existing.permissive,
+            .enabled = new_enabled,
+            .using_clause = existing.getUsingClause(),
+            .check_clause = existing.getCheckClause(),
+            .audit_level = existing.audit_level,
+            .created_by = existing.created_by,
+        });
+        try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "ALTER_POLICY", policy_id, new_name, null);
+    }
+
     fn recomputeAndStorePolicyHmac(self: *Self, policy_id: u64, hmac_key: *const [32]u8) !void {
         const record = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
         const computed = computePolicyHmac(hmac_key, &record);

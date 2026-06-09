@@ -2193,17 +2193,29 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            try pol_cat.alterPolicy(ap_stmt.name, ap_stmt.set_enabled);
+            try pol_cat.alterPolicy(ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
 
-            // Write-through for ALTER POLICY is Phase 8 — no persistence hook defined yet.
-            // In-memory update is authoritative for the running server; restart will
-            // re-hydrate from __geode_security (which still reflects the original CREATE).
-            // Operators needing durable enable/disable should DROP + CREATE the policy.
+            // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
+            // GAP-0858: durable ALTER POLICY write-through to __geode_security via
+            // hooks installed at server startup. In CLI / test contexts hooks are
+            // null and the in-memory catalog update is authoritative for the
+            // running process only. The hook is called with the CURRENT (pre-rename)
+            // name so the durable record can be located before the rename applies.
+            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
+                hooks.alter(hooks.ctx, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to) catch |err| {
+                    const logging_mod = @import("logging");
+                    const log_ex = logging_mod.scoped("execution");
+                    log_ex.warn("GPS ALTER POLICY persistence to __geode_security failed — change is in-memory only", &.{
+                        logging_mod.Attr.string("name", ap_stmt.name),
+                        logging_mod.Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
 
-            // CANARY: REQ=REQ-GPS-AUDIT-003; FEATURE="GPS Policy DDL Audit"; ASPECT=AlterPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
+            // CANARY: REQ=REQ-GPS-AUDIT-003; FEATURE="GPS Policy DDL Audit"; ASPECT=AlterPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-06-09
             {
                 const audit_mod = @import("security/audit.zig");
-                const detail_str = std.fmt.allocPrint(allocator, "name={s} set_enabled={?}", .{ ap_stmt.name, ap_stmt.set_enabled }) catch null;
+                const detail_str = std.fmt.allocPrint(allocator, "name={s} set_enabled={?} rename_to={?s}", .{ ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to }) catch null;
                 defer if (detail_str) |s| allocator.free(s);
                 const actor_user_id: u64 = if (context.principal) |p| (p.user_id orelse 0) else 0;
                 const actor_username: []const u8 = if (context.principal) |p| (p.username orelse "") else "";

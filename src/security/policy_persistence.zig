@@ -131,6 +131,22 @@ pub fn dropPolicy(
     try agm.dropPolicy(hmac_key, name);
 }
 
+// CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicy; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
+/// GAP-0858: durable ALTER POLICY write-through. Applies an enable/disable
+/// toggle and/or rename to the persisted policy located by its CURRENT name,
+/// then reseals the HMAC chain. The mutation is an in-place update of the
+/// existing :Policy node, so no stale record survives a rename.
+/// Propagates error.PolicyNotFound if no matching policy exists.
+pub fn alterPolicy(
+    agm: *AuthGraphManager,
+    hmac_key: *const [32]u8,
+    name: []const u8,
+    set_enabled: ?bool,
+    rename_to: ?[]const u8,
+) !void {
+    try agm.alterPolicy(hmac_key, name, set_enabled, rename_to);
+}
+
 // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=HydrateCatalog; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
 /// Load all :Policy nodes from the __geode_security graph into `cat`.
 ///

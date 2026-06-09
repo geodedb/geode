@@ -1020,6 +1020,14 @@ pub fn wireGpsPolicyHooks(
             const pp = @import("policy_persistence");
             try pp.dropPolicy(am, &am.hmac_key, name);
         }
+
+        // GAP-0858: durable ALTER POLICY write-through (enable/disable + rename).
+        fn alterFn(ctx: *anyopaque, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) anyerror!void {
+            _ = ctx;
+            const am = g_agm orelse return;
+            const pp = @import("policy_persistence");
+            try pp.alterPolicy(am, &am.hmac_key, name, set_enabled, rename_to);
+        }
     };
     HookCtx.g_agm = agm;
 
@@ -1027,6 +1035,7 @@ pub fn wireGpsPolicyHooks(
         .ctx = @ptrCast(agm), // non-null; actual state is in HookCtx.g_agm
         .persist = HookCtx.persistFn,
         .drop = HookCtx.dropFn,
+        .alter = HookCtx.alterFn,
     });
 
     log.info("GPS policy persistence hooks installed", &.{});
