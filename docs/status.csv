@@ -3159,6 +3159,7 @@ REQ-LSP-AUTH-NOAUTH-001,LspPermissionAwareCompletion,NoAuthBind,TESTED,,,lsp,202
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,CompletionTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,ContextStruct,TESTED,,,lsp,2026-06-09,src/cli/lsp/context.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,DefinitionContext,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
+REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,DiagnosticsTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,HoverTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,LeakRegression,TESTED,,,lsp,2026-06-09,tests/test_gap0818_lsp_context.zig
 REQ-LSP-EMBEDDED-E2E-001,LspPermissionAwareCompletion,EmbeddedTcpAuthGate,TESTED,,,lsp,2026-05-14,tests/test_lsp_embedded_e2e.zig

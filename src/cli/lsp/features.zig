@@ -55,10 +55,12 @@ pub fn startsWithCI(s: []const u8, p: []const u8) bool {
 
 // CANARY: REQ=REQ-LSP-SCHEMA-DIAG-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=UnknownLabel; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"diagnostics flag unknown labels with hint"; OWNER=lsp; UPDATED=2026-05-14
 // CANARY: REQ=REQ-LSP-SCHEMA-DIAG-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=UnknownEdgeType; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"diagnostics flag unknown edge types with hint"; OWNER=lsp; UPDATED=2026-05-14
+// CANARY: REQ=REQ-LSP-CALLER-IDENTITY-001; FEATURE="LspCallerIdentity"; ASPECT=DiagnosticsTenantGate; STATUS=TESTED; TEST=tests/test_gap0818_lsp_context.zig:"GAP-0818 diagnostics for tenant A does not leak tenant B label in hint"; OWNER=lsp; UPDATED=2026-06-09
 pub fn provideDiagnostics(
     allocator: Allocator,
     doc: *const Document,
-    schema: ?*@import("schema_provider.zig").SchemaProvider,
+    schema: ?*SchemaProviderType,
+    caller: LspContext,
 ) ![]protocol.Diagnostic {
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
     errdefer diagnostics.deinit(allocator);
@@ -237,7 +239,14 @@ pub fn provideDiagnostics(
     // close match exists. Skipped when no schema is wired (e.g. --no-auth
     // stdio or tests). Memory: each `.message` is allocPrint'd and owned by
     // the caller (matches the parse/semantic branches above).
-    if (schema) |sp| {
+    //
+    // GAP-0818: gate the tenant-scoped schema scan on caller tenant identity
+    // (same shadow as completion/hover). On a mismatch we null out the
+    // provider so a tenant-B label name can never leak into a tenant-A
+    // "Unknown label `X`. Did you mean `Beta`?" hint via closestLabel.
+    const schema_for_caller: ?*SchemaProviderType =
+        if (schema) |sp| (if (caller.schemaTenantMatches(sp.ctx.tenant_id)) sp else null) else null;
+    if (schema_for_caller) |sp| {
         const known = sp.getLabels() catch &[_][]const u8{};
         const text = doc.text;
         var i: usize = 0;
@@ -398,7 +407,7 @@ pub fn provideHover(
     doc: *const Document,
     line: u32,
     character: u32,
-    schema: ?*@import("schema_provider.zig").SchemaProvider,
+    schema: ?*SchemaProviderType,
     caller: LspContext,
 ) !?protocol.Hover {
     const offset = doc.getOffset(line, character) orelse return null;
@@ -409,7 +418,7 @@ pub fn provideHover(
     // static (tenant-independent) keyword/function/type/procedure hover
     // metadata below can fire — a tenant-B label can never render a hover
     // card for a tenant-A request.
-    const schema_for_caller: ?*@import("schema_provider.zig").SchemaProvider =
+    const schema_for_caller: ?*SchemaProviderType =
         if (schema) |sp| (if (caller.schemaTenantMatches(sp.ctx.tenant_id)) sp else null) else null;
 
     // Schema-aware label hover: if the hovered word is a node label visible
@@ -705,7 +714,7 @@ pub fn provideCompletion(
     doc: *const Document,
     line: u32,
     character: u32,
-    schema: ?*@import("schema_provider.zig").SchemaProvider,
+    schema: ?*SchemaProviderType,
     caller: LspContext,
 ) ![]protocol.CompletionItem {
     const ctx_mod = @import("completion_context.zig");

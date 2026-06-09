@@ -570,11 +570,17 @@ pub const Server = struct {
     /// callers must use the context only for the duration of a single
     /// request handler, which is always synchronous here.
     pub fn callerContext(self: *const Server) features.LspContext {
-        const a = self.auth orelse return features.LspContext.stdio;
+        if (self.auth == null) return features.LspContext.stdio;
+        // Borrow directly from the stored AuthState (not a by-value copy)
+        // so the derived session-handle slice points at the inline buffer
+        // that lives for the duration of the request handler.
+        const a: *const auth_mod.AuthState = &self.auth.?;
         return .{
             .tenant_id = a.tenant_id,
             .user_id = if (a.user.len > 0) a.user else null,
-            .session_id = if (a.token.len > 0) a.token else null,
+            // GAP-0818 follow-up: never expose the raw bearer token. Use the
+            // derived, non-reversible Wyhash-hex handle (null for stdio).
+            .session_id = a.sessionHandle(),
         };
     }
 
@@ -1320,7 +1326,7 @@ pub const Server = struct {
         self.diagnostics_send_count_for_test += 1;
         const doc = self.documents.get(uri) orelse return;
 
-        const diagnostics = try features.provideDiagnostics(self.allocator, doc, self.schema);
+        const diagnostics = try features.provideDiagnostics(self.allocator, doc, self.schema, self.callerContext());
         defer {
             for (diagnostics) |diag| {
                 self.allocator.free(diag.message);

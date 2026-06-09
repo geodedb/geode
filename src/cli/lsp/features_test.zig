@@ -18,7 +18,7 @@ test "provideDiagnostics - valid GQL query" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null, features.LspContext.stdio);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -37,7 +37,7 @@ test "provideDiagnostics - invalid GQL query" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null, features.LspContext.stdio);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -58,7 +58,7 @@ test "provideDiagnostics - empty document" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null, features.LspContext.stdio);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -77,7 +77,7 @@ test "provideDiagnostics - multiple errors" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null, features.LspContext.stdio);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -1403,7 +1403,7 @@ test "diagnostics flag unknown labels with hint" {
 
     var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (n:Persn) RETURN n", 1);
     defer doc.deinit();
-    const diags = try features.provideDiagnostics(alloc, doc, &sp);
+    const diags = try features.provideDiagnostics(alloc, doc, &sp, .{ .tenant_id = "tenant-a" });
     defer {
         for (diags) |d| alloc.free(d.message);
         alloc.free(diags);
@@ -1442,7 +1442,7 @@ test "diagnostics flag unknown edge types with hint" {
 
     var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (a)-[r:NOWS]-(b)", 1);
     defer doc.deinit();
-    const diags = try features.provideDiagnostics(alloc, doc, &sp);
+    const diags = try features.provideDiagnostics(alloc, doc, &sp, .{ .tenant_id = "tenant-a" });
     defer {
         for (diags) |d| alloc.free(d.message);
         alloc.free(diags);

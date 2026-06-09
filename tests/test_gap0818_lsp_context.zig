@@ -130,6 +130,43 @@ test "GAP-0818 hover for tenant A does not leak tenant B label card" {
     }
 }
 
+test "GAP-0818 diagnostics for tenant A does not leak tenant B label in hint" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"Beta"}, default_graph, "tenant-b");
+
+    // SchemaProvider scoped to tenant-b, but the diagnostics request below
+    // carries a tenant-a caller. The tenant gate must null out the provider
+    // so the "did you mean" hint can never echo tenant-b's "Beta" label.
+    var sp_b = SchemaProvider.init(alloc, &store, .{
+        .user = "bob",
+        .tenant_id = "tenant-b",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp_b.deinit();
+
+    const ctx_a = LspContext{ .tenant_id = "tenant-a", .user_id = "alice", .session_id = "sess-a" };
+
+    // "Beto" is Levenshtein-distance 1 from "Beta": without the tenant gate,
+    // closestLabel would surface "Beta" in the hint, leaking the other
+    // tenant's label name.
+    var doc = makeDoc("file:///t.gql", "MATCH (n:Beto) RETURN n");
+    const diags = try features.provideDiagnostics(alloc, &doc, &sp_b, ctx_a);
+    defer {
+        for (diags) |d| alloc.free(d.message);
+        alloc.free(diags);
+    }
+
+    // No diagnostic may contain the tenant-B label name "Beta".
+    for (diags) |d| {
+        try testing.expect(std.mem.indexOf(u8, d.message, "Beta") == null);
+    }
+}
+
 test "GAP-0818 matching tenant still gets its own schema" {
     const alloc = testing.allocator;
     var store = try graph_store.GraphStore.init(alloc);

@@ -77,6 +77,37 @@ pub const AuthState = struct {
     tenant_id: ?[]const u8 = null,
     verified: bool = false,
 
+    /// GAP-0818 follow-up: a derived, non-reversible session handle exposed
+    /// to `LspContext.session_id`. It is the lowercase hex of a 64-bit
+    /// Wyhash of the bearer token, NOT the raw token — so the session id we
+    /// hand to feature providers (and any future logging/telemetry) never
+    /// carries the secret. Owned inline; no heap, freed with the struct.
+    /// Computed once via `deriveSessionHandle` after `token` is set.
+    session_handle_buf: [16]u8 = [_]u8{0} ** 16,
+    session_handle_len: usize = 0,
+
+    /// Fill `session_handle_buf` with the hex of Wyhash(token). A no-op for
+    /// an empty token (stdio default keeps `session_handle_len == 0`, which
+    /// `sessionHandle` reports as null). Idempotent.
+    pub fn deriveSessionHandle(self: *AuthState) void {
+        if (self.token.len == 0) {
+            self.session_handle_len = 0;
+            return;
+        }
+        const h = std.hash.Wyhash.hash(0, self.token);
+        // 16 lowercase hex chars for a u64 — exactly fills the buffer.
+        _ = std.fmt.bufPrint(&self.session_handle_buf, "{x:0>16}", .{h}) catch unreachable;
+        self.session_handle_len = 16;
+    }
+
+    /// The derived session handle slice, or null when none was derived
+    /// (empty/stdio token). Borrows the inline buffer — valid for the
+    /// lifetime of the AuthState.
+    pub fn sessionHandle(self: *const AuthState) ?[]const u8 {
+        if (self.session_handle_len == 0) return null;
+        return self.session_handle_buf[0..self.session_handle_len];
+    }
+
     /// Parse `params.geode.{authToken,graph,tenant}` out of an
     /// `initialize` request's `initializationOptions`. Every owned
     /// slice is freshly duped; release them all via `deinit`.
@@ -106,6 +137,7 @@ pub const AuthState = struct {
             if (t == .string) s.tenant_id = try allocator.dupe(u8, t.string);
         }
 
+        s.deriveSessionHandle();
         return s;
     }
 
