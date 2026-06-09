@@ -2183,6 +2183,21 @@ pub fn build(b: *std.Build) void {
     tenant_quota_tests.root_module.addImport("logging", logging_mod);
     const run_tenant_quota_tests = b.addRunArtifact(tenant_quota_tests);
 
+    // GAP-0839: durable tenant lifecycle registry — in-file unit tests
+    // (create/list/show/drop/set_quota mechanics + the durable persist+hydrate
+    // round-trip). Mirrors the tenant_quota_tests wiring; only needs `logging`.
+    const tenant_registry_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/security/tenant_registry.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    tenant_registry_tests.root_module.addImport("logging", logging_mod);
+    const run_tenant_registry_tests = b.addRunArtifact(tenant_registry_tests);
+    const tenant_registry_step = b.step("test-tenant-registry", "GAP-0839 durable tenant registry unit tests");
+    tenant_registry_step.dependOn(&run_tenant_registry_tests.step);
+
     // GAP-0436: Security test — JSONB parser must reject deeply nested input to prevent DoS
     const jsonb_depth_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -2634,6 +2649,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_random_security_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_secure_zero_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_tenant_quota_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_tenant_registry_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_jsonb_depth_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_migration_unit_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_blake2b_migration_tests.step, 1, test_shard_loads, test_shard_index);
@@ -4554,6 +4570,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0838_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0838_step = b.step("test-gap0838-tenant-hierarchy", "GAP-0838 regression (string-keyed tenant HierarchyManager + addTenant)");
     gap0838_step.dependOn(&run_gap0838_tests.step);
+
+    // GAP-0839 regression: the native `CALL geode.tenant.*` lifecycle surface
+    // (create/list/show/drop/set_quota) over a DURABLE file-backed registry,
+    // wired to GAP-0838's HierarchyManager.addTenant + the GAP-0289 quota
+    // manager, gated on the admin_tenant GPS action. Exercises the real
+    // parse → execute pipeline. Needs the root `geode` module plus the `rls`
+    // and `rls_types` modules to publish a live expr-RLS engine.
+    const gap0839_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0839_tenant_lifecycle.zig"), .target = target, .optimize = optimize });
+    gap0839_test_mod.addImport("geode", root_mod);
+    gap0839_test_mod.addImport("rls", rls_mod);
+    gap0839_test_mod.addImport("rls_types", rls_types_mod);
+    const gap0839_tests = b.addTest(.{ .root_module = gap0839_test_mod });
+    const run_gap0839_tests = b.addRunArtifact(gap0839_tests);
+    shardDep(test_step, &run_gap0839_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0839_step = b.step("test-gap0839-tenant-lifecycle", "GAP-0839 regression (CALL geode.tenant.* lifecycle surface + durable registry + admin_tenant authz)");
+    gap0839_step.dependOn(&run_gap0839_tests.step);
 
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });

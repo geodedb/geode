@@ -356,6 +356,31 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         });
     }
 
+    // CANARY: REQ=REQ-GPS-ADMIN-TENANT-001; FEATURE="GPS AdminTenant Action"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gap0839_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-06-08
+    // GAP-0839: admin_tenant — the authorization gate for tenant lifecycle
+    // administration (CALL geode.tenant.create/list/show/drop/set_quota).
+    // Admin is always allowed; any non-Admin principal is denied (fail-closed).
+    // There is no permission-level analogue (actionToPermission returns null for
+    // admin_tenant), so without this branch every caller — including Admin —
+    // would fall through to the policy catalog and be denied, leaving tenant
+    // administration unreachable. Tenant admin is intentionally admin-only and
+    // is NOT widenable by a graph/Read/Write grant; only the Admin builtin role
+    // (or, in a future iteration, an explicit admin_tenant Policy) authorizes it.
+    if (req.action == .admin_tenant) {
+        for (req.principal.roles) |role_name| {
+            if (std.mem.eql(u8, role_name, "Admin")) {
+                return cacheAndReturn(cache_key, PolicyDecision{
+                    .kind = .allow,
+                    .reason_code = "admin_tenant_admin",
+                });
+            }
+        }
+        return cacheAndReturn(cache_key, PolicyDecision{
+            .kind = .unauthorized,
+            .reason_code = "admin_tenant_not_admin",
+        });
+    }
+
     // Phase 2 task 2-4: builtin-role evaluation.
     // Walk the principal's roles slice, resolve each to a user_management.Role,
     // and ask hasPermission() — preserving legacy semantics bit-identically.

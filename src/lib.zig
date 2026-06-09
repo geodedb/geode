@@ -449,6 +449,8 @@ pub const auth = @import("geode_auth");
 pub const multi_graph_security = @import("security/multi_graph_security.zig");
 // GAP-0289: Per-tenant resource quota manager
 pub const tenant_quota = @import("security/tenant_quota.zig");
+// GAP-0839: Durable tenant lifecycle registry
+pub const tenant_registry = @import("security/tenant_registry.zig");
 
 // Security modules for enhanced RLS and compliance features
 pub const security = struct {
@@ -457,6 +459,8 @@ pub const security = struct {
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");
     pub const tenant_quota = @import("security/tenant_quota.zig");
+    // GAP-0839: Durable tenant lifecycle registry
+    pub const tenant_registry = @import("security/tenant_registry.zig");
     // GPS Phase 1: canonical Principal type and authentication result type
     pub const principal = @import("security/principal.zig");
     pub const authn = @import("security/authn.zig");

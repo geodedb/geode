@@ -39,6 +39,7 @@ const meta_dispatch = @import("meta_dispatch.zig");
 const rls_dispatch = @import("rls_dispatch.zig");
 const fts_dispatch = @import("fts_dispatch.zig");
 const ts_dispatch = @import("ts_dispatch.zig");
+const tenant_dispatch = @import("tenant_dispatch.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
@@ -207,6 +208,16 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // CANARY: REQ=REQ-GQL-TS-PROC-001; FEATURE="CALL geode.ts.* native timeseries surface"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/ts_ingest_roundtrip.zig; OWNER=timeseries; UPDATED=2026-05-31
     if (std.mem.startsWith(u8, proc_name, "geode.ts.")) {
         if (try ts_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
+            return result;
+        }
+    }
+
+    // ---- geode.tenant.* procedures (tenant lifecycle: create/list/show/drop/set_quota) ----
+    // CANARY: REQ=REQ-TENANT-LIFECYCLE-002; FEATURE="CALL geode.tenant.* native tenant lifecycle surface"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_gap0839_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-06-08
+    // GAP-0839: each handler re-checks the admin_tenant GPS action internally
+    // (the generic gate above only maps to .read/.write); see tenant_dispatch.
+    if (std.mem.startsWith(u8, proc_name, "geode.tenant.")) {
+        if (try tenant_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }
     }

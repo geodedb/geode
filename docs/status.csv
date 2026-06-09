@@ -1158,6 +1158,7 @@ REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-0
 REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,PolicyExpressionModule,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,PredicateIRAttr,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
+REQ-GPS-ADMIN-TENANT-001,GPS AdminTenant Action,AdminAllowed,TESTED,,,security,2026-06-08,src/security/gps.zig
 REQ-GPS-AUDIT-001,GPS Policy DDL Audit,CreatePolicyAuditEmission,TESTED,,,security,2026-05-21,src/execution.zig
 REQ-GPS-AUDIT-002,GPS Policy DDL Audit,DropPolicyAuditEmission,TESTED,,,security,2026-05-21,src/execution.zig
 REQ-GPS-AUDIT-003,GPS Policy DDL Audit,AlterPolicyAuditEmission,TESTED,,,security,2026-05-21,src/execution.zig
@@ -4641,6 +4642,9 @@ REQ-TDE-TENANT-003,PerTenantTDEFileEncryption,FileIO,TESTED,,,security,2026-04-0
 REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,EXEMPT,,,tde,2025-11-12,src/security/tde.zig
 REQ-TEMPORAL-ARITH-001,TemporalArithmeticModule,Extraction,TESTED,,,eval,2026-04-01,src/eval/temporal_arithmetic.zig
 REQ-TEMPORAL-PROP-001,TemporalPropertyFiltering,Temporal,TESTED,,,temporal,2026-01-25,src/temporal/time_travel.zig
+REQ-TENANT-LIFECYCLE-001,TenantRegistry,DurableRegistry,TESTED,,,security,2026-06-08,src/security/tenant_registry.zig
+REQ-TENANT-LIFECYCLE-002,CALL geode.tenant.* native tenant lifecycle surface,Dispatch,TESTED,,,security,2026-06-08,src/execution/procedure_registry.zig
+REQ-TENANT-LIFECYCLE-003,TenantRegistryServerWiring,ServerInit,IMPL,,,security,2026-06-08,src/server/main.zig
 REQ-TEST-ASSERT-001,Testing,AssertionTesting,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-TEST-COVERAGE-001,TESTING,Coverage,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-TEST-E2E-001,Testing,E2ETesting,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

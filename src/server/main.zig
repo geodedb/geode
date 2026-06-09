@@ -850,6 +850,75 @@ fn tuneServerMalloc() void {
     _ = c.mallopt(M_TRIM_THRESHOLD, 128 * 1024);
 }
 
+// GAP-0839: replay persisted tenants into the live HierarchyManager and the
+// per-tenant quota manager after the registry hydrates from disk. The registry
+// is the durable source of truth; the hierarchy and quota manager are derived
+// runtime structures that must be rebuilt on every start.
+//
+// addTenant requires a tenant's parent to already exist in the hierarchy, but
+// the registry snapshot is unordered, so we iterate to a fixed point: each pass
+// adds every tenant whose parent is already present (or has no parent), until a
+// pass makes no progress (any residue is an orphaned parent reference, which we
+// log and skip rather than fail server startup over).
+fn rehydrateTenantDerivedState(
+    gpa: std.mem.Allocator,
+    reg: *geode.tenant_registry.TenantRegistry,
+    engine: *@import("rls").RLSEngine,
+    quota_mgr: *geode.tenant_quota.TenantQuotaManager,
+) void {
+    const recs = reg.list(gpa) catch |err| {
+        log.warn("tenant_registry.rehydrate_list_failed", &.{Attr.string("error", @errorName(err))});
+        return;
+    };
+    defer geode.tenant_registry.TenantRegistry.freeRecordSlice(gpa, recs);
+    if (recs.len == 0) return;
+
+    // Track which tenants have been added to the hierarchy this rehydrate.
+    var added = std.AutoHashMap(usize, void).init(gpa);
+    defer added.deinit();
+
+    var made_progress = true;
+    while (made_progress and added.count() < recs.len) {
+        made_progress = false;
+        for (recs, 0..) |rec, i| {
+            if (added.contains(i)) continue;
+            const parent_ready = if (rec.parent) |p| engine.hierarchy_manager.tenant_hierarchy.contains(p) else true;
+            if (!parent_ready) continue;
+            engine.hierarchy_manager.addTenant(rec.tenant_id, rec.parent) catch |err| switch (err) {
+                error.TenantAlreadyExists => {},
+                else => log.warn("tenant_registry.rehydrate_hierarchy_failed", &.{
+                    Attr.string("tenant", rec.tenant_id),
+                    Attr.string("error", @errorName(err)),
+                }),
+            };
+            added.put(i, {}) catch {};
+            made_progress = true;
+        }
+    }
+    if (added.count() < recs.len) {
+        log.warn("tenant_registry.rehydrate_incomplete_orphan_parents", &.{
+            Attr.int("added", @intCast(added.count())),
+            Attr.int("total", @intCast(recs.len)),
+        });
+    }
+
+    // Replay quota overrides into the live manager (order-independent).
+    for (recs) |rec| {
+        if (!rec.has_quota) continue;
+        quota_mgr.setQuota(rec.tenant_id, .{
+            .max_connections = rec.max_connections,
+            .max_concurrent_queries = rec.max_concurrent_queries,
+            .max_graphs = rec.max_graphs,
+            .max_nodes_per_graph = rec.max_nodes_per_graph,
+        }) catch |err| log.warn("tenant_registry.rehydrate_quota_failed", &.{
+            Attr.string("tenant", rec.tenant_id),
+            Attr.string("error", @errorName(err)),
+        });
+    }
+
+    log.info("tenant_registry.rehydrated", &.{Attr.int("tenants", @intCast(recs.len))});
+}
+
 pub fn main() !void {
     // Return freed large per-connection allocations to the OS (see notes on
     // tuneServerMalloc). Must run before the first glibc allocation.
@@ -1715,6 +1784,38 @@ pub fn main() !void {
         defer expr_rls_engine.deinit();
         rls_types_mod.setGlobalExprRLSEngine(@ptrCast(&expr_rls_engine));
         defer rls_types_mod.setGlobalExprRLSEngine(null);
+
+        // GAP-0839: Initialize the production per-tenant quota manager and the
+        // durable tenant lifecycle registry, then publish both as process
+        // globals. Before this, getGlobalQuotaManager() always returned null in
+        // production (so every tenant resolved to default_quota — setQuota was
+        // tests-only), and there was no tenant lifecycle surface at all.
+        //
+        // The registry is file-backed under {data_dir}/tenants/registry.jsonl
+        // and is hydrated here on startup. After hydration we replay each
+        // persisted tenant into (a) the expr-RLS HierarchyManager and (b) the
+        // quota manager, so a server RESTART restores the full tenant hierarchy
+        // and per-tenant quota overrides — not just the registry rows.
+        // CANARY: REQ=REQ-TENANT-LIFECYCLE-003; FEATURE="TenantRegistryServerWiring"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-06-08
+        var quota_manager = geode.tenant_quota.TenantQuotaManager.init(gpa);
+        defer quota_manager.deinit();
+        geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
+        defer geode.tenant_quota.setGlobalQuotaManager(null);
+
+        var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch blk: {
+            log.warn("tenant_registry.init_failed_fallback_in_memory", &.{});
+            break :blk geode.tenant_registry.TenantRegistry.init(gpa);
+        };
+        defer tenant_reg.deinit();
+        geode.tenant_registry.setGlobalRegistry(&tenant_reg);
+        defer geode.tenant_registry.setGlobalRegistry(null);
+
+        // Replay persisted tenants into the live hierarchy + quota manager. The
+        // registry is the source of truth; these structures are derived. Tenants
+        // are sorted parent-before-child by their created_at so addTenant's
+        // "parent must exist" invariant holds for hierarchies built in order;
+        // any out-of-order parent is retried until the set stabilizes.
+        rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
 
         // GAP-0280: Initialize a server-wide timeseries Store so that
         // timeseries.value() calls in the QUIC/gRPC execution path return
