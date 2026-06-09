@@ -559,6 +559,25 @@ pub const Server = struct {
         };
     }
 
+    /// GAP-0818: build the caller-identity context the feature providers
+    /// (completion / hover / definition) enforce their tenant gate
+    /// against. Pulled from the verified per-session `AuthState`. When no
+    /// session is bound (the providers reject requests before
+    /// `initialize` anyway) this returns the unauthenticated stdio
+    /// default — a null tenant that only matches a null-tenant schema.
+    ///
+    /// The returned slices borrow from `self.auth` (freed in `deinit`);
+    /// callers must use the context only for the duration of a single
+    /// request handler, which is always synchronous here.
+    pub fn callerContext(self: *const Server) features.LspContext {
+        const a = self.auth orelse return features.LspContext.stdio;
+        return .{
+            .tenant_id = a.tenant_id,
+            .user_id = if (a.user.len > 0) a.user else null,
+            .session_id = if (a.token.len > 0) a.token else null,
+        };
+    }
+
     /// Emit a JSON-RPC -32002 ("ServerNotInitialized") error response
     /// for `initialize`. We map every `AuthError` to -32002 because the
     /// LSP spec only defines that one code for "this session is not
@@ -787,7 +806,7 @@ pub const Server = struct {
         // never leave the request unanswered. Errors collapse to a null
         // result so the client unblocks instead of waiting for its read
         // timeout.
-        const hover = features.provideHover(self.allocator, doc, line, character, self.schema) catch {
+        const hover = features.provideHover(self.allocator, doc, line, character, self.schema, self.callerContext()) catch {
             try self.sendResult(id, .null);
             return;
         };
@@ -839,7 +858,7 @@ pub const Server = struct {
         // JSON-RPC error reply. Catch + return an empty completion list so
         // the client always observes a response; downstream features such as
         // hover/definition use the same pattern.
-        const items = features.provideCompletion(self.allocator, doc, line, character, self.schema) catch {
+        const items = features.provideCompletion(self.allocator, doc, line, character, self.schema, self.callerContext()) catch {
             try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
             return;
         };
@@ -889,7 +908,7 @@ pub const Server = struct {
     /// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinitionWired"; ASPECT=VariableLookup; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
     pub fn computeDefinition(self: *Server, uri: []const u8, line: u32, character: u32) !?protocol.Location {
         const doc = self.documents.get(uri) orelse return null;
-        return try features.provideDefinition(self.allocator, doc, line, character);
+        return try features.provideDefinition(self.allocator, doc, line, character, self.callerContext());
     }
 
     fn handleDefinition(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {

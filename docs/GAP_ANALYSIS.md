@@ -7,8 +7,8 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 This top register is authoritative as of 2026-06-09. Historical sections below are retained for traceability; when an older section conflicts with this register, use this register. The 2026-06-09 audit also normalizes duplicate CaaST IDs: GAP-0838 remains the cross-pod cluster failure, and CaaST tenancy/FLE residuals are tracked as GAP-0846 through GAP-0854.
 
-- **Total open/partial gaps:** 36
-- **Critical:** 3 (GAP-0256, GAP-0818, GAP-0838) — GAP-0854 closed 2026-06-09
+- **Total open/partial gaps:** 35
+- **Critical:** 2 (GAP-0256, GAP-0838) — GAP-0854 closed 2026-06-09; GAP-0818 closed 2026-06-09
 - **High:** 7 (GAP-0816, GAP-0817, GAP-0846, GAP-0848, GAP-0849, GAP-0855, GAP-0858)
 - **Medium:** 17
 - **Low:** 9
@@ -24,7 +24,7 @@ This top register is authoritative as of 2026-06-09. Historical sections below a
 | GAP-0516 | Medium | MCP | MCP resource subscription support remains intentionally absent (`src/mcp/server.zig` returns `MethodNotFound` for subscribe/unsubscribe). | Either implement subscriptions or document the protocol subset and make capability reporting/tests prove it. |
 | GAP-0816 | High | LSP lifecycle | `$/cancelRequest` is not handled, so long-running LSP work cannot be cancelled. | Add a request table, cancellation propagation, `-32800` responses, and conformance coverage. |
 | GAP-0817 | High | LSP lifecycle | LSP initialization lacks `positionEncoding` negotiation, risking UTF-8/UTF-16 position drift. | Negotiate and store encoding per client and cover multi-byte ranges in tests. |
-| GAP-0818 | Critical | LSP / multi-tenancy | LSP feature providers still lack enforced caller identity; documentation precondition landed, but enforcement is partial. | Thread tenant/user/session context through completion, hover, and definition providers; add leak regression tests. |
+| ~~GAP-0818~~ | ~~Critical~~ | LSP / multi-tenancy | **Closed 2026-06-09.** `LspContext { tenant_id, user_id, session_id }` (`src/cli/lsp/context.zig`) is threaded through `provideCompletion` / `provideHover` / `provideDefinition` (`src/cli/lsp/features.zig`); each provider enforces a tenant gate (`LspContext.schemaTenantMatches`) so a SchemaProvider scoped to tenant B can never surface tenant B's labels/edge-types/properties to a tenant-A request — it falls back to static, tenant-independent language metadata. `src/cli/lsp/server.zig` builds the context per session via `callerContext()`. Leak regression in `tests/test_gap0818_lsp_context.zig` (`zig build test-gap0818`), proven red→green. CANARY `REQ-LSP-CALLER-IDENTITY-001` now TESTED on all three providers. | ✅ Done. |
 | GAP-0820 | Medium | LSP workspace | LSP `workspace/*` family is absent. | Implement folders, symbols, configuration/applyEdit as advertised or trim capabilities. |
 | GAP-0821 | Medium | LSP workspace | `textDocument/rename` and `prepareRename` are not implemented. | Implement rename analysis/edit generation or remove advertised support. |
 | GAP-0822 | Medium | LSP diagnostics | `textDocument/codeAction` quick fixes are not implemented. | Add code-action provider and tests for diagnostics to edits. |

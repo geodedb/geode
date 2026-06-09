@@ -9,6 +9,19 @@ const Document = @import("document.zig").Document;
 const geode = @import("geode");
 const semantic = @import("semantic.zig");
 const language_metadata = geode.language_metadata;
+const context_mod = @import("context.zig");
+
+/// GAP-0818: caller identity threaded into every feature provider.
+pub const LspContext = context_mod.LspContext;
+
+// GAP-0818 re-exports so out-of-tree test modules (rooted at this file as
+// the `lsp_features` named module) can construct the provider inputs
+// without registering `protocol.zig` / `document.zig` /
+// `schema_provider.zig` as separate modules — which would trip Zig
+// 0.16's "file exists in modules X and X0" diamond.
+pub const Protocol = protocol;
+pub const DocumentType = Document;
+pub const SchemaProviderType = @import("schema_provider.zig").SchemaProvider;
 
 /// Formatting options for the GQL formatter
 pub const FormattingOptions = struct {
@@ -379,15 +392,25 @@ fn offsetToLineCol(text: []const u8, offset: usize) protocol.Position {
 // CANARY: REQ=REQ-LSP-SCHEMA-HOVER-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverLabel; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on label shows property list"; OWNER=lsp; UPDATED=2026-05-14
 // CANARY: REQ=REQ-LSP-SCHEMA-HOVER-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverEdgeType; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on edge type shows usage hint"; OWNER=lsp; UPDATED=2026-05-14
 // CANARY: REQ=REQ-LSP-SCHEMA-HOVER-003; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverProperty; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on property shows owning label"; OWNER=lsp; UPDATED=2026-05-14
+// CANARY: REQ=REQ-LSP-CALLER-IDENTITY-001; FEATURE="LspCallerIdentity"; ASPECT=HoverTenantGate; STATUS=TESTED; TEST=tests/test_gap0818_lsp_context.zig:"GAP-0818 hover for tenant A does not leak tenant B label card"; OWNER=lsp; UPDATED=2026-06-09
 pub fn provideHover(
     allocator: Allocator,
     doc: *const Document,
     line: u32,
     character: u32,
     schema: ?*@import("schema_provider.zig").SchemaProvider,
+    caller: LspContext,
 ) !?protocol.Hover {
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;
+
+    // GAP-0818: gate the tenant-scoped schema hover branches on caller
+    // tenant identity. On a mismatch we null out the provider so only the
+    // static (tenant-independent) keyword/function/type/procedure hover
+    // metadata below can fire — a tenant-B label can never render a hover
+    // card for a tenant-A request.
+    const schema_for_caller: ?*@import("schema_provider.zig").SchemaProvider =
+        if (schema) |sp| (if (caller.schemaTenantMatches(sp.ctx.tenant_id)) sp else null) else null;
 
     // Schema-aware label hover: if the hovered word is a node label visible
     // to this user/tenant, render the label + its observed property keys as
@@ -400,7 +423,7 @@ pub fn provideHover(
     // branches below). `sp.getLabels()` / `sp.getPropertiesFor()` slices
     // are borrowed from the SchemaProvider cache — we read them inline and
     // copy what we need into the buffer, so no caller-side free of those.
-    if (schema) |sp| {
+    if (schema_for_caller) |sp| {
         const labels = sp.getLabels() catch &[_][]const u8{};
         for (labels) |lbl| {
             if (!std.mem.eql(u8, lbl, word)) continue;
@@ -675,12 +698,15 @@ fn formatProcedureHover(allocator: Allocator, info: language_metadata.ProcedureI
 // edge-type branches use a static literal detail (no free needed).
 // `insertText` is intentionally aliased to `label` so the existing
 // "skip free when insertText == label" cleanup convention holds.
+//
+// CANARY: REQ=REQ-LSP-CALLER-IDENTITY-001; FEATURE="LspCallerIdentity"; ASPECT=CompletionTenantGate; STATUS=TESTED; TEST=tests/test_gap0818_lsp_context.zig:"GAP-0818 completion for tenant A does not leak tenant B labels"; OWNER=lsp; UPDATED=2026-06-09
 pub fn provideCompletion(
     allocator: Allocator,
     doc: *const Document,
     line: u32,
     character: u32,
     schema: ?*@import("schema_provider.zig").SchemaProvider,
+    caller: LspContext,
 ) ![]protocol.CompletionItem {
     const ctx_mod = @import("completion_context.zig");
     const ctx = ctx_mod.analyze(doc.text, .{ .line = line, .character = character });
@@ -688,7 +714,16 @@ pub fn provideCompletion(
     var items = std.ArrayList(protocol.CompletionItem).initCapacity(allocator, 200) catch return error.OutOfMemory;
     errdefer items.deinit(allocator);
 
-    if (schema) |sp| {
+    // GAP-0818: only consult the SchemaProvider's tenant-scoped data when
+    // the caller's tenant matches the provider's tenant. A mismatch
+    // (mis-wired / reused provider) drops us to the static, tenant-
+    // independent language metadata so we never surface another tenant's
+    // labels / edge types / properties. Static keyword/function/type/
+    // procedure completion below is tenant-independent and always served.
+    const schema_for_caller: ?*@import("schema_provider.zig").SchemaProvider =
+        if (schema) |sp| (if (caller.schemaTenantMatches(sp.ctx.tenant_id)) sp else null) else null;
+
+    if (schema_for_caller) |sp| {
         switch (ctx.kind) {
             .label => {
                 const labels = sp.getLabels() catch &[_][]const u8{};
@@ -837,7 +872,15 @@ pub fn provideCompletion(
 
 // GAP-0056: LSP Go-To-Definition Implementation
 // CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinition"; ASPECT=VariableLookup; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
-pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.Location {
+// CANARY: REQ=REQ-LSP-CALLER-IDENTITY-001; FEATURE="LspCallerIdentity"; ASPECT=DefinitionContext; STATUS=TESTED; TEST=tests/test_gap0818_lsp_context.zig:"GAP-0818 definition is tenant-independent variable lookup"; OWNER=lsp; UPDATED=2026-06-09
+pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, character: u32, caller: LspContext) !?protocol.Location {
+    // GAP-0818: go-to-definition resolves an in-document variable
+    // declaration (a pattern variable like `(n:...)`), which is purely a
+    // function of the open document text and carries no tenant-scoped
+    // schema lookup. The caller identity is threaded for parity with the
+    // other providers (audit / telemetry attribution) but does not change
+    // the resolution — there is nothing tenant-scoped to leak here.
+    _ = caller;
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;
 

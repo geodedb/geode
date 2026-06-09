@@ -97,7 +97,7 @@ test "provideHover - MATCH keyword" {
     defer doc.deinit();
 
     // Hover over MATCH (line 0, char 2)
-    const hover = try features.provideHover(allocator, doc, 0, 2, null);
+    const hover = try features.provideHover(allocator, doc, 0, 2, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -113,7 +113,7 @@ test "provideHover - RETURN keyword" {
     defer doc.deinit();
 
     // Hover over RETURN (line 0, char 12)
-    const hover = try features.provideHover(allocator, doc, 0, 12, null);
+    const hover = try features.provideHover(allocator, doc, 0, 12, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -128,7 +128,7 @@ test "provideHover - WHERE keyword" {
     defer doc.deinit();
 
     // Hover over WHERE (line 0, char 12)
-    const hover = try features.provideHover(allocator, doc, 0, 12, null);
+    const hover = try features.provideHover(allocator, doc, 0, 12, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -143,7 +143,7 @@ test "provideHover - count function" {
     defer doc.deinit();
 
     // Hover over count (line 0, char 8)
-    const hover = try features.provideHover(allocator, doc, 0, 8, null);
+    const hover = try features.provideHover(allocator, doc, 0, 8, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -158,7 +158,7 @@ test "provideHover - distance function" {
     defer doc.deinit();
 
     // Hover over distance (line 0, char 10)
-    const hover = try features.provideHover(allocator, doc, 0, 10, null);
+    const hover = try features.provideHover(allocator, doc, 0, 10, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -174,7 +174,7 @@ test "provideHover - INTEGER type" {
     defer doc.deinit();
 
     // Hover over INTEGER (line 0, char 26)
-    const hover = try features.provideHover(allocator, doc, 0, 26, null);
+    const hover = try features.provideHover(allocator, doc, 0, 26, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -189,7 +189,7 @@ test "provideHover - VECTOR type" {
     defer doc.deinit();
 
     // Hover over VECTOR (line 0, char 25)
-    const hover = try features.provideHover(allocator, doc, 0, 25, null);
+    const hover = try features.provideHover(allocator, doc, 0, 25, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -206,7 +206,7 @@ test "provideHover - on whitespace returns null" {
     defer doc.deinit();
 
     // Hover over whitespace (line 0, char 6)
-    const hover = try features.provideHover(allocator, doc, 0, 6, null);
+    const hover = try features.provideHover(allocator, doc, 0, 6, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover == null);
@@ -220,7 +220,7 @@ test "provideHover - on unknown word returns null" {
     defer doc.deinit();
 
     // Hover over unknownword (line 0, char 10)
-    const hover = try features.provideHover(allocator, doc, 0, 10, null);
+    const hover = try features.provideHover(allocator, doc, 0, 10, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover == null);
@@ -233,7 +233,7 @@ test "provideCompletion - returns keywords" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 3, null);
+    const items = try features.provideCompletion(allocator, doc, 0, 3, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             // Free insertText if allocated (different from label)
@@ -271,7 +271,7 @@ test "provideCompletion - returns functions" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 10, null);
+    const items = try features.provideCompletion(allocator, doc, 0, 10, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -308,7 +308,7 @@ test "provideCompletion - returns types" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 20, null);
+    const items = try features.provideCompletion(allocator, doc, 0, 20, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -344,7 +344,7 @@ test "provideCompletion - includes all major keywords" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 0, null);
+    const items = try features.provideCompletion(allocator, doc, 0, 0, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -385,7 +385,7 @@ test "provideCompletion - includes common functions" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 0, null);
+    const items = try features.provideCompletion(allocator, doc, 0, 0, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -424,7 +424,7 @@ test "provideCompletion - includes common types" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 0, null);
+    const items = try features.provideCompletion(allocator, doc, 0, 0, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -464,7 +464,7 @@ test "provideDefinition - finds variable definition in pattern" {
     defer doc.deinit();
 
     // Position 17 is at 'n' in "RETURN n" - should find definition at position 7 (n in "(n)")
-    const location = try features.provideDefinition(allocator, doc, 0, 17);
+    const location = try features.provideDefinition(allocator, doc, 0, 17, features.LspContext.stdio);
     try testing.expect(location != null);
     try testing.expectEqual(@as(u32, 0), location.?.range.start.line);
     try testing.expectEqual(@as(u32, 7), location.?.range.start.character);
@@ -478,7 +478,7 @@ test "provideDefinition - returns null for keywords" {
     defer doc.deinit();
 
     // Position 0 is at 'M' in "MATCH" - keywords should return null
-    const location = try features.provideDefinition(allocator, doc, 0, 0);
+    const location = try features.provideDefinition(allocator, doc, 0, 0, features.LspContext.stdio);
     try testing.expect(location == null);
 }
 
@@ -1206,7 +1206,7 @@ test "provideCompletion offers labels after (n:" {
     var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (n:", 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(alloc, doc, 0, 9, &sp);
+    const items = try features.provideCompletion(alloc, doc, 0, 9, &sp, features.LspContext{ .tenant_id = "tenant-a" });
     defer alloc.free(items);
 
     var found = false;
@@ -1233,7 +1233,7 @@ test "provideCompletion filters static keywords by prefix" {
     var doc = try document.Document.init(alloc, "test:///q.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(alloc, doc, 0, 3, null);
+    const items = try features.provideCompletion(alloc, doc, 0, 3, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -1293,7 +1293,7 @@ test "hover on label shows property list" {
 
     // Cursor on `Person` — column 11 lands inside the identifier (the
     // label starts at column 9 and runs through column 14 inclusive).
-    const hover = (try features.provideHover(alloc, doc, 0, 11, &sp)) orelse return error.NoHover;
+    const hover = (try features.provideHover(alloc, doc, 0, 11, &sp, features.LspContext{ .tenant_id = "tenant-a" })) orelse return error.NoHover;
     defer alloc.free(hover.contents.value);
 
     try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);
@@ -1331,7 +1331,7 @@ test "hover on edge type shows usage hint" {
 
     // Position cursor inside KNOWS — col 14 lands on the 'N' (KNOWS starts
     // at col 13 and runs through col 17 inclusive).
-    const hover = (try features.provideHover(alloc, doc, 0, 14, &sp)) orelse return error.NoHover;
+    const hover = (try features.provideHover(alloc, doc, 0, 14, &sp, features.LspContext{ .tenant_id = "tenant-a" })) orelse return error.NoHover;
     defer alloc.free(hover.contents.value);
 
     try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);
@@ -1368,7 +1368,7 @@ test "hover on property shows owning label" {
 
     // Cursor on `age` — col 26 lands on the 'a' (`n.age` starts at col 24,
     // the dot is at col 25, the property starts at col 26).
-    const hover = (try features.provideHover(alloc, doc, 0, 26, &sp)) orelse return error.NoHover;
+    const hover = (try features.provideHover(alloc, doc, 0, 26, &sp, features.LspContext{ .tenant_id = "tenant-a" })) orelse return error.NoHover;
     defer alloc.free(hover.contents.value);
 
     try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);

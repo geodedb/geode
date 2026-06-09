@@ -4935,6 +4935,29 @@ pub fn build(b: *std.Build) void {
     const test_lsp_embedded_e2e_step = b.step("test-lsp-embedded-e2e", "Run LSP embedded-TCP listener end-to-end auth-rejection test");
     test_lsp_embedded_e2e_step.dependOn(&run_lsp_embedded_e2e_tests.step);
 
+    // GAP-0818: LSP feature providers must enforce caller tenant identity.
+    // We root a single module at features.zig (exposed as `lsp_features`)
+    // so the tests/ regression file can construct Document / SchemaProvider
+    // / LspContext / protocol via the re-exports at the top of features.zig
+    // WITHOUT registering protocol.zig / document.zig / schema_provider.zig
+    // as separate modules (which would trip Zig 0.16's "file exists in
+    // modules X and X0" diamond). features.zig pulls schema_provider.zig in
+    // as a relative sibling, so it needs the same named imports the LSP
+    // test runner provides: `geode` (root_mod) + `schema_introspection`.
+    const lsp_features_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/features.zig"), .target = target, .optimize = optimize });
+    lsp_features_mod.addImport("geode", root_mod);
+    lsp_features_mod.addImport("schema_introspection", schema_introspection_mod);
+    lsp_features_mod.link_libc = true;
+    const gap0818_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0818_lsp_context.zig"), .target = target, .optimize = optimize });
+    gap0818_test_mod.addImport("geode", root_mod);
+    gap0818_test_mod.addImport("lsp_features", lsp_features_mod);
+    gap0818_test_mod.link_libc = true;
+    const gap0818_tests = b.addTest(.{ .root_module = gap0818_test_mod });
+    const run_gap0818_tests = b.addRunArtifact(gap0818_tests);
+    shardDep(test_step, &run_gap0818_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0818_step = b.step("test-gap0818", "GAP-0818: LSP providers enforce caller tenant identity (cross-tenant leak regression)");
+    gap0818_step.dependOn(&run_gap0818_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.

@@ -74,19 +74,19 @@ test "E2E - hover on different elements" {
     try testing.expect(doc != null);
 
     // Hover over MATCH
-    const hover1 = try features.provideHover(allocator, doc.?, 0, 2, null);
+    const hover1 = try features.provideHover(allocator, doc.?, 0, 2, null, features.LspContext.stdio);
     defer if (hover1) |h| allocator.free(h.contents.value);
     try testing.expect(hover1 != null);
     try testing.expect(std.mem.indexOf(u8, hover1.?.contents.value, "MATCH") != null);
 
     // Hover over WHERE
-    const hover2 = try features.provideHover(allocator, doc.?, 0, 19, null);
+    const hover2 = try features.provideHover(allocator, doc.?, 0, 19, null, features.LspContext.stdio);
     defer if (hover2) |h| allocator.free(h.contents.value);
     try testing.expect(hover2 != null);
     try testing.expect(std.mem.indexOf(u8, hover2.?.contents.value, "WHERE") != null);
 
     // Hover over count
-    const hover3 = try features.provideHover(allocator, doc.?, 0, 41, null);
+    const hover3 = try features.provideHover(allocator, doc.?, 0, 41, null, features.LspContext.stdio);
     defer if (hover3) |h| allocator.free(h.contents.value);
     try testing.expect(hover3 != null);
     try testing.expect(std.mem.indexOf(u8, hover3.?.contents.value, "count") != null);
@@ -107,7 +107,7 @@ test "E2E - completion workflow" {
     try testing.expect(doc != null);
 
     // Get completions
-    const items = try features.provideCompletion(allocator, doc.?, 0, 1, null);
+    const items = try features.provideCompletion(allocator, doc.?, 0, 1, null, features.LspContext.stdio);
     defer {
         for (items) |item| {
             if (item.insertText) |text| {
@@ -156,19 +156,19 @@ test "E2E - multi-line document navigation" {
     try testing.expect(doc != null);
 
     // Hover on line 0 (MATCH)
-    const hover1 = try features.provideHover(allocator, doc.?, 0, 2, null);
+    const hover1 = try features.provideHover(allocator, doc.?, 0, 2, null, features.LspContext.stdio);
     defer if (hover1) |h| allocator.free(h.contents.value);
     try testing.expect(hover1 != null);
     try testing.expect(std.mem.indexOf(u8, hover1.?.contents.value, "MATCH") != null);
 
     // Hover on line 1 (WHERE)
-    const hover2 = try features.provideHover(allocator, doc.?, 1, 2, null);
+    const hover2 = try features.provideHover(allocator, doc.?, 1, 2, null, features.LspContext.stdio);
     defer if (hover2) |h| allocator.free(h.contents.value);
     try testing.expect(hover2 != null);
     try testing.expect(std.mem.indexOf(u8, hover2.?.contents.value, "WHERE") != null);
 
     // Hover on line 2 (RETURN)
-    const hover3 = try features.provideHover(allocator, doc.?, 2, 2, null);
+    const hover3 = try features.provideHover(allocator, doc.?, 2, 2, null, features.LspContext.stdio);
     defer if (hover3) |h| allocator.free(h.contents.value);
     try testing.expect(hover3 != null);
     try testing.expect(std.mem.indexOf(u8, hover3.?.contents.value, "RETURN") != null);
@@ -197,7 +197,7 @@ test "E2E - vector search query workflow" {
     try testing.expectEqual(@as(usize, 0), diag.len);
 
     // Hover over distance function
-    const hover = try features.provideHover(allocator, doc.?, 0, 10, null);
+    const hover = try features.provideHover(allocator, doc.?, 0, 10, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
     try testing.expect(hover != null);
     try testing.expect(std.mem.indexOf(u8, hover.?.contents.value, "distance") != null);
@@ -233,23 +233,23 @@ test "E2E - complex query with multiple features" {
     try testing.expectEqual(@as(usize, 0), diag.len);
 
     // Test hover on different lines
-    const hover_match = try features.provideHover(allocator, doc.?, 0, 2, null);
+    const hover_match = try features.provideHover(allocator, doc.?, 0, 2, null, features.LspContext.stdio);
     defer if (hover_match) |h| allocator.free(h.contents.value);
     try testing.expect(hover_match != null);
 
-    const hover_where = try features.provideHover(allocator, doc.?, 1, 2, null);
+    const hover_where = try features.provideHover(allocator, doc.?, 1, 2, null, features.LspContext.stdio);
     defer if (hover_where) |h| allocator.free(h.contents.value);
     try testing.expect(hover_where != null);
 
-    const hover_return = try features.provideHover(allocator, doc.?, 2, 2, null);
+    const hover_return = try features.provideHover(allocator, doc.?, 2, 2, null, features.LspContext.stdio);
     defer if (hover_return) |h| allocator.free(h.contents.value);
     try testing.expect(hover_return != null);
 
-    const hover_order = try features.provideHover(allocator, doc.?, 3, 2, null);
+    const hover_order = try features.provideHover(allocator, doc.?, 3, 2, null, features.LspContext.stdio);
     defer if (hover_order) |h| allocator.free(h.contents.value);
     try testing.expect(hover_order != null);
 
-    const hover_limit = try features.provideHover(allocator, doc.?, 4, 2, null);
+    const hover_limit = try features.provideHover(allocator, doc.?, 4, 2, null, features.LspContext.stdio);
     defer if (hover_limit) |h| allocator.free(h.contents.value);
     try testing.expect(hover_limit != null);
 
@@ -297,7 +297,7 @@ test "E2E - concurrent documents" {
     const doc2 = srv.documents.get("file:///doc2.gql");
     try testing.expect(doc2 != null);
 
-    const hover = try features.provideHover(allocator, doc2.?, 0, 2, null);
+    const hover = try features.provideHover(allocator, doc2.?, 0, 2, null, features.LspContext.stdio);
     defer if (hover) |h| allocator.free(h.contents.value);
     try testing.expect(hover != null);
 
