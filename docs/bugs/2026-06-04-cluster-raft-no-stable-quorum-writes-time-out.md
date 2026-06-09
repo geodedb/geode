@@ -551,3 +551,52 @@ separate, deeper QUIC-core change to be done carefully on its own, NOT bundled h
 - M2: a genuinely half-open dead peer holds a `connection_pool` worker until the
   QUIC idle timeout reaps it (benign in a live cluster: heartbeats keep the stream
   active far under the idle timeout).
+
+### ⚠️ NEW residual on real k8s (2026-06-09, `dev` = `f653bdb`) — cluster does NOT survive pod restart / staggered start
+
+The multiplexed-stream fix was verified on the netns A5 harness, which is
+**steady-state**: all 3 nodes start, *then* load runs — membership never changes.
+Deployed to the real arda 3-pod StatefulSet, the **transport fix holds** but a
+membership-change defect is exposed that A5 cannot see, and it is **fatal in k8s**
+(where pods start staggered and restart constantly):
+
+- **Steady-state confirmed good.** A clean boot reached a stable leader (geode-2) +
+  follower (geode-0), **0 OutOfStreams / 0 HandshakeError / 0 `poll cycle slow`**,
+  and a leader `CREATE (:DevRepl) RETURN 1` read back `count=1` on the leader **and
+  the follower** (replication works — #5 transport churn is genuinely gone).
+- **A node that starts late or restarts cannot (re)join.** With `Parallel`
+  podManagement + `local-path` PVC provisioning, geode-1 came up ~60s after the
+  other two; it parked at **`candidate term=0`** and **never joined** — the leader
+  reaches geode-0 (heartbeats → follower term=1) but never geode-1. Deleting geode-1
+  so it restarts into the *already-stable* cluster did **not** help: it came back at
+  `candidate term=0` and stayed isolated. Both sides log **nothing** (0 errors, 0
+  connection lines) — the raft frames to/from the late/restarted peer simply never
+  flow.
+- **Restarting the leader breaks the whole cluster.** `kubectl delete pod` of the
+  leader → all three go `candidate`, and **no leader re-elects for 80s+** (the two
+  restarted/new-IP nodes stuck at `term=0`, the survivor stuck `candidate term=1`),
+  again with 0 transport errors. So the cluster cannot recover from a single pod
+  restart — disqualifying for k8s, where the StatefulSet, node drains, image rolls,
+  and OOM all restart pods routinely.
+
+**Likely cause:** the new model keeps **one long-lived `PeerConnection.send_stream`
+per peer, reopened only on a real send error**. A pod **restart reschedules the
+peer to a new IP** (and a late peer was absent at first connect), but a cached
+connection to the old/absent endpoint does not surface a "real send error" that
+triggers reopen — and even on reopen it must **re-resolve the peer FQDN to the new
+pod IP**. So a peer that changes identity/appears-late is never (re)connected: the
+survivor keeps a wedged stream to a dead IP, and the fresh node can't establish its
+own outbound streams against the current membership (it sits at `term=0`). The
+steady-state A5 test never restarts a node, so it cannot catch this.
+
+**Suggested test + fix.** Extend the netns/k8s harness with a **membership-churn**
+phase: (a) start nodes staggered, assert the late one joins as a follower and
+replicates; (b) restart a follower, assert it rejoins (follower at the leader's
+term + a subsequent leader write reaches it); (c) restart the **leader**, assert a
+single new leader elects and all three reconverge + replicate. Fix direction:
+drive peer-connection liveness from the **heartbeat path** (not only send-error) —
+when frames stop being acked / the stream is half-open, **re-resolve the peer FQDN
+and reopen `send_stream` to the current endpoint**; and ensure a freshly-started
+node (re)establishes its long-lived streams against the live membership rather than
+a one-shot connect at boot. Until this lands, a k8s cluster only works on a
+single, simultaneous, never-restarted boot — which it never gets in practice.
