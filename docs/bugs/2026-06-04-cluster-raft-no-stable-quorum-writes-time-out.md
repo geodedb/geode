@@ -799,14 +799,22 @@ on reload).
 
 - ~~**No durable raft log / hard-state (FileStorage).**~~ **RESOLVED 2026-06-09**
   — see section below.
-- **Re-apply storm efficiency.** With FileStorage now wiring durable log +
-  hard-state, a restarted node still re-applies (as no-ops) `O(committed log)`
-  entries before catching up, because the pinned raft library (`v0.1.5`) **never
-  auto-drives `InstallSnapshot`** — `node.zig`'s `buildAppendEntries` returns
-  `null` on `StorageError.Compacted` and there is no caller of
-  `buildInstallSnapshotMessages`. A safe applied-watermark + snapshot path would
-  eliminate the storm; design carefully given the crash-window. Tracked as a
-  follow-up (does not affect correctness — the no-op applies are safe).
+- **Re-apply storm efficiency.** ~~Blocked on the pinned raft library (`v0.1.5`)
+  never auto-driving `InstallSnapshot`.~~ **LIBRARY GAP FIXED 2026-06-09** — raft
+  `v0.1.6` (lib commits `77010f5` fix + `a18e743` repro tests, tag `v0.1.6`) now
+  auto-drives `InstallSnapshot`: when a follower's `next_index` falls behind the
+  leader's compaction boundary, all three replication-driver sites (sequential
+  heartbeat, parallel heartbeat, AppendEntries-rejection retry) escalate to a
+  throttled snapshot send instead of an empty heartbeat; pending state clears on
+  ack and normal AppendEntries resumes. The lib also fixed a latent follower-side
+  gap: installed snapshots are now persisted to storage in `advancePersist`
+  (before, the backing store kept a stale `snapshot_index`, desyncing offsets).
+  Geode's pin updated to `v0.1.6`. **Geode-side residual:** geode never calls
+  `reportSnapshot`, so its raft log never compacts and the storm remains until an
+  applied-watermark + snapshot-content design lands geode-side (careful: a
+  marker-only snapshot blob would let a fresh follower skip entries it never
+  applied — the snapshot must carry, or safely imply, the full applied state).
+  Correctness is unaffected (re-applies are idempotent no-ops).
 - **Edge / delete / merge replication idempotency.** Those mutations are still
   `ClusterWriteNotReplicable`; when they become replicable they need the same
   raft-index-keyed idempotency.

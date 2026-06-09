@@ -343,8 +343,8 @@
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.5#e93b8bf75b846886569c26ff3c777ce4350127a6",
-            .hash = "raft-0.1.4-PqJyvpbTBAB8Jw8e2Y4jrb5L6aRYCoTSHsYKjo7wNfda",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.6#b65f16453379191ae7674f53067585821a6f45cc",
+            .hash = "raft-0.1.6-PqJyvjUTBQBp0ko3ydL3M18-wzoDONtWTfLiekav-5E5",
         },
 
         // =======================================================================
