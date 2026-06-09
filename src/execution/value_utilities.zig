@@ -21,6 +21,16 @@ const json_lib = @import("json");
 const ExecutionResult = execution.ExecutionResult;
 const Value = value_types.Value;
 
+/// GAP-0844 (secondary): resolve the current FLE role, preferring the active
+/// ExecutionContext's request-scoped `fle_role` over the per-thread map (falls
+/// back to the per-thread map when no context is active — unchanged behavior).
+fn currentUserRolePreferringContext() ?[]const u8 {
+    if (execution.getActiveContext()) |ctx_ptr| {
+        return fle_integration.getCurrentUserRoleCtx(ctx_ptr);
+    }
+    return fle_integration.getCurrentUserRole();
+}
+
 /// Write a string with proper RFC 8259 JSON escaping
 /// Handles GQL doubled single quotes ('') -> single quote (')
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-020; FEATURE="JSON Library Migration"; ASPECT=StringEscaping; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
@@ -235,7 +245,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                             if (fle_integration.hasEncryptedFields()) {
                                 // Field-Level Encryption: decrypt if configured
                                 const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                                const user_role = fle_integration.getCurrentUserRole();
+                                const user_role = currentUserRolePreferringContext();
                                 const fle_ctx = fle_integration.EncryptionContext{
                                     .tenant_id = fle_integration.getCurrentTenantId(),
                                     .schema_name = type_name,
@@ -336,7 +346,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                     .tenant_id = fle_integration.getCurrentTenantId(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
-                                    .current_user_role = fle_integration.getCurrentUserRole(),
+                                    .current_user_role = currentUserRolePreferringContext(),
                                 };
                                 const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
                                 defer allocator.free(record_id_buf);

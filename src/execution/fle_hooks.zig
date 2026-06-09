@@ -8,6 +8,21 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-28
 // CANARY: REQ=REQ-FLE-FAILSECURE-001; FEATURE="FLEFailSecure"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/security/test_fle_enforcement.zig; OWNER=security; UPDATED=2026-01-28
 
+/// GAP-0844 (secondary): resolve the current FLE role, preferring the active
+/// ExecutionContext's request-scoped `fle_role` over the per-thread map. The FLE
+/// hooks do not receive a context parameter — they read the thread-local active
+/// context the same way `decryptPropertyIfNeeded`'s GPS gate does — so the
+/// context becomes authoritative wherever one is pushed (the request boundary),
+/// while internal/legacy callers with no active context keep the per-thread
+/// behavior unchanged. Lazy import avoids the execution ↔ fle_hooks cycle.
+fn currentUserRolePreferringContext() ?[]const u8 {
+    const exec_mod = @import("../execution.zig");
+    if (exec_mod.getActiveContext()) |ctx_ptr| {
+        return fle_integration.getCurrentUserRoleCtx(ctx_ptr);
+    }
+    return fle_integration.getCurrentUserRole();
+}
+
 /// Error type for FLE hooks - fail-secure behavior
 pub const FLEHookError = error{
     /// Encryption failed and cannot proceed safely
@@ -45,7 +60,7 @@ pub fn encryptPropertyIfNeeded(
         .tenant_id = fle_integration.getCurrentTenantId(),
         .schema_name = node_type,
         .allocator = allocator,
-        .current_user_role = fle_integration.getCurrentUserRole(),
+        .current_user_role = currentUserRolePreferringContext(),
     };
 
     const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
@@ -93,7 +108,7 @@ pub fn encryptEdgePropertyIfNeeded(
         .tenant_id = fle_integration.getCurrentTenantId(),
         .schema_name = edge_type,
         .allocator = allocator,
-        .current_user_role = fle_integration.getCurrentUserRole(),
+        .current_user_role = currentUserRolePreferringContext(),
     };
 
     const record_id = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge_id});
@@ -179,7 +194,7 @@ pub fn decryptPropertyIfNeeded(
         .tenant_id = fle_integration.getCurrentTenantId(),
         .schema_name = node_type,
         .allocator = allocator,
-        .current_user_role = fle_integration.getCurrentUserRole(),
+        .current_user_role = currentUserRolePreferringContext(),
     };
 
     // Try to decrypt - handles RBAC and returns "[REDACTED]" if unauthorized

@@ -2027,6 +2027,12 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                // GAP-0844 (secondary): thread the session FLE role into the context
+                // so getCurrentUserRoleCtx prefers it. The gRPC HELLO sets the role
+                // per-thread (setCurrentUserRole); state.fle_user_role mirrors it
+                // when populated, else null falls back to the per-thread map —
+                // identical to current behavior.
+                .fle_role = state.fle_user_role,
                 .principal = &principal_for_request,
                 .pending_index_rebuilds = null,
             };

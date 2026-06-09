@@ -510,6 +510,14 @@ pub const ExecutionContext = struct {
     // Covered by the GAP-0515 thread-reuse regression test in fle_integration.zig
     // and the GAP-0509 tenant isolation tests in tests/test_gap0509_tenant_isolation.zig.
     tenant_id: ?[]const u8 = null,
+    // CANARY: REQ=REQ-FLE-ROLE-ISOLATION-004; FEATURE="FLERoleIsolation"; ASPECT=ContextRole; STATUS=TESTED; TEST=tests/test_gap0844_role_context.zig; OWNER=security; UPDATED=2026-06-08
+    // GAP-0844 (secondary): request-scoped FLE role. When set at the request
+    // boundary (alongside fle_integration.setCurrentUserRole), FLE read sites that
+    // hold a context should prefer this over the per-thread map via
+    // fle_integration.getCurrentUserRoleCtx — so FLE isolation survives a future
+    // async / work-stealing executor that moves a request across threads. Null in
+    // legacy/test paths; getCurrentUserRoleCtx falls back to the per-thread map.
+    fle_role: ?[]const u8 = null,
     // GAP-0511: Queued advanced index rebuilds to be flushed at the end of statement execution
     pending_index_rebuilds: ?*std.StringHashMap(void) = null,
     // Allocator used for pending_index_rebuilds keys — must match the allocator

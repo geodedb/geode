@@ -5334,6 +5334,12 @@ fn handleClientMessage(
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                // GAP-0844 (secondary): thread the session FLE role into the context
+                // alongside the per-thread setter (installThreadLocalSessionState).
+                // FLE read sites that hold this context prefer it via
+                // getCurrentUserRoleCtx, making the context authoritative at the
+                // request boundary (per-thread map remains the fallback).
+                .fle_role = state.fle_user_role,
                 .principal = &principal_for_request,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06

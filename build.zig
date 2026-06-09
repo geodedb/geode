@@ -4602,6 +4602,17 @@ pub fn build(b: *std.Build) void {
     const gap0839_cli_step = b.step("test-gap0839-tenant-cli", "GAP-0839 CLI regression (geode tenant subcommand builds CALL geode.tenant.* query strings)");
     gap0839_cli_step.dependOn(&run_gap0839_cli_tests.step);
 
+    // GAP-0844 (secondary): FLE role flows through ExecutionContext.fle_role.
+    // getCurrentUserRoleCtx prefers the request-scoped context role, falling back
+    // to the per-thread map so the synchronous path is unchanged.
+    const gap0844_ctx_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0844_role_context.zig"), .target = target, .optimize = optimize });
+    gap0844_ctx_test_mod.addImport("geode", root_mod);
+    const gap0844_ctx_tests = b.addTest(.{ .root_module = gap0844_ctx_test_mod });
+    const run_gap0844_ctx_tests = b.addRunArtifact(gap0844_ctx_tests);
+    shardDep(test_step, &run_gap0844_ctx_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0844_ctx_step = b.step("test-gap0844-role-context", "GAP-0844 secondary regression (FLE role flows through ExecutionContext.fle_role)");
+    gap0844_ctx_step.dependOn(&run_gap0844_ctx_tests.step);
+
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
     perf_b_test_mod.addImport("geode", root_mod);

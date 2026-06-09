@@ -145,6 +145,31 @@ pub fn getCurrentUserRole() ?[]const u8 {
     return per_thread_roles.get(std.Thread.getCurrentId());
 }
 
+/// GAP-0844 (secondary): context-preferring FLE role reader.
+///
+/// Prefers the request-scoped `ctx.fle_role` (set at the request boundary
+/// alongside `setCurrentUserRole`), falling back to the per-thread map via
+/// `getCurrentUserRole()` when the context carries no role. This makes the
+/// EXECUTION CONTEXT — not the OS thread — authoritative wherever a context is
+/// threaded, so FLE role isolation survives a future async / work-stealing
+/// executor that moves a request across threads mid-flight.
+///
+/// `ctx` is `anytype` (rather than the concrete `execution.ExecutionContext`)
+/// purely to avoid a fle_integration ↔ execution import cycle; the only field it
+/// reads is `fle_role`. `getCurrentUserRole()` (the per-thread reader) is left
+/// untouched so the ~12 existing per-thread call sites keep their behavior.
+pub fn getCurrentUserRoleCtx(ctx: anytype) ?[]const u8 {
+    const T = @TypeOf(ctx);
+    if (comptime @typeInfo(T) == .pointer) {
+        if (comptime @hasField(@typeInfo(T).pointer.child, "fle_role")) {
+            if (ctx.fle_role) |r| return r;
+        }
+    } else if (comptime @hasField(T, "fle_role")) {
+        if (ctx.fle_role) |r| return r;
+    }
+    return getCurrentUserRole();
+}
+
 /// Clear all per-thread FLE state (tenant_id and role) for the current thread.
 /// MUST be called in the connection handler's defer block to prevent stale
 /// state from leaking into a subsequent connection that reuses the same thread.
