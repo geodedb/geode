@@ -7,11 +7,11 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 This top register is authoritative as of 2026-06-09. Historical sections below are retained for traceability; when an older section conflicts with this register, use this register. The 2026-06-09 audit also normalizes duplicate CaaST IDs: GAP-0838 remains the cross-pod cluster failure, and CaaST tenancy/FLE residuals are tracked as GAP-0846 through GAP-0854.
 
-- **Total open/partial gaps:** 35
+- **Total open/partial gaps:** 34
 - **Critical:** 2 (GAP-0256, GAP-0838) — GAP-0854 closed 2026-06-09; GAP-0818 closed 2026-06-09
 - **High:** 6 (GAP-0816, GAP-0817, GAP-0846, GAP-0848, GAP-0849, GAP-0855) — GAP-0858 closed 2026-06-09
 - **Medium:** 17
-- **Low:** 9
+- **Low:** 8 — GAP-0832 closed 2026-06-09
 - **Current dependency state:** `../geode-client-zig` was pulled to `9ba815e`, but this repo still pins `geode-client-zig` to `e66fdf5`/`v0.2.11` in `build.zig.zon`; `/home/benji/src/devnw/zig/fts-storage` is current at `908c1f5`; `/home/benji/src/devnw/zig/timeseries-storage` has a newer script-only commit (`33d5ef9`) while this repo pins `e5ecd21`; `/home/benji/src/devnw/zig/zcap` is current; `encrypted-fs` and `zcap2` under `~/src/devnw/zig` are not git repositories.
 - **Retired from open count after revalidation:** LDAP/OIDC user-directory claims were delisted (GAP-0246/GAP-0247 historical only); orphan transaction stream-close cleanup is implemented in `src/server/server_state.zig:400-481`; the external KMS client now has Vault/AWS HTTP implementations even though `docs/DESIGN_TDE_KMS.md` still contains stale "stub" language.
 
@@ -37,7 +37,7 @@ This top register is authoritative as of 2026-06-09. Historical sections below a
 | GAP-0829 | Medium | LSP docs | LSP docs and resolved-gap notes still drift from actual feature state. | Update `LSP_IMPLEMENTATION.md` and resolved register to match shipped handlers. |
 | GAP-0830 | Low | MCP/LSP bridge | `src/mcp/lsp.zig` bridge lacks design doc, REQ-DOC issue, and CANARY for bridge contract. | Add bridge contract doc, CANARY marker, and governance test. |
 | GAP-0831 | Medium | LSP governance | Capability-vs-handler truthfulness guard is missing. | Add a structural test that advertised capabilities have wired handlers. |
-| GAP-0832 | Low | LSP quality | Residual unsafe field access at `src/cli/lsp/server.zig:220-221` remains a quality follow-up. | Replace unsafe access with validated decode path and regression coverage. |
+| GAP-0832 | Low | LSP quality | ~~Residual unsafe field access at `src/cli/lsp/server.zig:220-221` remains a quality follow-up.~~ **CLOSED 2026-06-09** (commit `1b459709`): `handleMessage` now validates the JSON-RPC envelope via pure `Server.decodeEnvelope` (non-object root / non-string method → -32600, structured ids normalized to null), and `handleFormatting` routes through the safe `extractTextDocumentUri` extractor (-32602 on bad shape). Regression cover in `tests/test_gap0832_lsp_decode.zig` (wired as `test-gap0832`); three handleMessage tests crash on pre-fix code. | ~~Replace unsafe access with validated decode path and regression coverage.~~ Done. |
 | GAP-0838 | Critical | Distributed cluster | Cross-pod Raft peer TLS/handshake failure was re-confirmed on geode 0.6.12; loopback harness coverage is insufficient. | Prove three non-loopback nodes form quorum in Kubernetes/CI, including TLS peer SAN/SNI handling and restart acceptance. |
 | GAP-0846 | High | Tenancy hierarchy | `HierarchyManager` is now string-keyed and registry-populated, but live query/RLS read paths still do not consult hierarchy for parent/descendant access. | Enforce `canAccessTenant` semantics in all tenant-filtered reads and add cross-tenant hierarchy leak tests. |
 | GAP-0847 | Medium | Tenant lifecycle | `CALL geode.tenant.*`, durable registry, and CLI exist, but GQL tenant DDL and cascade data deletion on tenant drop are missing; `docs/security/MULTI_TENANT_HARDENING.md` still says there is no registry/CLI. | Add standard tenant DDL or document CALL-only scope, implement safe drop semantics, and update hardening docs. |
@@ -2467,7 +2467,7 @@ Phase-4 sync of the `/codepros:audit` LSP pipeline. Inputs: `/tmp/lsp-audit-phas
 | GAP-0829 | [#764](https://gitlab.com/devnw/codepros/geode/geode/-/issues/764) | Medium | `Domain::lsp::doc-drift` | `LSP_IMPLEMENTATION.md` lists shipped features under "Future" + `GAP_ANALYSIS_RESOLVED.md` falsely closes GAP-0056 | Open |
 | GAP-0830 | [#547](https://gitlab.com/devnw/codepros/geode/geode/-/issues/547) | Low | `Domain::mcp::lsp-bridge` | `src/mcp/lsp.zig` MCP↔LSP bridge has no design doc, no REQ-DOC issue, no CANARY for the bridge contract | Open |
 | GAP-0831 | [#765](https://gitlab.com/devnw/codepros/geode/geode/-/issues/765) | Medium | `Domain::lsp::canary-hygiene` | LSP capability-vs-handler "advertise truthfulness" guard missing | Open |
-| GAP-0832 (NEW) | tbd | Low | `Domain::lsp::lifecycle` | Residual unsafe field access at `src/cli/lsp/server.zig:220-221` after SEC-004 — file follow-up quality issue | Open |
+| GAP-0832 (NEW) | tbd | Low | `Domain::lsp::lifecycle` | Residual unsafe field access at `src/cli/lsp/server.zig:220-221` after SEC-004 — file follow-up quality issue | **Closed 2026-06-09** (`1b459709`) — validated `decodeEnvelope` + safe `handleFormatting` extractor; regression `tests/test_gap0832_lsp_decode.zig` |
 
 ### Top-5 must-close (per Phase-3 ranking)
 
@@ -2479,7 +2479,7 @@ Phase-4 sync of the `/codepros:audit` LSP pipeline. Inputs: `/tmp/lsp-audit-phas
 
 ### Cross-cutting references for sibling Phase-4 trackers
 
-- Quality tracker: GAP-0829 (doc-drift), GAP-0831 (canary-hygiene), GAP-0832 (residual unsafe field access)
+- Quality tracker: GAP-0829 (doc-drift), GAP-0831 (canary-hygiene), ~~GAP-0832 (residual unsafe field access)~~ **Closed 2026-06-09** (`1b459709`)
 - Perf tracker: GAP-0826 (LSP perf/stress pack)
 - Security tracker: GAP-0818 (Critical — multi-tenant LSP), GAP-0819 (Critical — MCP injection — **Closed 2026-05-06**)
 
@@ -2490,7 +2490,7 @@ Phase-4 sync of the `/codepros:audit` LSP pipeline. Inputs: `/tmp/lsp-audit-phas
 | GAP-0056 | LSP Go-to-Definition wired to dispatcher | `46334814` | Closed |
 | GAP-0818 | MCP-LSP bridge RLS pre-condition documented | `01ca2480` | Partial (enforcement → #795) |
 | GAP-0819 | MCP input chokepoint (1 MiB cap, UTF-8, nested comments) | `c090763b` | Closed |
-| GAP-0832 | Residual unsafe field access at `server.zig:220-221` (SEC-004 follow-up) | n/a | Open (filed as quality follow-up) |
+| GAP-0832 | Residual unsafe field access at `server.zig:220-221` (SEC-004 follow-up) | `1b459709` | **Closed 2026-06-09** (validated decode path + regression) |
 
 ## 2026-06-08/09 - CaaST multi-tenant integration findings (Tenancy & FLE)
 
