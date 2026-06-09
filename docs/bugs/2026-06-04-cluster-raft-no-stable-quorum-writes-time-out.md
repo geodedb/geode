@@ -600,3 +600,85 @@ and reopen `send_stream` to the current endpoint**; and ensure a freshly-started
 node (re)establishes its long-lived streams against the live membership rather than
 a one-shot connect at boot. Until this lands, a k8s cluster only works on a
 single, simultaneous, never-restarted boot — which it never gets in practice.
+
+---
+
+## ✅ RESOLVED (2026-06-09) — periodic peer FQDN re-resolution (reschedule-aware transport)
+
+The membership-change defect is fixed in geode (no raft library change). A
+faithful, deterministic netns reproduction was built FIRST and confirmed RED on
+the pre-fix binary, then GREEN after the fix.
+
+### Root cause (confirmed by reproduction, not just inference)
+
+The multiplexed-stream transport (root cause #5) keys a long-lived
+`Transport.PeerConnection` by **node-id** and only ever rebuilds it on a *send
+error* (`shouldEvictOnSendError`). When a pod is **rescheduled to a new IP**, the
+old IP becomes a **silent blackhole**: the survivors' cached QUIC connection keeps
+"sending" to the departed IP, the datagrams are dropped with **no ICMP and no send
+error**, so the evict-on-send-error path NEVER fires and the FQDN is NEVER
+re-resolved. `getOrCreatePeerConnection`'s fast path (`raft_consensus.zig`) returns
+the cached `established` connection without ever re-resolving `peer.endpoint`.
+
+Reproduced deterministically with Linux netns (distinct routable IPs, wildcard
+`0.0.0.0` bind, FQDN+DNS, hostname identity, CA-TLS — the faithful k8s topology),
+modelling a reschedule by moving a node's veth IP, repointing a mutable DNS zone,
+and installing a **bogus permanent ARP entry** for the old IP in the surviving
+peers so it is a true silent blackhole. The pre-fix binary: a follower-reschedule
+leaves the cluster **flapping** (a survivor whose stale cached connection points
+at the departed IP can never exchange votes — `0` re-resolve lines, `0` transport
+errors, the new IP never appears via the connect path); a leader-reschedule
+**collapses** the whole cluster to all-candidates. A staggered start with NO IP
+change (`M1`) joins fine — confirming the defect is specifically the **stale-IP
+cached connection**, not late arrival per se. The inbound/outbound asymmetry is
+why an inbound-liveness signal is insufficient: a node cannot observe its own dead
+*outbound* from *inbound* traffic (inbound uses the peer's outbound — a different
+connection), so the recovery trigger must be **re-resolution of the FQDN**, not
+"have I heard from this peer."
+
+### Fix (`src/distributed/raft_consensus.zig`, `src/transport/quic.zig`)
+
+`clientPollLoop` now runs a **periodic peer IP-change reaper** (every ~3 s, gated
+well above the 2 ms poll cadence and well below any election timeout): for each
+cached peer connection it re-resolves the peer FQDN (`quic.resolveHostIpAlloc`, a
+new owned-string resolver) and, if it now maps to a **different IP** than the live
+connection (`PeerConnection.resolved_ip`, captured at connect time), evicts the
+stale connection (`evictPeerConnection`). The next `send` rebuilds it via
+`connectWithTLS`, which resolves the FQDN to the **current** IP. This recovers
+**every** direction and scenario (follower restart, leader restart, staggered
+start) regardless of which side's connection went stale, and only reconnects on an
+**actual** IP change (an IP-literal/loopback cluster resolves to itself and never
+churns — so steady-state A1–A5 are unaffected). The reschedule is logged at
+`warn` (the report complained churn was invisible at `info`): `raft transport peer
+rescheduled to a new IP; evicting stale connection old_ip=… new_ip=… peer=…`.
+
+### Evidence
+
+- **Reproduction harness:** `tests/cluster/netns_cluster_membership_churn_test.sh`
+  (`make test-cluster-netns-churn`). Phases: **M1** staggered start, **M2**
+  follower restart with NEW IP, **M3** leader restart with NEW IP. Each asserts
+  SUSTAINED health (1 leader / 0 candidates held for ≥8 s — an instantaneous check
+  races a flapping node) + a write replicating to all 3.
+- **Pre-fix:** M2/M3 RED (flap / collapse; `0` re-resolve lines).
+- **Post-fix:** M1+M2+M3 **GREEN**; the reaper fires exactly on each IP change
+  (`old_ip=10.90.0.11 new_ip=10.90.0.21 peer=1`,
+  `old_ip=10.90.0.12 new_ip=10.90.0.22 peer=2`) and all three reconverge to a
+  single leader + replicate.
+- **No regression:** the steady-state netns regression (`A1–A5`,
+  `netns_cluster_replication_test.sh`) and the in-process cluster/raft tests
+  (`test-cluster-steady-state`, `test-cluster-3node-election`,
+  `test-raft-per-peer-drain`, `test-cluster-propose-write`,
+  `test-raft-envelope-roundtrip`) all pass — the reaper does not churn a healthy
+  same-IP cluster.
+
+### Still open (characterized, secondary — NOT membership re-resolution)
+
+- **Restart re-apply / no persisted raft log (root cause #6).** Unchanged: the
+  cluster `RaftNode` uses `InMemoryStorage`, so a rescheduled-with-new-IP node can
+  duplicate already-applied rows. Now that new-IP rejoin actually *works*, this
+  surfaces more often and should be scheduled next (wire `FileStorage` +
+  applied-index coordination).
+- **Dead-write budget (`quic.zig client_writer_max_blocked_ns = 60 s`).** Not
+  required for recovery here (the ~3 s reaper evicts well before a write hard-blocks
+  on a healthy host), but for k8s faithfulness the raft outbound write should carry
+  a heartbeat-scaled deadline so a drain thread never parks 60 s on a wedged peer.

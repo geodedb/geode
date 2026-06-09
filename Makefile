@@ -1566,6 +1566,17 @@ test-cluster-netns: build
 	@echo "Running distinct-IP netns cluster replication regression..."
 	sudo tests/cluster/netns_cluster_replication_test.sh zig-out/bin/geode
 
+# Distinct-IP netns cluster MEMBERSHIP-CHURN regression for the re-opened
+# docs/bugs/2026-06-04-...: a pod reschedule moves a peer to a NEW IP; the
+# survivors' cached raft connections silently blackhole against the old IP and
+# never re-resolve, so the cluster cannot reconverge (staggered start, follower
+# new-IP rejoin, leader new-IP re-election). Requires root (network namespaces +
+# bogus-ARP blackhole); skips cleanly when unprivileged.
+.PHONY: test-cluster-netns-churn
+test-cluster-netns-churn: build
+	@echo "Running distinct-IP netns cluster membership-churn regression..."
+	sudo tests/cluster/netns_cluster_membership_churn_test.sh zig-out/bin/geode
+
 # CPU-constrained QUIC sustained-load reproduction / Phase-2 validation gate for
 # docs/bugs/2026-06-07-unresponsive-under-sustained-query-load-liveness-kill-503.md.
 # Manual diagnostic (needs systemd-run user-scope CPU control; ~2 min). Measures

@@ -1537,6 +1537,23 @@ fn resolveHostToIp(allocator: std.mem.Allocator, host: []const u8) !struct { ip:
     return error.InvalidAddress;
 }
 
+/// Resolve `host` (an FQDN or an IP literal) to an owned IPv4/IPv6 address
+/// string. Caller owns the returned slice and must free it.
+///
+/// Used by the raft transport's periodic peer re-resolution: a k8s pod
+/// reschedule moves a peer to a NEW IP, but a long-lived cached QUIC connection
+/// keeps targeting the OLD IP and (when that IP becomes a silent blackhole)
+/// never surfaces a send error to trigger a reconnect. Comparing a freshly
+/// resolved IP against the live connection's IP detects the move so the stale
+/// connection can be evicted and rebuilt against the current endpoint. An IP
+/// literal resolves to itself, so a cluster addressed by raw IPs never churns.
+pub fn resolveHostIpAlloc(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
+    const r = try resolveHostToIp(allocator, host);
+    const out = try allocator.dupe(u8, r.ip);
+    if (r.allocated) allocator.free(@constCast(r.ip));
+    return out;
+}
+
 /// GAP-0838: parse a PEM CA file into a DER trust-anchor chain.
 ///
 /// The vendor api-client TLS path consumes inline DER trust anchors

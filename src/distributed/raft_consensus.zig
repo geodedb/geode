@@ -253,6 +253,12 @@ const quic = if (builtin.is_test) struct {
             return undefined;
         }
     };
+    // Test-mode stub for the peer re-resolution used by clientPollLoop. Tests
+    // address peers by IP literal, so "resolution" returns the host unchanged
+    // and the periodic IP-change reaper never evicts.
+    pub fn resolveHostIpAlloc(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
+        return allocator.dupe(u8, host);
+    }
 } else @import("transport/quic");
 
 pub const RpcClient = struct {
@@ -390,6 +396,17 @@ pub const Transport = struct {
         established: bool = false,
         endpoint: []const u8,
         port: u16,
+        /// The destination peer's id. Stored so the IP-change reaper in
+        /// `clientPollLoop` (which iterates the snapshot by pointer) can call
+        /// `evictPeerConnection(peer_id)` when this connection's endpoint has
+        /// been rescheduled to a new IP. Immutable after publish into the map.
+        peer_id: u64 = 0,
+        /// The IP `endpoint` resolved to when this connection was established.
+        /// Owned. The reaper compares it against a fresh resolution of
+        /// `endpoint`; a difference means the peer pod was rescheduled to a new
+        /// IP and the cached connection (which silently blackholes against the
+        /// old IP) must be evicted + rebuilt. Immutable after publish.
+        resolved_ip: []const u8 = &.{},
 
         /// Refcount for safe concurrent eviction-vs-poll (A6f, 2026-05-26).
         /// Semantics: entries in `Transport.peers` carry an implicit ref of 1
@@ -429,6 +446,7 @@ pub const Transport = struct {
             }
             self.client.deinit();
             self.allocator.free(self.endpoint);
+            if (self.resolved_ip.len > 0) self.allocator.free(self.resolved_ip);
             self.allocator.destroy(self);
         }
 
@@ -794,7 +812,18 @@ pub const Transport = struct {
         // for the snapshot to avoid allocator pressure on the hot path.
         var snap_buf: [16]*PeerConnection = undefined;
         const io = std.Io.Threaded.global_single_threaded.io();
+        // k8s membership churn: re-resolve every peer FQDN on a slow cadence so a
+        // pod reschedule (peer moves to a new IP, old IP becomes a silent
+        // blackhole that never errors a send) is detected and the stale
+        // connection rebuilt. Gated well above the 2 ms poll cadence so the DNS
+        // lookups add negligible load; well below any election timeout so
+        // recovery is prompt.
+        const peer_reresolve_ms: i64 = 3000;
+        var last_reresolve_ms: i64 = compat_milliTimestamp();
         while (!self.client_poll_shutdown.load(.acquire)) {
+            const now_ms = compat_milliTimestamp();
+            const do_reresolve = (now_ms - last_reresolve_ms) >= peer_reresolve_ms;
+            if (do_reresolve) last_reresolve_ms = now_ms;
             // Snapshot the peer set AND acquire a reference on each entry
             // while holding peers_mutex. evictPeerConnection waits for the
             // refcount to drop to zero before freeing, so the references
@@ -820,14 +849,46 @@ pub const Transport = struct {
                 pc.client_mutex.lockUncancelable(io);
                 pc.client.poll(0) catch {};
                 pc.client_mutex.unlock(io);
+                // IP-change reaper: outside client_mutex (DNS only, never touches
+                // the QUIC client). May evict pc; our snapshot ref keeps it alive
+                // until the release below.
+                if (do_reresolve) self.maybeReconnectOnIpChange(pc);
                 if (pc.release()) {
-                    // Eviction completed while we were polling; we hold the
-                    // last reference and must deinit.
+                    // Eviction completed while we were polling/re-resolving; we
+                    // hold the last reference and must deinit.
                     pc.deinit();
                 }
             }
             compat_sleep(2 * std.time.ns_per_ms);
         }
+    }
+
+    /// Periodic peer IP-change reaper, invoked from `clientPollLoop` on a slow
+    /// cadence. Re-resolves the peer's FQDN; if it now maps to a DIFFERENT IP
+    /// than the live connection, the peer pod was rescheduled to a new IP and
+    /// the cached connection is silently blackholing against the old one (no
+    /// send error ever fires, so the evict-on-send-error path can't recover it).
+    /// Evict it so the next `send` rebuilds via `connectWithTLS`, which resolves
+    /// the FQDN to the current IP. Reads only fields that are immutable after the
+    /// connection is published (`endpoint`/`resolved_ip`/`peer_id`); takes no
+    /// lock here — `evictPeerConnection` takes `peers_mutex` itself.
+    fn maybeReconnectOnIpChange(self: *Transport, pc: *PeerConnection) void {
+        if (pc.resolved_ip.len == 0) return; // IP unknown (resolve failed at connect) — nothing to compare
+        const fresh = quic.resolveHostIpAlloc(self.allocator, pc.endpoint) catch return; // transient resolve failure: keep the connection, retry next interval
+        defer self.allocator.free(fresh);
+        if (std.mem.eql(u8, fresh, pc.resolved_ip)) return; // same IP — connection still valid
+        // warn (not info/debug): a peer reschedule is an operationally important
+        // membership event an operator must be able to see — the bug report
+        // specifically complained that churn was invisible ("0 errors") while the
+        // cluster silently failed to reconverge. Only fires on an actual IP change
+        // (then the connection is rebuilt to the new IP), so it is not noisy.
+        log.warn("raft transport peer rescheduled to a new IP; evicting stale connection", &.{
+            Attr.string("endpoint", pc.endpoint),
+            Attr.string("old_ip", pc.resolved_ip),
+            Attr.string("new_ip", fresh),
+            Attr.uint("peer", pc.peer_id),
+        });
+        self.evictPeerConnection(pc.peer_id);
     }
 
     fn clientPollEntry(ctx: ?*anyopaque) void {
@@ -1005,14 +1066,26 @@ pub const Transport = struct {
         // the lock so we don't serialize handshakes across peers.
         const conn = try self.allocator.create(PeerConnection);
         errdefer self.allocator.destroy(conn);
+        const endpoint_dup = try self.allocator.dupe(u8, peer.endpoint);
+        errdefer self.allocator.free(endpoint_dup);
+        // Record the IP `endpoint` resolves to NOW so the clientPollLoop reaper
+        // can later detect a pod reschedule (FQDN -> new IP) and rebuild this
+        // connection. A resolution failure is non-fatal: store an empty IP — the
+        // reaper treats "" as "unknown" and skips this peer (it never reconnects
+        // off a missing baseline). In practice this is unreachable: if resolution
+        // fails here, the connectWithTLS below resolves the same FQDN and fails
+        // too, so no established connection is ever published with an empty IP.
+        const resolved = quic.resolveHostIpAlloc(self.allocator, endpoint_dup) catch &.{};
+        errdefer if (resolved.len > 0) self.allocator.free(resolved);
         conn.* = .{
             .allocator = self.allocator,
             .client = quic.QuicClient.init(self.allocator),
             .established = false,
-            .endpoint = try self.allocator.dupe(u8, peer.endpoint),
+            .endpoint = endpoint_dup,
             .port = peer.port,
+            .peer_id = peer.id,
+            .resolved_ip = resolved,
         };
-        errdefer self.allocator.free(conn.endpoint);
         errdefer conn.client.deinit();
 
         try connectWithTLS(&conn.client, self.allocator, conn.endpoint, conn.port);
