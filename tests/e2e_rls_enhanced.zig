@@ -1,3 +1,12 @@
+// NOTE: This file is currently DISABLED (commented out in tests/all_tests.zig
+// and not wired into build.zig). Its relative imports below point at modules
+// that no longer exist (`../src/security/rls.zig`, `../src/security/auth.zig`)
+// and several blocks use stale pre-Zig-0.16 APIs. Reviving the whole file is
+// out of scope. GAP-0838 only re-keyed the tenant HierarchyManager from `u64`
+// to the string `tenant_id`, so the "hierarchical tenant access control" block
+// below was updated to the new string-keyed `addTenant`/`canAccessTenant` API.
+// The live, wired production regression for that path lives in
+// tests/test_gap0838_tenant_hierarchy.zig (`zig build test-gap0838-tenant-hierarchy`).
 const std = @import("std");
 const testing = std.testing;
 const rls = @import("../src/security/rls.zig");
@@ -94,53 +103,24 @@ test "RLS - hierarchical tenant access control" {
     var engine = try rls.RLSEngine.init(allocator);
     defer engine.deinit();
 
-    // Set up tenant hierarchy
-    try engine.hierarchy_manager.tenant_hierarchy.put(1, .{
-        .id = 1,
-        .parent_id = null,
-        .children = std.ArrayList(u64).init(allocator),
-        .level = 0,
-        .path = &[_]u64{1},
-        .metadata = std.StringHashMap([]const u8).init(allocator),
-    });
-
-    try engine.hierarchy_manager.tenant_hierarchy.put(2, .{
-        .id = 2,
-        .parent_id = 1,
-        .children = std.ArrayList(u64).init(allocator),
-        .level = 1,
-        .path = &[_]u64{ 1, 2 },
-        .metadata = std.StringHashMap([]const u8).init(allocator),
-    });
-
-    try engine.hierarchy_manager.tenant_hierarchy.put(3, .{
-        .id = 3,
-        .parent_id = 2,
-        .children = std.ArrayList(u64).init(allocator),
-        .level = 2,
-        .path = &[_]u64{ 1, 2, 3 },
-        .metadata = std.StringHashMap([]const u8).init(allocator),
-    });
+    // Set up tenant hierarchy via the GAP-0838 string-keyed addTenant API.
+    // tenant "1" (root) -> "2" -> "3", with sibling "4" under "2".
+    try engine.hierarchy_manager.addTenant("1", null);
+    try engine.hierarchy_manager.addTenant("2", "1");
+    try engine.hierarchy_manager.addTenant("3", "2");
 
     // Test parent can access child tenant
-    const parent_can_access = try engine.hierarchy_manager.canAccessTenant(1, 3);
+    const parent_can_access = try engine.hierarchy_manager.canAccessTenant("1", "3");
     try testing.expect(parent_can_access);
 
     // Test child cannot access parent tenant
-    const child_cannot_access = try engine.hierarchy_manager.canAccessTenant(3, 1);
+    const child_cannot_access = try engine.hierarchy_manager.canAccessTenant("3", "1");
     try testing.expect(!child_cannot_access);
 
     // Test sibling access (should fail)
-    try engine.hierarchy_manager.tenant_hierarchy.put(4, .{
-        .id = 4,
-        .parent_id = 2,
-        .children = std.ArrayList(u64).init(allocator),
-        .level = 2,
-        .path = &[_]u64{ 1, 2, 4 },
-        .metadata = std.StringHashMap([]const u8).init(allocator),
-    });
+    try engine.hierarchy_manager.addTenant("4", "2");
 
-    const sibling_cannot_access = try engine.hierarchy_manager.canAccessTenant(3, 4);
+    const sibling_cannot_access = try engine.hierarchy_manager.canAccessTenant("3", "4");
     try testing.expect(!sibling_cannot_access);
 }
 

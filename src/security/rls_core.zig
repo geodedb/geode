@@ -2082,19 +2082,37 @@ pub const QueryRewriter = struct {
     }
 };
 
-// Hierarchical access control for multi-tenant scenarios
+// Hierarchical access control for multi-tenant scenarios.
+//
+// GAP-0838: re-keyed on the STRING `tenant_id` (`[]const u8`) to match the rest
+// of the system (HELLO/session/FLE/audit/proto all use `tenant_id: []const u8`,
+// and `graph_store.DEFAULT_TENANT_ID = "default"`). Previously this was keyed on
+// `u64` and had no production provisioning API, so it was dead code that could
+// never be bridged to the wire's string tenant ids. It now owns its key/path
+// strings (callers may pass borrowed slices) and exposes `addTenant` so
+// production code — not just tests — can populate the org → business-unit →
+// engagement tree CaaST needs.
+//
+// NOTE (scope): this manager is a populate-able, queryable registry. Wiring the
+// live query/RLS evaluation path to consult `canAccessTenant` for every read is
+// a separate, larger authz-semantics change and is intentionally NOT done here
+// (see GAP-0838 follow-up). `addTenant` is the public provisioning seam; a
+// server-init / tenant-provisioning path should call it to register tenants.
 pub const HierarchyManager = struct {
     allocator: Allocator,
-    tenant_hierarchy: std.AutoHashMap(u64, TenantNode),
+    tenant_hierarchy: std.StringHashMap(TenantNode),
     data_domains: std.StringHashMap(DataDomain),
     inheritance_rules: []InheritanceRule,
 
     pub const TenantNode = struct {
-        id: u64,
-        parent_id: ?u64,
-        children: std.ArrayList(u64),
+        // `id` aliases the owned map key (NOT separately freed).
+        id: []const u8,
+        // `parent_id` aliases the parent's owned map key (NOT separately freed).
+        parent_id: ?[]const u8,
+        // `children` and `path` own their own dupes (freed in removeNode/deinit).
+        children: std.ArrayList([]const u8),
         level: u32,
-        path: []const u64,
+        path: []const []const u8,
         metadata: std.StringHashMap([]const u8),
     };
 
@@ -2128,31 +2146,108 @@ pub const HierarchyManager = struct {
     pub fn init(allocator: Allocator) !HierarchyManager {
         return HierarchyManager{
             .allocator = allocator,
-            .tenant_hierarchy = std.AutoHashMap(u64, TenantNode).init(allocator),
+            .tenant_hierarchy = std.StringHashMap(TenantNode).init(allocator),
             .data_domains = std.StringHashMap(DataDomain).init(allocator),
             .inheritance_rules = try allocator.alloc(InheritanceRule, 0),
         };
     }
 
     pub fn deinit(self: *HierarchyManager) void {
+        var it = self.tenant_hierarchy.iterator();
+        while (it.next()) |entry| {
+            // Free the owned per-node allocations. `id`/`parent_id` alias map
+            // keys and are NOT freed here; the map frees its keys on deinit.
+            for (entry.value_ptr.path) |seg| self.allocator.free(seg);
+            self.allocator.free(entry.value_ptr.path);
+            for (entry.value_ptr.children.items) |child| self.allocator.free(child);
+            entry.value_ptr.children.deinit(self.allocator);
+            entry.value_ptr.metadata.deinit();
+            // Free the owned map key.
+            self.allocator.free(entry.key_ptr.*);
+        }
         self.tenant_hierarchy.deinit();
         self.data_domains.deinit();
         self.allocator.free(self.inheritance_rules);
     }
 
-    pub fn getTenantPath(self: *HierarchyManager, tenant_id: u64) ![]const u64 {
+    // GAP-0838: production provisioning API. Registers `tenant_id` under
+    // optional `parent`. Both slices are BORROWED — the manager dupes whatever
+    // it needs to own. `parent` (when set) must already be registered.
+    //
+    // The node's `path` is the root-to-self ancestry chain (parent.path ++
+    // tenant_id), which is exactly what `canAccessTenant`'s prefix check
+    // consumes. `level` is the depth (root == 0).
+    pub fn addTenant(self: *HierarchyManager, tenant_id: []const u8, parent: ?[]const u8) !void {
+        if (self.tenant_hierarchy.contains(tenant_id)) return error.TenantAlreadyExists;
+
+        // Own the key string. On any later failure we free it via errdefer.
+        const owned_key = try self.allocator.dupe(u8, tenant_id);
+        errdefer self.allocator.free(owned_key);
+
+        var level: u32 = 0;
+        var parent_key: ?[]const u8 = null;
+        var parent_path: []const []const u8 = &[_][]const u8{};
+        if (parent) |p| {
+            const parent_node = self.tenant_hierarchy.getPtr(p) orelse return error.TenantNotFound;
+            // Alias the parent's OWNED key so `parent_id` outlives `p`.
+            parent_key = parent_node.id;
+            parent_path = parent_node.path;
+            level = parent_node.level + 1;
+        }
+
+        // Build the owned root-to-self path: dupe every ancestor segment plus
+        // self so the path owns its strings independent of caller/parent.
+        var path = try self.allocator.alloc([]const u8, parent_path.len + 1);
+        var built: usize = 0;
+        errdefer {
+            for (path[0..built]) |seg| self.allocator.free(seg);
+            self.allocator.free(path);
+        }
+        for (parent_path) |seg| {
+            path[built] = try self.allocator.dupe(u8, seg);
+            built += 1;
+        }
+        path[built] = try self.allocator.dupe(u8, tenant_id);
+        built += 1;
+
+        try self.tenant_hierarchy.put(owned_key, .{
+            .id = owned_key,
+            .parent_id = parent_key,
+            .children = std.ArrayList([]const u8).empty,
+            .level = level,
+            .path = path,
+            .metadata = std.StringHashMap([]const u8).init(self.allocator),
+        });
+
+        // Register self in the parent's children list (owned dupe). If this
+        // fails we've already committed the node; leave it consistent by
+        // surfacing the error to the caller without rolling back the put.
+        if (parent) |p| {
+            const parent_node = self.tenant_hierarchy.getPtr(p).?;
+            const child_dup = try self.allocator.dupe(u8, tenant_id);
+            errdefer self.allocator.free(child_dup);
+            try parent_node.children.append(self.allocator, child_dup);
+        }
+    }
+
+    pub fn getTenantPath(self: *HierarchyManager, tenant_id: []const u8) ![]const []const u8 {
         const node = self.tenant_hierarchy.get(tenant_id) orelse return error.TenantNotFound;
         return node.path;
     }
 
-    pub fn canAccessTenant(self: *HierarchyManager, accessor_tenant: u64, target_tenant: u64) !bool {
+    // Access semantics PRESERVED from the original u64 implementation: an
+    // accessor can access a target iff the accessor's path is a prefix of the
+    // target's path — i.e. the accessor is an ANCESTOR of, or IS, the target.
+    // Parent → descendant: allowed. Descendant → ancestor: denied. Siblings:
+    // denied. Self: allowed. Unknown tenant: error.TenantNotFound.
+    pub fn canAccessTenant(self: *HierarchyManager, accessor_tenant: []const u8, target_tenant: []const u8) !bool {
         const accessor_path = try self.getTenantPath(accessor_tenant);
         const target_path = try self.getTenantPath(target_tenant);
 
-        // Check if accessor is ancestor of target
+        // Check if accessor is ancestor-or-self of target (path prefix).
         if (accessor_path.len <= target_path.len) {
             for (accessor_path, 0..) |id, i| {
-                if (target_path[i] != id) return false;
+                if (!std.mem.eql(u8, target_path[i], id)) return false;
             }
             return true;
         }

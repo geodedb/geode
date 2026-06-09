@@ -114,6 +114,48 @@ tenants. Pair it with the `--insecure-allow-all` ban above:
 See [`src/execution/tenancy.zig`](../../src/execution/tenancy.zig) and the
 regression suite [`tests/test_gap0840_strict_tenancy.zig`](../../tests/test_gap0840_strict_tenancy.zig).
 
+## Tenant hierarchy (GAP-0838) — string-keyed, populate-able
+
+The tenant `HierarchyManager`
+([`src/security/rls_core.zig`](../../src/security/rls_core.zig)) models a
+parent → child → sub-tenant tree (org → business-unit → engagement) and answers
+"can tenant A see tenant B's data?" via `canAccessTenant`. As of GAP-0838 it is
+keyed on the **string `tenant_id`** (matching HELLO/session/FLE/audit/proto and
+`graph_store.DEFAULT_TENANT_ID = "default"`) instead of the old, never-bridged
+`u64`, and it exposes a production provisioning API:
+
+```zig
+// Borrowed slices; the manager dupes/owns what it keeps. `parent` must already
+// be registered (or null for a root). Returns error.TenantAlreadyExists /
+// error.TenantNotFound on misuse.
+try hierarchy_manager.addTenant("acme", null);            // root org
+try hierarchy_manager.addTenant("acme-bu1", "acme");      // business unit
+try hierarchy_manager.addTenant("acme-bu1-eng1", "acme-bu1"); // engagement
+```
+
+**Access semantics:** an accessor can access a target iff the accessor's
+root-to-self path is a prefix of the target's path — i.e. the accessor is an
+**ancestor of, or is,** the target. Parent → descendant is allowed; descendant →
+ancestor is denied; siblings are denied; self-access is allowed; an unknown
+tenant yields `error.TenantNotFound`.
+
+**Populating it in production:** `addTenant` is the public seam. The live RLS
+engine's `hierarchy_manager` is created at server init
+([`src/server/main.zig`](../../src/server/main.zig) `RLSEngine.init`). Geode does
+**not** yet ship a tenant registry or `CREATE TENANT` DDL to drive a hierarchy
+automatically (that lifecycle surface is the separate GAP-0839); until it lands,
+a deployment/embedder calls `addTenant` from its own provisioning code to
+register the tree.
+
+**Scope note:** GAP-0838 delivered the string-keyed, populate-able, tested
+registry + `canAccessTenant`/`addTenant`. Wiring the live query/RLS evaluation
+path to consult `canAccessTenant` on every read (so a parent tenant
+automatically reads a descendant's rows) is a deliberately deferred
+authz-semantics change — the current per-row tenant filter remains exact-match
+on `tenant_id`. Regression suite:
+[`tests/test_gap0838_tenant_hierarchy.zig`](../../tests/test_gap0838_tenant_hierarchy.zig)
+(`zig build test-gap0838-tenant-hierarchy`).
+
 ## Checklist
 
 - [ ] `--insecure-allow-all` is **absent** from every production invocation,

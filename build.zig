@@ -4525,6 +4525,19 @@ pub fn build(b: *std.Build) void {
     const gap0842_step = b.step("test-gap0842-insecure-allow-all", "GAP-0842 regression (insecure-allow-all startup banner contract)");
     gap0842_step.dependOn(&run_gap0842_tests.step);
 
+    // GAP-0838 regression: tenant HierarchyManager re-keyed on string tenant_id
+    // with a production addTenant() provisioning API. Exercises the real
+    // string-keyed canAccessTenant path (org -> business-unit -> engagement)
+    // that CaaST needs, preserving the original ancestor-prefix access
+    // semantics. Imports the `rls` module directly (rls_core.zig).
+    const gap0838_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0838_tenant_hierarchy.zig"), .target = target, .optimize = optimize });
+    gap0838_test_mod.addImport("rls", rls_mod);
+    const gap0838_tests = b.addTest(.{ .root_module = gap0838_test_mod });
+    const run_gap0838_tests = b.addRunArtifact(gap0838_tests);
+    shardDep(test_step, &run_gap0838_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0838_step = b.step("test-gap0838-tenant-hierarchy", "GAP-0838 regression (string-keyed tenant HierarchyManager + addTenant)");
+    gap0838_step.dependOn(&run_gap0838_tests.step);
+
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
     perf_b_test_mod.addImport("geode", root_mod);
