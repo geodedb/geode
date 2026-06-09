@@ -84,6 +84,9 @@ const session_cli = @import("session_cli.zig");
 const authn_cli = @import("authn_cli.zig");
 const apikey_cli = @import("apikey_cli.zig");
 const mtls_cli = @import("mtls_cli.zig");
+// GAP-0839: `geode tenant` connects to the server and issues CALL geode.tenant.*,
+// so it delegates to cmdQuery (handled as a special subcommand in dispatch()).
+const tenant_cli = @import("tenant_cli.zig");
 
 // Re-export command handlers for main to use
 pub const cmdUser = user_mgmt_cli.cmdUser;
@@ -96,6 +99,9 @@ pub const cmdRestore = backup_cli.cmdRestore;
 pub const cmdMigrate = backup_cli.cmdMigrate;
 pub const cmdStorage = storage_cli.cmdStorage;
 pub const cmdApiKey = apikey_cli.cmdApiKey;
+// GAP-0839: `geode tenant` — re-exported for completeness; dispatched specially
+// in dispatch() because it needs cmdQuery (server connection) threaded in.
+pub const cmdTenant = tenant_cli.cmdTenant;
 
 // Forward declare command handlers that remain in main.zig
 // These will be passed in when calling dispatch()
@@ -366,6 +372,15 @@ pub fn dispatch(
     } else if (std.mem.eql(u8, subcommand, "mtls")) {
         try mtls_cli.cmdMtls(allocator, argv, subcommand_start + 1);
         std.process.exit(@intFromEnum(ExitCode.success));
+    } else if (std.mem.eql(u8, subcommand, "tenant")) {
+        // GAP-0839: tenant lifecycle administration over CALL geode.tenant.*.
+        // It connects to the server (reusing cmdQuery's client + auth path) and
+        // the server's admin_tenant gate enforces authorization. cmdQuery is in
+        // scope here, so we thread it in (the command table can't hold cmdTenant
+        // because its signature carries the extra cmdQuery parameter).
+        logAuditEvent("command", "tenant", "started");
+        try tenant_cli.cmdTenant(allocator, argv, subcommand_start, cmdQuery);
+        std.process.exit(@intFromEnum(ExitCode.success));
     } else {
         // Check if this is an option that should be handled by query command
         if (std.mem.startsWith(u8, subcommand, "--format") or
@@ -567,6 +582,11 @@ const geode_completion_role_cmd = CliCommand{
     .summary = "Manage roles",
 };
 
+const geode_completion_tenant_cmd = CliCommand{
+    .name = "tenant",
+    .summary = "Manage tenants (create/list/show/drop/set-quota) via CALL geode.tenant.*",
+};
+
 const geode_completion_policy_cmd = CliCommand{
     .name = "policy",
     .summary = "Manage policies",
@@ -656,6 +676,7 @@ const geode_completion_subcommands = [_]*const CliCommand{
     &geode_completion_migrate_cmd,
     &geode_completion_user_cmd,
     &geode_completion_role_cmd,
+    &geode_completion_tenant_cmd,
     &geode_completion_policy_cmd,
     &geode_completion_grant_cmd,
     &geode_completion_revoke_cmd,
@@ -1409,6 +1430,7 @@ pub fn printMainUsage() void {
         "  logout              Logout (alias for auth logout)\n" ++
         "  user                User management\n" ++
         "  role                Role management\n" ++
+        "  tenant              Tenant lifecycle (create/list/show/drop/set-quota)\n" ++
         "  policy              RLS policy management\n" ++
         "  grant               Grant permissions\n" ++
         "  revoke              Revoke permissions\n" ++

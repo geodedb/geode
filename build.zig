@@ -4589,6 +4589,19 @@ pub fn build(b: *std.Build) void {
     const gap0839_step = b.step("test-gap0839-tenant-lifecycle", "GAP-0839 regression (CALL geode.tenant.* lifecycle surface + durable registry + admin_tenant authz)");
     gap0839_step.dependOn(&run_gap0839_tests.step);
 
+    // GAP-0839 CLI: the `geode tenant` subcommand's pure query-string builder
+    // (`buildTenantCallQuery`). The test imports `src/cli/tenant_cli.zig`
+    // directly — it exercises only the deterministic argv → CALL-string layer
+    // (no server, no client, no heavy imports), so it needs no extra modules.
+    const tenant_cli_mod = b.createModule(.{ .root_source_file = b.path("src/cli/tenant_cli.zig"), .target = target, .optimize = optimize });
+    const gap0839_cli_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0839_tenant_cli.zig"), .target = target, .optimize = optimize });
+    gap0839_cli_test_mod.addImport("tenant_cli", tenant_cli_mod);
+    const gap0839_cli_tests = b.addTest(.{ .root_module = gap0839_cli_test_mod });
+    const run_gap0839_cli_tests = b.addRunArtifact(gap0839_cli_tests);
+    shardDep(test_step, &run_gap0839_cli_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0839_cli_step = b.step("test-gap0839-tenant-cli", "GAP-0839 CLI regression (geode tenant subcommand builds CALL geode.tenant.* query strings)");
+    gap0839_cli_step.dependOn(&run_gap0839_cli_tests.step);
+
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
     perf_b_test_mod.addImport("geode", root_mod);
