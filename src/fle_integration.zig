@@ -219,6 +219,29 @@ fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindInde
     return bi;
 }
 
+/// Tear down the process-global FLE key manager and blind index, freeing all
+/// memory they own and clearing the singletons so the next access re-initializes
+/// from the environment. Production never calls this (the singletons live for the
+/// process lifetime); it exists so leak-checked unit tests that actually exercise
+/// the encrypt path (which lazily instantiates these globals on the test
+/// allocator) can release that memory deterministically. Safe to call when no
+/// global has been created — it is a no-op in that case.
+pub fn resetGlobalKeyStateForTesting() void {
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (global_key_manager_instance) |km| {
+        km.deinit();
+        global_key_manager_instance = null;
+    }
+    if (global_blind_index_instance) |bi| {
+        const alloc = bi.allocator;
+        bi.deinit();
+        alloc.destroy(bi);
+        global_blind_index_instance = null;
+    }
+}
+
 // GAP-0083: Key rotation support
 // CANARY: REQ=REQ-FLE-ROTATION-002; FEATURE="FLEKeyRotation"; ASPECT=KeyManagement; STATUS=TESTED; TEST=geodetestlab/specs/fle_rotation.yml; OWNER=security; UPDATED=2026-01-10
 

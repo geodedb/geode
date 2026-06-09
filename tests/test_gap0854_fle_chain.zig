@@ -69,6 +69,25 @@ const testing = std.testing;
 const HMAC_KEY = [_]u8{0x5a} ** 32;
 const SECURITY_GRAPH_NAME = "__geode_security";
 
+// libc setenv shim: the FLE key manager reads GEODE_MASTER_KEY via std.c.getenv
+// and refuses to operate without it. The test module links libc.
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
+// 32-byte secret (hex) for the FLE master key — test-only, never a real secret.
+const TEST_MASTER_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+// Local mirror of graph_store.isLikelyFleEnvelope (private). Used only to
+// assert — positively — that a value stored in a NORMAL graph really did get
+// turned into an FLE envelope (alg id 1-3 + matching length-prefix), so the
+// GAP-0854 security-graph guard cannot regress into disabling FLE everywhere.
+fn looksLikeFleEnvelope(data: []const u8) bool {
+    if (data.len < 35) return false;
+    const alg_id = data[0];
+    if (alg_id < 1 or alg_id > 3) return false;
+    const ciphertext_len = std.mem.readInt(u32, data[31..35], .little);
+    return data.len == 35 + ciphertext_len;
+}
+
 // Drive the real `CALL geode.fle.configureField('User','email')` dispatch so
 // the SAME global FLE catalog/state the storage layer reads is configured.
 fn configureFleField(arena: std.mem.Allocator, type_name: []const u8, field_name: []const u8) !void {
@@ -90,10 +109,22 @@ fn configureFleField(arena: std.mem.Allocator, type_name: []const u8, field_name
 test "GAP-0854: configureField on a colliding label does not corrupt the auth HMAC chain across restart" {
     const allocator = testing.allocator;
 
+    // The FLE key manager refuses to derive a FEK without a master key.
+    // Install a deterministic test key so the positive-encryption assertion
+    // (step 5) can produce a real envelope. (The security-graph guard is
+    // independent of whether a master key is present.)
+    _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
+
     // Isolated FLE state: ensure no leftover global encryption flag/catalog
     // from another test in the same binary. Restore afterwards.
     const had_fields_before = fle_integration.hasEncryptedFields();
     defer fle_integration.setHasEncryptedFields(had_fields_before);
+
+    // Step 5 exercises the real encrypt path, which lazily instantiates the
+    // process-global FLE key manager + blind index on the test allocator. Tear
+    // them down so the leak checker stays clean (production keeps them for the
+    // process lifetime).
+    defer fle_integration.resetGlobalKeyStateForTesting();
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
@@ -159,5 +190,24 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
                 try testing.expectEqualStrings("admin@localhost", email_val.String);
             }
         }
+    }
+
+    // 5. POSITIVE counter-assertion (the guard must NOT disable FLE generally):
+    //    a `User` node in a NORMAL (non-security) graph, with the exact same
+    //    ('User','email') field configured above, MUST get FLE-encrypted — the
+    //    raw stored value is an FLE envelope, not the plaintext we wrote. This
+    //    locks in that the GAP-0854 security-graph short-circuit only suppresses
+    //    FLE for `__geode_security`, never anywhere else.
+    {
+        const plaintext_email = "alice@example.com";
+        const labels = [_][]const u8{"User"};
+        const node_id = try store.createNodeWithGraph(&labels, "app");
+        try store.setNodeProperty(node_id, "email", .{ .String = plaintext_email });
+
+        // Read the RAW stored value (no FLE decrypt) — it must be an envelope.
+        const raw = try store.getNodePropertyValue(node_id, "email");
+        try testing.expect(raw == .String);
+        try testing.expect(!std.mem.eql(u8, raw.String, plaintext_email));
+        try testing.expect(looksLikeFleEnvelope(raw.String));
     }
 }

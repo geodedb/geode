@@ -3103,6 +3103,12 @@ pub const GraphStore = struct {
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
+        // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
+        // it can be released after the adapter write / in-memory copy / WAL
+        // notification have all consumed it — otherwise the envelope leaks on
+        // every encrypted property write.
+        var owned_encrypted: ?[]const u8 = null;
+        defer if (owned_encrypted) |buf| self.allocator.free(buf);
         const effective_value = switch (value) {
             .String => |s| blk: {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
@@ -3139,8 +3145,10 @@ pub const GraphStore = struct {
                             break :blk value;
                         };
                         if (!std.mem.eql(u8, encrypted, s)) {
+                            owned_encrypted = encrypted;
                             break :blk PropertyValue{ .String = encrypted };
                         }
+                        // encryptFieldIfNeeded returned the input unchanged — nothing to free.
                     }
                 }
                 break :blk value;
@@ -4605,11 +4613,19 @@ pub const GraphStore = struct {
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
+        // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
+        // it is released after the adapter write / in-memory copy / WAL
+        // notification have consumed it (see setNodeProperty for rationale).
+        var owned_encrypted: ?[]const u8 = null;
+        defer if (owned_encrypted) |buf| self.allocator.free(buf);
         const effective_value = switch (value) {
             .String => |s| blk: {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
-                    const edge_type: []const u8 = if (self.edges.get(edge_id)) |e| e.label else "Unknown";
-                    if (fle_integration.fieldRequiresEncryption(edge_type, key)) {
+                    const maybe_edge = self.edges.get(edge_id);
+                    const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
+                    // GAP-0854: never FLE-encrypt the internal security graph.
+                    const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
+                    if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
                         const fle_ctx = fle_integration.EncryptionContext{
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
@@ -4631,6 +4647,7 @@ pub const GraphStore = struct {
                             break :blk value;
                         };
                         if (!std.mem.eql(u8, encrypted, s)) {
+                            owned_encrypted = encrypted;
                             break :blk PropertyValue{ .String = encrypted };
                         }
                     }
@@ -4776,8 +4793,11 @@ pub const GraphStore = struct {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
-                    const edge_type: []const u8 = if (self.edges.get(edge_id)) |e| e.label else "Unknown";
-                    if (fle_integration.fieldRequiresEncryption(edge_type, key)) {
+                    const maybe_edge = self.edges.get(edge_id);
+                    const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
+                    // GAP-0854: never FLE-encrypt the internal security graph.
+                    const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
+                    if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
                         const fle_ctx = fle_integration.EncryptionContext{
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
