@@ -4516,6 +4516,23 @@ pub fn build(b: *std.Build) void {
     const gap0840_step = b.step("test-gap0840-strict-tenancy", "GAP-0840 regression (opt-in strict-tenancy mode)");
     gap0840_step.dependOn(&run_gap0840_tests.step);
 
+    // GAP-0843 regression: per-tenant TDE key isolation + real page-encrypt.
+    // Proves (a) data encrypted under tenant A's HKDF-derived key cannot be
+    // decrypted under tenant B's key (AEAD tag mismatch) and round-trips under
+    // A's own key — i.e. encryptForTenant/decryptForTenant are correct, tested
+    // building blocks; and (b) tde.encrypt_page (storage_dispatch.executeTde) is
+    // a real encrypt (master key at the page boundary), not the old stub that
+    // returned success=true, page_id=0, encrypted_size=0. Needs libc for the
+    // std.c.setenv that installs GEODE_TDE_KEY for the engine.
+    const gap0843_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0843_tenant_tde.zig"), .target = target, .optimize = optimize });
+    gap0843_test_mod.addImport("geode", root_mod);
+    gap0843_test_mod.link_libc = true; // std.c.setenv / std.c.getenv for GEODE_TDE_KEY
+    const gap0843_tests = b.addTest(.{ .root_module = gap0843_test_mod });
+    const run_gap0843_tests = b.addRunArtifact(gap0843_tests);
+    shardDep(test_step, &run_gap0843_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0843_step = b.step("test-gap0843-tenant-tde", "GAP-0843 regression (per-tenant TDE key isolation + real page encrypt)");
+    gap0843_step.dependOn(&run_gap0843_tests.step);
+
     // GAP-0842: prominent --insecure-allow-all startup banner contract.
     const gap0842_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0842_insecure_allow_all_banner.zig"), .target = target, .optimize = optimize });
     gap0842_test_mod.addImport("geode", root_mod);

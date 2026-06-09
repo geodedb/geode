@@ -4608,6 +4608,8 @@ REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,src/execu
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,src/execution/storage_dispatch.zig
+REQ-TDE-PROC-015,PerTenantTDEKeys,EncryptPage,TESTED,,,security,2026-06-08,src/execution/storage_dispatch.zig
+REQ-TDE-PROC-015,PerTenantTDEKeys,LibExportStorageDispatch,TESTED,,,security,2026-06-08,src/lib.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
@@ -4634,6 +4636,7 @@ REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-TENANT-001,PerTenantTDEKeys,KeyDerivation,TESTED,,,security,2026-04-01,src/security/tde_key_manager.zig
 REQ-TDE-TENANT-002,PerTenantTDEKeys,EncryptDecrypt,TESTED,,,security,2026-04-01,src/security/tde.zig
+REQ-TDE-TENANT-002,PerTenantTDEKeys,KeyIsolation,TESTED,,,security,2026-06-08,tests/test_gap0843_tenant_tde.zig
 REQ-TDE-TENANT-003,PerTenantTDEFileEncryption,FileIO,TESTED,,,security,2026-04-01,src/storage/tde_file_encryption.zig
 REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,EXEMPT,,,tde,2025-11-12,src/security/tde.zig
 REQ-TEMPORAL-ARITH-001,TemporalArithmeticModule,Extraction,TESTED,,,eval,2026-04-01,src/eval/temporal_arithmetic.zig

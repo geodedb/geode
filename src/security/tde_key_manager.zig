@@ -696,7 +696,11 @@ pub const TenantKeyManager = struct {
         return .{
             .master_key = master_key,
             .tenant_keys = std.StringHashMap(TenantKeyEntry).init(allocator),
-            .mu = .{},
+            // GAP-0843: std.Io.Mutex is an extern struct requiring an explicit
+            // `state` field in Zig 0.16; bare `.{}` no longer compiles. This path
+            // was never compiled before because encryptForTenant/decryptForTenant
+            // had zero callers — wiring it into a live test surfaced the latent bug.
+            .mu = std.Io.Mutex.init,
             .allocator = allocator,
         };
     }

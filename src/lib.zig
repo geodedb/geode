@@ -753,6 +753,12 @@ pub const auth_dispatch = @import("execution/auth_dispatch.zig");
 // Re-export meta_dispatch so tests can call the executeDb*ForTest helpers without a
 // relative cross-module @import (which Zig 0.16 rejects for files outside the module path).
 pub const meta_dispatch = @import("execution/meta_dispatch.zig");
+// CANARY: REQ=REQ-TDE-PROC-015; FEATURE="PerTenantTDEKeys"; ASPECT=LibExportStorageDispatch; STATUS=TESTED; TEST=tests/test_gap0843_tenant_tde.zig; OWNER=security; UPDATED=2026-06-08
+// GAP-0843: re-export storage_dispatch so the page-encryption round-trip test can
+// drive executeTde("tde.encrypt_page", ...) directly, and util/feature_flags so it
+// can flip the TDE feature flag deterministically without mutating real env.
+pub const storage_dispatch = @import("execution/storage_dispatch.zig");
+pub const util_feature_flags = @import("feature_flags");
 // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=LibExport; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
 // GAP-0840: re-export the strict-tenancy decision module so server startup can
 // set the process flag and integration tests can exercise resolveTenantFilter

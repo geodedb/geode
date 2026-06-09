@@ -916,18 +916,103 @@ fn handleTdeTestTransparentEncryption(allocator: std.mem.Allocator, _: ast.CallP
     };
 }
 
-fn handleTdeEncryptPage(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // REQ-TDE-PROC-015
-    const columns = try allocator.alloc([]const u8, 3);
+// CANARY: REQ=REQ-TDE-PROC-015; FEATURE="PerTenantTDEKeys"; ASPECT=EncryptPage; STATUS=TESTED; TEST=tests/test_gap0843_tenant_tde.zig; OWNER=security; UPDATED=2026-06-08
+// GAP-0843 (tracked alongside GAP-0290): `tde.encrypt_page` was previously a stub
+// that returned success=true, page_id=0, encrypted_size=0 and DISCARDED the input
+// — a "reads as done but does nothing" hazard. It now performs a real AES-256-GCM
+// encrypt of the supplied page bytes via the TDE engine and returns the real
+// page_id, encrypted_size, and the ciphertext blob (nonce ++ tag ++ data) so the
+// round-trip can be observed and the at-rest bytes are genuinely protected.
+//
+// KEY CHOICE — master key, not a per-tenant key. A geode "tenant" is a per-RECORD
+// string tag, and a storage page is per-GRAPH and can hold records from MULTIPLE
+// tenants, so there is no single tenant_id that owns a page. Encrypting a page
+// under one tenant's key would be incorrect. Per-page per-tenant TDE requires
+// per-tenant page segregation — a storage-model change tracked under GAP-0290.
+// The correct, tested per-tenant key building blocks (tde.encryptForTenant /
+// decryptForTenant) live in src/security/tde.zig awaiting that segregation; see
+// docs/security/MULTI_TENANT_HARDENING.md (GAP-0843 section).
+//
+// Signature: tde.encrypt_page(page_bytes [, page_id])
+//   -> success, page_id, encrypted_size, ciphertext
+fn handleTdeEncryptPage(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    const args = switch (call_stmt.procedure) {
+        .Call => |call| call.args,
+        else => &[_]*ast.Expr{},
+    };
+
+    // arg[0]: page bytes (string or bytea). Required for a real encrypt.
+    const page_bytes: ?[]const u8 = if (args.len > 0) switch (args[0].*) {
+        .String => |s| s,
+        .ByteaLit => |b| b,
+        else => null,
+    } else null;
+
+    // arg[1] (optional): page id, defaults to 1. Never silently 0.
+    const page_id: i64 = if (args.len > 1 and args[1].* == .Int) args[1].Int else 1;
+
+    const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "success");
     columns[1] = try allocator.dupe(u8, "page_id");
     columns[2] = try allocator.dupe(u8, "encrypted_size");
+    columns[3] = try allocator.dupe(u8, "ciphertext");
 
     const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
+    const row = try allocator.alloc(Value, 4);
+
+    if (page_bytes == null) {
+        // No page payload to encrypt — fail honestly (do NOT claim success).
+        row[0] = Value{ .Bool = false };
+        row[1] = Value{ .Int = page_id };
+        row[2] = Value{ .Int = 0 };
+        row[3] = Value{ .Bytea = "" };
+        rows[0] = row;
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
+    const plaintext = page_bytes.?;
+
+    // Real encrypt via the TDE engine (master key), empty AAD. AES-256-GCM with a
+    // fresh random nonce per call (NIST SP 800-38D), so identical pages produce
+    // distinct ciphertexts.
+    const ct = tde_mod.encrypt(allocator, plaintext, "") catch |err| {
+        // FeatureDisabled / KeyNotLoaded: TDE is off or no GEODE_TDE_KEY. Report
+        // honestly with success=false rather than fabricating a result.
+        if (err == error.FeatureDisabled or err == error.KeyNotLoaded) {
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Int = page_id };
+            row[2] = Value{ .Int = 0 };
+            row[3] = Value{ .Bytea = "" };
+            rows[0] = row;
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+            };
+        }
+        // Free what we allocated for columns before propagating an unexpected error.
+        for (columns) |c| allocator.free(c);
+        allocator.free(columns);
+        allocator.free(row);
+        allocator.free(rows);
+        return err;
+    };
+    defer allocator.free(ct.data);
+
+    // Serialize the ciphertext as nonce ++ tag ++ data so it round-trips.
+    const blob = try allocator.alloc(u8, ct.nonce.len + ct.tag.len + ct.data.len);
+    @memcpy(blob[0..ct.nonce.len], &ct.nonce);
+    @memcpy(blob[ct.nonce.len .. ct.nonce.len + ct.tag.len], &ct.tag);
+    @memcpy(blob[ct.nonce.len + ct.tag.len ..], ct.data);
+
     row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Int = 0 };
+    row[1] = Value{ .Int = page_id };
+    row[2] = Value{ .Int = @intCast(ct.data.len) };
+    row[3] = Value{ .Bytea = blob };
     rows[0] = row;
 
     return ExecutionResult{

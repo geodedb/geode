@@ -156,6 +156,67 @@ on `tenant_id`. Regression suite:
 [`tests/test_gap0838_tenant_hierarchy.zig`](../../tests/test_gap0838_tenant_hierarchy.zig)
 (`zig build test-gap0838-tenant-hierarchy`).
 
+## At-rest TDE is master-keyed, not per-tenant (GAP-0843 / GAP-0290)
+
+Transparent Data Encryption (TDE) encrypts at-rest storage pages and backups
+under a **single master key** (`GEODE_TDE_KEY`), **not** under per-tenant keys.
+A single TDE/master-key compromise therefore spans **every** tenant's at-rest
+data. Field-level encryption (FLE) is different — FLE field keys *are* derived
+per tenant from `tenant_id` (see
+[`docs/FIELD_LEVEL_ENCRYPTION.md`](../FIELD_LEVEL_ENCRYPTION.md)); this caveat is
+specifically about the page/backup TDE layer.
+
+### Why TDE cannot be per-tenant today
+
+A geode "tenant" is a per-**record** string tag (`graph_store.tenant_id`,
+default `"default"`), and storage is laid out per-**graph** at
+`{data_dir}/graphs/{uuid}/...`. The per-graph storage engine is initialized with
+one `encryption_key` (the master key) in
+[`src/graph_store.zig`](../../src/graph_store.zig)
+(`initGlobalAdapter` → `GraphConfig.encryption_key`). Because a single storage
+**page** can hold records belonging to **multiple** tenants, there is no single
+`tenant_id` that owns a page — so "encrypt each page under its tenant's key" is
+not generally possible without **per-tenant page segregation**. That is a
+storage-model redesign tracked under **GAP-0290** and is out of scope here.
+
+### What GAP-0843 delivered (the tractable, correct subset)
+
+- **`tde.encrypt_page` is a real encrypt, not a stub.** The handler
+  ([`src/execution/storage_dispatch.zig`](../../src/execution/storage_dispatch.zig)
+  `handleTdeEncryptPage`) performs an actual AES-256-GCM encrypt of the supplied
+  page bytes via the TDE engine and returns the real `page_id`, `encrypted_size`,
+  and `ciphertext` (`nonce ++ tag ++ data`, as `Bytea`). It previously returned a
+  fabricated `success=true, page_id=0, encrypted_size=0` and discarded the input
+  — a "reads as done but does nothing" hazard. With TDE disabled / no key it now
+  reports `success=false` honestly. The key used is the **master key** (the only
+  correct key at the multi-tenant page boundary).
+- **The per-tenant key functions are correct, tested building blocks awaiting
+  GAP-0290.** `tde.encryptForTenant` / `tde.decryptForTenant`
+  ([`src/security/tde.zig`](../../src/security/tde.zig)) derive a per-tenant
+  AES-256-GCM key via HKDF-SHA256 from the master key. They are correct **only**
+  for a buffer of bytes known to belong to exactly **one** tenant (a future
+  per-tenant backup/export — not a page). They are now compiled and regression-
+  covered; data encrypted under tenant A's key cannot be decrypted under tenant
+  B's (AEAD tag mismatch). The parallel file-level
+  `encryptWithTenantKey`/`decryptWithTenantKey`
+  ([`src/storage/tde_file_encryption.zig`](../../src/storage/tde_file_encryption.zig))
+  are the same kind of building block.
+
+Regression suite:
+[`tests/test_gap0843_tenant_tde.zig`](../../tests/test_gap0843_tenant_tde.zig)
+(`zig build test-gap0843-tenant-tde`). Source findings:
+[`docs/CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md`](../CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md)
+(GAP-0843 section).
+
+### Operator guidance
+
+Until GAP-0290 lands, treat the TDE master key as protecting **all** tenants'
+at-rest data collectively. Protect `GEODE_TDE_KEY` (or the KMS-wrapped master
+key) accordingly: a deployment that needs cryptographic at-rest separation
+between tenants today must isolate at a higher level (e.g. a separate Geode
+instance / data directory per tenant), since a shared instance shares the at-rest
+key across tenants.
+
 ## Checklist
 
 - [ ] `--insecure-allow-all` is **absent** from every production invocation,
@@ -166,3 +227,8 @@ on `tenant_id`. Regression suite:
 - [ ] FLE-encrypted fields are configured (see
       [`docs/FIELD_LEVEL_ENCRYPTION.md`](../FIELD_LEVEL_ENCRYPTION.md)) and the
       `decrypt_field` privilege is granted only to the intended roles.
+- [ ] At-rest TDE is understood to be **master-keyed, not per-tenant**
+      (GAP-0843 / GAP-0290): the `GEODE_TDE_KEY` master key protects every
+      tenant's at-rest pages/backups collectively. For cryptographic at-rest
+      separation between tenants today, isolate per tenant at the instance /
+      data-directory level.
