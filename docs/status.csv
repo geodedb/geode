@@ -1283,13 +1283,17 @@ REQ-GPS-DDL-003,GPS ALTER POLICY DDL,AlterPolicyAST,TESTED,,,security,2026-06-09
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,AlterPolicyExecution,TESTED,,,security,2026-05-21,src/execution.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,AlterUnknownPolicyNotFound,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,CatalogRenameInMemory,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
+REQ-GPS-DDL-003,GPS ALTER POLICY DDL,CreatedAtPreservedOnAlter,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,DecisionCacheInvalidated,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,DisablePolicy,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,DisableSurvivesRestart,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,DurablePersistTestSuite,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
+REQ-GPS-DDL-003,GPS ALTER POLICY DDL,DurableRenameCollisionRejected,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,EnablePolicy,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,EnableSurvivesRestart,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,Parser,TESTED,,,security,2026-06-09,src/gql/parser.zig
+REQ-GPS-DDL-003,GPS ALTER POLICY DDL,ParserRenameNotCombinedWithSetEnabled,TESTED,,,security,2026-06-09,tests/test_gps_alter_policy.zig
+REQ-GPS-DDL-003,GPS ALTER POLICY DDL,ParserRenameTo,TESTED,,,security,2026-06-09,tests/test_gps_alter_policy.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,ParserSetEnabledFalse,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,ParserSetEnabledTrue,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,PolicyCatalogAlter,TESTED,,,security,2026-06-09,src/security/policy_catalog.zig

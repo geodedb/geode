@@ -117,6 +117,42 @@ test "parser: ALTER POLICY p2 SET ENABLED true" {
     try std.testing.expectEqual(true, st.AlterPolicy.set_enabled.?);
 }
 
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=ParserRenameTo; STATUS=TESTED; OWNER=security; UPDATED=2026-06-09
+test "parser: ALTER POLICY p RENAME TO q" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const st = try parseOne("ALTER POLICY p RENAME TO q;", &arena);
+    try std.testing.expect(st == .AlterPolicy);
+    try std.testing.expectEqualStrings("p", st.AlterPolicy.name);
+    try std.testing.expect(st.AlterPolicy.rename_to != null);
+    try std.testing.expectEqualStrings("q", st.AlterPolicy.rename_to.?);
+    // A pure rename does not toggle ENABLED.
+    try std.testing.expect(st.AlterPolicy.set_enabled == null);
+}
+
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=ParserRenameNotCombinedWithSetEnabled; STATUS=TESTED; OWNER=security; UPDATED=2026-06-09
+test "parser: ALTER POLICY ... RENAME TO ... SET ENABLED is not one combined statement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // RENAME TO terminates the ALTER clause. The grammar does NOT support a
+    // single combined `RENAME TO q SET ENABLED false`: an AlterPolicy node must
+    // never carry BOTH rename_to and set_enabled. Whether the trailing tokens
+    // error or parse as a separate statement, the FIRST statement must be a
+    // pure rename (set_enabled == null).
+    var lx = lexer_mod.Lexer{ .src = "ALTER POLICY p RENAME TO q SET ENABLED false;" };
+    var p = parser_mod.Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    if (p.parseProgram()) |prog| {
+        try std.testing.expect(prog.statements.len >= 1);
+        try std.testing.expect(prog.statements[0] == .AlterPolicy);
+        // The combined form is rejected: the rename statement carries no
+        // ENABLED toggle.
+        try std.testing.expect(prog.statements[0].AlterPolicy.rename_to != null);
+        try std.testing.expect(prog.statements[0].AlterPolicy.set_enabled == null);
+    } else |_| {
+        // A parse error is also an acceptable rejection of the combined form.
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Executor integration tests
 // ---------------------------------------------------------------------------

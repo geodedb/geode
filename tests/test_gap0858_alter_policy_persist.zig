@@ -241,6 +241,128 @@ test "alterPolicy on unknown name returns PolicyNotFound" {
 }
 
 // ---------------------------------------------------------------------------
+// GAP-0858 follow-up: created_at must NOT be clobbered by an ALTER. The durable
+// record's creation timestamp is the source of truth in the HMAC-chained graph;
+// an enable/disable/rename is an update and must preserve it.
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=CreatedAtPreservedOnAlter; STATUS=TESTED; OWNER=security; UPDATED=2026-06-09
+// ---------------------------------------------------------------------------
+
+/// Read the durable creation timestamp for the named policy directly from the
+/// storage record (the PolicyCatalog does not surface created_at).
+fn durableCreatedAt(mgr: *AuthGraphManager, name: []const u8) ?i64 {
+    const id = mgr.findPolicyIdByName(name) orelse return null;
+    const rec = mgr.storage.getPolicy(id) orelse return null;
+    return rec.created_at;
+}
+
+test "ALTER preserves created_at across enable/disable + rename (no clobber)" {
+    const allocator = testing.allocator;
+
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var mgr = try AuthGraphManager.init(allocator, &store);
+    defer mgr.deinit();
+
+    // Seed a policy with a KNOWN-OLD creation timestamp via the low-level
+    // storage API. Using an explicit sentinel (not now()) makes this a genuine
+    // guard: before the fix, persistPolicy unconditionally stamped now() on
+    // every ALTER, so the sentinel would be clobbered — a same-millisecond
+    // coincidence cannot mask the regression.
+    const SENTINEL_CREATED_AT: i64 = 1_000_000_000_000; // 2001-09-09, far in the past
+    try mgr.storage.persistPolicy(.{
+        .policy_id = 1,
+        .name = "ts-policy",
+        .description = "",
+        .graph = "hr",
+        .table = "",
+        .operation = 0b0000_0001, // read
+        .permissive = true,
+        .enabled = true,
+        .using_clause = "true",
+        .check_clause = null,
+        .audit_level = 0,
+        .created_by = 0,
+        .created_at = SENTINEL_CREATED_AT,
+    });
+    // The seed node carries no HMAC yet; the first alterPolicy below recomputes
+    // the policy HMAC and reseals the whole chain, so verifyChain is asserted
+    // only after the first mutation.
+    try testing.expectEqual(SENTINEL_CREATED_AT, durableCreatedAt(&mgr, "ts-policy").?);
+
+    // A disable must not change created_at.
+    try policy_persistence.alterPolicy(&mgr, &HMAC_KEY, "ts-policy", false, null);
+    try mgr.verifyChain(&HMAC_KEY);
+    try testing.expectEqual(SENTINEL_CREATED_AT, durableCreatedAt(&mgr, "ts-policy").?);
+
+    // A rename must not change created_at either; the timestamp follows the
+    // record to the new name.
+    try policy_persistence.alterPolicy(&mgr, &HMAC_KEY, "ts-policy", null, "ts-renamed");
+    try mgr.verifyChain(&HMAC_KEY);
+    try testing.expect(durableCreatedAt(&mgr, "ts-policy") == null); // old name gone
+    try testing.expectEqual(SENTINEL_CREATED_AT, durableCreatedAt(&mgr, "ts-renamed").?);
+
+    // And after a simulated restart (fresh hydrate), the renamed policy is
+    // still present exactly once.
+    try testing.expectEqual(@as(usize, 1), try hydratedCount(allocator, &mgr));
+    try testing.expect((try snapshotHydrated(allocator, &mgr, "ts-renamed")).found);
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0858 follow-up: durable rename-collision guard. A rename onto a name
+// already held by a DIFFERENT policy must be rejected (error.PolicyAlreadyExists)
+// and leave both policies untouched.
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=DurableRenameCollisionRejected; STATUS=TESTED; OWNER=security; UPDATED=2026-06-09
+// ---------------------------------------------------------------------------
+
+test "durable ALTER RENAME onto an existing policy name is rejected" {
+    const allocator = testing.allocator;
+
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var mgr = try AuthGraphManager.init(allocator, &store);
+    defer mgr.deinit();
+
+    const actions = [_]policy_catalog_mod.Action{.read};
+    try policy_persistence.persistPolicy(&mgr, &HMAC_KEY, .{
+        .name = "coll-a",
+        .scope_graph = "g1",
+        .actions = &actions,
+        .effect = .allow,
+        .expression_source = "true",
+        .enabled = true,
+    });
+    try policy_persistence.persistPolicy(&mgr, &HMAC_KEY, .{
+        .name = "coll-b",
+        .scope_graph = "g2",
+        .actions = &actions,
+        .effect = .deny,
+        .expression_source = "true",
+        .enabled = true,
+    });
+
+    // Renaming coll-a -> coll-b must collide.
+    try testing.expectError(
+        error.PolicyAlreadyExists,
+        policy_persistence.alterPolicy(&mgr, &HMAC_KEY, "coll-a", null, "coll-b"),
+    );
+
+    // Both policies survive the rejected rename, distinct and intact.
+    try mgr.verifyChain(&HMAC_KEY);
+    try testing.expectEqual(@as(usize, 2), try hydratedCount(allocator, &mgr));
+    try testing.expect((try snapshotHydrated(allocator, &mgr, "coll-a")).found);
+    try testing.expect((try snapshotHydrated(allocator, &mgr, "coll-b")).found);
+
+    // Renaming a policy onto ITS OWN name is a no-op success, not a collision.
+    try policy_persistence.alterPolicy(&mgr, &HMAC_KEY, "coll-a", false, "coll-a");
+    try mgr.verifyChain(&HMAC_KEY);
+    const a = try snapshotHydrated(allocator, &mgr, "coll-a");
+    try testing.expect(a.found);
+    try testing.expect(!a.enabled);
+}
+
+// ---------------------------------------------------------------------------
 // In-memory catalog rename: old name freed, new name present, collision rejected.
 // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=CatalogRenameInMemory; STATUS=TESTED; OWNER=security; UPDATED=2026-06-09
 // ---------------------------------------------------------------------------

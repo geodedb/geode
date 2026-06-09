@@ -996,6 +996,12 @@ pub const UserStorageBackend = struct {
         check_clause: ?[]const u8,
         audit_level: u8,
         created_by: u64,
+        /// GAP-0858: creation timestamp. `null` (the default, used by the
+        /// create path) stamps the current time. Update-path callers (e.g.
+        /// AuthGraphManager.alterPolicy) pass the existing record's
+        /// `created_at` so an enable/disable/rename does NOT falsify the
+        /// original creation timestamp in the HMAC-chained security graph.
+        created_at: ?i64 = null,
     };
 
     pub fn persistPolicy(self: *Self, opts: PolicyPersistOptions) !void {
@@ -1020,8 +1026,12 @@ pub const UserStorageBackend = struct {
             record.check_clause_len = copyIntoField(&record.check_clause, cc);
         }
         record.audit_level = opts.audit_level;
-        record.created_at = compat_milliTimestamp();
-        record.updated_at = record.created_at;
+        const now = compat_milliTimestamp();
+        // GAP-0858: preserve the original creation timestamp on the update
+        // path (alterPolicy passes existing.created_at); only the create path
+        // (created_at == null) stamps "now". updated_at always advances.
+        record.created_at = opts.created_at orelse now;
+        record.updated_at = now;
         record.created_by = opts.created_by;
 
         try self.policy_cache.put(opts.policy_id, record);

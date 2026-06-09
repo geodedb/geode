@@ -1051,6 +1051,17 @@ pub const AuthGraphManager = struct {
         const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
         const existing = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
 
+        // GAP-0858 (follow-up): durable rename-collision guard. If the rename
+        // target is already held by a DIFFERENT policy id, reject — otherwise
+        // the re-persist under our own id would leave two :Policy nodes sharing
+        // a name (the in-memory PolicyCatalog already rejects this; the durable
+        // path must too).
+        if (rename_to) |target| {
+            if (self.findPolicyIdByName(target)) |other_id| {
+                if (other_id != policy_id) return error.PolicyAlreadyExists;
+            }
+        }
+
         // Resolve the post-mutation field values, defaulting to the durable
         // record's current values so an unspecified mutation is preserved.
         const new_enabled = set_enabled orelse existing.enabled;
@@ -1058,6 +1069,8 @@ pub const AuthGraphManager = struct {
 
         // Re-persist under the SAME id so upsertPolicyNode reuses the existing
         // node (in-place rename/toggle — no duplicate, no stale old-name node).
+        // created_at is carried over from the existing record so the ALTER does
+        // not falsify the original creation timestamp.
         try self.storage.persistPolicy(.{
             .policy_id = policy_id,
             .name = new_name,
@@ -1071,6 +1084,7 @@ pub const AuthGraphManager = struct {
             .check_clause = existing.getCheckClause(),
             .audit_level = existing.audit_level,
             .created_by = existing.created_by,
+            .created_at = existing.created_at,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
