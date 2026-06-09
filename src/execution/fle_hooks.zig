@@ -23,6 +23,23 @@ fn currentUserRolePreferringContext() ?[]const u8 {
     return fle_integration.getCurrentUserRole();
 }
 
+/// GAP-0854 follow-up: the internal HMAC-chained security graph
+/// (`__geode_security`) must NEVER receive an FLE envelope. Its nodes/edges
+/// carry common labels (`User`, `Role`, `HAS_ROLE`) that collide with
+/// application schema, so a user-configured FLE field such as `('User','email')`
+/// would otherwise be encrypted by this execution-layer hook BEFORE the value
+/// reaches graph_store — and because the stored bytes are already an FLE
+/// envelope, graph_store's own `isSecurityGraphName` guard (which only fires on
+/// plaintext input via `isLikelyFleEnvelope`) can no longer undo it. The auth
+/// HMAC chain is computed over plaintext, so the rewritten property would brick
+/// the next restart. Mirror the graph_store guard at this layer using the
+/// single source-of-truth constant. Lazy import avoids a top-level cycle.
+fn isSecurityGraph(graph_name: ?[]const u8) bool {
+    const name = graph_name orelse return false;
+    const graph_store = @import("../graph_store.zig");
+    return std.mem.eql(u8, name, graph_store.SECURITY_GRAPH_NAME);
+}
+
 /// Error type for FLE hooks - fail-secure behavior
 pub const FLEHookError = error{
     /// Encryption failed and cannot proceed safely
@@ -39,11 +56,18 @@ pub const FLEHookError = error{
 /// CANARY: REQ=REQ-FLE-FAILSECURE-002; FEATURE="FLEFailSecure"; ASPECT=EncryptionRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 pub fn encryptPropertyIfNeeded(
     allocator: std.mem.Allocator,
+    graph_name: ?[]const u8,
     node_labels: [][]const u8,
     field_name: []const u8,
     plaintext_value: []const u8,
     node_id: u64,
 ) (FLEHookError || std.mem.Allocator.Error)![]const u8 {
+    // GAP-0854 follow-up: never FLE-encrypt the internal security graph (see
+    // isSecurityGraph). Returning the plaintext here keeps the auth HMAC chain
+    // computable and lets graph_store's TDE protect it at rest.
+    if (isSecurityGraph(graph_name)) {
+        return plaintext_value;
+    }
     // Get node type from first label
     if (node_labels.len == 0) {
         return plaintext_value; // No type, cannot check encryption
@@ -94,11 +118,18 @@ pub fn encryptPropertyIfNeeded(
 /// CANARY: REQ=REQ-FLE-FAILSECURE-003; FEATURE="FLEFailSecure"; ASPECT=EdgeEncryptionRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 pub fn encryptEdgePropertyIfNeeded(
     allocator: std.mem.Allocator,
+    graph_name: ?[]const u8,
     edge_type: []const u8,
     field_name: []const u8,
     plaintext_value: []const u8,
     edge_id: u64,
 ) (FLEHookError || std.mem.Allocator.Error)![]const u8 {
+    // GAP-0854 follow-up: never FLE-encrypt the internal security graph (see
+    // isSecurityGraph) — security-graph edges such as HAS_ROLE feed the auth
+    // HMAC chain and must stay plaintext (TDE protects them at rest).
+    if (isSecurityGraph(graph_name)) {
+        return plaintext_value;
+    }
     // Check if this field requires encryption BEFORE attempting encryption
     const requires_encryption = fle_integration.fieldRequiresEncryption(edge_type, field_name);
 

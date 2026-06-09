@@ -210,4 +210,46 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
         try testing.expect(!std.mem.eql(u8, raw.String, plaintext_email));
         try testing.expect(looksLikeFleEnvelope(raw.String));
     }
+
+    // 6. BATCH-PATH leak + correctness (GAP-0854 follow-up): the batch property
+    //    writers (`setNodePropertiesBatch`) FLE-encrypt the same configured
+    //    ('User','email') field via `applyFleEncryption`, which allocates a
+    //    fresh envelope. Before the follow-up that envelope was copied into the
+    //    in-memory store and then dropped on the floor (leak). Running this
+    //    under `testing.allocator` (leak-checked) fails the test if the envelope
+    //    is not freed exactly once. Also assert the in-memory store holds the
+    //    ENVELOPE (consistent with the singular path), not plaintext.
+    {
+        const plaintext_email = "carol@example.com";
+        const labels = [_][]const u8{"User"};
+        const node_id = try store.createNodeWithGraph(&labels, "app");
+        const entries = [_]graph_store.GraphStore.BatchPropertyEntry{
+            .{ .key = "email", .value = .{ .String = plaintext_email } },
+        };
+        try store.setNodePropertiesBatch(node_id, &entries);
+
+        const raw = try store.getNodePropertyValue(node_id, "email");
+        try testing.expect(raw == .String);
+        try testing.expect(!std.mem.eql(u8, raw.String, plaintext_email));
+        try testing.expect(looksLikeFleEnvelope(raw.String));
+    }
+
+    // 7. BATCH-PATH security-graph guard (GAP-0854 follow-up): a batch write of
+    //    `email` onto the security-graph User node must stay plaintext, exactly
+    //    like the singular path, so the auth chain still verifies.
+    {
+        const nodes = store.getNodesByLabel(SECURITY_GRAPH_NAME, "User") orelse &[_]u64{};
+        for (nodes) |node_id| {
+            const entries = [_]graph_store.GraphStore.BatchPropertyEntry{
+                .{ .key = "email", .value = .{ .String = "admin@localhost" } },
+            };
+            try store.setNodePropertiesBatch(node_id, &entries);
+            const raw = try store.getNodePropertyValue(node_id, "email");
+            try testing.expect(raw == .String);
+            try testing.expectEqualStrings("admin@localhost", raw.String);
+        }
+        var mgr3 = try AuthGraphManager.init(allocator, &store);
+        defer mgr3.deinit();
+        try mgr3.verifyChain(&HMAC_KEY);
+    }
 }

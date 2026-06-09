@@ -239,8 +239,10 @@ fn isInternalPersistedPropertyKey(key: []const u8) bool {
 }
 
 /// Name of the internal HMAC-chained security graph (auth users/roles/
-/// permissions/policies/grants). Must mirror `SECURITY_GRAPH_NAME` in
-/// `src/storage/user_storage.zig` and `src/security/auth_graph_manager.zig`.
+/// permissions/policies/grants). This is the single source of truth: as of the
+/// GAP-0854 follow-up, `SECURITY_GRAPH_NAME` in `src/storage/user_storage.zig`
+/// and `src/security/auth_graph_manager.zig` are aliases of this constant (both
+/// modules already depend on graph_store), so the name cannot drift.
 pub const SECURITY_GRAPH_NAME = "__geode_security";
 
 /// GAP-0854: FLE field encryption must NEVER touch the internal
@@ -3227,10 +3229,24 @@ pub const GraphStore = struct {
             var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, entries.len);
             defer self.allocator.free(adapter_entries);
 
+            // GAP-0854 follow-up: track freshly-allocated FLE envelopes so they
+            // are freed exactly once after the adapter has copied them into
+            // storage. Indexed parallel to `adapter_entries`; null when the
+            // entry was a removal or no encryption occurred.
+            var owned_envelopes = try self.allocator.alloc(?[]const u8, entries.len);
+            defer {
+                for (owned_envelopes) |maybe_buf| {
+                    if (maybe_buf) |buf| self.allocator.free(buf);
+                }
+                self.allocator.free(owned_envelopes);
+            }
+            @memset(owned_envelopes, null);
+
             for (entries, 0..) |entry, i| {
                 if (entry.value) |val| {
-                    const effective = self.applyFleEncryption(node_id, entry.key, val);
-                    adapter_entries[i] = .{ .key = entry.key, .value = effective };
+                    const res = self.applyFleEncryption(node_id, entry.key, val);
+                    adapter_entries[i] = .{ .key = entry.key, .value = res.value };
+                    owned_envelopes[i] = res.owned;
                 } else {
                     adapter_entries[i] = .{ .key = entry.key, .value = null };
                 }
@@ -3243,8 +3259,11 @@ pub const GraphStore = struct {
             const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
             for (entries) |entry| {
                 if (entry.value) |val| {
-                    const effective = self.applyFleEncryption(node_id, entry.key, val);
-                    try vt.setNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key, effective);
+                    const res = self.applyFleEncryption(node_id, entry.key, val);
+                    // GAP-0854 follow-up: free the envelope after the vtable
+                    // setter has copied it into the storage layer.
+                    defer if (res.owned) |buf| self.allocator.free(buf);
+                    try vt.setNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key, res.value);
                 } else {
                     try vt.removeNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key);
                 }
@@ -3268,7 +3287,13 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
                 if (entry.value) |val| {
-                    const effective = self.applyFleEncryption(node_id, entry.key, val);
+                    const res = self.applyFleEncryption(node_id, entry.key, val);
+                    // GAP-0854 follow-up: the encrypted envelope is copied into
+                    // the in-memory store and read by the WAL notify below;
+                    // free the freshly-allocated buffer once both have consumed
+                    // it, otherwise it leaks per encrypted property write.
+                    defer if (res.owned) |buf| self.allocator.free(buf);
+                    const effective = res.value;
                     const value_copy = try copyPropertyValue(self, effective);
                     errdefer freePropertyValue(self, value_copy);
 
@@ -3297,10 +3322,25 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Result of an `applyFleEncryption*` call.
+    ///
+    /// `owned` is set to the freshly-allocated FLE envelope (a String payload)
+    /// when encryption produced a new buffer the caller now owns and MUST free
+    /// after all consumers (adapter write, in-memory copy, WAL notify) have
+    /// read it. It is `null` when the value was returned unchanged (no
+    /// encryption, double-encryption guard, security graph, or error fallback),
+    /// in which case there is nothing to free. See GAP-0854 follow-up: the
+    /// batch paths previously dropped this buffer on the floor, leaking one
+    /// envelope per encrypted property write.
+    const FleApplyResult = struct {
+        value: PropertyValue,
+        owned: ?[]const u8 = null,
+    };
+
     /// Apply FLE encryption to a property value if required.  Factored out
     /// so both `setNodeProperty` and `setNodePropertiesBatch` share the
     /// same logic.
-    fn applyFleEncryption(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) PropertyValue {
+    fn applyFleEncryption(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) FleApplyResult {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
@@ -3321,7 +3361,7 @@ pub const GraphStore = struct {
                         // Stack-formatted record ID — see setNodeProperty comment.
                         var id_buf: [32]u8 = undefined;
                         const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
-                            return value;
+                            return .{ .value = value };
                         };
                         const encrypted = fle_integration.encryptFieldIfNeeded(
                             fle_ctx,
@@ -3330,16 +3370,16 @@ pub const GraphStore = struct {
                             s,
                             record_id,
                         ) catch {
-                            return value;
+                            return .{ .value = value };
                         };
                         if (!std.mem.eql(u8, encrypted, s)) {
-                            return PropertyValue{ .String = encrypted };
+                            return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
                         }
                     }
                 }
-                return value;
+                return .{ .value = value };
             },
-            else => return value,
+            else => return .{ .value = value },
         }
     }
 
@@ -4740,10 +4780,23 @@ pub const GraphStore = struct {
             var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, entries.len);
             defer self.allocator.free(adapter_entries);
 
+            // GAP-0854 follow-up: track freshly-allocated FLE envelopes so they
+            // are freed exactly once after the adapter has copied them into
+            // storage (mirrors the node batch path).
+            var owned_envelopes = try self.allocator.alloc(?[]const u8, entries.len);
+            defer {
+                for (owned_envelopes) |maybe_buf| {
+                    if (maybe_buf) |buf| self.allocator.free(buf);
+                }
+                self.allocator.free(owned_envelopes);
+            }
+            @memset(owned_envelopes, null);
+
             for (entries, 0..) |entry, i| {
                 if (entry.value) |val| {
-                    const effective = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
-                    adapter_entries[i] = .{ .key = entry.key, .value = effective };
+                    const res = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    adapter_entries[i] = .{ .key = entry.key, .value = res.value };
+                    owned_envelopes[i] = res.owned;
                 } else {
                     adapter_entries[i] = .{ .key = entry.key, .value = null };
                 }
@@ -4758,7 +4811,11 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
                 if (entry.value) |val| {
-                    const effective = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    const res = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    // GAP-0854 follow-up: free the in-memory-path envelope after
+                    // the copy + WAL notify have consumed it.
+                    defer if (res.owned) |buf| self.allocator.free(buf);
+                    const effective = res.value;
                     const value_copy = try copyPropertyValue(self, effective);
                     errdefer freePropertyValue(self, value_copy);
 
@@ -4789,7 +4846,7 @@ pub const GraphStore = struct {
     /// out so both `setEdgeProperty` and `setEdgePropertiesBatch` share the
     /// same logic.  Mirrors `applyFleEncryption` (the node variant) at line
     /// 2132.
-    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) PropertyValue {
+    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) FleApplyResult {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
@@ -4807,7 +4864,7 @@ pub const GraphStore = struct {
                         // Stack-formatted record ID — see setNodeProperty comment.
                         var id_buf: [32]u8 = undefined;
                         const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
-                            return value;
+                            return .{ .value = value };
                         };
                         const encrypted = fle_integration.encryptFieldIfNeeded(
                             fle_ctx,
@@ -4816,16 +4873,16 @@ pub const GraphStore = struct {
                             s,
                             record_id,
                         ) catch {
-                            return value;
+                            return .{ .value = value };
                         };
                         if (!std.mem.eql(u8, encrypted, s)) {
-                            return PropertyValue{ .String = encrypted };
+                            return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
                         }
                     }
                 }
-                return value;
+                return .{ .value = value };
             },
-            else => return value,
+            else => return .{ .value = value },
         }
     }
 

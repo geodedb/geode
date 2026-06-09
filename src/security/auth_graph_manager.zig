@@ -87,7 +87,10 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const log = logging.scoped("auth_graph_manager");
 const Attr = logging.Attr;
 
-const SECURITY_GRAPH_NAME = "__geode_security";
+// GAP-0854 follow-up: single source of truth for the internal security graph
+// name lives at the lowest layer (graph_store). Aliasing here prevents drift
+// between the FLE exclusion guard and the auth/HMAC machinery.
+const SECURITY_GRAPH_NAME = graph_store.SECURITY_GRAPH_NAME;
 const HAS_ROLE_EDGE = "HAS_ROLE";
 const geode_hkdf_config = auth_hmac.HkdfConfig{
     .salt = "geode-auth-hmac-v1",

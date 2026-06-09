@@ -275,10 +275,16 @@ pub fn setNodePropertyFromValue(
     key: []const u8,
     value: Value,
 ) !void {
+    // GAP-0854 follow-up: resolve the node's graph so the FLE hook can exclude
+    // the internal __geode_security graph. Cheap pointer lookup; the security
+    // graph must never receive an FLE envelope (its records feed the auth HMAC
+    // chain, which is computed over plaintext).
+    const node_graph: ?[]const u8 = if (store.getNodePtr(node_id)) |n| n.graph_name else null;
     const prop_value = switch (value) {
         .Str => |s| blk: {
             const encrypted_or_plain = try fle_hooks.encryptPropertyIfNeeded(
                 allocator,
+                node_graph,
                 labels,
                 key,
                 s,
@@ -330,10 +336,14 @@ pub fn setEdgePropertyFromValue(
     key: []const u8,
     value: Value,
 ) !void {
+    // GAP-0854 follow-up: resolve the edge's graph so the FLE hook can exclude
+    // the internal __geode_security graph (HAS_ROLE etc. feed the auth chain).
+    const edge_graph: ?[]const u8 = if (store.getEdgePtr(edge_id)) |e| e.graph_name else null;
     const prop_value = switch (value) {
         .Str => |s| blk: {
             const encrypted_or_plain = try fle_hooks.encryptEdgePropertyIfNeeded(
                 allocator,
+                edge_graph,
                 edge_type,
                 key,
                 s,
