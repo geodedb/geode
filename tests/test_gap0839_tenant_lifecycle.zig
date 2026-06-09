@@ -257,6 +257,89 @@ test "GAP-0839: set_quota makes the production quota manager resolve a non-defau
 }
 
 // ---------------------------------------------------------------------------
+// 3b. publishing the global quota manager must be BEHAVIOR-NEUTRAL by default.
+//
+// Regression guard for the GAP-0839 fix: before GAP-0839 the global quota
+// manager was always null in production, so every quota check was SKIPPED and
+// every tenant was effectively UNLIMITED. GAP-0839 published the manager at
+// startup, which — if the manager keeps the TenantQuota *struct* default
+// (max_connections=100, max_concurrent_queries=32) as its default_quota —
+// silently ACTIVATES enforcement at 100/32 for every tenant that has no
+// explicit override. That is a production-breaking behavior change.
+//
+// The fix: the GLOBAL manager is constructed UNLIMITED (initUnlimited), so a
+// tenant WITHOUT an explicit set_quota override stays unlimited (pre-GAP-0839
+// behavior). An EXPLICIT override still enforces real limits.
+// ---------------------------------------------------------------------------
+
+test "GAP-0839: published global quota manager is unlimited for tenants without an override" {
+    const allocator = testing.allocator;
+
+    // The production global manager — constructed exactly like main.zig's
+    // startup site does (initUnlimited), NOT the plain tests-only init.
+    var qm = tenant_quota.TenantQuotaManager.initUnlimited(allocator);
+    defer qm.deinit();
+
+    // A tenant with no explicit override resolves to the unlimited default.
+    const q = qm.getQuota("default");
+    try testing.expectEqual(std.math.maxInt(u32), q.max_connections);
+    try testing.expectEqual(std.math.maxInt(u32), q.max_concurrent_queries);
+    try testing.expectEqual(std.math.maxInt(u32), q.max_graphs);
+    try testing.expectEqual(std.math.maxInt(u64), q.max_nodes_per_graph);
+
+    // Acquiring FAR more connections and queries than the old struct default
+    // (100 / 32) must NOT be rejected — there is no limit for this tenant.
+    var i: u32 = 0;
+    while (i < 500) : (i += 1) {
+        try qm.acquireConnection("default");
+        try qm.acquireQuery("default");
+    }
+    try testing.expectEqual(@as(u32, 500), qm.getUsage("default").connections);
+    try testing.expectEqual(@as(u32, 500), qm.getUsage("default").queries);
+
+    // Clean up the acquired slots.
+    i = 0;
+    while (i < 500) : (i += 1) {
+        qm.releaseConnection("default");
+        qm.releaseQuery("default");
+    }
+}
+
+test "GAP-0839: explicit set_quota override still enforces on the unlimited global manager" {
+    const allocator = testing.allocator;
+
+    var qm = tenant_quota.TenantQuotaManager.initUnlimited(allocator);
+    defer qm.deinit();
+
+    // An EXPLICIT override on the otherwise-unlimited global manager must take
+    // effect: max_connections=2 means the 3rd connection is rejected.
+    try qm.setQuota("capped", .{ .max_connections = 2, .max_concurrent_queries = 1 });
+
+    try qm.acquireConnection("capped");
+    try qm.acquireConnection("capped");
+    try testing.expectError(tenant_quota.QuotaError.ConnectionQuotaExceeded, qm.acquireConnection("capped"));
+
+    try qm.acquireQuery("capped");
+    try testing.expectError(tenant_quota.QuotaError.QueryQuotaExceeded, qm.acquireQuery("capped"));
+
+    // A DIFFERENT tenant on the same manager remains unlimited (override is
+    // per-tenant; it must not leak the struct default to everyone else).
+    var i: u32 = 0;
+    while (i < 200) : (i += 1) {
+        try qm.acquireConnection("other");
+    }
+    try testing.expectEqual(@as(u32, 200), qm.getUsage("other").connections);
+
+    qm.releaseConnection("capped");
+    qm.releaseConnection("capped");
+    qm.releaseQuery("capped");
+    i = 0;
+    while (i < 200) : (i += 1) {
+        qm.releaseConnection("other");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 4. admin_tenant authorization (fail-closed)
 // ---------------------------------------------------------------------------
 

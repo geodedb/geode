@@ -1796,8 +1796,17 @@ pub fn main() !void {
         // persisted tenant into (a) the expr-RLS HierarchyManager and (b) the
         // quota manager, so a server RESTART restores the full tenant hierarchy
         // and per-tenant quota overrides — not just the registry rows.
+        //
+        // The global manager is constructed with an UNLIMITED default_quota
+        // (initUnlimited) so that PUBLISHING it is behavior-neutral: a tenant
+        // WITHOUT an explicit set_quota override stays unlimited, exactly as
+        // before GAP-0839 (when getGlobalQuotaManager() was null and every quota
+        // check was skipped). Only tenants with an explicit override — set via
+        // CALL geode.tenant.set_quota or restored from the registry below — are
+        // enforced. Using the plain init() (struct default 100/32) here would
+        // silently activate enforcement on every existing deployment.
         // CANARY: REQ=REQ-TENANT-LIFECYCLE-003; FEATURE="TenantRegistryServerWiring"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-06-08
-        var quota_manager = geode.tenant_quota.TenantQuotaManager.init(gpa);
+        var quota_manager = geode.tenant_quota.TenantQuotaManager.initUnlimited(gpa);
         defer quota_manager.deinit();
         geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
         defer geode.tenant_quota.setGlobalQuotaManager(null);

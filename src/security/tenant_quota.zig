@@ -18,6 +18,27 @@ pub const TenantQuota = struct {
     max_nodes_per_graph: u64 = 1_000_000,
 };
 
+/// An effectively-unlimited quota (every limit at its type maximum).
+///
+/// This is the `default_quota` used by the *global* (production) quota manager
+/// so that publishing the manager is BEHAVIOR-NEUTRAL: a tenant WITHOUT an
+/// explicit `set_quota` override stays unlimited — exactly the pre-GAP-0839
+/// behavior, when `getGlobalQuotaManager()` returned null and every quota check
+/// was skipped. Only tenants with an EXPLICIT override (via
+/// `CALL geode.tenant.set_quota` or restored from the registry) get enforced.
+///
+/// NOTE: this is intentionally distinct from `TenantQuota{}` (the struct's own
+/// field defaults of 100/32/100/1M), which other code and the tenant_quota unit
+/// tests rely on as the *struct* default. Do not conflate the two.
+pub fn unlimitedQuota() TenantQuota {
+    return .{
+        .max_connections = std.math.maxInt(u32),
+        .max_concurrent_queries = std.math.maxInt(u32),
+        .max_graphs = std.math.maxInt(u32),
+        .max_nodes_per_graph = std.math.maxInt(u64),
+    };
+}
+
 /// Live usage counters for a tenant. Tracked with atomics for lock-free hot-path.
 pub const TenantUsage = struct {
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -49,6 +70,21 @@ pub const TenantQuotaManager = struct {
             .usage = .empty,
             .mu = .init,
             .default_quota = .{},
+        };
+    }
+
+    /// Construct a manager whose `default_quota` is UNLIMITED — the form used by
+    /// the global (production) manager at server startup. A tenant without an
+    /// explicit `setQuota` override resolves to the unlimited default (preserving
+    /// the pre-GAP-0839 "no global manager → unlimited" behavior); only tenants
+    /// with an explicit override are enforced. See `unlimitedQuota()`.
+    pub fn initUnlimited(allocator: std.mem.Allocator) TenantQuotaManager {
+        return .{
+            .allocator = allocator,
+            .quotas = .empty,
+            .usage = .empty,
+            .mu = .init,
+            .default_quota = unlimitedQuota(),
         };
     }
 
@@ -261,6 +297,32 @@ test "TenantQuotaManager: default quota applies when no explicit quota set" {
     const q = mgr.getQuota("tenant-A");
     try std.testing.expectEqual(@as(u32, 100), q.max_connections);
     try std.testing.expectEqual(@as(u32, 32), q.max_concurrent_queries);
+}
+
+test "TenantQuotaManager: initUnlimited resolves unlimited for tenants without an override" {
+    var mgr = TenantQuotaManager.initUnlimited(std.testing.allocator);
+    defer mgr.deinit();
+
+    // No explicit quota → the unlimited default, NOT the struct default (100/32).
+    const q = mgr.getQuota("tenant-A");
+    try std.testing.expectEqual(std.math.maxInt(u32), q.max_connections);
+    try std.testing.expectEqual(std.math.maxInt(u32), q.max_concurrent_queries);
+    try std.testing.expectEqual(std.math.maxInt(u32), q.max_graphs);
+    try std.testing.expectEqual(std.math.maxInt(u64), q.max_nodes_per_graph);
+
+    // The TenantQuota *struct* default is unchanged (still 100/32) — only the
+    // global manager's default_quota is unlimited.
+    const struct_default = TenantQuota{};
+    try std.testing.expectEqual(@as(u32, 100), struct_default.max_connections);
+    try std.testing.expectEqual(@as(u32, 32), struct_default.max_concurrent_queries);
+
+    // An explicit override on the unlimited manager still enforces.
+    try mgr.setQuota("capped", .{ .max_connections = 2, .max_concurrent_queries = 32 });
+    try mgr.acquireConnection("capped");
+    try mgr.acquireConnection("capped");
+    try std.testing.expectError(QuotaError.ConnectionQuotaExceeded, mgr.acquireConnection("capped"));
+    mgr.releaseConnection("capped");
+    mgr.releaseConnection("capped");
 }
 
 test "TenantQuotaManager: setQuota and getQuota" {

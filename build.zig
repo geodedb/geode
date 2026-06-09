@@ -2182,6 +2182,8 @@ pub fn build(b: *std.Build) void {
     });
     tenant_quota_tests.root_module.addImport("logging", logging_mod);
     const run_tenant_quota_tests = b.addRunArtifact(tenant_quota_tests);
+    const tenant_quota_step = b.step("test-tenant-quota", "GAP-0289/GAP-0839 per-tenant quota manager unit tests");
+    tenant_quota_step.dependOn(&run_tenant_quota_tests.step);
 
     // GAP-0839: durable tenant lifecycle registry — in-file unit tests
     // (create/list/show/drop/set_quota mechanics + the durable persist+hydrate
