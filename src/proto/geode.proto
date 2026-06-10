@@ -576,6 +576,9 @@ message UploadBackupRequest {
   uint64 size_bytes = 1;
   string checksum = 2;
   string session_id = 3;
+  // GAP-0880: full backup artifact bytes (GEOB header + payload). Required;
+  // metadata-only uploads are rejected by the server.
+  bytes payload = 4;
 }
 message UploadBackupResponse {
   bool success = 1;
