@@ -3656,6 +3656,18 @@ pub fn executeClusterMatchUpdateIfNeeded(
     }
 }
 
+/// Empty (no columns / no rows) ExecutionResult — the success shape for a
+/// replicated or no-op cluster write. Allocated fresh per call so each early
+/// exit owns its result independently; fail-closed error paths never construct
+/// one (nothing to leak).
+fn emptyExecutionResult(allocator: std.mem.Allocator) !ExecutionResult {
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 /// Replicate an eligible `MATCH (a:L {p}),(b:M {q}) CREATE (a)-[:R {props}]->(b)`
 /// through Raft as a GNC2 multi-create with ZERO new nodes and `absolute_id`
 /// endpoints. Called ONLY when this node is the cluster leader. The create is
@@ -3675,7 +3687,7 @@ pub fn executeClusterMatchUpdateIfNeeded(
 ///   * CREATE endpoints are pure var refs (no labels/props on endpoint patterns),
 ///   * no RETURN / WITH / FILTER / SET / REMOVE / DELETE attached,
 ///   * scalar edge props only; ≤ MAX_MULTI_EDGES edges; no variable-length hops.
-// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=LeaderProposeMatchCreate; STATUS=TESTED; TEST=test_cluster_replicable_mutations; OWNER=distributed; UPDATED=2026-06-10
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=LeaderProposeMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
 fn clusterReplicateMatchCreate(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -3736,11 +3748,7 @@ fn clusterReplicateMatchCreate(
         }
         const rid = resolved orelse {
             // Nothing matched → semantically a no-op; short-circuit WITHOUT proposing.
-            return ExecutionResult{
-                .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]Value, 0),
-                .flags = std.ArrayList([]const u8).empty,
-            };
+            return try emptyExecutionResult(allocator);
         };
         // Duplicate MATCH variable names would make the Env lookup (first
         // binding wins) disagree with endpoint resolution (last put wins) —
@@ -3768,11 +3776,7 @@ fn clusterReplicateMatchCreate(
             .Bool => |b| b,
             else => false,
         };
-        if (!keep) return ExecutionResult{
-            .columns = try allocator.alloc([]const u8, 0),
-            .rows = try allocator.alloc([]Value, 0),
-            .flags = std.ArrayList([]const u8).empty,
-        };
+        if (!keep) return try emptyExecutionResult(allocator);
     }
 
     // Build edge specs from the CREATE pattern: endpoints must be pure refs to
@@ -3873,11 +3877,7 @@ fn clusterReplicateMatchCreate(
     // Block until the entry is applied locally (apply happens on quorum commit).
     try coord.waitForApplied(idx, 5000);
 
-    return ExecutionResult{
-        .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]Value, 0),
-        .flags = std.ArrayList([]const u8).empty,
-    };
+    return try emptyExecutionResult(allocator);
 }
 
 /// Cluster write routing for a `MATCH … CREATE …` query. Returns `null` in
@@ -3886,7 +3886,7 @@ fn clusterReplicateMatchCreate(
 /// fails closed). On a follower it rejects the write (error.ClusterNotLeader —
 /// clients retry the leader). THIS CLOSES THE 2026-06-04 SILENT-DIVERGENCE
 /// HOLE: MATCH…CREATE edge writes were previously never cluster-gated.
-// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ExecutorRouteMatchCreate; STATUS=TESTED; TEST=test_cluster_replicable_mutations; OWNER=distributed; UPDATED=2026-06-10
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ExecutorRouteMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
 pub fn executeClusterMatchCreateIfNeeded(
     allocator: std.mem.Allocator,
     q: ast.Query,
