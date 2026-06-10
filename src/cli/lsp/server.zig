@@ -51,18 +51,15 @@ pub const ServerCapabilities = struct {
     semanticTokensProvider: bool = true,
 };
 
-/// GAP-0831: single source of truth for the request methods the dispatch in
-/// `handleRequest` routes to a handler. The dispatch switch references these
-/// constants directly (via `std.mem.eql(u8, method, M.<name>)`) so the list
-/// and the dispatch CANNOT drift — adding a handler without listing it here
-/// (or vice versa) is a visible inconsistency, and the structural truthfulness
-/// guard (`tests/test_gap0831_lsp_capability_guard.zig`) asserts every
-/// non-lifecycle entry here maps to an advertised capability and back.
+/// GAP-0831: single source of truth for the LSP method-name string constants.
+/// These name the methods; the *dispatch* and the *introspected handled-method
+/// lists* are both derived from the comptime dispatch tables below
+/// (`request_dispatch` / `notification_dispatch`), so a method that is no longer
+/// dispatched is also no longer listed.
 ///
-/// Lifecycle / control methods (`initialize`, `shutdown`) are listed because
-/// the dispatch handles them, but they are exempt from the capability mapping
-/// in the guard — they are mandated by the LSP base protocol, not advertised
-/// via `ServerCapabilities`.
+/// Lifecycle / control methods (`initialize`, `shutdown`) are dispatched but are
+/// exempt from the capability mapping in the guard — they are mandated by the
+/// LSP base protocol, not advertised via `ServerCapabilities`.
 ///
 /// CANARY: REQ=REQ-LSP-CAP-001; FEATURE="CapabilityHandlerTruthfulness"; ASPECT=DispatchTable; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
 pub const Methods = struct {
@@ -87,33 +84,84 @@ pub const Methods = struct {
     pub const did_close = "textDocument/didClose";
 };
 
-/// GAP-0831: the exact set of request methods `handleRequest` dispatches.
-/// Iterated by the truthfulness guard; the dispatch chain references the same
-/// `Methods.*` constants so this list reflects reality.
-pub const handled_request_methods = [_][]const u8{
-    Methods.initialize,
-    Methods.shutdown,
-    Methods.hover,
-    Methods.completion,
-    Methods.definition,
-    Methods.formatting,
-    Methods.document_symbol,
-    Methods.signature_help,
-    Methods.references,
-    Methods.semantic_tokens_full,
+/// GAP-0831: uniform request-handler signature. Every request handler is wrapped
+/// to this shape so the dispatch table can hold a single function-pointer type.
+/// (`handleShutdown` ignores `params`; the wrapper below normalizes its arity.)
+pub const RequestHandler = *const fn (*Server, std.json.Value, ?std.json.Value) anyerror!void;
+
+/// GAP-0831: uniform notification-handler signature.
+pub const NotificationHandler = *const fn (*Server, ?std.json.Value) anyerror!void;
+
+/// GAP-0831: one row of the request dispatch table.
+pub const RequestDispatchEntry = struct {
+    method: []const u8,
+    handler: RequestHandler,
+};
+
+/// GAP-0831: one row of the notification dispatch table.
+pub const NotificationDispatchEntry = struct {
+    method: []const u8,
+    handler: NotificationHandler,
+};
+
+/// GAP-0831: THE request dispatch table — the single source of truth for both
+/// (a) what `handleRequest` routes (via `inline for` over this table) and
+/// (b) the introspected `handled_request_methods` list (derived at comptime
+/// from this same table). Deleting a row here simultaneously removes the
+/// dispatch branch AND shrinks the introspected list, so the capability
+/// truthfulness guard trips (CapabilityWithoutHandler) the moment an advertised
+/// feature loses its dispatch — closing the branch-removal blind spot the
+/// reviewer proved against the old hand-maintained array.
+pub const request_dispatch = [_]RequestDispatchEntry{
+    .{ .method = Methods.initialize, .handler = Server.handleInitializeEntry },
+    .{ .method = Methods.shutdown, .handler = Server.handleShutdownEntry },
+    .{ .method = Methods.hover, .handler = Server.handleHover },
+    .{ .method = Methods.completion, .handler = Server.handleCompletion },
+    .{ .method = Methods.definition, .handler = Server.handleDefinition },
+    .{ .method = Methods.formatting, .handler = Server.handleFormatting },
+    .{ .method = Methods.document_symbol, .handler = Server.handleDocumentSymbol },
+    .{ .method = Methods.signature_help, .handler = Server.handleSignatureHelp },
+    .{ .method = Methods.references, .handler = Server.handleReferences },
+    .{ .method = Methods.semantic_tokens_full, .handler = Server.handleSemanticTokensFull },
+};
+
+/// GAP-0831: THE notification dispatch table — the single source of truth for
+/// both `handleNotification`'s `inline for` dispatch and the introspected
+/// `handled_notification_methods` list (derived below). Notifications carry
+/// varying intent but a uniform `(self, params)` signature, so the same
+/// comptime-table pattern as requests applies; `initialized`/`exit` use thin
+/// wrappers because they only mutate flags.
+pub const notification_dispatch = [_]NotificationDispatchEntry{
+    .{ .method = Methods.initialized, .handler = Server.handleInitializedEntry },
+    .{ .method = Methods.exit, .handler = Server.handleExitEntry },
+    .{ .method = Methods.did_open, .handler = Server.handleDidOpen },
+    .{ .method = Methods.did_change, .handler = Server.handleDidChange },
+    .{ .method = Methods.did_close, .handler = Server.handleDidClose },
+};
+
+/// GAP-0831: the exact set of request methods `handleRequest` dispatches,
+/// DERIVED AT COMPTIME from `request_dispatch`. Iterated by the truthfulness
+/// guard. Because both the dispatch and this list come from the same table, a
+/// removed dispatch row removes the corresponding entry here too — there is no
+/// hand-maintained array to drift out of sync.
+pub const handled_request_methods = blk: {
+    var arr: [request_dispatch.len][]const u8 = undefined;
+    for (request_dispatch, 0..) |entry, i| arr[i] = entry.method;
+    const frozen = arr;
+    break :blk frozen;
 };
 
 /// GAP-0831: the exact set of notification methods `handleNotification`
-/// dispatches. Notifications are exempt from the capability mapping (they are
-/// driven by `textDocumentSync` for the did* trio and by the base protocol for
-/// initialized/exit), but the guard still asserts the did* notifications imply
-/// `textDocumentSync` is advertised.
-pub const handled_notification_methods = [_][]const u8{
-    Methods.initialized,
-    Methods.exit,
-    Methods.did_open,
-    Methods.did_change,
-    Methods.did_close,
+/// dispatches, DERIVED AT COMPTIME from `notification_dispatch`. Notifications
+/// are exempt from the capability mapping (they are driven by `textDocumentSync`
+/// for the did* trio and by the base protocol for initialized/exit), but the
+/// guard still asserts the did* notifications imply `textDocumentSync` is
+/// advertised.
+pub const handled_notification_methods = blk: {
+    var arr: [notification_dispatch.len][]const u8 = undefined;
+    for (notification_dispatch, 0..) |entry, i| arr[i] = entry.method;
+    const frozen = arr;
+    break :blk frozen;
 };
 
 /// GAP-0831: build the `capabilities` object EXACTLY as advertised in the
@@ -139,43 +187,83 @@ pub fn buildCapabilitiesObject(allocator: Allocator) !std.json.ObjectMap {
     try caps.put(allocator, "documentSymbolProvider", .{ .bool = capabilities.documentSymbolProvider });
     try caps.put(allocator, "referencesProvider", .{ .bool = capabilities.referencesProvider });
 
-    var completion = std.json.ObjectMap{};
-    var triggers = std.json.Array.init(allocator);
-    try triggers.append(.{ .string = "." });
-    try triggers.append(.{ .string = ":" });
-    try triggers.append(.{ .string = "$" });
-    try completion.put(allocator, "triggerCharacters", .{ .array = triggers });
-    try caps.put(allocator, "completionProvider", .{ .object = completion });
+    // GAP-0831 (Minor): each nested provider object is built by a helper that
+    // owns its intermediate allocations via internal errdefers and returns a
+    // fully-formed Value. The completed Value is transferred into `caps` with a
+    // single `put`; after that the top-level `errdefer deinitCapabilitiesObject`
+    // owns it. This removes the OOM-path leak windows where a half-built local
+    // (e.g. `completion`/`triggers`) would be lost if a later `put`/`append`
+    // failed — no local outlives its transfer, so no double-free either.
+    const completion = try buildTriggerObject(allocator, &[_][]const u8{ ".", ":", "$" });
+    try caps.put(allocator, "completionProvider", completion);
 
-    // Signature help provider
-    var sig_help = std.json.ObjectMap{};
-    var sig_triggers = std.json.Array.init(allocator);
-    try sig_triggers.append(.{ .string = "(" });
-    try sig_triggers.append(.{ .string = "," });
-    try sig_help.put(allocator, "triggerCharacters", .{ .array = sig_triggers });
-    try caps.put(allocator, "signatureHelpProvider", .{ .object = sig_help });
+    const sig_help = try buildTriggerObject(allocator, &[_][]const u8{ "(", "," });
+    try caps.put(allocator, "signatureHelpProvider", sig_help);
 
-    // Semantic tokens provider
-    var sem_tokens = std.json.ObjectMap{};
-    try sem_tokens.put(allocator, "full", .{ .bool = true });
-
-    var legend = std.json.ObjectMap{};
-    var token_types = std.json.Array.init(allocator);
-    for (protocol.SemanticTokenTypes.types) |t| {
-        try token_types.append(.{ .string = t });
-    }
-    try legend.put(allocator, "tokenTypes", .{ .array = token_types });
-
-    var token_modifiers = std.json.Array.init(allocator);
-    for (protocol.SemanticTokenTypes.modifiers) |m| {
-        try token_modifiers.append(.{ .string = m });
-    }
-    try legend.put(allocator, "tokenModifiers", .{ .array = token_modifiers });
-
-    try sem_tokens.put(allocator, "legend", .{ .object = legend });
-    try caps.put(allocator, "semanticTokensProvider", .{ .object = sem_tokens });
+    const sem_tokens = try buildSemanticTokensObject(allocator);
+    try caps.put(allocator, "semanticTokensProvider", sem_tokens);
 
     return caps;
+}
+
+/// GAP-0831 (Minor): build a JSON string array from `strings`, freeing the
+/// partial array if any append OOMs. The returned Value owns its backing store
+/// until the caller transfers it into a parent via `put`.
+fn buildStringArray(allocator: Allocator, strings: []const []const u8) !std.json.Value {
+    var arr = std.json.Array.init(allocator);
+    errdefer arr.deinit();
+    for (strings) |s| try arr.append(.{ .string = s });
+    return .{ .array = arr };
+}
+
+/// GAP-0831 (Minor): build a `{ "triggerCharacters": [...] }` provider object.
+/// The array is built fully before being transferred into `obj`, so no local
+/// outlives its ownership transfer (no leak on OOM, no double-free).
+fn buildTriggerObject(allocator: Allocator, triggers: []const []const u8) !std.json.Value {
+    var obj = std.json.ObjectMap{};
+    var obj_value = std.json.Value{ .object = obj };
+    errdefer deinitJsonValue(allocator, &obj_value);
+
+    const triggers_arr = try buildStringArray(allocator, triggers);
+    try obj.put(allocator, "triggerCharacters", triggers_arr);
+    obj_value = .{ .object = obj };
+    return obj_value;
+}
+
+/// GAP-0831 (Minor): build the semanticTokens provider object
+/// (`{ "full": true, "legend": { "tokenTypes": [...], "tokenModifiers": [...] } }`).
+/// Each nested array is fully built (via `buildStringArray`) before transfer, so
+/// the only error-path owner of a given allocation is the object it was already
+/// transferred into — no leak, no double-free.
+fn buildSemanticTokensObject(allocator: Allocator) !std.json.Value {
+    var sem_tokens = std.json.ObjectMap{};
+    var sem_value = std.json.Value{ .object = sem_tokens };
+    errdefer deinitJsonValue(allocator, &sem_value);
+
+    try sem_tokens.put(allocator, "full", .{ .bool = true });
+    sem_value = .{ .object = sem_tokens };
+
+    const legend = try buildSemanticTokensLegend(allocator);
+    try sem_tokens.put(allocator, "legend", legend);
+    sem_value = .{ .object = sem_tokens };
+    return sem_value;
+}
+
+/// GAP-0831 (Minor): build the semanticTokens `legend` object. Helper isolates
+/// the two arrays so each is fully built before transfer into the legend.
+fn buildSemanticTokensLegend(allocator: Allocator) !std.json.Value {
+    var legend = std.json.ObjectMap{};
+    var legend_value = std.json.Value{ .object = legend };
+    errdefer deinitJsonValue(allocator, &legend_value);
+
+    const token_types = try buildStringArray(allocator, &protocol.SemanticTokenTypes.types);
+    try legend.put(allocator, "tokenTypes", token_types);
+    legend_value = .{ .object = legend };
+
+    const token_modifiers = try buildStringArray(allocator, &protocol.SemanticTokenTypes.modifiers);
+    try legend.put(allocator, "tokenModifiers", token_modifiers);
+    legend_value = .{ .object = legend };
+    return legend_value;
 }
 
 /// GAP-0831: recursively release a capabilities ObjectMap built by
@@ -642,49 +730,56 @@ pub const Server = struct {
             }
         }
 
-        // GAP-0831: dispatch references the `Methods.*` constants that are the
-        // single source of truth for `handled_request_methods`. The
-        // truthfulness guard iterates that list and this chain in lockstep.
-        if (std.mem.eql(u8, method, Methods.initialize)) {
-            try self.handleInitialize(id, params);
-        } else if (std.mem.eql(u8, method, Methods.shutdown)) {
-            try self.handleShutdown(id);
-        } else if (std.mem.eql(u8, method, Methods.hover)) {
-            try self.handleHover(id, params);
-        } else if (std.mem.eql(u8, method, Methods.completion)) {
-            try self.handleCompletion(id, params);
-        } else if (std.mem.eql(u8, method, Methods.definition)) {
-            try self.handleDefinition(id, params);
-        } else if (std.mem.eql(u8, method, Methods.formatting)) {
-            try self.handleFormatting(id, params);
-        } else if (std.mem.eql(u8, method, Methods.document_symbol)) {
-            try self.handleDocumentSymbol(id, params);
-        } else if (std.mem.eql(u8, method, Methods.signature_help)) {
-            try self.handleSignatureHelp(id, params);
-        } else if (std.mem.eql(u8, method, Methods.references)) {
-            try self.handleReferences(id, params);
-        } else if (std.mem.eql(u8, method, Methods.semantic_tokens_full)) {
-            try self.handleSemanticTokensFull(id, params);
-        } else {
-            try self.sendError(id, @intFromEnum(protocol.ErrorCode.MethodNotFound), "Method not found");
+        // GAP-0831: dispatch is an `inline for` over the comptime
+        // `request_dispatch` table, which is ALSO the source `handled_request_methods`
+        // is derived from. Removing a table row removes both the branch and the
+        // introspected entry, so the truthfulness guard catches an advertised
+        // capability that has lost its dispatch (the branch-removal blind spot).
+        inline for (request_dispatch) |entry| {
+            if (std.mem.eql(u8, method, entry.method)) {
+                return entry.handler(self, id, params);
+            }
         }
+        try self.sendError(id, @intFromEnum(protocol.ErrorCode.MethodNotFound), "Method not found");
     }
 
     fn handleNotification(self: *Server, method: []const u8, params: ?std.json.Value) !void {
-        // GAP-0831: dispatch references the `Methods.*` constants that are the
-        // single source of truth for `handled_notification_methods`.
-        if (std.mem.eql(u8, method, Methods.initialized)) {
-            self.initialized = true;
-            self.transport.logMessage("INFO", "Client initialized");
-        } else if (std.mem.eql(u8, method, Methods.exit)) {
-            self.shutdown_requested = true;
-        } else if (std.mem.eql(u8, method, Methods.did_open)) {
-            try self.handleDidOpen(params);
-        } else if (std.mem.eql(u8, method, Methods.did_change)) {
-            try self.handleDidChange(params);
-        } else if (std.mem.eql(u8, method, Methods.did_close)) {
-            try self.handleDidClose(params);
+        // GAP-0831: dispatch is an `inline for` over the comptime
+        // `notification_dispatch` table, the same source `handled_notification_methods`
+        // is derived from. A method not in the table is silently ignored, per
+        // JSON-RPC 2.0 §5 (servers MUST NOT reply to unknown notifications).
+        inline for (notification_dispatch) |entry| {
+            if (std.mem.eql(u8, method, entry.method)) {
+                return entry.handler(self, params);
+            }
         }
+    }
+
+    /// GAP-0831: uniform-signature wrapper for `handleInitialize` so it can sit
+    /// in `request_dispatch` alongside the other request handlers.
+    fn handleInitializeEntry(self: *Server, id: std.json.Value, params: ?std.json.Value) anyerror!void {
+        return self.handleInitialize(id, params);
+    }
+
+    /// GAP-0831: uniform-signature wrapper for `handleShutdown` (which takes no
+    /// params) so it matches the `RequestHandler` type in `request_dispatch`.
+    fn handleShutdownEntry(self: *Server, id: std.json.Value, params: ?std.json.Value) anyerror!void {
+        _ = params;
+        return self.handleShutdown(id);
+    }
+
+    /// GAP-0831: uniform-signature wrapper for the `initialized` notification,
+    /// which only flips a flag. Lets it live in `notification_dispatch`.
+    fn handleInitializedEntry(self: *Server, params: ?std.json.Value) anyerror!void {
+        _ = params;
+        self.initialized = true;
+        self.transport.logMessage("INFO", "Client initialized");
+    }
+
+    /// GAP-0831: uniform-signature wrapper for the `exit` notification.
+    fn handleExitEntry(self: *Server, params: ?std.json.Value) anyerror!void {
+        _ = params;
+        self.shutdown_requested = true;
     }
 
     /// Task 12: bind the per-session AuthState + SchemaProvider +
