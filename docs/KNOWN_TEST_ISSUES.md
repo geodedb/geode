@@ -1,250 +1,152 @@
 # Known Test Issues
 
-This document tracks tests that are skipped in the geodetestlab test suite due to unimplemented features or test infrastructure issues.
+This document is the canonical, evidence-backed baseline of the local Zig test
+suite (`zig build test-*` steps) plus the historical geodetestlab integration
+numbers. It is rebaselined from a single real run — see the metadata block
+below — under GAP-0860.
 
-> **Note**: This is the authoritative source for test status. Run `make geodetestlab-comprehensive` for current results. Other documentation files reference this document rather than containing their own test numbers.
+> **How to refresh:** re-run the per-step sweep (commands in "Reproduction"
+> below), then rewrite the per-step table from THAT run. The geodetestlab
+> integration suite lives in `../geode-test-harness` and requires a separate
+> harness run (`make test` / `make test-everything-otel`); record those numbers
+> as a dated historical snapshot until a fresh harness run is captured.
 
-## Test Suite Status (January 2026)
+## Canonical Local Baseline (2026-06-10)
 
-**Last Updated**: January 9, 2026
+| Field | Value |
+|---|---|
+| Date | 2026-06-10 (UTC) |
+| Commit | `faac1f3e` (branch `gap-closure-2026-06-09`) |
+| Zig | 0.16.0 |
+| Host | 32-core x86_64 (znver2), Linux 6.17 |
+| Env | `GEODE_MASTER_KEY` set to a 32-byte test value (required by FLE-backed tests) |
+| Method | each named `test-*` build step run in isolation, 300 s per-step timeout |
 
-> Numbers below are from the last documented test run. Run tests locally for current results.
+**Result: 175 named `test-*` steps — 166 PASS, 6 FAIL, 3 TIMEOUT, 0 not-run.**
 
-- **Pass Rate**: ~97% (varies by test run)
-- **Skipped**: ~120 tests (intentionally skipped due to known limitations documented below)
+`zig build` (the production binary) compiles clean. The 166 passing steps cover
+the parser/lexer, planner, storage/MVCC/WAL, index types, security/auth/FLE
+wiring, transport, cluster bootstrap/identity/steady-state, RLS, GPS policy,
+LSP/MCP, timeseries, FTS, and the bulk-ingest fast paths.
 
-## Test Suite Drift — Pre-existing, Tracked for Re-baseline
+### Failures and hangs (named, with evidence)
 
-The items below were observed during validation of unrelated MRs and have
-been confirmed to reproduce at the parent commit (no regression from the
-MR being validated). They are recorded here so future runs don't chase
-them as new failures; each block carries enough context to triage cheaply
-when the underlying issue is finally addressed.
+Each was re-confirmed by re-running the step in isolation on an idle host (so
+these are not load-induced flakes unless noted).
 
-### `extended_test_runner.py` — ~200 failures including `gql_pattern_matching_comprehensive` 0/35 (2026-05-07)
+| Step | Result | Root cause (verified) |
+|---|---|---|
+| `test-count-pushdown` | TIMEOUT (300 s, zero output) | **Genuine hang.** The test binary produces no output and never exits; reproduced twice (sweep + isolated 200 s re-run, exit 124). Needs a focused triage (likely a blocking wait in the count-pushdown executor path). |
+| `test-simple-merge-fastpath` | FAIL (10/11 tests pass) | **Real functional bug.** `test "bulkMergeNode apply_on_match updates existing node (true upsert)"` (`tests/bulk_ingest/test_simple_merge_fastpath.zig:476`) fails `expectEqualStrings("bob@example.com", email_prop.String)` — the bulk-MERGE apply-on-match path does not persist a *new* property introduced on the match update. Aligns with the documented bulk-MERGE limitation area (see CLAUDE.md → Full-text search bulk-MERGE). FLE key was set, so this is not the master-key path. |
+| `test-perf` | FAIL (10/11 tests pass) | **Perf gate, hardware-dependent.** The two-phase bulk-edge throughput test asserts a parallel speedup threshold; this host measured `speedup=1.07x–1.10x`, below the gate. Reproduces idle. Treat as a host-relative perf signal, not a correctness regression. |
+| `test-stream-pool-concurrent-lanes` | FAIL (2/3 tests pass) | `test "task31_edge: submit() — 8 tasks on 4-thread pool all complete"` (`tests/test_stream_pool_concurrent_lanes.zig:236`) fails `ctx.max_concurrent >= 2`. The scheduler completed tasks without ever observing ≥2 in-flight. Reproduces idle; concurrency-observation assertion is too strict for the platform scheduler or there is a real serialization. |
+| `test-perf-c-introspection-index` | FAIL (7/7 tests pass, **3 leaks**) | All assertions pass, but the FLE-keyed introspection-index path leaks 3 allocations (leak originates in `src/fle_integration.zig:469` `encryptFieldIfNeeded` → `key_manager.getFEK`). The leak alone trips the non-zero exit. |
+| `test-gpu` | FAIL (compile) | **Environmental.** No GPU/Vulkan shader toolchain on this host; the GPU test target fails to compile its shader/native pieces. Expected on non-GPU CI/dev hosts. |
+| `test-e2e` | FAIL (compile) | Pulls in benchmark + fuzz targets that have not been migrated to Zig 0.16: `tests/e2e_tde_encryption.zig` uses the removed `std.time.milliTimestamp`; `fuzz/targets/txn_sequence_fuzz.zig` / `decimal_roundtrip_fuzz.zig` use the old `testing.Smith` fuzz signature; `bench_federation_mismatch_*` / `bench_redo_optimization_delta` fail to compile. These are separate never-compiled paths, not e2e logic regressions. |
+| `test-cluster-3node-subprocess` | TIMEOUT (300 s) | Known: the 3-node subprocess cluster reliably stalls/crashes in the QUIC vendor library during multi-node bring-up (see project memory "A6f QUIC processShortHeader crash"). The in-process cluster steps (`test-cluster-3node-election`, `test-cluster-steady-state`, `test-cluster-bootstrap`, `test-cluster-identity`) PASS. |
+| `test-all` | TIMEOUT (300 s) | The `test-all` aggregate (unit + e2e) inherits the `test-e2e` compile failures and the `test-count-pushdown` hang, and also drives the blocked `graph_store_unit_tests` shard below. Not a distinct issue — it is the union of the rows above plus the shard note. |
 
-Running `python3 scripts/test/extended_test_runner.py` against the harness
-specs in `../geode-test-harness/geodetestlab-cli/specs/` produces ~200
-failures, dominated by a 0/35 wipeout in
-`gql_pattern_matching_comprehensive.yml`. Verified pre-existing by
-reverting all fix files for the active MR and re-running on the parent
-commit — same 0/35 reproduces.
+### Blocked: `graph_store_unit_tests` shard / monolithic `zig build test`
 
-**Status:** Pre-existing environmental drift in the in-tree Python
-runner, not the harness's `geodetestlab` CLI. The harness CLI runner
-(invoked via `make test-everything-otel` / `make geodetestlab-comprehensive`)
-remains green for these specs.
+`zig build test` aggregates ~60 test binaries via a sharded dependency graph.
+The `graph_store_unit_tests` shard (rooted at `src/graph_store.zig`)
+transitively imports `execution.zig → raft_consensus.zig → txn_coordinator.zig`
+and pulls those files' inline `test` blocks into the test root. Several of
+those paths never compiled under the test root and were therefore silently
+absent from `zig build test`. Commit `faac1f3e` repaired the mechanical ones
+(missing module imports on the test root; the removed `.noop` Message variant;
+the `std.Io.Dir`/`File` API; stale managed-`ArrayList` calls; the protobuf
+`.@"enum"` field form; `std.json.ObjectMap` unmanaged form).
 
-**Likely cause:** Setup / persistence / server-lifecycle handling has
-diverged between the two runners (`extended_test_runner.py` and
-`geodetestlab` CLI) since the harness was extracted to its own repo.
-`extended_test_runner.py` uses `test_runner_core.start_server` /
-`stop_server`; the geodetestlab CLI has its own server-manager path.
+**Residual blocker (library limitation):** the txn_coordinator 2PC tests
+protobuf-encode `distributed_schema.TwoPhaseOperation`, which is a Zig `union`.
+The pinned `protobuf` 0.1.3 (`zig-pkg/protobuf-0.1.3-…`) rejects a union as a
+submessage at comptime:
 
-**Re-baseline action (follow-up sprint):**
+```
+protobuf.zig:711  internal_init(comptime T: type, ...)  // requires @typeInfo(T) == .@"struct"
+protobuf.zig:713  @compileError("Invalid internal init type {s}", .{@typeName(T)})  // T = TwoPhaseOperation (union)
+wire.zig:704      error: expected type 'builtin.Type.StructField', found 'builtin.Type.UnionField'
+```
 
-1. Decide whether `extended_test_runner.py` is still authoritative or
-   should be deprecated in favour of the harness CLI for spec runs.
-2. If keeping it: re-baseline by aligning the runner's setup path with
-   the harness CLI (per-spec data dir, persistence reset between tests,
-   stdin handling — see `docs/TEST_RUNNER_FIXES_OCTOBER_2025.md` for the
-   parallel runner fix history).
-3. If deprecating: remove the runner and update CLAUDE.md /
-   `make`-target references that still point at it.
+This is the same protobuf "union-as-submessage" blocker tracked for the
+distributed cluster bring-up. Until the protobuf dependency gains union support
+(or `TwoPhaseOperation` is reshaped into a struct-with-oneof), the
+`graph_store_unit_tests` shard — and therefore the single monolithic
+`zig build test` invocation — cannot fully compile. The per-step sweep above is
+the canonical local baseline in the meantime; the graph_store logic itself is
+exercised by the many passing `test-graph-*`, `test-merge-*`, `test-perf-*`,
+`test-match-*`, and bulk-ingest steps.
 
-### Load-induced 30 s timeouts in `make test-everything-otel` runs (2026-05-07)
+### Reproduction
 
-Several specs intermittently fail with `Test timed out after 30000ms`
-when the harness is run under heavy concurrent load (other CI work
-happening on the host, or the harness running with `PARALLEL_WORKERS=1`
-back-to-back with shell + load-test phases):
+```bash
+export GEODE_MASTER_KEY='testmasterkey32chars-DO-NOT-USE-IN-PROD-12345678'
 
-- `gap_0193_priority_categories.yml :: metadata-relationship-types`
-  (`CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType LIMIT 10`)
-- `gap_153_154_password_security.yml :: gap-0154-user-create-with-explicit-password`
-  (`geode user create gap154test gap154@test.com --password SecurePass123!`)
-- `geode_migrations.yml :: check-index-usage` setup-0
-  (multi-statement `CREATE (:TestNode {id: 1}), ... ; CREATE INDEX IF NOT EXISTS ...`)
+# Production binary (must stay green):
+zig build
 
-**Status:** Confirmed flaky, not deterministic. Re-running each spec in
-isolation via `make test-spec SPEC=<file>.yml` produces 52/52, 19/19,
-and 30/30 PASS respectively. The `output` field of the failed test is empty, which
-is consistent with the geode subprocess still warming up (server
-startup, cache hydration, FLE bootstrap) when the per-test 30 s wall
-elapses.
+# Per-step baseline sweep (enumerate from build.zig, run each in isolation):
+grep -oE 'b\.step\("test-[^"]+"' build.zig | sed -E 's/b\.step\("//;s/"$//' \
+  | sort -u | while read -r step; do
+      timeout 300 zig build "$step" >/tmp/$step.log 2>&1
+      echo "$step rc=$?"
+    done
 
-**Likely cause:** The harness's `client.timeout_ms: 30000` is the same
-as the geode `server.startup_timeout_ms: 30000` for `cli.server.enabled:
-true` specs. Under CPU pressure, the server startup path can consume
-most of that budget, leaving the first per-test invocation insufficient
-runway. The cause is environmental, not a regression in the MR being
-validated.
+# Re-run a single failing/hanging step:
+zig build test-count-pushdown        # hangs (300 s, zero output)
+zig build test-simple-merge-fastpath # 10/11; apply_on_match upsert assertion
+```
 
-**Re-baseline action (follow-up sprint):**
+## geodetestlab Integration Suite — historical snapshot (requires a harness run)
 
-1. Decouple per-test timeouts from the cli server startup timeout for
-   `cli.server.enabled: true` specs — the test-level wall should start
-   when the server reports ready, not when the harness records the
-   spec start.
-2. Optionally bump `client.timeout_ms` to 60 s for these two specs
-   while the underlying timeout decoupling lands; revert once the
-   harness layer fix is in.
-3. Audit any spec that hits the wall by >50% of the test's isolated
-   duration — it's the same pattern under load.
+The full integration suite lives in `../geode-test-harness` and is **not**
+exercised by the local `zig build test-*` sweep above. It requires a dedicated
+harness run (`GEODE_BINARY=… make test`, ~25 min with 2 workers, 198 specs) or
+`make test-everything-otel`. No fresh harness run was captured for THIS
+baseline.
 
-## Recently Fixed — Concurrency
+**Last recorded harness numbers (historical, pre-2026-06-10):** ~97% pass rate,
+1644/1688 reported (≈46 intentionally skipped). Treat these as a stale snapshot
+until a harness run is recorded here with a date. To refresh:
 
-### `test-two-phase-edge-lock` :: "two-phase lock: 16 threads beat single-thread by >= 4x" ✅ FIXED (2026-04-27)
+```bash
+cd ../geode-test-harness
+GEODE_BINARY=/path/to/geode make test          # 198-spec integration suite
+# or, with span/metric capture for triage:
+make test-everything-otel GEODE_BINARY=/path/to/geode
+```
 
-- **Test**: `tests/bulk_ingest/test_two_phase_edge_lock.zig:207`
-- **Was**: `error.EdgeSlotMappingMissing` from `requireEdgeSlot`; `expected 800, found 434–663` under 16-thread contention
-- **Two-part fix landed in the same commit**:
-  1. `GraphStore.createEdgeWithGraphAndTenant` (`src/graph_store.zig:2975`) no longer swallows errors from `vt.createEdgeFn` — the silent `catch break :blk null` arms are now `try` / `return error.{Source,Target}NodeNotFound`.
-  2. `StorageAdapter.createEdge` (`src/storage/graph_storage_adapter.zig:2105`) only takes the per-shard `addEdgeTxn` fast path when `shardOfNode(from) == shardOfNode(to)`; cross-shard edges fall through to `ShardedGraphEngine.addEdge` → `crossShardAddEdge` (2PC) instead of the broken per-shard route.
-- **Verification**: 3/3 tests pass deterministically; 800/800 parallel edges; throughput within 1.5× of the single-thread baseline.
-- **Full bug report**: [docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md](bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md) (now marked RESOLVED).
+### Notes carried forward from earlier harness runs (verify before trusting)
 
-## Recently Fixed Issues
+These items were recorded against earlier harness runs and are kept for triage
+context. They are **not** reproduced by the 2026-06-10 local sweep above (that
+sweep does not run the harness). Re-confirm against a fresh harness run before
+acting:
 
-### WITH + Aggregation + WHERE ✅ FIXED (January 2026)
-
-- `with-aggregation`: WITH clause with aggregation and WHERE filter now works correctly
-- Test verified: `MATCH (n:Person) WITH n.age AS age, count(*) AS count WHERE count > 0 RETURN age, count`
-
-### CASE Expressions in MATCH ✅ FIXED (January 2026)
-
-- `case-when-then`, `case-with-default`: CASE expressions now work in MATCH context
-- Test verified: `MATCH (n:Person) RETURN n.name, CASE WHEN n.age < 30 THEN 'young' ELSE 'senior' END AS category`
-
-### DateTime Property Access ✅ FIXED (January 2026)
-
-- `datetime-operations`: DateTime property access now works
-- Test verified: `RETURN datetime('2024-01-15T14:30:00').year AS year, datetime('2024-01-15T14:30:00').month AS month`
-
-### List Functions head()/tail() ✅ FIXED (January 2026)
-
-- `list-functions`: head(), tail(), last() list functions now work correctly
-- Test verified: `WITH [1, 2, 3, 4, 5] AS list RETURN head(list) AS first, tail(list) AS rest, size(list) AS length`
-- Returns: `{"first":1,"rest":[2,3,4,5],"length":5}`
-
-### Regex Matching (=~) ✅ FIXED (January 2026)
-
-- `where-with-regex`: Regex matching with =~ operator now works
-- Test verified: `MATCH (n:Person) WHERE n.name =~ 'A.*' RETURN n.name`
-- Supports: anchors (^, $), wildcards (., .*), character classes ([...]), optional (?), escapes (\)
-
-### VALUES Clause ✅ FIXED (January 2026)
-
-- `values-list`, `values-with-match`: VALUES clause now fully implemented
-- Test verified: `VALUES (1), (2), (3), (4), (5) AS (number) RETURN number * 2 AS doubled`
-- Returns: `{"doubled":2},{"doubled":4},{"doubled":6},{"doubled":8},{"doubled":10}`
-
-### Setup Data Persistence ✅ FIXED (December 2025)
-
-The test harness was modified to ensure setup data persists across all tests within a spec file:
-
-- Persistence files are now cleared once at the start of each spec (before spec-level setup)
-- Setup data created in spec-level setup is now available to all tests within that spec
-- **34 tests re-enabled** across `nested_queries_basic.yml`, `nested_queries_advanced.yml`, and `recursive_and_cte.yml`
-
-## Categories of Skipped Tests
-
-### 1. Unimplemented Language Features
-
-The following features are skipped because they are not yet implemented:
-
-#### geode_regression_tests.yml (3 tests skipped)
-
-- `pattern-comprehension`: Pattern comprehension list syntax `[(p)-[:KNOWS]->(friend) | friend.name]` not implemented (Cypher extension, not ISO GQL)
-- `map-projection`: Map projection syntax `n {.name, .age}` not implemented (Cypher extension, not ISO GQL)
-- `path-node-update`: Variable-length path with SET not fully implemented
-
-### 2. Recursive CTEs (WITH RECURSIVE)
-
-Recursive Common Table Expressions **are supported** (GAP-0268 wired the
-fixpoint executor; GAP-0859 added real end-to-end coverage and fixed a dropped
-`WHERE` in the recursive term). The fixpoint evaluator runs the anchor, then
-re-runs the recursive term against only the previous iteration's NEW rows (the
-delta working set), accumulating each iteration's output into the final result
-until the working set is empty (or the iteration cap is hit).
-See [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) → "Common Table Expressions" for the
-verified forms and `tests/e2e_recursive_queries.zig` (`zig build
-test-recursive-cte`) for the regression suite.
-
-**Supported (verified):**
-
-- Simple `WITH name AS (...)` CTEs (body bound as a named list value).
-- Recursive `WITH RECURSIVE name AS (anchor UNION [ALL] recursive_term)` where
-  the recursive term self-references the working set via `UNWIND <name> AS x`.
-- `WHERE` in the recursive term bounds/terminates the recursion (transitive
-  closure, bounded depth).
-- `UNION ALL` (keep all) vs `UNION` (dedup, terminates revisiting cycles).
-- Cycle safety via a hard **100-iteration cap** (the
-  `RECURSIVE_CTE_MAX_ITERATIONS` constant in
-  `src/execution/query_execution.zig`) — cyclic `UNION ALL` recursion terminates
-  with a finite capped result, never hangs.
-
-**Residual limits:**
-
-- The recursive term operates on the working-set list (via `UNWIND`), not
-  directly on live `MATCH`-ed graph edges; model graph reachability by encoding
-  the successor relation in the recursive term. SQL-style `SEARCH`/`CYCLE`
-  clauses are not implemented.
-- For arbitrary-depth graph traversal, variable-length path patterns
-  (`MATCH (a)-[*1..10]->(b)`) or `MATCH SHORTEST` remain the idiomatic path.
-
-### 3. Remaining Test Failures (67 tests)
-
-The remaining failures are in these spec files:
-
-| Spec File | Failures | Notes |
-|-----------|----------|-------|
-| gql_expressions_comprehensive.yml | 15 | Expression evaluation edge cases |
-| geode_audit_logging_enterprise.yml | 11 | Audit logging features |
-| geode_advanced.yml | 10 | Advanced query features |
-| gql_pattern_matching_comprehensive.yml | 7 | Pattern matching edge cases |
-| gql_type_system_comprehensive.yml | 6 | Type system features |
-| geode_functions_comprehensive.yml | 5 | Function implementation gaps |
-| geode_quic_transport.yml | 3 | QUIC transport edge cases |
-| geode_recent_features.yml | 3 | Recently added features |
-| multi_graph.yml | 2 | Multi-graph operations |
-| geode_auth_security.yml | 2 | Authentication features |
-| geode_index_comprehensive.yml | 1 | Index operations |
-| geode_advanced_math_algorithms.yml | 1 | Math algorithm edge cases |
-| gql_catalog_operations_comprehensive.yml | 1 | Catalog operations |
-
-## Priority for Fixes
-
-### Completed ✅
-
-1. **WITH + aggregation + WHERE** - Fixed January 2026
-2. **CASE expressions in MATCH** - Fixed January 2026
-3. **DateTime property access** - Fixed January 2026
-4. **List functions (head/tail)** - Fixed January 2026
-5. **Regex matching (=~)** - Fixed January 2026
-6. **VALUES clause** - Fixed January 2026
-
-### Medium Priority (Remaining)
-
-1. **Recursive CTEs** - Complex feature, use workarounds documented above
-
-### Low Priority (Cypher extensions, not ISO GQL)
-
-1. Pattern comprehension (Cypher syntax)
-2. Map projection (Cypher syntax)
-
-## Notes
-
-- Tests marked with `skip: true` are intentionally skipped due to known limitations
-- The test infrastructure properly handles skipped tests and excludes them from failure counts
-- All skipped tests have comments explaining why they are skipped
+- **Skipped Cypher-extension features (not ISO GQL):** pattern comprehension
+  (`[(p)-[:KNOWS]->(f) | f.name]`) and map projection (`n {.name, .age}`) are
+  intentionally unimplemented (Cypher syntax, outside ISO/IEC 39075).
+- **Recursive CTEs are supported** (GAP-0268 / GAP-0859); the fixpoint executor
+  has a 100-iteration cycle cap. See [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) and
+  `zig build test-recursive-cte` (PASS in this baseline).
+- **`extended_test_runner.py` drift (2026-05-07):** the in-tree Python runner
+  reported ~200 spec failures (notably `gql_pattern_matching_comprehensive`
+  0/35) that the harness CLI runner did not. This was attributed to runner
+  setup/persistence drift, not geode behavior. The authoritative runner is the
+  harness CLI; the Python runner is a candidate for deprecation. Not reproduced
+  locally (the Python runner is not part of this baseline).
+- **Load-induced 30 s spec timeouts (2026-05-07):** a few specs intermittently
+  hit `Test timed out after 30000ms` under heavy concurrent host load; each
+  passed when re-run in isolation. Environmental, not a regression.
 
 ## Updating This Document
 
-When fixing a feature, update this document by:
+1. Re-run the per-step sweep (Reproduction above) at the current commit.
+2. Rewrite the "Canonical Local Baseline" table and the failures/hangs table
+   from THAT run — keep only issues that still reproduce, with file:line and the
+   exact assertion/error.
+3. For integration coverage, run the harness in `../geode-test-harness` and
+   record the dated numbers in the historical section.
 
-1. Removing the skip marker from the test
-2. Running `make geodetestlab-comprehensive` to verify the fix
-3. Removing the entry from this document
-
-*Last Updated: 2026-05-07*
+*Last rebaselined: 2026-06-10 (GAP-0860) from commit `faac1f3e`.*

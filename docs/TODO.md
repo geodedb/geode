@@ -1,9 +1,9 @@
 # TODO - Current Development Priorities
 
-> **Status**: Updated January 21, 2026 - **Documentation Refresh Complete**
-> **Test Coverage**: See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current status. Run `make geodetestlab-comprehensive` for latest results.
-> **Build Status**: ✅ Passes `make verify-all` with **0 compiler errors** - **393/393 Zig tests passing**
-> **CANARY Status**: 1,735 markers tracking 2,190+ requirements (81.4% TESTED)
+> **Status**: Local test baseline rebaselined 2026-06-10 (GAP-0860) from commit `faac1f3e`.
+> **Test Coverage**: [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) is the authoritative, evidence-backed baseline. Current local sweep: **166/175 named `zig build test-*` steps PASS** (6 FAIL, 3 TIMEOUT — all named with reproduction in KNOWN_TEST_ISSUES.md). `zig build` (production binary) compiles clean. The geodetestlab integration suite (`../geode-test-harness`) requires a separate harness run; the prior ~97% / 1644-1688 figures below are a stale historical snapshot pending a fresh harness run.
+> **Build Status**: ✅ `zig build` passes with 0 compiler errors. The monolithic `zig build test` is blocked by a protobuf 0.1.3 union-as-submessage limitation in the `graph_store_unit_tests` shard (see KNOWN_TEST_ISSUES.md → Blocked); use the per-step `test-*` sweep as the canonical local gate.
+> **CANARY Status**: see `docs/status.csv` / `make status-generate` for live counts.
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
 > **Security Status**: 🟢 **PRODUCTION READY** - Memory-safe user storage with proper deep-copy patterns
 > **GPU Status**: ✅ **Vulkan/CUDA headers properly configured** in NixOS environment
@@ -500,8 +500,8 @@ Complete documentation available in `./docs/`:
 
 ---
 
-*Last Updated: January 21, 2026*
-*Status: PRODUCTION READY - 97.4% test coverage, 100% GQL compliance, all major features complete, GPU build system integrated*
+*Last Updated: 2026-06-10 (test-status rebaseline, GAP-0860). The "97.4% / 1644-1688" figures throughout the phase-completion narrative below this header are a historical geodetestlab snapshot, NOT the current local baseline; see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the canonical 2026-06-10 per-step results (166/175 `test-*` PASS) and the geodetestlab harness-run requirement.*
+*Status: DEVELOPMENT READY (single-tenant). `zig build` clean; per-step local test gate is the canonical baseline (monolithic `zig build test` blocked by a protobuf union-submessage limitation — see KNOWN_TEST_ISSUES.md). 100% GQL compliance (70/70). See docs/GAP_ANALYSIS.md for open gaps.*
 
 ---
 
