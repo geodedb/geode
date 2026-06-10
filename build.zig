@@ -4864,6 +4864,7 @@ pub fn build(b: *std.Build) void {
     // PERF-C (issue #814): LSP introspection label/property/edge-type index.
     const perf_c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_c_lsp_introspection_index.zig"), .target = target, .optimize = optimize });
     perf_c_test_mod.addImport("geode", root_mod);
+    perf_c_test_mod.link_libc = true; // setenv/unsetenv shim for the GAP-0863b FLE leak regression
     const perf_c_tests = b.addTest(.{ .root_module = perf_c_test_mod });
     const run_perf_c_tests = b.addRunArtifact(perf_c_tests);
     shardDep(test_step, &run_perf_c_tests.step, 1, test_shard_loads, test_shard_index);
