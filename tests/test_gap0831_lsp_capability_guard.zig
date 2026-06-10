@@ -68,9 +68,8 @@ const non_method_capability_keys = [_][]const u8{
     "positionEncoding",
 };
 
-// GAP-0820 (and GAP-0821..0824 added in follow-on commits): capabilities
-// Geode's LSP server INTENTIONALLY does not advertise (the "honest non-support"
-// contract). Each is the inverse of the
+// GAP-0820..0824: capabilities Geode's LSP server INTENTIONALLY does not
+// advertise (the "honest non-support" contract). Each is the inverse of the
 // truthfulness guarantee this file enforces: GAP-0831 proves every advertised
 // capability has a handler; these prove the deliberately-unadvertised
 // capabilities are NOT advertised (so the unadvertised feature requests fall
@@ -90,6 +89,11 @@ const intentionally_unsupported_capabilities = [_]IntentionallyUnsupportedCapabi
     .{ .capability = "renameProvider", .gap = "GAP-0821" }, // rename/prepareRename
     .{ .capability = "codeActionProvider", .gap = "GAP-0822" }, // codeAction
     .{ .capability = "inlayHintProvider", .gap = "GAP-0823" }, // inlayHint
+    // GAP-0824: save lifecycle. textDocumentSync is advertised as a bare integer
+    // (Full sync) which cannot carry save/willSave members; these top-level keys
+    // are never present either.
+    .{ .capability = "willSave", .gap = "GAP-0824" },
+    .{ .capability = "willSaveWaitUntil", .gap = "GAP-0824" },
 };
 
 // `textDocumentSync` is a sync capability, not a request-handler capability:

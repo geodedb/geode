@@ -222,3 +222,45 @@ test "GAP-0823: inlayHint request -> -32601, inlayHintProvider absent" {
 
     try expectMethodNotFound(alloc, &srv, "textDocument/inlayHint", 50);
 }
+
+// ---------------------------------------------------------------------------
+// GAP-0824 — save lifecycle non-support contract
+// ---------------------------------------------------------------------------
+
+test "GAP-0824: textDocumentSync advertises no save support (bare integer)" {
+    const alloc = testing.allocator;
+    var caps = try server.buildCapabilitiesObject(alloc, .utf16);
+    defer server.deinitCapabilitiesObject(alloc, &caps);
+
+    // textDocumentSync is advertised as a BARE INTEGER (1 = Full sync). The
+    // verbose object form (TextDocumentSyncOptions) is the ONLY way to advertise
+    // `save` / `willSave` / `willSaveWaitUntil` support; a bare integer cannot
+    // carry those members, so by construction no save lifecycle is advertised.
+    const sync = caps.get("textDocumentSync") orelse return error.NoTextDocumentSync;
+    try testing.expect(sync == .integer);
+    try testing.expectEqual(@as(i64, 1), sync.integer);
+    // The save lifecycle is never exposed as a top-level capability either.
+    try testing.expect(caps.get("willSave") == null);
+    try testing.expect(caps.get("willSaveWaitUntil") == null);
+    try testing.expect(caps.get("save") == null);
+}
+
+test "GAP-0824: willSave + didSave notifications tolerated, willSaveWaitUntil request -> -32601" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newCapturingServer(alloc);
+    defer srv.deinit();
+
+    // willSaveWaitUntil is a REQUEST (it expects a TextEdit[] response). Since
+    // it is unadvertised it must be rejected with -32601, NOT left hanging.
+    try expectMethodNotFound(alloc, &srv, "textDocument/willSaveWaitUntil", 60);
+
+    // willSave + didSave are NOTIFICATIONS -> silently tolerated (no response,
+    // no crash, no error frame).
+    try expectNotificationSilentlyTolerated(alloc, &srv,
+        \\{"jsonrpc":"2.0","method":"textDocument/willSave","params":{"textDocument":{"uri":"file:///x.gql"},"reason":1}}
+    );
+    try expectNotificationSilentlyTolerated(alloc, &srv,
+        \\{"jsonrpc":"2.0","method":"textDocument/didSave","params":{"textDocument":{"uri":"file:///x.gql"}}}
+    );
+}
