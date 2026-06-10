@@ -82,6 +82,10 @@ pub const Methods = struct {
     pub const did_open = "textDocument/didOpen";
     pub const did_change = "textDocument/didChange";
     pub const did_close = "textDocument/didClose";
+    // GAP-0816: cancellation control notification (LSP 3.17 §3.17.10). Under
+    // the "$/" base-protocol namespace, so it is capability-exempt (see the
+    // guard's `$/`-prefix exemption). Never produces a response itself.
+    pub const cancel_request = "$/cancelRequest";
 };
 
 /// GAP-0831: uniform request-handler signature. Every request handler is wrapped
@@ -137,6 +141,10 @@ pub const notification_dispatch = [_]NotificationDispatchEntry{
     .{ .method = Methods.did_open, .handler = Server.handleDidOpen },
     .{ .method = Methods.did_change, .handler = Server.handleDidChange },
     .{ .method = Methods.did_close, .handler = Server.handleDidClose },
+    // GAP-0816: $/cancelRequest is a notification (no response of its own); it
+    // records the target id into the cancel registry, which handleRequest then
+    // consults at entry to short-circuit with -32800.
+    .{ .method = Methods.cancel_request, .handler = Server.handleCancelRequestEntry },
 };
 
 /// GAP-0831: the exact set of request methods `handleRequest` dispatches,
@@ -302,6 +310,132 @@ const DebounceState = struct {
     pending: bool,
 };
 
+/// GAP-0816: bounded registry of request ids the client has asked to cancel via
+/// the `$/cancelRequest` notification (LSP 3.17 §3.17.10). Geode's LSP server
+/// processes messages strictly synchronously one-at-a-time, so a cancel can
+/// never race an in-flight handler in-process. The spec-compliant, race-free
+/// realization is therefore a registry: `$/cancelRequest` records the id, and
+/// `handleRequest` consults the registry AT ENTRY — if the id is registered the
+/// request is answered immediately with JSON-RPC error -32800 (RequestCancelled)
+/// and the entry is consumed (cleared), so a later legitimate reuse of the same
+/// id is unaffected.
+///
+/// The registry is a fixed-capacity ring: cancelling more ids than `capacity`
+/// before any are consumed evicts the OLDEST pending cancellation (FIFO). This
+/// bounds memory against a hostile client that spams `$/cancelRequest` for ids
+/// it never sends — the worst case is a stale eviction, never unbounded growth.
+/// Ids are normalized to a compact key (sign-tagged integer text, or the raw
+/// string) so integer and string ids share one comparison path; structured ids
+/// are not valid JSON-RPC ids (see `idOrNull`) and are never recorded.
+///
+/// CANARY: REQ=REQ-LSP-CANCEL-001; FEATURE="CancelRequestRegistry"; ASPECT=BoundedRing; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+pub const CancelRegistry = struct {
+    /// Fixed ring capacity. 64 is far above the realistic count of
+    /// simultaneously-cancelled-but-not-yet-delivered request ids (the
+    /// synchronous loop drains each request before the next arrives) while
+    /// staying tiny. Eviction is FIFO once full.
+    pub const capacity = 64;
+    /// Max bytes we retain for any single normalized id key. JSON-RPC string
+    /// ids are client-chosen; we cap the stored key so a pathological id can't
+    /// bloat a slot. A longer id is truncated for storage AND lookup (both
+    /// sides go through `normalizeId`), so the cap is self-consistent: it can
+    /// only ever cause two ultra-long ids sharing a prefix to collide, which
+    /// at worst cancels a request the client also asked to cancel.
+    pub const max_key_len = 128;
+
+    const Slot = struct {
+        used: bool = false,
+        len: usize = 0,
+        buf: [max_key_len]u8 = undefined,
+
+        fn key(self: *const Slot) []const u8 {
+            return self.buf[0..self.len];
+        }
+    };
+
+    slots: [capacity]Slot = [_]Slot{.{}} ** capacity,
+    /// Next slot to overwrite when full (FIFO eviction cursor).
+    next: usize = 0,
+
+    /// Normalize a JSON-RPC id into a comparable byte key written into `out`.
+    /// Returns the populated slice, or null when the id is not a valid /
+    /// recordable id (structured ids were already rejected upstream, but we
+    /// fail-closed here too). Integer ids are rendered as decimal text with a
+    /// leading 'i'; string ids are stored verbatim with a leading 's' so an
+    /// integer id `1` never aliases the string id `"1"`. Float/null ids are
+    /// not used as cancellable request ids in practice but are handled for
+    /// completeness (tag 'f'/'n').
+    fn normalizeId(id: std.json.Value, out: *[max_key_len]u8) ?[]const u8 {
+        switch (id) {
+            .integer => |i| {
+                const s = std.fmt.bufPrint(out, "i{d}", .{i}) catch return null;
+                return s;
+            },
+            .string => |s| {
+                out[0] = 's';
+                const n = @min(s.len, max_key_len - 1);
+                @memcpy(out[1 .. 1 + n], s[0..n]);
+                return out[0 .. 1 + n];
+            },
+            .float => |f| {
+                const s = std.fmt.bufPrint(out, "f{d}", .{f}) catch return null;
+                return s;
+            },
+            .null => {
+                out[0] = 'n';
+                return out[0..1];
+            },
+            else => return null,
+        }
+    }
+
+    /// Record an id as cancelled. Idempotent: re-registering an already-present
+    /// id is a no-op (does not consume a second slot). FIFO-evicts the oldest
+    /// entry when full.
+    pub fn cancel(self: *CancelRegistry, id: std.json.Value) void {
+        var keybuf: [max_key_len]u8 = undefined;
+        const key = normalizeId(id, &keybuf) orelse return;
+
+        // Idempotency: already registered?
+        for (&self.slots) |*slot| {
+            if (slot.used and std.mem.eql(u8, slot.key(), key)) return;
+        }
+        // Find a free slot first; else FIFO-evict at `next`.
+        var target: ?*Slot = null;
+        for (&self.slots) |*slot| {
+            if (!slot.used) {
+                target = slot;
+                break;
+            }
+        }
+        const slot = target orelse blk: {
+            const s = &self.slots[self.next];
+            self.next = (self.next + 1) % capacity;
+            break :blk s;
+        };
+        slot.used = true;
+        slot.len = key.len;
+        @memcpy(slot.buf[0..key.len], key);
+    }
+
+    /// Consume a cancellation for `id`: returns true (and clears the entry) when
+    /// the id was registered, false otherwise. "Consume" semantics mean a
+    /// cancelled id triggers exactly one -32800 response; a subsequent request
+    /// reusing the same id is served normally.
+    pub fn consume(self: *CancelRegistry, id: std.json.Value) bool {
+        var keybuf: [max_key_len]u8 = undefined;
+        const key = normalizeId(id, &keybuf) orelse return false;
+        for (&self.slots) |*slot| {
+            if (slot.used and std.mem.eql(u8, slot.key(), key)) {
+                slot.used = false;
+                slot.len = 0;
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 /// F-01: portable monotonic-ish nanos (Zig 0.16 removed
 /// `std.time.nanoTimestamp`). Returns ns since some unspecified
 /// reference; only deltas are meaningful.
@@ -335,6 +469,12 @@ pub const Server = struct {
     /// (or would transmit) a diagnostic frame. Test-only field; does
     /// not affect production behavior.
     diagnostics_send_count_for_test: usize = 0,
+
+    /// GAP-0816: registry of request ids the client asked to cancel via
+    /// `$/cancelRequest`. Consulted at the top of `handleRequest`; a hit
+    /// short-circuits with JSON-RPC -32800 (RequestCancelled) and consumes the
+    /// entry. Inline value (no allocation) — bounded ring, see `CancelRegistry`.
+    cancel_registry: CancelRegistry = .{},
 
     // -------- Task 12: per-session auth + schema binding --------
     /// Verifier vtable the LSP server invokes during `initialize` to
@@ -715,6 +855,20 @@ pub const Server = struct {
     }
 
     fn handleRequest(self: *Server, method: []const u8, id: std.json.Value, params: ?std.json.Value) !void {
+        // GAP-0816: cancellation gate. Consulted BEFORE the auth gate and
+        // before dispatch so a request the client already asked to cancel
+        // (via a prior `$/cancelRequest` notification) is answered exactly
+        // once with JSON-RPC -32800 (RequestCancelled) and the registry entry
+        // is consumed. Because the server processes messages synchronously
+        // one-at-a-time, this is the spec-compliant realization of LSP 3.17
+        // §3.17.10: there is no in-flight handler to interrupt, so the cancel
+        // is observed at the next safe point — the request's own entry. An
+        // un-cancelled (or already-consumed) id falls straight through.
+        if (self.cancel_registry.consume(id)) {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.RequestCancelled), "request cancelled");
+            return;
+        }
+
         // Task 12 auth gate: every non-init/shutdown request must
         // come from a session whose AuthState.verify succeeded during
         // the `initialize` handshake. We respond with JSON-RPC -32002
@@ -780,6 +934,37 @@ pub const Server = struct {
     fn handleExitEntry(self: *Server, params: ?std.json.Value) anyerror!void {
         _ = params;
         self.shutdown_requested = true;
+    }
+
+    /// GAP-0816: `$/cancelRequest` notification handler. Records the target id
+    /// into the bounded cancel registry; `handleRequest` consults it at entry.
+    /// Per LSP 3.17 §3.17.10 the params are `{ "id": <number|string> }`. A
+    /// missing/malformed id (or a structurally-invalid id type) is a silent
+    /// no-op — a notification never produces a response, and cancelling an
+    /// unknown id must not error. Cancelling an id for a request that was
+    /// already completed (or never sent) is likewise harmless: the entry simply
+    /// lingers until consumed by a same-id request or FIFO-evicted.
+    ///
+    /// CANARY: REQ=REQ-LSP-CANCEL-001; FEATURE="CancelRequestRegistry"; ASPECT=NotificationHandler; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+    fn handleCancelRequestEntry(self: *Server, params: ?std.json.Value) anyerror!void {
+        const p = params orelse return;
+        if (p != .object) return;
+        const id_v = p.object.get("id") orelse return;
+        // Reuse the same id-validity gate the response path uses so an
+        // attacker-controlled structured id is never recorded.
+        const id = idOrNull(id_v) orelse return;
+        self.cancel_registry.cancel(id);
+    }
+
+    /// GAP-0816: test accessor — the most recent raw JSON-RPC frame written to
+    /// the transport when the Server was built with a capturing Noop transport
+    /// (`Transport.initNoop` + `NoopTransport.initCapturing`). Returns null for
+    /// non-capturing transports. Side-effect-free.
+    pub fn lastWrittenForTest(self: *const Server) ?[]const u8 {
+        return switch (self.transport) {
+            .noop => |*n| n.lastMessage(),
+            else => null,
+        };
     }
 
     /// Task 12: bind the per-session AuthState + SchemaProvider +

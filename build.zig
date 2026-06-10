@@ -5031,6 +5031,25 @@ pub fn build(b: *std.Build) void {
     const gap0831_step = b.step("test-gap0831", "GAP-0831: LSP capability/handler truthfulness guard (bidirectional)");
     gap0831_step.dependOn(&run_gap0831_tests.step);
 
+    // GAP-0816: LSP `$/cancelRequest` handling. Roots the regression file
+    // through a single module at server.zig (exposed as `lsp_server`) so the
+    // test reaches `Server.handleMessage`, `Server.CancelRegistry`, and the
+    // capturing Noop transport via `transport_mod`. Same module-diamond
+    // avoidance rationale as gap0831/gap0832.
+    const gap0816_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0816_server_mod.addImport("geode", root_mod);
+    gap0816_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0816_server_mod.link_libc = true;
+    const gap0816_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0816_lsp_cancel.zig"), .target = target, .optimize = optimize });
+    gap0816_test_mod.addImport("lsp_server", gap0816_server_mod);
+    gap0816_test_mod.addImport("geode", root_mod);
+    gap0816_test_mod.link_libc = true;
+    const gap0816_tests = b.addTest(.{ .root_module = gap0816_test_mod });
+    const run_gap0816_tests = b.addRunArtifact(gap0816_tests);
+    shardDep(test_step, &run_gap0816_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0816_step = b.step("test-gap0816", "GAP-0816: LSP $/cancelRequest handling with -32800 responses");
+    gap0816_step.dependOn(&run_gap0816_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.

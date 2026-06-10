@@ -108,6 +108,13 @@ pub const Transport = union(enum) {
         return .{ .noop = NoopTransport.init(allocator) };
     }
 
+    /// GAP-0816: Noop transport that records the most recent written frame so
+    /// a test can assert on the exact JSON-RPC response body the server emits
+    /// (e.g. a -32800 RequestCancelled error). `deinit` frees the buffer.
+    pub fn initNoopCapturing(allocator: Allocator) Transport {
+        return .{ .noop = NoopTransport.initCapturing(allocator) };
+    }
+
     pub fn deinit(self: *Transport) void {
         switch (self.*) {
             .stdio => |*s| if (@hasDecl(StdioTransport, "deinit")) s.deinit(),
@@ -326,21 +333,51 @@ pub const TcpTransport = struct {
 /// child blocks on stdin for instructions it can no longer parse).
 pub const NoopTransport = struct {
     allocator: Allocator,
+    /// GAP-0816: optional capture buffer for the last frame written. Off by
+    /// default (`init`) so the historical "drop on the floor" behavior is
+    /// unchanged for every existing caller. `initCapturing` turns it on so a
+    /// test can inspect the exact JSON-RPC response the server emitted
+    /// (e.g. assert a `$/cancelRequest`-cancelled request answers with
+    /// error code -32800). The buffer is owned by the transport and freed in
+    /// `deinit`; each `writeMessage` overwrites it with the newest frame.
+    capture: ?std.ArrayList(u8) = null,
 
     pub fn init(allocator: Allocator) NoopTransport {
         return .{ .allocator = allocator };
     }
 
-    pub fn deinit(_: *NoopTransport) void {}
+    /// GAP-0816: construct a Noop transport that records the most recent
+    /// written frame into `capture`, so tests can assert on response content
+    /// without a live socket. The recorded frame is the raw JSON-RPC body
+    /// (no Content-Length header — `writeMessage` receives the body only).
+    pub fn initCapturing(allocator: Allocator) NoopTransport {
+        return .{ .allocator = allocator, .capture = std.ArrayList(u8).empty };
+    }
+
+    pub fn deinit(self: *NoopTransport) void {
+        if (self.capture) |*buf| buf.deinit(self.allocator);
+    }
 
     pub fn readMessage(_: *NoopTransport) TransportError![]const u8 {
         return TransportError.EndOfStream;
     }
 
-    pub fn writeMessage(_: *NoopTransport, _: []const u8) TransportError!void {
-        // Drop the message on the floor. Tests that need to inspect
-        // the response should reach into Server state directly
-        // (see `server_auth_test.zig`'s post-condition asserts).
+    pub fn writeMessage(self: *NoopTransport, msg: []const u8) TransportError!void {
+        // Drop the message on the floor unless capture is enabled. Tests that
+        // need to inspect the response either reach into Server state directly
+        // (see `server_auth_test.zig`) or use `initCapturing` + `lastMessage`.
+        if (self.capture) |*buf| {
+            buf.clearRetainingCapacity();
+            buf.appendSlice(self.allocator, msg) catch return TransportError.WriteFailed;
+        }
+    }
+
+    /// GAP-0816: the most recent frame written, or null when capture is off
+    /// or nothing has been written yet. Borrows the transport's buffer.
+    pub fn lastMessage(self: *const NoopTransport) ?[]const u8 {
+        const buf = self.capture orelse return null;
+        if (buf.items.len == 0) return null;
+        return buf.items;
     }
 
     pub fn logMessage(_: *NoopTransport, _: []const u8, _: []const u8) void {

@@ -88,6 +88,9 @@ const exempt_notification_methods = [_][]const u8{
     "textDocument/didOpen",
     "textDocument/didChange",
     "textDocument/didClose",
+    // GAP-0816: $/cancelRequest is a base-protocol control notification under
+    // the "$/" namespace — never advertised via ServerCapabilities.
+    "$/cancelRequest",
 };
 
 // ---------------------------------------------------------------------------
@@ -271,7 +274,9 @@ test "GAP-0831: dispatch tables reference the Methods single-source constants" {
     }
 
     const expected_notifications = [_][]const u8{
-        M.initialized, M.exit, M.did_open, M.did_change, M.did_close,
+        M.initialized,    M.exit, M.did_open, M.did_change, M.did_close,
+        // GAP-0816: $/cancelRequest cancellation control notification.
+        M.cancel_request,
     };
     try testing.expectEqual(expected_notifications.len, server.handled_notification_methods.len);
     for (expected_notifications, 0..) |m, i| {
