@@ -1226,6 +1226,22 @@ const BufferedProtoReader = struct {
     }
 
     fn decodeBufferedMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
+        // REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME (2026-06-10): defensive framing
+        // guard. The diagnosed SIGSEGV was a GP fault in `std.mem.readInt` at the
+        // length-prefix read below, ultimately rooted in a use-after-free of the
+        // owning `FirstStreamOwnerContext` (a freed/torn reader). The lifetime fix
+        // removes the root cause; this guard turns any residual torn/corrupt
+        // reader (`start_index` advanced past the buffer, e.g. a partially-freed
+        // ArrayList observed mid-tear) into a loud, recoverable error instead of
+        // an out-of-bounds slice that GP-faults. Pinned by
+        // `first_stream_decode_buffered_framing_bounds_pin`.
+        if (self.start_index > self.buffer.items.len) {
+            log.err("decodeBufferedMessage: start_index past buffer end (torn/corrupt reader)", &.{
+                Attr.int("start_index", @intCast(self.start_index)),
+                Attr.int("buf_len", @intCast(self.buffer.items.len)),
+            });
+            return error.CorruptStreamFraming;
+        }
         const unread = self.buffer.items[self.start_index..];
         if (unread.len < 4) return null;
 
@@ -2619,28 +2635,50 @@ const FirstStreamOwnerContext = struct {
     pending_packet: ?schema.ClientPacket = null,
     post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    // ── TEST SEAM (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, 2026-06-10) ──────────
+    // ── LIFETIME REFCOUNT (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, 2026-06-10) ──
     //
     // Lifetime refcount mirroring the `StreamAcceptorContext` model (:1887).
-    // The struct starts with a single owner ref. The DIAGNOSED use-after-free
-    // is that `finishCooperativeContext` (:2920) frees this context via the
-    // detached `cleanupFirstStreamOwnerAsync` path WITHOUT any synchronization
-    // against (a) the detached-owner read loop touching `&ctx.reader`, or
-    // (b) the poll-thread RX-ready notifier `firstStreamReadyCallback` (:3329)
-    // which reads `ctx.cooperative_*` after a TOCTOU on `cooperative_done`.
+    // The struct starts with a single lifecycle ref. The DIAGNOSED use-after-free
+    // was that `finishCooperativeContext` freed this context via the detached
+    // `cleanupFirstStreamOwnerAsync` path WITHOUT any synchronization against
+    // (a) the detached-owner read loop touching `&ctx.reader`, or
+    // (b) the poll-thread RX-ready notifier `firstStreamReadyCallback` which
+    // reads `ctx.cooperative_*` after a TOCTOU on `cooperative_done`.
     //
-    // These decls are BEHAVIOR-NEUTRAL today: nothing in the production free
-    // path retains/releases them yet, so they have no effect on the current
-    // (buggy) lifecycle. They exist so:
-    //   1. the reproduction test in `tests/test_first_stream_owner_lifetime.zig`
-    //      (and the inline tests below) can drive the real free-vs-read race and
-    //      assert the post-fix contract, and
-    //   2. the fixer wires the real cleanup to honor `owner_refs` (free only at
-    //      the last release), turning the red tests green.
-    // The fixer should add `retainOwnerRef` calls at the notifier/read-loop
-    // entry points and replace the unconditional `gpa.destroy(ctx)` in
-    // `destroyFirstStreamOwnerResources` with a `releaseOwnerRef`-gated free.
+    // FIX: every thread that can touch the ctx holds a ref while it does so.
+    //   * The terminal teardown holds the initial lifecycle ref (=1).
+    //   * `submit` takes a second ref for the poll-thread notifier when it
+    //     installs the RX-ready callback (the cooperative path), released by
+    //     `cleanupFirstStreamOwner` only AFTER the lib notifier is cleared and
+    //     all in-flight callbacks have drained (`notifier_inflight == 0`).
+    // `destroyFirstStreamOwnerResources` runs the heavy teardown then frees the
+    // allocation behind `releaseOwnerRef` — the releaser that brings the count
+    // to zero performs `gpa.destroy(ctx)`. See the notifier-gate fields below.
     owner_refs: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+
+    // ── NOTIFIER QUIESCE GATE ────────────────────────────────────────────────
+    //
+    // The vendored QUIC lib fires `firstStreamReadyCallback` from the poll
+    // thread inside `pushStreamFrame`'s defer, AFTER releasing `Connection.mu`
+    // and with NO lock geode can take to mutually exclude an in-flight callback
+    // (quic-0.1.21 conn.zig:1918-1922 / methods_a.zig:801-817). It also offers no
+    // quiesce primitive: `clearReadReadyNotifier` only nulls the fn pointer, so a
+    // poll thread that already captured a non-null fn can still invoke us once.
+    //
+    // `notifier_inflight` brackets every callback body (inc at entry / dec at
+    // exit). `cleanupFirstStreamOwner` sets `cooperative_done`, clears the lib
+    // notifier, then spins until `notifier_inflight == 0` so no ENTERED callback
+    // is mid-deref before it drops the notifier ref. The notifier ref itself
+    // keeps the allocation alive across the whole window, so even the narrow
+    // lib capture→entry gap dereferences live memory (the ref is not the LAST
+    // ref until the lifecycle teardown releases too, which happens strictly
+    // after the quiesce + `destroyConnection`, by which point the lib has been
+    // told to stop and the entered callbacks have drained).
+    notifier_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// True once `submit` installed the lib notifier and took the notifier ref.
+    /// Guards `cleanupFirstStreamOwner` so it releases that ref exactly once
+    /// (and only when it was actually taken — non-cooperative paths never arm).
+    notifier_armed: bool = false,
 
     /// Test-only barrier checked by `cleanupFirstStreamOwnerAsync` immediately
     /// before it runs the free path. When set, the detached cleanup blocks here
@@ -2664,6 +2702,28 @@ const FirstStreamOwnerContext = struct {
         const prev = self.owner_refs.fetchSub(1, .acq_rel);
         std.debug.assert(prev > 0);
         return prev == 1;
+    }
+
+    /// Mark a notifier callback as in-flight. Called as the FIRST action of
+    /// `firstStreamReadyCallback`, before any other field access, so the
+    /// quiesce spin in `cleanupFirstStreamOwner` can observe the callback.
+    pub fn enterNotifier(self: *FirstStreamOwnerContext) void {
+        _ = self.notifier_inflight.fetchAdd(1, .acq_rel);
+    }
+
+    /// Mark a notifier callback as finished. Paired with `enterNotifier`.
+    pub fn exitNotifier(self: *FirstStreamOwnerContext) void {
+        const prev = self.notifier_inflight.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+    }
+
+    /// Bounded spin until no notifier callback is mid-flight. Called by the
+    /// teardown AFTER the lib notifier has been cleared, so no NEW callback can
+    /// be dispatched once this returns 0. Yields rather than busy-spins.
+    pub fn waitNotifierDrained(self: *FirstStreamOwnerContext) void {
+        while (self.notifier_inflight.load(.acquire) != 0) {
+            std.Thread.yield() catch {};
+        }
     }
 };
 
@@ -2730,9 +2790,28 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
         ctx.detached_first_stream_acquired = false;
     }
     if (ctx.cooperative_scheduler != null) {
+        // Quiesce the poll-thread RX-ready notifier before releasing its ref
+        // (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME). Order matters:
+        //   1. publish `cooperative_done` (TOCTOU flag a live callback reads),
+        //   2. clear the lib notifier so NO NEW callback is dispatched,
+        //   3. drain any callback already in-flight (`notifier_inflight -> 0`),
+        //   4. drop the notifier ref taken in `submit`.
+        // The notifier ref (still held through 1-3) keeps the allocation alive
+        // for the whole window, so an in-flight callback never derefs freed
+        // memory. After step 4 only the lifecycle ref remains (held by THIS
+        // thread, which proceeds to the gated teardown), so no other thread can
+        // free the ctx concurrently.
         ctx.cooperative_done.store(true, .release);
         ctx.stream.clearReadReadyNotifier();
         ctx.cooperative_scheduler = null;
+        ctx.waitNotifierDrained();
+        if (ctx.notifier_armed) {
+            ctx.notifier_armed = false;
+            // Not the last ref: the lifecycle ref is still held here. Asserted
+            // by the contract that `submit` took exactly one extra ref.
+            const was_last = ctx.releaseOwnerRef();
+            std.debug.assert(!was_last);
+        }
     }
     if (ctx.stream_throttle_acquired) {
         g_stream_throttle.release();
@@ -2780,7 +2859,18 @@ fn destroyFirstStreamOwnerResources(ctx: *FirstStreamOwnerContext) void {
     deinitQuicServerState(gpa, &ctx.state, "first stream close");
     ctx.transport.destroyConnection(ctx.conn);
     if (ctx.peer_ip_allocated) gpa.free(ctx.peer_ip);
-    gpa.destroy(ctx);
+
+    // REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME: free behind the lifetime refcount.
+    // By the time this runs, `cleanupFirstStreamOwner` has already cleared +
+    // drained the notifier and released the notifier ref, so the only ref left
+    // is the lifecycle ref owned by THIS thread — `releaseOwnerRef` returns true
+    // and this is the single, exactly-once free. The refcount gate is the
+    // defensive invariant (mirrors `StreamAcceptorContext.release`): if any path
+    // ever held an outstanding ref, the last releaser — not necessarily this
+    // thread — performs the destroy.
+    if (ctx.releaseOwnerRef()) {
+        gpa.destroy(ctx);
+    }
 }
 
 /// Reaper callback: runs `destroyFirstStreamOwnerResources` once the acceptor
@@ -2997,7 +3087,21 @@ pub const FirstStreamScheduler = struct {
         self.workers = &.{};
     }
 
-    pub fn submit(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) !void {
+    /// Publish a first-stream owner to the cooperative scheduler.
+    ///
+    /// CONTRACT (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, 2026-06-10): on success
+    /// the scheduler OWNS the ctx — the caller MUST NOT dereference `ctx` again,
+    /// because a worker can finish and free it the instant `enqueueReady`
+    /// publishes it (and the poll-thread notifier becomes live the instant
+    /// `setReadReadyNotifier` is installed). The previous caller deref of
+    /// `first_ctx.cooperative_scheduler` after `submit` returned was a
+    /// use-after-free. Callers now branch on the returned bool instead.
+    ///
+    /// Returns `true` if the owner was scheduled (scheduler owns it); `false`
+    /// only on a registration/enqueue failure, in which case the ctx is NOT
+    /// owned by the scheduler, the notifier ref has been released, and the
+    /// caller must run the fallback path with the still-valid ctx.
+    pub fn submit(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) bool {
         registerFirstStreamReader(ctx);
         ctx.cooperative_scheduler = self;
         ctx.cooperative_done.store(false, .release);
@@ -3010,17 +3114,41 @@ pub const FirstStreamScheduler = struct {
         ctx.cooperative_mutation_wait_class.store(@intFromEnum(CooperativeMutationAdmissionClass.none), .release);
         ctx.pending_packet = null;
 
+        // Take the notifier ref BEFORE installing the lib callback so the
+        // allocation is kept alive for the entire window the poll thread can
+        // fire `firstStreamReadyCallback`. Released by `cleanupFirstStreamOwner`
+        // after the notifier is cleared + drained. owner_refs: 1 -> 2.
+        ctx.retainOwnerRef();
+        ctx.notifier_armed = true;
+
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
-        try self.contexts.append(self.allocator, ctx);
+        self.contexts.append(self.allocator, ctx) catch {
+            self.mutex.unlock(io);
+            // Roll back: not scheduled. Drop the notifier ref we just took and
+            // disarm so the caller's fallback teardown does not double-release.
+            ctx.notifier_armed = false;
+            ctx.cooperative_scheduler = null;
+            _ = ctx.releaseOwnerRef(); // 2 -> 1; caller still holds lifecycle ref
+            return false;
+        };
         _ = self.context_count.fetchAdd(1, .acq_rel);
         self.mutex.unlock(io);
 
         ctx.stream.setReadReadyNotifier(@ptrCast(ctx), firstStreamReadyCallback);
         // Prime the owner once so data that arrived between HELLO completion
         // and callback installation is observed without waiting for another
-        // STREAM frame.
-        try self.enqueueReady(ctx);
+        // STREAM frame. enqueueReady never fails fatally for the lifetime of a
+        // live scheduler (append OOM only), and even on its internal error path
+        // the ctx is already owned + the notifier installed, so we keep
+        // ownership and let the notifier/idle-sweep re-arm it. DO NOT touch
+        // `ctx` after this point — a worker may already be freeing it.
+        self.enqueueReady(ctx) catch |err| {
+            log.warn("Failed to prime cooperative first-stream owner; relying on notifier", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        return true;
     }
 
     fn workerMain(self: *FirstStreamScheduler) void {
@@ -3438,6 +3566,18 @@ pub fn setFirstStreamScheduler(scheduler: ?*FirstStreamScheduler) void {
 
 fn firstStreamReadyCallback(ctx_ptr: *anyopaque, _: *quic_transport.QuicInnerConnection) void {
     const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(ctx_ptr));
+    // Notifier quiesce gate (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME). The poll
+    // thread can invoke this lock-free after the lib released `Connection.mu`.
+    // Bracket the whole body with the in-flight counter so the teardown's
+    // `waitNotifierDrained` (run AFTER `clearReadReadyNotifier`) blocks until
+    // any entered callback has finished touching the ctx, before the notifier
+    // ref is released. The notifier ref keeps this allocation alive across the
+    // call, so every field access below is on live memory.
+    ctx.enterNotifier();
+    defer ctx.exitNotifier();
+    // TOCTOU flag: a torn-down owner sets this before clearing the lib notifier.
+    // Read it INSIDE the gate so a concurrent teardown cannot have freed the
+    // allocation underneath this read.
     if (ctx.cooperative_done.load(.acquire)) return;
     if (ctx.cooperative_running.load(.acquire)) {
         ctx.cooperative_needs_reschedule.store(true, .release);
@@ -4377,14 +4517,15 @@ pub fn handleQuicConnection(
     // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     if (!env_config.quic_stream_multiplexing_enabled and env_config.quic_cooperative_first_streams_enabled) {
         if (g_first_stream_scheduler) |scheduler| {
-            scheduler.submit(first_ctx) catch |err| {
-                log.warn("Failed to schedule cooperative first-stream owner, falling back to detached owner", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-            if (first_ctx.cooperative_scheduler != null) {
+            // CONTRACT (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME): branch on the
+            // returned bool, NOT on a post-submit deref of `first_ctx` — once
+            // `submit` returns true the scheduler owns the ctx and a worker may
+            // already have freed it. Reading `first_ctx.cooperative_scheduler`
+            // here was the publish-before-return use-after-free.
+            if (scheduler.submit(first_ctx)) {
                 return;
             }
+            log.warn("Failed to schedule cooperative first-stream owner, falling back to detached owner", &.{});
         }
     }
 
@@ -7496,20 +7637,26 @@ test "acceptor bail deadline: env parse defaults, clamps, and stays short" {
 // CANARY: REQ=REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME; FEATURE="QuicTransport"; ASPECT=FirstStreamOwnerLifetime; STATUS=TESTED; TEST=tests/test_first_stream_owner_lifetime.zig; OWNER=server; UPDATED=2026-06-10
 //
 // Diagnosed SIGSEGV (GP fault) in std.mem.readInt at decodeBufferedMessage
-// (:1233, inlined into nextMessage) under concurrent load. Root cause: a
-// `FirstStreamOwnerContext` is freed by the detached cleanup path
+// (inlined into nextMessage) under concurrent load. Root cause: a
+// `FirstStreamOwnerContext` was freed by the detached cleanup path
 // (`finishCooperativeContext` -> `cleanupFirstStreamOwnerAsync` ->
 // `destroyFirstStreamOwnerResources` -> `gpa.destroy(ctx)`) while the
 // poll-thread RX-ready notifier `firstStreamReadyCallback` and the detached
-// read loop still reference the SAME allocation. There is no refcount/quiesce
-// gating the free today (unlike the heap-refcounted `StreamAcceptorContext`).
+// read loop still referenced the SAME allocation.
 //
-// These tests are RED pre-fix and GREEN post-fix. They run under
+// FIX (2026-06-10): `owner_refs` lifetime refcount + the notifier quiesce gate
+// (`notifier_inflight` / `waitNotifierDrained`), mirroring the heap-refcounted
+// `StreamAcceptorContext`. `submit` takes a notifier ref; `cleanupFirstStreamOwner`
+// clears + drains the notifier before releasing it; `destroyFirstStreamOwnerResources`
+// frees behind `releaseOwnerRef` (last release destroys). The `submit` contract
+// also changed so the caller never derefs the ctx after publication.
+//
+// These tests were RED pre-fix and are GREEN post-fix. They run under
 // std.testing.allocator, whose UAF/double-free/leak detection is the oracle.
-// The build step `test-first-stream-owner-lifetime` roots src/main.zig and
-// filters to these test names + the matching ones in
-// tests/test_first_stream_owner_lifetime.zig. NOT wired into the sharded
-// `zig build test` aggregate yet — it is intentionally red until the fix lands.
+// The build step `test-first-stream-owner-lifetime` roots the full server
+// module and filters to these test names + the matching ones in
+// tests/test_first_stream_owner_lifetime.zig, and IS now wired into the sharded
+// `zig build test` aggregate.
 
 // Serialize the few tests that toggle the process-global cleanup barrier so
 // they don't race each other within the test binary. Zig 0.16 retired
@@ -7576,6 +7723,12 @@ test "first_stream_owner_notifier_vs_async_free_regression" {
     // POST-FIX (fixer swaps these two `destroyOwnerUnsynchronized()` calls for
     // `if (destroyOwnerGated()) _ = free_count.fetchAdd(1, .acq_rel)`): the
     // refcount makes exactly one release the last -> a single free. GREEN.
+    // CONTRACT CHANGE (fix landed): both sides now call `destroyOwnerGated()`,
+    // the refcount-gated free the production teardown adopted
+    // (`destroyFirstStreamOwnerResources` -> `releaseOwnerRef`-gated
+    // `gpa.destroy`). Only the release that brings `owner_refs` to zero frees,
+    // so exactly one of the two releases (reader vs. cleanup) performs the
+    // single `gpa.destroy(ctx)`. `free_count == 1`. GREEN.
     const Reader = struct {
         h: *FirstStreamLifetimeTestHarness,
         gate: *FirstStreamTestGate,
@@ -7583,8 +7736,7 @@ test "first_stream_owner_notifier_vs_async_free_regression" {
         fn run(self: *@This()) void {
             self.h.fireReadyNotifier(); // REAL notifier access while ref held
             self.gate.wait(); // overlap with the cleanup free on every run
-            self.h.destroyOwnerUnsynchronized(); // PRE-FIX: uncoordinated free
-            _ = self.free_count.fetchAdd(1, .acq_rel);
+            if (self.h.destroyOwnerGated()) _ = self.free_count.fetchAdd(1, .acq_rel);
         }
     };
 
@@ -7592,10 +7744,9 @@ test "first_stream_owner_notifier_vs_async_free_regression" {
     var reader = Reader{ .h = &harness, .gate = &gate, .free_count = &free_count };
     const t = try std.Thread.spawn(.{}, Reader.run, .{&reader});
 
-    // Cleanup side: TODAY's unconditional production free, then release the gate
-    // so the reader's free overlaps. Pre-fix BOTH free the same allocation.
-    harness.destroyOwnerUnsynchronized();
-    _ = free_count.fetchAdd(1, .acq_rel);
+    // Cleanup side: the gated production free, then release the gate so the
+    // reader's release overlaps. Exactly one of the two releases is the last.
+    if (harness.destroyOwnerGated()) _ = free_count.fetchAdd(1, .acq_rel);
     gate.set();
     t.join();
 
@@ -7640,15 +7791,15 @@ test "first_stream_owner_submit_publish_before_return_regression" {
     var free_count = std.atomic.Value(u32).init(0);
 
     // Worker side: the scheduler has published this ctx; the worker finishes it
-    // and runs the async cleanup. Today that free is unconditional.
+    // and runs the async cleanup. CONTRACT CHANGE (fix landed): the free is now
+    // refcount-gated, so the worker's release only frees if it is the last.
     const Worker = struct {
         h: *FirstStreamLifetimeTestHarness,
         gate: *FirstStreamTestGate,
         free_count: *std.atomic.Value(u32),
         fn run(self: *@This()) void {
             self.gate.wait(); // overlap with the caller's post-submit read
-            self.h.destroyOwnerUnsynchronized(); // PRE-FIX: worker async free
-            _ = self.free_count.fetchAdd(1, .acq_rel);
+            if (self.h.destroyOwnerGated()) _ = self.free_count.fetchAdd(1, .acq_rel);
         }
     };
 
@@ -7656,14 +7807,14 @@ test "first_stream_owner_submit_publish_before_return_regression" {
     var worker = Worker{ .h = &harness, .gate = &gate, .free_count = &free_count };
     const t = try std.Thread.spawn(.{}, Worker.run, .{&worker});
 
-    // Caller side (handleQuicConnection post-submit): read cooperative_scheduler
-    // then run its own teardown. This is the dereference at :4171 that the bug
-    // can perform on freed memory. We touch the field to mirror the real read.
+    // Caller side (handleQuicConnection post-submit). The production fix removed
+    // the post-submit `first_ctx.cooperative_scheduler` deref entirely — the
+    // caller now branches on `submit`'s returned bool and never touches the ctx
+    // after publication. The caller holds its own ref across this window (the
+    // `retainOwnerRef` above) and releases it gated; exactly one of the two
+    // gated releases frees.
     gate.set();
-    const sched = harness.ctx.cooperative_scheduler; // :4171 read (pre-fix: may be freed)
-    std.mem.doNotOptimizeAway(sched);
-    harness.destroyOwnerUnsynchronized(); // PRE-FIX: caller's own free
-    _ = free_count.fetchAdd(1, .acq_rel);
+    if (harness.destroyOwnerGated()) _ = free_count.fetchAdd(1, .acq_rel);
     t.join();
 
     // Exactly one free is the contract. Pre-fix: 2 (RED, double free).

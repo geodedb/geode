@@ -5624,8 +5624,9 @@ pub fn build(b: *std.Build) void {
     // test plan + CANARY and a geode-reachable supporting assertion; the
     // deterministic-red repro lives inline and runs through this filtered step.
     //
-    // INTENTIONALLY RED until the lifetime fix lands — NOT wired into the
-    // sharded `zig build test` aggregate yet. The fixer re-adds it once green.
+    // 2026-06-10: the lifetime fix landed (refcount-gated free + notifier
+    // quiesce gate), so this is now GREEN and wired into the sharded
+    // `zig build test` aggregate via the `shardDep` calls below.
     //
     // We build a FRESH test module rooted at the same source as the executable
     // (src/unified_entry.zig) and copy the executable module's fully-wired
@@ -5657,8 +5658,14 @@ pub fn build(b: *std.Build) void {
         .filters = &.{ "first_stream_owner_", "first_stream_decode_" },
     });
     const run_first_stream_lifetime_tests = b.addRunArtifact(first_stream_lifetime_tests);
-    const first_stream_lifetime_step = b.step("test-first-stream-owner-lifetime", "Run FirstStreamOwnerContext use-after-free reproduction (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, RED until fix)");
+    const first_stream_lifetime_step = b.step("test-first-stream-owner-lifetime", "Run FirstStreamOwnerContext use-after-free regression (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME)");
     first_stream_lifetime_step.dependOn(&run_first_stream_lifetime_tests.step);
+    // 2026-06-10: the lifetime fix landed (refcount-gated FirstStreamOwnerContext
+    // free + notifier quiesce gate), so the step is now GREEN and wired into the
+    // sharded `zig build test` aggregate. Weight 8 mirrors the other
+    // `geode_exe`-rooted test artifacts (exe unit tests) since this compiles the
+    // full server module in TEST mode.
+    shardDep(test_step, &run_first_stream_lifetime_tests.step, 8, test_shard_loads, test_shard_index);
 
     // geode-reachable supporting suite for the same REQ (framing-pin lives here;
     // imports only the public `geode` surface).
@@ -5667,6 +5674,7 @@ pub fn build(b: *std.Build) void {
     const first_stream_lifetime_doc_tests = b.addTest(.{ .root_module = first_stream_lifetime_doc_mod });
     const run_first_stream_lifetime_doc_tests = b.addRunArtifact(first_stream_lifetime_doc_tests);
     first_stream_lifetime_step.dependOn(&run_first_stream_lifetime_doc_tests.step);
+    shardDep(test_step, &run_first_stream_lifetime_doc_tests.step, 1, test_shard_loads, test_shard_index);
 
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
