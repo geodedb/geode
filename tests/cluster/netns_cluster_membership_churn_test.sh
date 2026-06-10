@@ -23,6 +23,15 @@
 #   M2 follower new-IP    -> a follower restarted on a NEW IP rejoins + replicates.
 #   M3 leader  new-IP     -> a leader restarted on a NEW IP -> single new leader
 #                            re-elects within the election budget + replicates.
+#   M4 in-place restart   -> a node restarted in place (PVC preserved) re-applies
+#                            the committed log and must NOT duplicate a plain
+#                            node CREATE (root cause #6).
+#   M5 edge  restart-dup  -> ditto for a replicated edge CREATE: node + edge
+#                            counts stay 1 after the durable-log re-apply.
+#   M6 delete restart-dup -> a DETACH-DELETEd row must NOT resurrect from the log
+#                            re-apply (count stays 0 everywhere).
+#   M7 merge/SET restart  -> a MERGE'd row stays EXACTLY 1 (no double-apply) and a
+#                            replicated MATCH...SET property survives the re-apply.
 #
 # Same faithful topology as netns_cluster_replication_test.sh: 3 nodes, each in
 # its own netns with a distinct routable IP on a bridge, WILDCARD cluster bind
@@ -45,7 +54,7 @@ SUBNET="${NETNS_TEST_SUBNET:-10.90.0}"
 BR=gchurnbr0
 NS_NODES="1 2 3"
 NS_ALL="1 2 3 53"
-PHASES="${PHASES:-M1 M2 M3 M4}"
+PHASES="${PHASES:-M1 M2 M3 M4 M5 M6 M7}"
 # Node IPs start at $SUBNET.1<id> (.11/.12/.13); a reschedule moves a node to
 # $SUBNET.2<id> (.21/.22/.23). DNS is $SUBNET.153, bridge gw is $SUBNET.1.
 ns_ip() { echo "$SUBNET.1$1"; }      # original pod IP for node $1
@@ -205,6 +214,11 @@ laststate() { grep -aoE "\[raft\] node $1 state=[a-z]+ term=[0-9]+" "$WORK/node$
 termof() { laststate "$1" | grep -aoE 'term=[0-9]+' | grep -aoE '[0-9]+'; }
 roleof() { laststate "$1" | grep -aoE 'state=[a-z]+' | sed 's/state=//'; }
 cnt() { q "$1" "MATCH (n:$2) RETURN count(n) AS c" 12 | grep -aoE '"c":[0-9]+' | grep -aoE '[0-9]+' | tail -1; }
+# Generic count: run an ARBITRARY query on node $1 that projects a single integer
+# column aliased `AS c` (e.g. an edge count `MATCH ()-[r:T]->() RETURN count(r) AS c`
+# or a predicated node count `MATCH (n:L) WHERE n.v = 42 RETURN count(n) AS c`) and
+# echo the integer. Shares cnt()'s `"c":N` parse (verified shape: {"c":1}).
+cntq() { q "$1" "$2" 12 | grep -aoE '"c":[0-9]+' | grep -aoE '[0-9]+' | tail -1; }
 leaderof() { local id; for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] && laststate $id | grep -q state=leader && { echo $id; return; }; done; }
 
 # wait until node $1 reports state=$2 (any term) within $3 seconds
@@ -213,6 +227,9 @@ wait_state() { local id=$1 want=$2 to=${3:-30} t; for t in $(seq 1 "$to"); do [ 
 wait_leader() { local to=${1:-30} t lid; for t in $(seq 1 "$to"); do lid=$(leaderof); [ -n "$lid" ] && { echo "$lid"; return 0; }; sleep 1; done; return 1; }
 # poll node $1 for label $2 count==1 within $3 seconds
 wait_cnt1() { local id=$1 lbl=$2 to=${3:-30} t c; for t in $(seq 1 "$to"); do c=$(cnt $id $lbl); [ "$c" = "1" ] && return 0; sleep 1; done; return 1; }
+# poll node $1 until ARBITRARY count-query $2 == expected $3 within $4 seconds
+# (the cntq analog of wait_cnt1: used for edge counts and predicated counts).
+wait_cntq() { local id=$1 query=$2 want=$3 to=${4:-30} t c; for t in $(seq 1 "$to"); do c=$(cntq "$id" "$query"); [ "$c" = "$want" ] && return 0; sleep 1; done; return 1; }
 
 # ---- root cause #6: restart re-apply must NOT duplicate the replicated row ----
 # docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md root
@@ -241,6 +258,32 @@ assert_no_duplicate() {
     done
   done
   [ "$bad" = "0" ] && echo "  PASS no-dup: $lbl count is EXACTLY 1 on all 3 nodes after restart (no re-apply duplicate)"
+}
+
+# Generic restart-idempotency assertion for the NEW replicable mutation types
+# (edge create / DETACH DELETE / MERGE / MATCH...SET). Like assert_no_duplicate
+# but for an ARBITRARY count-query and an arbitrary expected value: asserts the
+# count is EXACTLY $want on EVERY node AND holds steady at $want (never drifts)
+# across several consecutive samples — so a durable-log re-apply that duplicates
+# an edge (want 1 -> 2), resurrects a deleted row (want 0 -> 1), double-applies a
+# MERGE (want 1 -> 2), or loses a replicated SET (predicate want 1 -> 0) is caught.
+#   $1 = phase/probe tag (for the PASS/FAIL line)
+#   $2 = count-query (projects a single integer `AS c`)
+#   $3 = expected steady value
+#   $4 = human description of what is being counted (for the PASS/FAIL line)
+assert_count_steady() {
+  local tag=$1 query=$2 want=$3 desc=$4 id c t bad=0
+  for id in $NS_NODES; do
+    for t in $(seq 1 6); do
+      c=$(cntq "$id" "$query")
+      if [ "$c" != "$want" ]; then
+        fail "$tag node$id has $desc=$c (expected EXACTLY $want) after restart re-applied the committed log — durable-log re-apply corrupted the replicated mutation"
+        bad=1; break
+      fi
+      sleep 1
+    done
+  done
+  [ "$bad" = "0" ] && echo "  PASS $tag: $desc is EXACTLY $want on all 3 nodes after restart (no re-apply corruption)"
 }
 
 # Fully terminate node $1 and WAIT until its process has actually exited, so its
@@ -478,6 +521,130 @@ if run_phase M4; then
     fi
   fi
   echo "  M4 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
+fi
+
+# =============================================================================
+# M5: in-place restart must NOT duplicate a replicated EDGE CREATE.
+#   Slice A made `CREATE (a)-[:T]->(b)` replicable through raft (commit c612711c)
+#   with stable-id / raft-index-keyed idempotent apply. M4 proves a plain node
+#   CREATE survives an in-place restart's durable-log re-apply without dup; this
+#   proves the SAME for the edge path: the two endpoint nodes AND the edge must
+#   each stay EXACTLY 1 after a follower re-applies the committed log on top of
+#   its persisted store. An unfixed edge-apply (fresh ids / re-inserted edge) would
+#   surface here as node count 2 or edge count 2 on the restarted follower.
+# =============================================================================
+if run_phase M5; then
+  echo "== M5: in-place restart must not duplicate a replicated edge CREATE =="
+  for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] || start_node $id; done
+  LID=$(wait_leader 40) || fail "M5 no leader for 3-node cluster in 40s"
+  if [ -n "${LID:-}" ]; then
+    # Seed one edge (two labelled endpoint nodes + one :M5L edge) and confirm BOTH
+    # node labels AND the edge converged on all 3 BEFORE the restart.
+    q "$LID" 'CREATE (a:M5A {k:1})-[:M5L]->(b:M5B {k:2})' 20 >/dev/null
+    M5_OK=1
+    M5_EDGEQ='MATCH ()-[r:M5L]->() RETURN count(r) AS c'
+    for id in $NS_NODES; do
+      wait_cnt1 $id M5A 40 || { fail "M5 seed did not replicate M5A to node$id (count=$(cnt $id M5A))"; M5_OK=0; }
+      wait_cnt1 $id M5B 40 || { fail "M5 seed did not replicate M5B to node$id (count=$(cnt $id M5B))"; M5_OK=0; }
+      wait_cntq $id "$M5_EDGEQ" 1 40 || { fail "M5 seed edge :M5L did not replicate to node$id (count=$(cntq $id "$M5_EDGEQ"))"; M5_OK=0; }
+    done
+    if [ "$M5_OK" = "1" ]; then
+      # Restart a follower IN PLACE (PVC preserved): it re-applies the committed
+      # edge-create on top of its persisted store. Pick a follower != leader.
+      RID=""; for id in $NS_NODES; do [ "$id" != "$LID" ] && { RID=$id; break; }; done
+      echo "  leader=node$LID; restarting follower node$RID in place (PVC preserved)"
+      restart_in_place "$RID"
+      wait_state "$RID" follower 45 || fail "M5 restarted node$RID never rejoined (state=$(roleof $RID))"
+      sleep 5
+      # Endpoint node counts AND the edge count must each stay EXACTLY 1 on all 3.
+      assert_no_duplicate M5A
+      assert_no_duplicate M5B
+      assert_count_steady M5edge "$M5_EDGEQ" 1 "M5L edge count"
+    fi
+  fi
+  echo "  M5 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
+fi
+
+# =============================================================================
+# M6: a DETACH-DELETEd row must NOT resurrect after an in-place restart.
+#   Slice B made DELETE / DETACH DELETE replicable through raft (commit e6d91f56).
+#   The danger after a delete: the restarted follower re-applies the committed log
+#   from the beginning — the CREATE entry is still in the log. If the delete entry
+#   were not also re-applied idempotently (or the create were re-minted), the
+#   deleted node would reappear as count=1. The contract: count stays 0 everywhere.
+# =============================================================================
+if run_phase M6; then
+  echo "== M6: in-place restart must not resurrect a DETACH-DELETEd row =="
+  for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] || start_node $id; done
+  LID=$(wait_leader 40) || fail "M6 no leader for 3-node cluster in 40s"
+  if [ -n "${LID:-}" ]; then
+    # Seed one row, converge to 1 on all 3, then DETACH DELETE it and converge to 0.
+    q "$LID" 'CREATE (:M6 {k:1})' 20 >/dev/null
+    M6_OK=1
+    for id in $NS_NODES; do
+      wait_cnt1 $id M6 40 || { fail "M6 seed CREATE (:M6) did not replicate to node$id (count=$(cnt $id M6))"; M6_OK=0; }
+    done
+    q "$LID" 'MATCH (n:M6) DETACH DELETE n' 20 >/dev/null
+    for id in $NS_NODES; do
+      wait_cntq $id 'MATCH (n:M6) RETURN count(n) AS c' 0 40 || { fail "M6 DETACH DELETE did not converge to 0 on node$id (count=$(cnt $id M6))"; M6_OK=0; }
+    done
+    if [ "$M6_OK" = "1" ]; then
+      # Restart a follower IN PLACE: it re-applies the full committed log (create
+      # THEN delete) on top of its persisted store. The row must stay deleted.
+      RID=""; for id in $NS_NODES; do [ "$id" != "$LID" ] && { RID=$id; break; }; done
+      echo "  leader=node$LID; restarting follower node$RID in place (PVC preserved)"
+      restart_in_place "$RID"
+      wait_state "$RID" follower 45 || fail "M6 restarted node$RID never rejoined (state=$(roleof $RID))"
+      sleep 5
+      # count MUST stay 0 on all 3 — count=1 anywhere is the deleted row resurrecting.
+      assert_count_steady M6del 'MATCH (n:M6) RETURN count(n) AS c' 0 "M6 node count"
+    fi
+  fi
+  echo "  M6 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
+fi
+
+# =============================================================================
+# M7: a MERGE'd row stays EXACTLY 1 (no double-apply) and a replicated MATCH...SET
+#   property survives an in-place restart.
+#   Slice C made MERGE replicable + idempotent (commit 4aec072c); Slice D made
+#   MATCH...SET replicable (commit ed75e2ce). The danger after restart: re-applying
+#   the committed MERGE entries could double-insert (count 2), or the re-applied
+#   SET could be lost / re-applied with the wrong target (predicate count 0).
+#   Contract: exactly 1 :M7 row, and exactly 1 row with v=42, on all 3 — before
+#   AND after the durable-log re-apply.
+# =============================================================================
+if run_phase M7; then
+  echo "== M7: in-place restart preserves MERGE idempotency + a replicated SET =="
+  for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] || start_node $id; done
+  LID=$(wait_leader 40) || fail "M7 no leader for 3-node cluster in 40s"
+  if [ -n "${LID:-}" ]; then
+    # MERGE the SAME key twice on the leader: match-or-create must yield exactly 1.
+    q "$LID" 'MERGE (n:M7 {k:1})' 20 >/dev/null
+    q "$LID" 'MERGE (n:M7 {k:1})' 20 >/dev/null
+    M7_OK=1
+    for id in $NS_NODES; do
+      wait_cnt1 $id M7 40 || { fail "M7 double MERGE did not converge to 1 on node$id (count=$(cnt $id M7))"; M7_OK=0; }
+    done
+    # Then SET v=42 on the leader and confirm the predicate converges on all 3.
+    M7_SETQ='MATCH (n:M7) WHERE n.v = 42 RETURN count(n) AS c'
+    q "$LID" 'MATCH (n:M7) SET n.v = 42' 20 >/dev/null
+    for id in $NS_NODES; do
+      wait_cntq $id "$M7_SETQ" 1 40 || { fail "M7 MATCH...SET v=42 did not replicate to node$id (count=$(cntq $id "$M7_SETQ"))"; M7_OK=0; }
+    done
+    if [ "$M7_OK" = "1" ]; then
+      # Restart a follower IN PLACE: it re-applies the committed MERGE x2 + SET.
+      RID=""; for id in $NS_NODES; do [ "$id" != "$LID" ] && { RID=$id; break; }; done
+      echo "  leader=node$LID; restarting follower node$RID in place (PVC preserved)"
+      restart_in_place "$RID"
+      wait_state "$RID" follower 45 || fail "M7 restarted node$RID never rejoined (state=$(roleof $RID))"
+      sleep 5
+      # Still EXACTLY 1 :M7 row (MERGE not double-applied) AND exactly 1 with v=42
+      # (the replicated SET survived the re-apply) on all 3.
+      assert_no_duplicate M7
+      assert_count_steady M7set "$M7_SETQ" 1 "M7 v=42 count"
+    fi
+  fi
+  echo "  M7 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
 fi
 
 echo
