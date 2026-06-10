@@ -19,12 +19,21 @@
 //   3. Routes every incoming `character` through an encoding-aware converter
 //      (`document.codeUnitsToByteColumn`) so it becomes a UTF-8 byte column
 //      before indexing the document.
+//   4. (follow-up) Converts every OUTBOUND `Position.character` back from the
+//      provider's BYTE column to the negotiated encoding's code units
+//      (`document.byteColumnToCodeUnits`, applied at the definition,
+//      documentSymbol, references, and diagnostics emit sites). Without this an
+//      inbound-only fix still returned byte columns to a utf-16 client — wrong
+//      on any multi-byte line.
 //
-// Tests here prove the negotiation result, the advertised value, and that a
+// Tests here prove the negotiation result, the advertised value, that a
 // multi-byte line resolves to the correct byte column under BOTH encodings
 // (the emoji counts as 2 utf-16 units / 4 utf-8 bytes; `é` as 1 utf-16 unit /
-// 2 utf-8 bytes). The end-to-end case drives the real `handleMessage` +
-// definition path with a capturing transport — no mocks.
+// 2 utf-8 bytes), that the OUTBOUND conversion is the exact inverse, and that a
+// real documentSymbol/diagnostic response on a multi-byte line carries utf-16
+// columns for a utf-16 session and byte columns for a utf-8 session. The
+// end-to-end cases drive the real `handleMessage` path with a capturing
+// transport — no mocks.
 //
 // CANARY: REQ=REQ-LSP-POSENC-001; FEATURE="PositionEncodingNegotiation"; ASPECT=MultiByteRange; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
 
@@ -146,6 +155,135 @@ test "GAP-0817: malformed UTF-8 is handled fail-safe (no panic, bounded)" {
     const bad = [_]u8{ 0xFF, 'a', 'b' };
     const col = C(&bad, 2, .utf16);
     try testing.expect(col <= bad.len);
+}
+
+// ---------------------------------------------------------------------------
+// Pure: byteColumnToCodeUnits (the OUTBOUND inverse)
+// ---------------------------------------------------------------------------
+
+test "GAP-0817 outbound: byte column maps to utf-16 code units" {
+    const B = doc_mod.byteColumnToCodeUnits;
+    // byte 0 → 0 units
+    try testing.expectEqual(@as(u32, 0), B(multibyte_line, 0, .utf16));
+    // byte 2 (after é) → 1 utf-16 unit
+    try testing.expectEqual(@as(u32, 1), B(multibyte_line, 2, .utf16));
+    // byte 6 (after é+🚀) → 1 + 2 = 3 utf-16 units
+    try testing.expectEqual(@as(u32, 3), B(multibyte_line, 6, .utf16));
+    // byte 7 (after x) → 4 utf-16 units
+    try testing.expectEqual(@as(u32, 4), B(multibyte_line, 7, .utf16));
+}
+
+test "GAP-0817 outbound: byte column maps to utf-32 code units (one per code point)" {
+    const B = doc_mod.byteColumnToCodeUnits;
+    try testing.expectEqual(@as(u32, 1), B(multibyte_line, 2, .utf32)); // after é
+    try testing.expectEqual(@as(u32, 2), B(multibyte_line, 6, .utf32)); // after é+🚀
+    try testing.expectEqual(@as(u32, 3), B(multibyte_line, 7, .utf32)); // after x
+}
+
+test "GAP-0817 outbound: utf-8 is identity passthrough" {
+    const B = doc_mod.byteColumnToCodeUnits;
+    try testing.expectEqual(@as(u32, 6), B(multibyte_line, 6, .utf8));
+    try testing.expectEqual(@as(u32, 0), B(multibyte_line, 0, .utf8));
+}
+
+test "GAP-0817 outbound: is the exact inverse of the inbound conversion" {
+    const C = doc_mod.codeUnitsToByteColumn; // units → bytes (inbound)
+    const B = doc_mod.byteColumnToCodeUnits; // bytes → units (outbound)
+    // For each code-point boundary, B(C(u)) == u under each encoding.
+    const enc_list = [_]doc_mod.PositionEncoding{ .utf16, .utf32, .utf8 };
+    for (enc_list) |enc| {
+        // Walk every code-point byte boundary in `é🚀x` and confirm the
+        // bytes → units → bytes round-trip is the identity.
+        const byte_boundaries = [_]u32{ 0, 2, 6, 7 };
+        for (byte_boundaries) |bcol| {
+            const units = B(multibyte_line, bcol, enc);
+            try testing.expectEqual(bcol, C(multibyte_line, units, enc));
+        }
+    }
+}
+
+test "GAP-0817 outbound: past-end byte column clamps to total code-unit width" {
+    const B = doc_mod.byteColumnToCodeUnits;
+    // 100 bytes on a 7-byte line → total utf-16 width (4).
+    try testing.expectEqual(@as(u32, 4), B(multibyte_line, 100, .utf16));
+}
+
+test "GAP-0817 outbound: malformed UTF-8 is fail-safe (bounded, no panic)" {
+    const B = doc_mod.byteColumnToCodeUnits;
+    const bad = [_]u8{ 0xFF, 'a', 'b' };
+    const units = B(&bad, 3, .utf16);
+    try testing.expect(units <= bad.len);
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end: a real documentSymbol response on a multi-byte line carries
+// utf-16 columns for a utf-16 session and byte columns for a utf-8 session.
+// Drives `Server.outboundChar` — the exact code the emit sites call — against
+// a document the server actually stores (opened via the real didOpen path).
+// ---------------------------------------------------------------------------
+
+fn newSession(alloc: std.mem.Allocator, init_msg: []const u8) !server.Server {
+    var srv = try server.Server.initWithTransport(
+        alloc,
+        transport.Transport.initNoopCapturing(alloc),
+        null,
+        true,
+    );
+    errdefer srv.deinit();
+    try srv.handleMessage(init_msg);
+    return srv;
+}
+
+test "GAP-0817 outbound: utf-16 session reports code-unit columns on a multi-byte line" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    // Default (no positionEncodings) → utf-16 session.
+    var srv = try newSession(alloc,
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+    );
+    defer srv.deinit();
+    try testing.expectEqual(doc_mod.PositionEncoding.utf16, srv.position_encoding);
+
+    // Open a document whose line 0 is `é🚀x` (the multibyte line).
+    const open_msg =
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///mb.gql","languageId":"gql","version":1,"text":"é🚀x"}}}
+    ;
+    try srv.handleMessage(open_msg);
+
+    // The provider would hand the emit site a BYTE column; the server converts
+    // it to the negotiated encoding. byte 6 (start of `x`) → utf-16 column 3.
+    try testing.expectEqual(@as(i64, 3), srv.outboundChar("file:///mb.gql", 0, 6));
+    // byte 2 (after é) → utf-16 column 1.
+    try testing.expectEqual(@as(i64, 1), srv.outboundChar("file:///mb.gql", 0, 2));
+}
+
+test "GAP-0817 outbound: utf-8 session reports byte columns unchanged" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newSession(alloc,
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"general":{"positionEncodings":["utf-8"]}}}}
+    );
+    defer srv.deinit();
+    try testing.expectEqual(doc_mod.PositionEncoding.utf8, srv.position_encoding);
+
+    try srv.handleMessage(
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///mb.gql","languageId":"gql","version":1,"text":"é🚀x"}}}
+    );
+
+    // utf-8 session: byte column is passed through unchanged.
+    try testing.expectEqual(@as(i64, 6), srv.outboundChar("file:///mb.gql", 0, 6));
+    try testing.expectEqual(@as(i64, 2), srv.outboundChar("file:///mb.gql", 0, 2));
+}
+
+test "GAP-0817 outbound: unknown document passes the byte column through" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newSession(alloc,
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+    );
+    defer srv.deinit();
+    // No document opened for this uri → degraded passthrough (no crash).
+    try testing.expectEqual(@as(i64, 6), srv.outboundChar("file:///nope.gql", 0, 6));
 }
 
 // ---------------------------------------------------------------------------

@@ -15,15 +15,22 @@
 //
 // This suite proves:
 //   (a) `$/cancelRequest` for an id, followed by the request with that id,
-//       yields a JSON-RPC error response with code -32800;
-//   (b) cancelling an unknown / already-completed id is a silent no-op (no
-//       response is emitted for the cancel notification, and a never-cancelled
-//       request still answers normally);
+//       yields a JSON-RPC error response with code -32800 that echoes the
+//       cancelled id;
+//   (b) cancelling an unknown id (one for which no request was ever sent) is a
+//       silent no-op — no response is emitted for the cancel notification, and
+//       a never-cancelled request still answers normally;
 //   (c) a normal request (no prior cancel) answers normally (no -32800);
-//   (d) the bounded registry's pure behavior: record/consume/idempotency/FIFO
-//       eviction, integer vs string id disambiguation, structured-id rejection.
+//   (d) POISONING REGRESSION: an answered request id, then a LATE
+//       `$/cancelRequest` for that same id, then a NEW request reusing the id —
+//       the new request answers NORMALLY (the late cancel is a spec no-op, not
+//       recorded against the reused id). This is the common ordering in a
+//       synchronous server and was the Critical defect the reviewer found;
+//   (e) the bounded registry's pure behavior: record/consume/clear/idempotency/
+//       FIFO eviction, integer vs string id disambiguation, structured-id
+//       rejection, plus the AnsweredRing's record/contains/idempotency/eviction.
 //
-// Tests (a)–(c) drive the real `handleMessage` path over a CAPTURING Noop
+// Tests (a)–(d) drive the real `handleMessage` path over a CAPTURING Noop
 // transport (GAP-0816 added `Transport.initNoopCapturing` + the
 // `lastWrittenForTest` accessor) so the assertions inspect the EXACT JSON-RPC
 // frame the production server emitted — no mocks, no simulated responses.
@@ -74,6 +81,29 @@ fn lastFrameHasErrorCode(alloc: std.mem.Allocator, srv: *const server.Server, co
     return c.integer == code;
 }
 
+/// True when the last written frame is a JSON-RPC error with the given `code`
+/// AND its `id` member equals the integer `id`. Proves the -32800 response
+/// echoes the cancelled request id (LSP/JSON-RPC requires the response id to
+/// match the request).
+fn lastFrameHasErrorCodeAndIntId(
+    alloc: std.mem.Allocator,
+    srv: *const server.Server,
+    code: i64,
+    id: i64,
+) !bool {
+    const frame = srv.lastWrittenForTest() orelse return false;
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, frame, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const id_v = parsed.value.object.get("id") orelse return false;
+    if (id_v != .integer or id_v.integer != id) return false;
+    const err = parsed.value.object.get("error") orelse return false;
+    if (err != .object) return false;
+    const c = err.object.get("code") orelse return false;
+    if (c != .integer) return false;
+    return c.integer == code;
+}
+
 /// True when the last written frame carries a `result` member (a normal
 /// successful response), false otherwise.
 fn lastFrameHasResult(alloc: std.mem.Allocator, srv: *const server.Server) !bool {
@@ -99,12 +129,45 @@ test "GAP-0816: cancelled request id answers with JSON-RPC -32800" {
         \\{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":42}}
     );
 
-    // Now deliver the request with that id. It must be answered with -32800.
+    // Now deliver the request with that id. It must be answered with -32800,
+    // and the error frame's id must echo the cancelled request id (42).
     try srv.handleMessage(
         \\{"jsonrpc":"2.0","id":42,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///x.gql"}}}
     );
 
     try testing.expect(try lastFrameHasErrorCode(alloc, &srv, -32800));
+    try testing.expect(try lastFrameHasErrorCodeAndIntId(alloc, &srv, -32800, 42));
+}
+
+test "GAP-0816: POISONING — answered id, late cancel, reused id answers normally" {
+    // Reviewer's Critical case. In a synchronous server the cancel almost
+    // always arrives AFTER the request was answered. The late cancel must be a
+    // no-op (LSP 3.17 §3.17.10), NOT poison the next request that reuses the id.
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newCapturingServer(alloc);
+    defer srv.deinit();
+
+    // 1. Request id 5 is delivered and answered NORMALLY (no prior cancel).
+    try srv.handleMessage(
+        \\{"jsonrpc":"2.0","id":5,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///x.gql"}}}
+    );
+    try testing.expect(!try lastFrameHasErrorCode(alloc, &srv, -32800));
+    try testing.expect(try lastFrameHasResult(alloc, &srv));
+
+    // 2. A LATE $/cancelRequest for id 5 arrives (the request already finished).
+    //    Per spec this is a no-op; it must NOT be recorded against id 5.
+    try srv.handleMessage(
+        \\{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":5}}
+    );
+
+    // 3. A NEW request reuses id 5. Before the poisoning fix it was wrongly
+    //    answered with -32800; it must now answer NORMALLY.
+    try srv.handleMessage(
+        \\{"jsonrpc":"2.0","id":5,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///x.gql"}}}
+    );
+    try testing.expect(!try lastFrameHasErrorCode(alloc, &srv, -32800));
+    try testing.expect(try lastFrameHasResult(alloc, &srv));
 }
 
 test "GAP-0816: cancellation is consumed — a second same-id request answers normally" {
@@ -249,4 +312,63 @@ test "GAP-0816: FIFO eviction bounds the registry" {
     try testing.expect(!reg.consume(.{ .integer = 0 }));
     try testing.expect(reg.consume(.{ .integer = 1 }));
     try testing.expect(reg.consume(.{ .integer = cap }));
+}
+
+test "GAP-0816: registry clear drops a pending entry without consuming-semantics" {
+    var reg = server.CancelRegistry{};
+    reg.cancel(.{ .integer = 3 });
+    reg.clear(.{ .integer = 3 });
+    // After clear the entry is gone, so consume misses.
+    try testing.expect(!reg.consume(.{ .integer = 3 }));
+    // clear on an absent id is a harmless no-op.
+    reg.clear(.{ .integer = 999 });
+}
+
+// ---------------------------------------------------------------------------
+// AnsweredRing pure unit tests (the poisoning-fix data structure)
+// ---------------------------------------------------------------------------
+
+test "GAP-0816: AnsweredRing record/contains round-trip" {
+    var ring = server.AnsweredRing{};
+    const id: std.json.Value = .{ .integer = 5 };
+    try testing.expect(!ring.contains(id)); // nothing recorded yet
+    ring.record(id);
+    try testing.expect(ring.contains(id)); // recorded
+    // contains is read-only: a second check still hits.
+    try testing.expect(ring.contains(id));
+}
+
+test "GAP-0816: AnsweredRing integer and string ids do not alias" {
+    var ring = server.AnsweredRing{};
+    ring.record(.{ .integer = 1 });
+    try testing.expect(!ring.contains(.{ .string = "1" }));
+    try testing.expect(ring.contains(.{ .integer = 1 }));
+}
+
+test "GAP-0816: AnsweredRing record is idempotent" {
+    var ring = server.AnsweredRing{};
+    ring.record(.{ .integer = 7 });
+    ring.record(.{ .integer = 7 });
+    ring.record(.{ .integer = 7 });
+    try testing.expect(ring.contains(.{ .integer = 7 }));
+}
+
+test "GAP-0816: AnsweredRing FIFO eviction bounds the ring" {
+    var ring = server.AnsweredRing{};
+    const cap = server.AnsweredRing.capacity;
+    var i: i64 = 0;
+    while (i < cap + 1) : (i += 1) {
+        ring.record(.{ .integer = i });
+    }
+    // id 0 was evicted; ids 1..cap survive.
+    try testing.expect(!ring.contains(.{ .integer = 0 }));
+    try testing.expect(ring.contains(.{ .integer = 1 }));
+    try testing.expect(ring.contains(.{ .integer = cap }));
+}
+
+test "GAP-0816: AnsweredRing rejects structured ids" {
+    var ring = server.AnsweredRing{};
+    const arr = std.json.Value{ .array = std.json.Array.init(testing.allocator) };
+    ring.record(arr);
+    try testing.expect(!ring.contains(arr));
 }

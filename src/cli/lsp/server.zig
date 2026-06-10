@@ -448,6 +448,100 @@ pub const CancelRegistry = struct {
         }
         return false;
     }
+
+    /// GAP-0816 (poisoning fix): unconditionally clear any pending cancellation
+    /// for `id` without reporting whether one existed. Used as the belt-and-
+    /// braces clear-on-response: when a request is answered we drop any same-id
+    /// cancel entry so a cancel that arrived after dispatch began (but is
+    /// observed before the next same-id request) cannot poison the reused id.
+    /// Distinct from `consume` only in that it has no return value and is a
+    /// no-op when nothing is registered.
+    pub fn clear(self: *CancelRegistry, id: std.json.Value) void {
+        var keybuf: [max_key_len]u8 = undefined;
+        const key = normalizeId(id, &keybuf) orelse return;
+        for (&self.slots) |*slot| {
+            if (slot.used and std.mem.eql(u8, slot.key(), key)) {
+                slot.used = false;
+                slot.len = 0;
+                return;
+            }
+        }
+    }
+};
+
+/// GAP-0816 (poisoning fix): bounded ring of request ids that have ALREADY been
+/// answered. In a strictly-synchronous server a `$/cancelRequest` almost always
+/// arrives AFTER its target request was fully processed and answered (the
+/// common case — there is never an in-flight handler to interrupt). LSP 3.17
+/// §3.17.10 says a cancel for an already-completed request is a no-op; the
+/// server simply ignores it. Without tracking answered ids the cancel would be
+/// recorded into `CancelRegistry` and then wrongly fire a `-32800` against the
+/// NEXT request that reuses the id (id reuse is routine: editors recycle small
+/// integer ids). This ring lets `handleCancelRequestEntry` recognize a
+/// late/no-op cancel and SKIP recording it.
+///
+/// Same normalization (`CancelRegistry.normalizeId`) and the same fixed-capacity
+/// FIFO discipline as `CancelRegistry`, so integer/string ids never alias and a
+/// hostile client cannot grow it without bound. Eviction only widens the window
+/// in which a late cancel for a long-ago id could slip through and (combined
+/// with a reuse of that exact id) cost one spurious `-32800`; the clear-on-
+/// response belt-and-braces in `CancelRegistry.clear` shrinks that further.
+///
+/// CANARY: REQ=REQ-LSP-CANCEL-001; FEATURE="CancelRequestRegistry"; ASPECT=AnsweredRing; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+pub const AnsweredRing = struct {
+    pub const capacity = CancelRegistry.capacity;
+    pub const max_key_len = CancelRegistry.max_key_len;
+
+    const Slot = struct {
+        used: bool = false,
+        len: usize = 0,
+        buf: [max_key_len]u8 = undefined,
+
+        fn key(self: *const Slot) []const u8 {
+            return self.buf[0..self.len];
+        }
+    };
+
+    slots: [capacity]Slot = [_]Slot{.{}} ** capacity,
+    next: usize = 0,
+
+    /// Record `id` as answered. Idempotent (re-recording an already-present id
+    /// refreshes nothing and consumes no extra slot). FIFO-evicts the oldest
+    /// entry when full. Shares `CancelRegistry.normalizeId` so the key space is
+    /// identical to the cancel registry's.
+    pub fn record(self: *AnsweredRing, id: std.json.Value) void {
+        var keybuf: [CancelRegistry.max_key_len]u8 = undefined;
+        const key = CancelRegistry.normalizeId(id, &keybuf) orelse return;
+        for (&self.slots) |*slot| {
+            if (slot.used and std.mem.eql(u8, slot.key(), key)) return;
+        }
+        var target: ?*Slot = null;
+        for (&self.slots) |*slot| {
+            if (!slot.used) {
+                target = slot;
+                break;
+            }
+        }
+        const slot = target orelse blk: {
+            const s = &self.slots[self.next];
+            self.next = (self.next + 1) % capacity;
+            break :blk s;
+        };
+        slot.used = true;
+        slot.len = key.len;
+        @memcpy(slot.buf[0..key.len], key);
+    }
+
+    /// True when `id` is currently recorded as answered. Read-only (does not
+    /// evict). Used by `handleCancelRequestEntry` to detect a late/no-op cancel.
+    pub fn contains(self: *const AnsweredRing, id: std.json.Value) bool {
+        var keybuf: [CancelRegistry.max_key_len]u8 = undefined;
+        const key = CancelRegistry.normalizeId(id, &keybuf) orelse return false;
+        for (&self.slots) |*slot| {
+            if (slot.used and std.mem.eql(u8, slot.key(), key)) return true;
+        }
+        return false;
+    }
 };
 
 /// F-01: portable monotonic-ish nanos (Zig 0.16 removed
@@ -497,6 +591,13 @@ pub const Server = struct {
     /// short-circuits with JSON-RPC -32800 (RequestCancelled) and consumes the
     /// entry. Inline value (no allocation) — bounded ring, see `CancelRegistry`.
     cancel_registry: CancelRegistry = .{},
+
+    /// GAP-0816 (poisoning fix): bounded ring of request ids already answered.
+    /// Populated in `sendResult`/`sendError` (every response path); consulted by
+    /// `handleCancelRequestEntry` to recognize a late cancel for a completed
+    /// request and skip recording it — preventing the reused-id poisoning the
+    /// reviewer found. Inline value (no allocation) — see `AnsweredRing`.
+    answered_ids: AnsweredRing = .{},
 
     // -------- Task 12: per-session auth + schema binding --------
     /// Verifier vtable the LSP server invokes during `initialize` to
@@ -752,6 +853,25 @@ pub const Server = struct {
         };
     }
 
+    /// GAP-0817 (outbound): translate a UTF-8 BYTE column (as produced by the
+    /// feature providers in `features.zig`, which compute `offset - line_start`)
+    /// into the negotiated encoding's code-unit column for an OUTBOUND
+    /// `Position.character`. For a utf-8 session this is an identity passthrough;
+    /// for utf-16/utf-32 it is the inverse of the inbound `codeUnitsToByteColumn`
+    /// conversion and is the fix that lands a definition/range/diagnostic at the
+    /// right column on a multi-byte line. When the document or its line text is
+    /// unavailable we pass the byte column through unchanged (degraded but
+    /// bounded — the alternative would be to drop the position entirely).
+    pub fn outboundChar(self: *const Server, uri: []const u8, line: i64, byte_char: i64) i64 {
+        if (self.position_encoding == .utf8) return byte_char;
+        if (byte_char <= 0 or line < 0) return byte_char;
+        const doc = self.documents.get(uri) orelse return byte_char;
+        const line_u32 = std.math.cast(u32, line) orelse return byte_char;
+        const byte_u32 = std.math.cast(u32, byte_char) orelse return byte_char;
+        const line_text = doc.getLineContent(line_u32) orelse return byte_char;
+        return document.byteColumnToCodeUnits(line_text, byte_u32, self.position_encoding);
+    }
+
     /// LSP-SEC-004: shared safe extractor for textDocument-only requests.
     fn extractTextDocumentUri(self: *Server, params_value: std.json.Value) json_helpers.JsonError![]const u8 {
         _ = self;
@@ -910,6 +1030,20 @@ pub const Server = struct {
             return;
         }
 
+        // GAP-0816 (poisoning fix): from here on this id WILL be answered (one
+        // of the branches below sends a result or error). Record it as answered
+        // and clear any pending cancel for it so that:
+        //   - a `$/cancelRequest` for this id that arrives later is recognized
+        //     as a no-op late cancel (see `handleCancelRequestEntry`), and
+        //   - the belt-and-braces `clear` drops a cancel entry that slipped in
+        //     between dispatch start and now (covers response paths that build
+        //     JSON manually instead of going through `sendResult`/`sendError`).
+        // `record`/`clear` reuse `idOrNull`'s key space; both are no-ops for a
+        // non-recordable id. Done before dispatch returns so it runs regardless
+        // of which response path the handler takes.
+        self.answered_ids.record(id);
+        self.cancel_registry.clear(id);
+
         // Task 12 auth gate: every non-init/shutdown request must
         // come from a session whose AuthState.verify succeeded during
         // the `initialize` handshake. We respond with JSON-RPC -32002
@@ -977,14 +1111,38 @@ pub const Server = struct {
         self.shutdown_requested = true;
     }
 
-    /// GAP-0816: `$/cancelRequest` notification handler. Records the target id
-    /// into the bounded cancel registry; `handleRequest` consults it at entry.
-    /// Per LSP 3.17 §3.17.10 the params are `{ "id": <number|string> }`. A
-    /// missing/malformed id (or a structurally-invalid id type) is a silent
-    /// no-op — a notification never produces a response, and cancelling an
-    /// unknown id must not error. Cancelling an id for a request that was
-    /// already completed (or never sent) is likewise harmless: the entry simply
-    /// lingers until consumed by a same-id request or FIFO-evicted.
+    /// GAP-0816: `$/cancelRequest` notification handler. Per LSP 3.17 §3.17.10
+    /// the params are `{ "id": <number|string> }`. A missing/malformed id (or a
+    /// structurally-invalid id type) is a silent no-op — a notification never
+    /// produces a response, and cancelling an unknown id must not error.
+    ///
+    /// GAP-0816 (poisoning fix): a cancel for a request that was ALREADY
+    /// answered is a spec no-op. In this strictly-synchronous server that is the
+    /// COMMON case — the request was fully processed and answered before the
+    /// cancel notification was even read, so there is never an in-flight handler
+    /// to interrupt. Recording such a late cancel would poison the next request
+    /// that reuses the id (editors recycle small integer ids), wrongly firing a
+    /// `-32800` against it. We therefore consult the answered-ids ring first and
+    /// SKIP recording when the id was already answered.
+    ///
+    /// Ordering matrix (cancel C{id}, request R{id}, answered ring A, cancel
+    /// registry CR; the server reads one message at a time):
+    ///   1. C then R (genuine pre-emptive cancel): C sees id ∉ A → records in
+    ///      CR. R's entry-gate `CR.consume` hits → one `-32800`. Correct.
+    ///   2. R then C then R' (reviewer's poisoning case): R answered →
+    ///      `sendResult/sendError` records id in A AND `CR.clear(id)` (no-op,
+    ///      nothing pending). C sees id ∈ A → SKIP. R' → CR empty → answered
+    ///      normally. Poisoning eliminated.
+    ///   3. C then R then C' then R' (cancel, serve, late dup-cancel, reuse):
+    ///      step 1 yields the `-32800` for R (sendError records id in A). C'
+    ///      sees id ∈ A → SKIP. R' answered normally. Correct.
+    ///   4. C for an id never sent: id ∉ A → recorded in CR; lingers until a
+    ///      same-id request consumes it (then behaves as case 1) or FIFO
+    ///      eviction reclaims the slot. Bounded, harmless.
+    ///   5. Residual: if the answered id was FIFO-evicted from A before a very
+    ///      late C arrives, C is recorded and a future reuse R' eats one
+    ///      spurious `-32800`. The window is bounded by `AnsweredRing.capacity`;
+    ///      `CR.clear` on every response shrinks it further.
     ///
     /// CANARY: REQ=REQ-LSP-CANCEL-001; FEATURE="CancelRequestRegistry"; ASPECT=NotificationHandler; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
     fn handleCancelRequestEntry(self: *Server, params: ?std.json.Value) anyerror!void {
@@ -994,6 +1152,9 @@ pub const Server = struct {
         // Reuse the same id-validity gate the response path uses so an
         // attacker-controlled structured id is never recorded.
         const id = idOrNull(id_v) orelse return;
+        // Late cancel (request already answered) = LSP no-op. Do NOT record it,
+        // or the reused id would be wrongly cancelled. See the matrix above.
+        if (self.answered_ids.contains(id)) return;
         self.cancel_registry.cancel(id);
     }
 
@@ -1181,13 +1342,14 @@ pub const Server = struct {
     /// GAP-0817: choose the session position encoding from the client's
     /// `initialize` params. The client lists the encodings it supports, in
     /// preference order, under `capabilities.general.positionEncodings` (LSP
-    /// 3.17). Geode PREFERS `utf-8` whenever the client offers it — it is the
-    /// cheapest for our UTF-8 byte-slice internals (no code-unit translation on
-    /// the hot path). Otherwise it falls back to the protocol DEFAULT, `utf-16`
-    /// (also chosen when the client offers nothing, an empty list, or only
-    /// encodings we don't implement). `utf-32` is honored only if it is the
-    /// sole offered encoding we recognize and utf-8 is absent. This is a pure
-    /// function of the params so it is unit-testable without a transport.
+    /// 3.17). Geode PREFERS `utf-8` whenever the client offers it (anywhere in
+    /// the list) — it is the cheapest for our UTF-8 byte-slice internals (no
+    /// code-unit translation on the hot path). If utf-8 is absent, it takes the
+    /// FIRST recognized encoding in the client's stated preference order (so
+    /// `utf-32` is chosen only when it is the first recognized non-utf-8 offer).
+    /// It falls back to the protocol DEFAULT, `utf-16`, when the client offers
+    /// nothing, an empty list, or only encodings we don't implement. This is a
+    /// pure function of the params so it is unit-testable without a transport.
     ///
     /// CANARY: REQ=REQ-LSP-POSENC-001; FEATURE="PositionEncodingNegotiation"; ASPECT=Negotiate; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
     pub fn negotiatePositionEncoding(params: ?std.json.Value) document.PositionEncoding {
@@ -1508,13 +1670,16 @@ pub const Server = struct {
             var result = std.json.ObjectMap{};
             try result.put(self.allocator, "uri", .{ .string = loc.uri });
 
+            // GAP-0817 (outbound): the feature provider returns BYTE columns;
+            // convert to the negotiated encoding's code units against the
+            // target document's line text before emitting.
             var range = std.json.ObjectMap{};
             var start_pos = std.json.ObjectMap{};
             try start_pos.put(self.allocator, "line", .{ .integer = loc.range.start.line });
-            try start_pos.put(self.allocator, "character", .{ .integer = loc.range.start.character });
+            try start_pos.put(self.allocator, "character", .{ .integer = self.outboundChar(loc.uri, loc.range.start.line, loc.range.start.character) });
             var end_pos = std.json.ObjectMap{};
             try end_pos.put(self.allocator, "line", .{ .integer = loc.range.end.line });
-            try end_pos.put(self.allocator, "character", .{ .integer = loc.range.end.character });
+            try end_pos.put(self.allocator, "character", .{ .integer = self.outboundChar(loc.uri, loc.range.end.line, loc.range.end.character) });
             try range.put(self.allocator, "start", .{ .object = start_pos });
             try range.put(self.allocator, "end", .{ .object = end_pos });
             try result.put(self.allocator, "range", .{ .object = range });
@@ -1661,26 +1826,27 @@ pub const Server = struct {
                 try obj.put(self.allocator, "detail", .{ .string = d });
             }
 
-            // Build range object
+            // Build range object. GAP-0817 (outbound): convert BYTE columns to
+            // negotiated code units against this document's line text.
             var range = std.json.ObjectMap{};
             var start_pos = std.json.ObjectMap{};
             try start_pos.put(self.allocator, "line", .{ .integer = sym.range.start.line });
-            try start_pos.put(self.allocator, "character", .{ .integer = sym.range.start.character });
+            try start_pos.put(self.allocator, "character", .{ .integer = self.outboundChar(uri, sym.range.start.line, sym.range.start.character) });
             var end_pos = std.json.ObjectMap{};
             try end_pos.put(self.allocator, "line", .{ .integer = sym.range.end.line });
-            try end_pos.put(self.allocator, "character", .{ .integer = sym.range.end.character });
+            try end_pos.put(self.allocator, "character", .{ .integer = self.outboundChar(uri, sym.range.end.line, sym.range.end.character) });
             try range.put(self.allocator, "start", .{ .object = start_pos });
             try range.put(self.allocator, "end", .{ .object = end_pos });
             try obj.put(self.allocator, "range", .{ .object = range });
 
-            // Build selection range object
+            // Build selection range object (same outbound conversion).
             var sel_range = std.json.ObjectMap{};
             var sel_start = std.json.ObjectMap{};
             try sel_start.put(self.allocator, "line", .{ .integer = sym.selectionRange.start.line });
-            try sel_start.put(self.allocator, "character", .{ .integer = sym.selectionRange.start.character });
+            try sel_start.put(self.allocator, "character", .{ .integer = self.outboundChar(uri, sym.selectionRange.start.line, sym.selectionRange.start.character) });
             var sel_end = std.json.ObjectMap{};
             try sel_end.put(self.allocator, "line", .{ .integer = sym.selectionRange.end.line });
-            try sel_end.put(self.allocator, "character", .{ .integer = sym.selectionRange.end.character });
+            try sel_end.put(self.allocator, "character", .{ .integer = self.outboundChar(uri, sym.selectionRange.end.line, sym.selectionRange.end.character) });
             try sel_range.put(self.allocator, "start", .{ .object = sel_start });
             try sel_range.put(self.allocator, "end", .{ .object = sel_end });
             try obj.put(self.allocator, "selectionRange", .{ .object = sel_range });
@@ -1829,13 +1995,15 @@ pub const Server = struct {
 
             try obj.put(self.allocator, "uri", .{ .string = loc.uri });
 
+            // GAP-0817 (outbound): convert BYTE columns to negotiated code units
+            // against the referenced document's line text.
             var range = std.json.ObjectMap{};
             var start_pos = std.json.ObjectMap{};
             try start_pos.put(self.allocator, "line", .{ .integer = loc.range.start.line });
-            try start_pos.put(self.allocator, "character", .{ .integer = loc.range.start.character });
+            try start_pos.put(self.allocator, "character", .{ .integer = self.outboundChar(loc.uri, loc.range.start.line, loc.range.start.character) });
             var end_pos = std.json.ObjectMap{};
             try end_pos.put(self.allocator, "line", .{ .integer = loc.range.end.line });
-            try end_pos.put(self.allocator, "character", .{ .integer = loc.range.end.character });
+            try end_pos.put(self.allocator, "character", .{ .integer = self.outboundChar(loc.uri, loc.range.end.line, loc.range.end.character) });
             try range.put(self.allocator, "start", .{ .object = start_pos });
             try range.put(self.allocator, "end", .{ .object = end_pos });
             try obj.put(self.allocator, "range", .{ .object = range });
@@ -1923,8 +2091,13 @@ pub const Server = struct {
             }
             try buffer.appendSlice(alloc, ",\"character\":");
             {
+                // GAP-0817 (outbound): the diagnostic provider emits BYTE
+                // columns; convert to the negotiated encoding's code units
+                // against this document's line text (the doc IS open — see the
+                // `documents.get(uri)` early-return at the top of this fn).
+                const _out_char = self.outboundChar(uri, diag.range.start.line, diag.range.start.character);
                 var _tmp_buf: [64]u8 = undefined;
-                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{diag.range.start.character}) catch return error.OutOfMemory;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{_out_char}) catch return error.OutOfMemory;
                 try buffer.appendSlice(alloc, _tmp_str);
             }
             try buffer.appendSlice(alloc, "},\"end\":{\"line\":");
@@ -1935,8 +2108,9 @@ pub const Server = struct {
             }
             try buffer.appendSlice(alloc, ",\"character\":");
             {
+                const _out_char = self.outboundChar(uri, diag.range.end.line, diag.range.end.character);
                 var _tmp_buf: [64]u8 = undefined;
-                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{diag.range.end.character}) catch return error.OutOfMemory;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{_out_char}) catch return error.OutOfMemory;
                 try buffer.appendSlice(alloc, _tmp_str);
             }
             try buffer.appendSlice(alloc, "}}");
@@ -1979,6 +2153,14 @@ pub const Server = struct {
     }
 
     fn sendResult(self: *Server, id: std.json.Value, result: std.json.Value) !void {
+        // GAP-0816 (poisoning fix): a response for `id` means the request is
+        // complete. Record it as answered and clear any lingering cancel so a
+        // late `$/cancelRequest` for it is treated as a no-op (see
+        // `handleCancelRequestEntry`). Idempotent with the `handleRequest`-level
+        // record/clear; both run so this also covers any future direct caller.
+        self.answered_ids.record(id);
+        self.cancel_registry.clear(id);
+
         var response = std.json.ObjectMap{};
         defer response.deinit(self.allocator);
 
@@ -1990,6 +2172,12 @@ pub const Server = struct {
     }
 
     fn sendError(self: *Server, id: std.json.Value, code: i32, message: []const u8) !void {
+        // GAP-0816 (poisoning fix): see `sendResult`. Recording here means the
+        // `-32800` cancellation response ALSO marks the id answered, so a
+        // duplicate late cancel for the same id is a no-op.
+        self.answered_ids.record(id);
+        self.cancel_registry.clear(id);
+
         var response = std.json.ObjectMap{};
         defer response.deinit(self.allocator);
 

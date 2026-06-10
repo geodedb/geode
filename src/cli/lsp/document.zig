@@ -82,6 +82,41 @@ pub fn codeUnitsToByteColumn(line_text: []const u8, character: u32, encoding: Po
     return @intCast(byte_i);
 }
 
+/// GAP-0817 (outbound): the inverse of `codeUnitsToByteColumn`. Translate a
+/// UTF-8 BYTE column within `line_text` into a `character` offset expressed in
+/// `encoding`'s code units, suitable for placing into an outbound LSP
+/// `Position.character`. Geode's feature providers compute byte columns
+/// (`offset - line_start`); a utf-16/utf-32 client expects code-unit columns, so
+/// every outbound position on a multi-byte line must be converted or the client
+/// renders ranges/locations at the wrong column.
+///
+/// Fail-safe, mirroring `codeUnitsToByteColumn`: an invalid lead byte is treated
+/// as a single-byte sequence so the walk always terminates; a `byte_col` past
+/// the end of the line clamps to the line's total code-unit width. UTF-8
+/// sessions are an identity passthrough (code units ARE bytes) but still clamp.
+pub fn byteColumnToCodeUnits(line_text: []const u8, byte_col: u32, encoding: PositionEncoding) u32 {
+    if (byte_col == 0) return 0;
+    var byte_i: usize = 0;
+    var units: u32 = 0;
+    while (byte_i < line_text.len) {
+        if (byte_i >= byte_col) break;
+        const lead = line_text[byte_i];
+        const seq_len: u3 = std.unicode.utf8ByteSequenceLength(lead) catch 1;
+        const safe_len: usize = blk: {
+            if (seq_len == 1) break :blk 1;
+            if (byte_i + seq_len > line_text.len) break :blk 1;
+            break :blk seq_len;
+        };
+        // If byte_col lands in the MIDDLE of a multi-byte sequence (malformed
+        // input from a client), count the whole code point — a code-unit column
+        // cannot point inside a code point. The walk still terminates because
+        // byte_i advances past byte_col.
+        units += codeUnitsForCodePoint(@intCast(safe_len), encoding);
+        byte_i += safe_len;
+    }
+    return units;
+}
+
 pub const Document = struct {
     uri: []const u8,
     text: []const u8,
