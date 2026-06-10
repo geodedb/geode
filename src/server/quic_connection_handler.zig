@@ -149,7 +149,7 @@ const index_manager = geode.index_manager;
 var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.GlobalStreamThrottle.init(
     stream_registry.default_max_global_stream_threads,
 );
-// CANARY: REQ=REQ-QUIC-HC-129; FEATURE="DetachedFirstStream"; ASPECT=ParserSafeOwnerStack; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+// CANARY: REQ=REQ-QUIC-HC-129; FEATURE="DetachedFirstStream"; ASPECT=ParserSafeOwnerStack; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // Detached first-stream owners run the full request loop, including GQL parse
 // and execution. 1 MiB is enough for lightweight protocol handling but can
@@ -212,7 +212,7 @@ const CooperativeFirstStreamTurn = enum {
     offloaded,
 };
 
-// CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // First-stream owners are long-lived persistent stream loops. Spawning one OS
 // thread per authenticated connection keeps 256-way fanout simple, but at
@@ -337,7 +337,7 @@ pub fn getMaxGlobalStreamThreads() u32 {
     return g_stream_throttle.max;
 }
 
-// CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 pub fn setMaxDetachedFirstStreamOwners(max: u32) void {
     const effective = if (max == 0) default_detached_first_stream_owner_threads else max;
     g_first_stream_detach_gate.configure(effective);
@@ -1264,7 +1264,7 @@ const BufferedProtoReader = struct {
         return self.start_index < self.buffer.items.len;
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     /// Non-blocking variant used by the cooperative first-stream scheduler.
     /// It returns WouldBlock as soon as the current stream has no readable
     /// bytes, letting the scheduler move to another connection instead of
@@ -1380,7 +1380,7 @@ fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStr
     try writeServerPacket(allocator, stream, .{ .quic = msg_copy });
 }
 
-// CANARY: REQ=REQ-QUIC-HC-077; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BatchedExecuteResponseWrite; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-077; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BatchedExecuteResponseWrite; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 fn sendQuicMessagesBatched(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -1414,7 +1414,7 @@ fn sendQuicMessagesBatched(
     _ = quic_response_metrics.response_batches_completed_total.fetchAdd(1, .monotonic);
 }
 
-// CANARY: REQ=REQ-QUIC-HC-089; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BatchedEmptyMutationSuccess; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-089; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BatchedEmptyMutationSuccess; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 fn sendEmptySuccessResult(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -2742,7 +2742,7 @@ fn processFirstStreamPacket(
     return true;
 }
 
-// CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 pub const FirstStreamScheduler = struct {
     allocator: std.mem.Allocator = undefined,
     contexts: std.ArrayList(*FirstStreamOwnerContext) = .empty,
@@ -2843,7 +2843,7 @@ pub const FirstStreamScheduler = struct {
         }
         for (self.workers) |*worker| worker.join();
 
-        // CANARY: REQ=REQ-QUIC-HC-178; FEATURE="HighConcurrencyMutations"; ASPECT=CooperativeMutationOffload; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+        // CANARY: REQ=REQ-QUIC-HC-178; FEATURE="HighConcurrencyMutations"; ASPECT=CooperativeMutationOffload; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
         //
         // Shard-parallel mutations can wait on group commit for milliseconds
         // to seconds under 4k+ fanout. The cooperative scheduler worker that
@@ -2920,7 +2920,7 @@ pub const FirstStreamScheduler = struct {
     fn finishCooperativeContext(self: *FirstStreamScheduler, ctx: *FirstStreamOwnerContext) void {
         ctx.cooperative_done.store(true, .release);
         self.removeContext(ctx);
-        // CANARY: REQ=REQ-QUIC-HC-073; FEATURE="QUIC High-Concurrency Requests"; ASPECT=SchedulerNonBlockingCleanup; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+        // CANARY: REQ=REQ-QUIC-HC-073; FEATURE="QUIC High-Concurrency Requests"; ASPECT=SchedulerNonBlockingCleanup; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
         //
         // Connection cleanup can wait for QUIC teardown and stream
         // drain. Running it on the cooperative scheduler worker
@@ -3131,7 +3131,7 @@ pub const FirstStreamScheduler = struct {
             return null;
         }
 
-        // CANARY: REQ=REQ-QUIC-HC-067; FEATURE="QUIC High-Concurrency Requests"; ASPECT=FirstStreamSchedulerFIFO; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-067; FEATURE="QUIC High-Concurrency Requests"; ASPECT=FirstStreamSchedulerFIFO; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
         //
         // FIFO avoids starving older HELLO streams during a 512+ connection
         // burst. Keep a head index so dequeue stays O(1) while preserving
@@ -3219,7 +3219,7 @@ pub const FirstStreamScheduler = struct {
                 return null;
             }
 
-            // CANARY: REQ=REQ-QUIC-HC-100; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeSchedulerMissedWakeSweep; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+            // CANARY: REQ=REQ-QUIC-HC-100; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeSchedulerMissedWakeSweep; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
             //
             // RX-ready callbacks can be lost during close-heavy fan-out when a
             // stream is idle for the whole burst and only receives a verifier
@@ -3561,7 +3561,7 @@ const CooperativeMutationOffloadTask = struct {
 };
 
 fn processCooperativeFirstStreamPacket(ctx: *FirstStreamOwnerContext, packet: *schema.ClientPacket) bool {
-    // CANARY: REQ=REQ-QUIC-HC-157; FEATURE="HighConcurrencyDiagnostics"; ASPECT=FirstStreamSchedulerLatency; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-157; FEATURE="HighConcurrencyDiagnostics"; ASPECT=FirstStreamSchedulerLatency; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     //
     // Record one server-side application-processing sample per delivered
     // first-stream packet. Combined with response write metrics, this
@@ -3685,7 +3685,7 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) CooperativeFirst
     return .keep;
 }
 
-// CANARY: REQ=REQ-QUIC-HC-011; FEATURE="DetachedFirstStream"; ASPECT=ConnectionAdmission; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-011; FEATURE="DetachedFirstStream"; ASPECT=ConnectionAdmission; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 fn handleFirstStreamOwner(ctx_ptr: *anyopaque) void {
     const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(ctx_ptr));
     defer cleanupFirstStreamOwner(ctx);
@@ -3905,7 +3905,7 @@ pub fn handleQuicConnection(
     // ── Phase 1: HELLO on first stream ─────────────────────────────────────
     // Wait for the first message (expected to be HELLO) and process it.
     // This keeps the handshake flow identical to the pre-multiplexing code.
-    // CANARY: REQ=REQ-QUIC-HC-014; FEATURE="BoundedHelloAdmission"; ASPECT=ConnectionThreadLifetime; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-014; FEATURE="BoundedHelloAdmission"; ASPECT=ConnectionThreadLifetime; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     //
     // Detached connection-admission threads must be short-lived. Bound the
     // post-stream HELLO read as well as the pre-stream wait so an idle peer
@@ -4098,7 +4098,7 @@ pub fn handleQuicConnection(
     quota_tenant_id = null;
     destroy_conn = false;
 
-    // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-10
     //
     // CLI batch mode opens additional streams on an authenticated QUIC
     // connection, so multiplexing stays enabled by default. High-fanout
@@ -4160,7 +4160,7 @@ pub fn handleQuicConnection(
 
     // ── Phase 3: First stream query loop (bounded detached owner) ──────────
     //
-    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     if (!env_config.quic_stream_multiplexing_enabled and env_config.quic_cooperative_first_streams_enabled) {
         if (g_first_stream_scheduler) |scheduler| {
             scheduler.submit(first_ctx) catch |err| {
@@ -5244,7 +5244,7 @@ fn handleClientMessage(
             var optimizer_hints_storage: query_plan_cache.OptimizerHints = .{};
             defer if (plan_handle) |*h| h.release();
 
-            // CANARY: REQ=REQ-QUIC-HC-166; FEATURE="High-Concurrency Query Cache"; ASPECT=ReadOnlyPlanCacheAdmission; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=engine; UPDATED=2026-05-29
+            // CANARY: REQ=REQ-QUIC-HC-166; FEATURE="High-Concurrency Query Cache"; ASPECT=ReadOnlyPlanCacheAdmission; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=engine; UPDATED=2026-06-10
             //
             // Mutation traffic often embeds literal worker/sequence values, so
             // routing it through the cross-connection plan cache creates many
@@ -5270,7 +5270,7 @@ fn handleClientMessage(
             // the same field-population logic. auth_version threads through for
             // cache-invalidation correctness (role/active/password changes).
             //
-            // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=ServerUnpack; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+            // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=ServerUnpack; STATUS=TESTED; TEST=tests/test_gps_mcp_wire.zig; OWNER=security; UPDATED=2026-06-10
             // GPS Phase 7 Tasks 7-5/7-6: if the incoming ExecuteRequest carries
             // a principal_envelope_bytes blob (field 4), deserialize it and use
             // the forwarded identity instead of the connection-level Principal.
