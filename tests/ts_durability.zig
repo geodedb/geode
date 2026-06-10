@@ -428,4 +428,17 @@ test "GAP-0865e TDE round-trip: reopen with key succeeds, without key fails clos
         st.deinit();
         return error.EncryptedStoreOpenedWithoutKey;
     } else |_| {}
+
+    // Reopen with a WRONG key: must also fail closed.
+    var wrong_key = key;
+    wrong_key[0] ^= 0xff;
+    const wrong_result = ts.Store.initWithConfig(allocator, .{
+        .data_dir = data_dir,
+        .encryption_key = wrong_key,
+    });
+    if (wrong_result) |st_const| {
+        var st = st_const;
+        st.deinit();
+        return error.EncryptedStoreOpenedWithWrongKey;
+    } else |_| {}
 }
