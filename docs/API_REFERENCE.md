@@ -88,6 +88,29 @@ DROP INDEX IF EXISTS person_age_idx;
 
 ## Backup and Restore
 
+> **Status (GAP-0862, 2026-06-10): the GQL `BACKUP TO` / `RESTORE FROM`
+> statement surface below is NOT executed.** The parser accepts these
+> statements, but the query executor returns `NotImplemented`
+> (SQLSTATE `0A000`, "feature not supported"); the `INCREMENTAL`,
+> `METADATA ONLY`, `TIMESTAMP`, and `VERIFY ONLY` forms additionally fail to
+> parse. The **implemented and supported** backup/restore surface is the CLI:
+>
+> ```bash
+> geode backup create --output ./full.backup [--compress]   # engine-backed full backup
+> geode restore ./full.backup --yes                          # restore from a backup file
+> geode backup list [--dir ./backups]                        # list local backups
+> ```
+>
+> The CLI is engine-backed by `BackupManager` (`src/storage/backup.zig`):
+> full backup of the per-graph storage tree with CRC32 integrity verification
+> on restore. Compression is requested-but-not-applied in this release (the
+> header truthfully records `none`; no zstd/lz4/gzip encoder is bundled).
+> Restore data-integrity (node/edge counts + property round-trip + checksum
+> rejection) is regression-tested by `zig build test-gap0862`. The GQL forms
+> below are retained as a forward-looking grammar sketch; implementing any of
+> them MUST also flip the `UNSUPPORTED` assertions in
+> `tests/backup_restore_test.sh` / `tests/backup_restore_regression_test.sh`.
+
 ### BACKUP TO
 
 Creates a backup of the database.
