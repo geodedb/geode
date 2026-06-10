@@ -47,12 +47,12 @@ pub const EnvironmentConfig = struct {
     inline_results_enabled: bool = true,
     inline_results_max_rows: usize = 1000,
     telemetry_paging: bool = false,
-    // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-10
     // Default to the measured high-throughput single-stream profile: no idle
     // per-connection acceptor loop unless an operator explicitly enables
     // multiplexed streams with GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1.
     quic_stream_multiplexing_enabled: bool = false,
-    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     // In single-stream high-fanout deployments, service first streams with a
     // bounded cooperative scheduler instead of one persistent worker per live
     // connection. This is now the production default; set
@@ -69,7 +69,7 @@ pub const EnvironmentConfig = struct {
     // because the handler prefers this env-config value over the file-
     // scope default.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
     graph_write_lock_timeout_ms: u64 = 120_000,
-    // CANARY: REQ=REQ-QUIC-HC-114; FEATURE="High-Concurrency Setup"; ASPECT=ConfigurableHelloReadTimeout; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-114; FEATURE="High-Concurrency Setup"; ASPECT=ConfigurableHelloReadTimeout; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     //
     // Detached connection-admission handlers remain bounded, but high-fanout
     // setup tests and production deployments need failed/stalled HELLO reads to

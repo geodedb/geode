@@ -132,7 +132,7 @@ pub const PollSync = struct {
     active_io_count: u32 = 0,
     poll_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    // CANARY: REQ=REQ-QUIC-HC-036; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedPollWakeFanout; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-036; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedPollWakeFanout; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     // Waking every stream reader after every packet-bearing poll cycle creates
     // a thundering herd under 100s of connections. A bounded futex wake lets
     // active streams make progress without burning the poll thread's CPU slice
@@ -248,7 +248,7 @@ pub const server_handler_wait_for_poll_ns: u64 = 100 * std.time.ns_per_ms;
 // 256 KB per-poll fill (which also taxes ACTIVE polling).
 pub const idle_poll_empty_park_ns: u64 = 250 * std.time.ns_per_ms;
 
-// CANARY: REQ=REQ-QUIC-HC-075; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ServerWriteWouldBlockRetry; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-075; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ServerWriteWouldBlockRetry; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // Under response fan-out, nonblocking UDP sends can return WouldBlock when the
 // kernel send queue is briefly full. Treat that like congestion/flow-control
@@ -256,7 +256,7 @@ pub const idle_poll_empty_park_ns: u64 = 250 * std.time.ns_per_ms;
 // then retry instead of failing the request with no response.
 pub const server_writer_wait_for_poll_ns: u64 = 1 * std.time.ns_per_ms;
 
-// CANARY: REQ=REQ-QUIC-HC-083; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ServerWriteCongestionDeadline; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-083; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ServerWriteCongestionDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // PollSync can wake writers for unrelated connection progress during a 512+
 // response burst. Use a wall-clock congestion deadline plus a periodic real
@@ -266,14 +266,14 @@ pub const server_writer_max_blocked_ns: u64 = 60 * std.time.ns_per_s;
 const server_writer_retry_yield_every: usize = 64;
 const server_writer_credit_wait_ns: u64 = 5 * std.time.ns_per_ms;
 
-// CANARY: REQ=REQ-QUIC-HC-084; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ClientWriteCongestionDeadline; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-084; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ClientWriteCongestionDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // Request fan-out has the same congestion-window burst behavior as response
 // fan-out. Keep client writes bounded by wall clock instead of the old 10s
 // retry budget so early EXECUTE frames can wait for ACK progress.
 pub const client_writer_max_blocked_ns: u64 = 60 * std.time.ns_per_s;
 
-// CANARY: REQ=REQ-QUIC-HC-088; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConfigurableInitialCwnd; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-088; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConfigurableInitialCwnd; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // Geode's QUIC deployment is server/datacenter oriented and routinely opens
 // hundreds or thousands of fresh connections in one fan-out. A 10-packet
@@ -283,7 +283,7 @@ pub const client_writer_max_blocked_ns: u64 = 60 * std.time.ns_per_s;
 const high_concurrency_initial_cwnd_packets: u16 = 64;
 
 fn waitForServerWriterProgress(stream: *QuicStream, blocked_retries: usize, observed_credit_generation: u32) void {
-    // CANARY: REQ=REQ-QUIC-HC-087; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PerConnectionTxCreditWake; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-087; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PerConnectionTxCreditWake; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     // Congestion-window zero returns clear only when this connection receives
     // Application ACK credit. Waiting on the endpoint-wide poll generation
     // wakes every blocked writer for unrelated peers and turns a response burst
@@ -527,7 +527,7 @@ pub const QuicTransport = struct {
         }
         ep.pto_dirty_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        // CANARY: REQ=REQ-QUIC-HC-034; FEATURE="QUIC High-Concurrency Requests"; ASPECT=EndpointSideSetDestroyCleanup; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-034; FEATURE="QUIC High-Concurrency Requests"; ASPECT=EndpointSideSetDestroyCleanup; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
         // pending_hs_send_set also stores raw connection pointers outside the
         // endpoint map. Remove it before api.destroy() frees the connection,
         // or a later poll cycle can retry a handshake send on freed state.
@@ -847,7 +847,7 @@ pub const QuicTransport = struct {
     /// still own. Handlers observe the per-connection shutdown flag on their
     /// next stream read/write and then call destroyConnection() normally.
     ///
-    /// CANARY: REQ=REQ-QUIC-HC-004; FEATURE="QUIC High-Concurrency Shutdown"; ASPECT=ConnectionDrainSignal; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+    /// CANARY: REQ=REQ-QUIC-HC-004; FEATURE="QUIC High-Concurrency Shutdown"; ASPECT=ConnectionDrainSignal; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     pub fn requestShutdown(self: *QuicTransport) void {
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -1245,7 +1245,7 @@ pub const QuicConnection = struct {
         if (self.poll_sync) |ps| ps.notifyPoll();
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-037; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PerConnectionRxWake; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-037; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PerConnectionRxWake; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     pub fn readGeneration(self: *const QuicConnection) u32 {
         return self.inner.rx_data_generation.load(.acquire);
     }
@@ -1362,7 +1362,7 @@ pub const QuicStream = struct {
         return n_read;
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-037; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PerConnectionRxWake; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-037; FEATURE="QUIC High-Concurrency Requests"; ASPECT=PerConnectionRxWake; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     /// Snapshot the vendored connection's RX generation before attempting a
     /// read. If the read returns WouldBlock, waitForReadGeneration parks on
     /// this per-connection generation rather than the endpoint-wide poll
