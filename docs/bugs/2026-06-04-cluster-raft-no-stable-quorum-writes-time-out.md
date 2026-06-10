@@ -815,9 +815,63 @@ on reload).
   marker-only snapshot blob would let a fresh follower skip entries it never
   applied — the snapshot must carry, or safely imply, the full applied state).
   Correctness is unaffected (re-applies are idempotent no-ops).
-- **Edge / delete / merge replication idempotency.** Those mutations are still
-  `ClusterWriteNotReplicable`; when they become replicable they need the same
-  raft-index-keyed idempotency.
+- ~~**Edge / delete / merge replication idempotency.**~~ **RESOLVED 2026-06-09**
+  — see "Edge/delete/merge/SET replication" section below.
+
+---
+
+## ✅ RESOLVED (2026-06-09) — Edge/delete/merge/SET replication with idempotent apply
+
+All four previously non-replicable mutation classes now replicate through Raft
+with deterministic, restart-idempotent apply (4 slices, commits `c612711c`,
+`e6d91f56`, `4aec072c`, `ed75e2ce`; failing-first repro tests in `7b168f62`):
+
+- **Edge CREATE** (`GNC2` payload): one committed entry mints up to 32 nodes +
+  32 edges via positional id derivation in a disjoint band (`MULTI_ID_BASE =
+  1<<40` — collision-free vs GNC1 plain-raft-index ids and far below the
+  `generateTimeBasedId` ~1.17e17 floor; unit sweep enforces this). Endpoints
+  encode as `{position, absolute_id}` so later slices reference pre-existing
+  nodes.
+- **DELETE / DETACH DELETE** (`GDEL`): the leader resolves the MATCH set to
+  explicit stable node/edge id arrays (followers NEVER re-run MATCH), validates
+  `NodeHasEdges` semantics locally before proposing, apply deletes edges before
+  nodes and no-ops on absent ids (restart re-apply is clean).
+- **MERGE** (`GMRG` + reuse of create codecs): match-or-create is decided ONCE
+  on the leader and shipped as an outcome — matched-without-ON-MATCH
+  short-circuits as a no-op; not-matched rides the idempotent create apply.
+  Concurrent-MERGE race documented (bounded by single-writer-leader
+  propose+waitForApplied).
+- **MATCH…SET / REMOVE** (`GUPD`): this path was previously **completely
+  ungated** — a leader SET silently mutated only the leader (silent divergence,
+  the highest-severity finding of the audit). Now: followers reject with
+  `ClusterNotLeader`; the leader evaluates SET expressions to concrete scalars
+  and ships `{node_id, set/remove props, add/remove labels}` (≤4096 nodes per
+  entry).
+- **Mixed-version safety**: the legacy opaque `.create` fallback (which created
+  junk `_raft_data` nodes for unknown payloads) is removed — unknown payload
+  magic logs-and-skips on every mutation type.
+- **Fail-closed scope** (unchanged semantics, precise errors): INSERT,
+  multi-chain patterns, non-scalar property values, `SET n = {map}`,
+  edge-property SET (`SET r.x`), relationship-MERGE, MERGE/SET with RETURN
+  projections, >4096-id updates/deletes.
+
+**Evidence**: `tests/test_cluster_replicable_mutations.zig` (4 real-process
+3-node tests, all red→green: edge create, DETACH DELETE, MERGE×2 idempotent,
+SET convergence); `tests/test_raft_apply.zig` 27/27 (codec round-trips,
+apply-twice idempotency, cross-store convergence, id-band sweep, unknown-magic
+skips); full pre-push gate (4 shards, 1887+ tests) green; netns churn harness
+extended with **M5/M6/M7** restart-no-dup phases (`1e2028c2`) — M5 standalone
+PASSES (edge + endpoints stay EXACTLY 1 after in-place restart durable-log
+re-apply).
+
+**Note on full M1–M7 netns runs**: intermittently blocked by the pre-existing
+**root cause #5** transport wedge — a node restarted in place can fail its
+outbound verified-TLS QUIC handshake to exactly one (healthy) peer forever
+(`getOrCreatePeerConnection failed error=HandshakeError`, never recovers,
+parks as perpetual candidate; reproduced 3 ways including an M1–M4-only run on
+unmodified phases, so it is independent of this change). That liveness defect
+remains the top open transport-hardening item (`connectWithTLS` /
+`waitForHandshake` in `src/distributed/raft_consensus.zig`).
 
 ---
 
