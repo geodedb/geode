@@ -2,11 +2,67 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: April 9, 2026
-**Last Verified**: April 9, 2026
+**Last Updated**: June 10, 2026
+**Last Verified**: June 10, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: 7 open gaps (3 Critical, 1 High, 3 Medium, 3 blocked). See docs/GAP_ANALYSIS.md.
+**Current Status**: 3 open gaps (2 Critical Blocked + 1 Medium Partial). See docs/GAP_ANALYSIS.md.
+
+## 2026-06-09/10 Closure Round — branch gap-closure-2026-06-09 (34 items)
+
+**Summary**: 34 gaps closed across the LSP subsystem, multi-tenancy enforcement, FLE correctness,
+GPS policy DDL durability, CDC sinks, distributed EXPLAIN, embedded API, recursive CTEs,
+backup validation, and documentation rebaselining. 2 remain Blocked (GAP-0256, GAP-0838).
+1 remains Partial (GAP-0514). Platform issue operations skipped — `glab` unavailable in this
+environment (GAP-0526 won't-do context). Branch commit count ~78; test baseline 167/175 named
+`zig build test-*` steps (see `docs/KNOWN_TEST_ISSUES.md` for the 8 non-passing).
+
+| Gap-ID | Severity | Area | Closing commit(s) | Pinning test target | Resolved date |
+|--------|----------|------|-------------------|---------------------|---------------|
+| GAP-0516 | Medium | MCP subscription contract | `8937ac5e` | `zig build test-gap0516` | 2026-06-10 |
+| GAP-0816 | High | LSP $/cancelRequest + AnsweredRing | `40e9c2fc` | `zig build test-gap0816` | 2026-06-09 |
+| GAP-0817 | High | LSP positionEncoding negotiation (in+out) | `70e45dc7` | `zig build test-gap0817` | 2026-06-09 |
+| GAP-0818 | Critical | LSP LspContext tenant/user/session threading | `38629a56`, `c186f38a` | `zig build test-gap0818` | 2026-06-09 |
+| GAP-0820 | Medium | LSP workspace/* explicit non-support | `b8ab3f0e` | `zig build test-gap0820-0824` | 2026-06-09 |
+| GAP-0821 | Medium | LSP rename explicit non-support | `4f7c428f` | `zig build test-gap0820-0824` | 2026-06-09 |
+| GAP-0822 | Medium | LSP codeAction explicit non-support | `66ee0768` | `zig build test-gap0820-0824` | 2026-06-09 |
+| GAP-0823 | Low | LSP inlayHint unadvertised + test | `35c9bcff` | `zig build test-gap0820-0824` | 2026-06-09 |
+| GAP-0824 | Low | LSP save lifecycle non-support contract | `57bddcbe` | `zig build test-gap0820-0824` | 2026-06-09 |
+| GAP-0825 | Low | LSP Content-Length framing conformance | `4d4dfa9a` | `zig build test-gap0825` | 2026-06-09 |
+| GAP-0826 | Low | LSP performance/stress test pack | `8e9b797d` | `zig build test-gap0826` | 2026-06-09 |
+| GAP-0827 | Low | LSP 3.17/JSON-RPC 2.0 conformance pack | `63713af5` | `zig build test-gap0827` | 2026-06-09 |
+| GAP-0828 | Low | LSP DocumentStore reopen leak regression | `a7054bd3` | `zig build test-gap0828` | 2026-06-09 |
+| GAP-0829 | Medium | LSP docs rewritten to shipped surface | `ce6acb11` | `zig build test-gap0831` (guard) | 2026-06-10 |
+| GAP-0830 | Low | MCP/LSP bridge contract doc + CANARY | `b79bb0d6` | `zig build test-gap0830` | 2026-06-10 |
+| GAP-0831 | Medium | LSP capability/handler truthfulness guard | `e678585f`, `2f23cbfb` | `zig build test-gap0831` | 2026-06-09 |
+| GAP-0832 | Low | LSP validated JSON-RPC decode (-32600) | `1b459709` | `zig build test-gap0832` | 2026-06-09 |
+| GAP-0846 | High | Tenant hierarchy enforced in read paths | `ce38a7f7` | `zig build test-gap0846` | 2026-06-09 |
+| GAP-0847 | Medium | Tenant drop cascade + CALL-only DDL scope | `030161b0`, `eaadd8b7` | `zig build test-gap0847` | 2026-06-10 |
+| GAP-0848 | High | Strict tenancy default in multi-tenant mode | `8fee8546` | `zig build test-gap0848` | 2026-06-09 |
+| GAP-0849 | High | geode-client-zig pin bumped to v0.2.11 | `2a477863` | `zig build test-clients` | 2026-06-10 |
+| GAP-0850 | Medium | Production refuse-to-start for --insecure-allow-all | `07cb8c52` | `zig build test-gap0850` | 2026-06-09 |
+| GAP-0851 | Medium | At-rest TDE claims narrowed (doc-only) | `8cd00053` | doc-only | 2026-06-10 |
+| GAP-0852 | Medium | FLE derives role/tenant from ExecutionContext | `5ed2369d` | `zig build test-gap0852` | 2026-06-09 |
+| GAP-0853 | Low | FLE CALL admin surface documented | `d856e938` | doc-only | 2026-06-10 |
+| GAP-0854 | Critical | FLE configureField corrupts auth HMAC chain | `15adb1ed` | `zig build test-gap0854` | 2026-06-09 |
+| GAP-0855 | High | CDC webhook + Kafka sink real delivery | `60597c5c`, `b2df1517` | `zig build test-gap0855-webhook` | 2026-06-10 |
+| GAP-0856 | Medium | Distributed EXPLAIN/PROFILE node-local scope | `33775bdc`, `126e21f3` | `zig build test-gap0856` | 2026-06-10 |
+| GAP-0857 | Medium | Embedded server API gated + documented | `e5c0fa82` | `zig build test-gap0857` | 2026-06-10 |
+| GAP-0858 | High | ALTER POLICY durable write-through | `c67cd99b`, `2e209aa8` | `zig build test-gap0858` | 2026-06-09 |
+| GAP-0859 | Medium | Recursive CTE real E2E + WHERE-in-UNWIND fix | `ae382327` | `zig build test-recursive-cte` | 2026-06-10 |
+| GAP-0860 | Medium | Test-status artifacts rebaselined | `faac1f3e`, `5807d99f` | `docs/KNOWN_TEST_ISSUES.md` | 2026-06-10 |
+| GAP-0861 | Medium | Product/compliance claims rebaselined | `97590e33` | doc-only | 2026-06-10 |
+| GAP-0862 | Medium | Backup/restore tests assert real behavior | `fd1b97cd`, `ef30537b` | `zig build test-gap0862` | 2026-06-10 |
+
+**Notable product defects fixed in this round** (not all were tracked as named gaps):
+FLE audit-chain corruption on configureField (GAP-0854); two cross-tenant read leaks in
+match_operations relaxed label-index sites (GAP-0846 follow-up); backup archived wrong root +
+lying compression header (GAP-0862); cancel-id poisoning in LSP AnsweredRing (GAP-0816
+follow-up); LSP response leaks on DocumentStore deinit (GAP-0828); LSP framer case-sensitivity
+on Content-Length header (GAP-0825); WHERE clause dropped in UNWIND execution path causing
+unbounded recursion (GAP-0859); FLE envelope leaks on batch ops (GAP-0854 follow-up).
+
+---
 
 ## March 13, 2026 Gap Resolution — Security & Cryptographic Gaps (6 items)
 
