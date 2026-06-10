@@ -1,6 +1,36 @@
 # Bug: SIGSEGV (exit 139) — "General protection exception" in `readInt` ← `nextMessage` (QUIC message parser) under sustained query load
 
-**Status:** **OPEN — reproduced on latest `geodedb/geode:dev`** (2026-06-10).
+**Status:** **FIXED on `main` (2026-06-10)** — root cause was a **use-after-free of
+`FirstStreamOwnerContext`**, not a framing-parser bug: the cooperative
+scheduler's detached async-cleanup (`finishCooperativeContext` →
+`cleanupFirstStreamOwnerAsync` → `gpa.destroy(ctx)`) freed the context while
+the detached-owner read loop and/or the poll-thread RX-ready notifier
+(`firstStreamReadyCallback`) still referenced `&ctx.reader` — the GP fault in
+`readInt` was a recycled-allocation read of the corrupt `buffer` slice header.
+Fix (commits `93f914c5` red tests, `d66ed52a` fix, `2580ff4e` review
+follow-ups): `owner_refs` lifetime refcount on `FirstStreamOwnerContext`
+(creation = lifecycle ref; cooperative `submit` takes a notifier ref before
+publishing; the last release destroys — mirrors `StreamAcceptorContext` and
+the 2026-06-02 reaper philosophy), a `notifier_inflight` enter/exit gate with
+`waitNotifierDrained()` in cleanup, `submit` returns ownership by value so the
+caller never dereferences the ctx after publication, a post-drain
+`removeContext` re-purge of stale notifier re-enqueues, and a loud bounds
+guard (`error.CorruptStreamFraming`) at the faulting `readInt` site.
+Regression: `tests/test_first_stream_owner_lifetime.zig` +
+`src/first_stream_owner_lifetime_test_root.zig`
+(`zig build test-first-stream-owner-lifetime`, 9/9, in the sharded aggregate;
+the two race regressions were deterministic-red before the fix via allocator
+canaries). **Known residual (documented at the notifier-gate comment in
+`quic_connection_handler.zig`):** the vendored quic lib's `notifyRxReady`
+loads fn+ctx non-atomically after `Connection.mu` release, so a
+captured-but-not-yet-invoked callback in that ~3-instruction window survives
+the drain — vastly narrower than the fixed whole-loop window (the 9×/hour
+crash class is closed) but structurally present until a lib-level notifier
+quiesce or a `pending_destroy`-epoch ctx free lands.
+
+Original report follows.
+
+**Original status:** **OPEN — reproduced on latest `geodedb/geode:dev`** (2026-06-10).
 Under a sustained Playwright e2e query workload (a single divelife-api replica +
 ~2 PDS replicas serving the divelife-ui coverage/qa-integration/runtime-error
 scanner suites), geode crashes with a **SIGSEGV / General protection exception**
