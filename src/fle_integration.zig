@@ -205,6 +205,46 @@ pub fn getCurrentTenantIdCtx(ctx: anytype) []const u8 {
     return getCurrentTenantId();
 }
 
+/// GAP-0852 follow-up: single source of truth for "resolve the FLE role,
+/// preferring the active ExecutionContext's request-scoped role over the
+/// per-thread map." Previously this 5-line body was copy-pasted into
+/// `src/execution/fle_hooks.zig`, `src/execution/value_utilities.zig`,
+/// `src/graph_store.zig`, and `src/planner/rewrite.zig` (each with its own lazy
+/// `@import("execution.zig")` to dodge the cycle). Consolidated here next to
+/// `getCurrentUserRoleCtx` — `checkPropertyAccess` already proves the lazy
+/// function-body import of execution works inside this module, so every migrated
+/// site now calls this instead. Wherever a request context is pushed (the request
+/// boundary), the context becomes authoritative; contextless internal/legacy
+/// callers keep the per-thread behavior. Fail-secure: with neither a context role
+/// nor a per-thread role, returns null so plaintext access is denied.
+/// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-003; FEATURE="FLERoleIsolation"; ASPECT=ContextRole; STATUS=TESTED; TEST=tests/test_gap0852_fle_request_context.zig; OWNER=security; UPDATED=2026-06-09
+pub fn rolePreferringActiveContext() ?[]const u8 {
+    const exec_mod = @import("execution.zig");
+    if (exec_mod.getActiveContext()) |ctx_ptr| {
+        return getCurrentUserRoleCtx(ctx_ptr);
+    }
+    return getCurrentUserRole();
+}
+
+/// GAP-0852 follow-up: single source of truth for "resolve the FLE tenant,
+/// preferring the active ExecutionContext's request-scoped tenant over the
+/// per-thread map" (analog of `rolePreferringActiveContext`). Consolidates the
+/// `currentTenantIdPreferringContext` copies from `src/execution/fle_hooks.zig`
+/// and `src/execution/value_utilities.zig`. When a context is present and carries
+/// a tenant, that tenant is used verbatim; the per-thread map (and its documented
+/// `"default"`) is reached ONLY for genuinely contextless internal callers
+/// (startup hydration, legacy paths). Fail-secure: a wrong tenant in the
+/// AAD/key-id namespace makes decryption fail rather than expose another tenant's
+/// plaintext.
+/// CANARY: REQ=REQ-MULTI-TENANT-FLE-004; FEATURE="FLE Multi-Tenancy"; ASPECT=ContextTenant; STATUS=TESTED; TEST=tests/test_gap0852_fle_request_context.zig; OWNER=security; UPDATED=2026-06-09
+pub fn tenantPreferringActiveContext() []const u8 {
+    const exec_mod = @import("execution.zig");
+    if (exec_mod.getActiveContext()) |ctx_ptr| {
+        return getCurrentTenantIdCtx(ctx_ptr);
+    }
+    return getCurrentTenantId();
+}
+
 /// Clear all per-thread FLE state (tenant_id and role) for the current thread.
 /// MUST be called in the connection handler's defer block to prevent stale
 /// state from leaking into a subsequent connection that reuses the same thread.

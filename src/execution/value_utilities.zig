@@ -21,27 +21,10 @@ const json_lib = @import("json");
 const ExecutionResult = execution.ExecutionResult;
 const Value = value_types.Value;
 
-/// GAP-0844 (secondary): resolve the current FLE role, preferring the active
-/// ExecutionContext's request-scoped `fle_role` over the per-thread map (falls
-/// back to the per-thread map when no context is active — unchanged behavior).
-fn currentUserRolePreferringContext() ?[]const u8 {
-    if (execution.getActiveContext()) |ctx_ptr| {
-        return fle_integration.getCurrentUserRoleCtx(ctx_ptr);
-    }
-    return fle_integration.getCurrentUserRole();
-}
-
-/// GAP-0852: resolve the current FLE tenant, preferring the active
-/// ExecutionContext's request-scoped `tenant_id` over the per-thread map (falls
-/// back to the per-thread map / its documented "default" only for genuinely
-/// contextless callers). Keeps decrypt-on-projection tenant-correct under a
-/// future async / work-stealing executor.
-fn currentTenantIdPreferringContext() []const u8 {
-    if (execution.getActiveContext()) |ctx_ptr| {
-        return fle_integration.getCurrentTenantIdCtx(ctx_ptr);
-    }
-    return fle_integration.getCurrentTenantId();
-}
+// GAP-0852 follow-up: the context-preferring role/tenant helpers used to live
+// here as `currentUserRolePreferringContext` / `currentTenantIdPreferringContext`.
+// They were duplicated across four modules and are now consolidated as
+// `fle_integration.rolePreferringActiveContext` / `.tenantPreferringActiveContext`.
 
 /// Write a string with proper RFC 8259 JSON escaping
 /// Handles GQL doubled single quotes ('') -> single quote (')
@@ -257,9 +240,9 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                             if (fle_integration.hasEncryptedFields()) {
                                 // Field-Level Encryption: decrypt if configured
                                 const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                                const user_role = currentUserRolePreferringContext();
+                                const user_role = fle_integration.rolePreferringActiveContext();
                                 const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = currentTenantIdPreferringContext(),
+                                    .tenant_id = fle_integration.tenantPreferringActiveContext(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
                                     .current_user_role = user_role,
@@ -355,10 +338,10 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                             if (fle_integration.hasEncryptedFields()) {
                                 const type_name = edge.label;
                                 const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = currentTenantIdPreferringContext(),
+                                    .tenant_id = fle_integration.tenantPreferringActiveContext(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
-                                    .current_user_role = currentUserRolePreferringContext(),
+                                    .current_user_role = fle_integration.rolePreferringActiveContext(),
                                 };
                                 const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
                                 defer allocator.free(record_id_buf);

@@ -35,22 +35,10 @@ const Attr = logging.Attr;
 
 const LabelCountValue = std.atomic.Value(usize);
 
-/// GAP-0852: resolve the FLE role for graph_store's own encrypt/decrypt
-/// enforcement, preferring the active ExecutionContext's request-scoped
-/// `fle_role` over the per-thread map. graph_store is imported BY execution, so
-/// the import is lazy to avoid a top-level cycle (same technique used in
-/// execution/fle_hooks.zig). Wherever a request context is pushed (the request
-/// boundary), the context becomes authoritative; internal/legacy callers with
-/// no active context keep the per-thread behavior unchanged. Fail-secure: with
-/// neither a context role nor a per-thread role, this returns null and
-/// canReadPlaintext denies decryption.
-fn fleRolePreferringContext() ?[]const u8 {
-    const exec_mod = @import("execution.zig");
-    if (exec_mod.getActiveContext()) |ctx_ptr| {
-        return fle_integration.getCurrentUserRoleCtx(ctx_ptr);
-    }
-    return fle_integration.getCurrentUserRole();
-}
+// GAP-0852 follow-up: the context-preferring FLE role helper used to live here as
+// `fleRolePreferringContext` (with its own lazy `@import("execution.zig")`). It was
+// duplicated across four modules and is now consolidated as
+// `fle_integration.rolePreferringActiveContext`.
 
 // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-001; FEATURE="EngineBackedPersistence"; ASPECT=LegacyRemoval; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
 // Phase 2: Legacy graph_store.dat persistence removed — adapter is the primary store.
@@ -3143,7 +3131,7 @@ pub const GraphStore = struct {
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
                             .allocator = self.allocator,
-                            .current_user_role = fleRolePreferringContext(),
+                            .current_user_role = fle_integration.rolePreferringActiveContext(),
                         };
                         // FLE record-id formatting must NOT go through allocPrint on the
                         // shared self.allocator — concurrent thread-pool paths (QUIC auth
@@ -3373,7 +3361,7 @@ pub const GraphStore = struct {
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
                             .allocator = self.allocator,
-                            .current_user_role = fleRolePreferringContext(),
+                            .current_user_role = fle_integration.rolePreferringActiveContext(),
                         };
                         // Stack-formatted record ID — see setNodeProperty comment.
                         var id_buf: [32]u8 = undefined;
@@ -3424,7 +3412,7 @@ pub const GraphStore = struct {
                         .tenant_id = self.tenant_id,
                         .schema_name = self.schema_name,
                         .allocator = self.allocator,
-                        .current_user_role = fleRolePreferringContext(),
+                        .current_user_role = fle_integration.rolePreferringActiveContext(),
                     };
 
                     // Format record ID on the stack — NOT via allocPrint on the shared
@@ -4687,7 +4675,7 @@ pub const GraphStore = struct {
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
                             .allocator = self.allocator,
-                            .current_user_role = fleRolePreferringContext(),
+                            .current_user_role = fle_integration.rolePreferringActiveContext(),
                         };
                         // Stack-formatted record ID — see setNodeProperty comment.
                         var id_buf: [32]u8 = undefined;
@@ -4876,7 +4864,7 @@ pub const GraphStore = struct {
                             .tenant_id = self.tenant_id,
                             .schema_name = self.schema_name,
                             .allocator = self.allocator,
-                            .current_user_role = fleRolePreferringContext(),
+                            .current_user_role = fle_integration.rolePreferringActiveContext(),
                         };
                         // Stack-formatted record ID — see setNodeProperty comment.
                         var id_buf: [32]u8 = undefined;

@@ -86,6 +86,54 @@ test "GAP-0852: a null-tenant context with empty per-thread map falls back to de
     try std.testing.expectEqualStrings("default", fle.getCurrentTenantIdCtx(&ctx_empty));
 }
 
+// GAP-0852 follow-up: pin the thread-local active-context wiring that the
+// migrated sites depend on. The four duplicated `*PreferringContext` helpers
+// were consolidated into `fle_integration.rolePreferringActiveContext` /
+// `.tenantPreferringActiveContext`, which read `execution.getActiveContext()`.
+// Every production site that previously had its own copy now funnels through
+// these two. This test exercises the REAL push/pop plumbing (not a hand-rolled
+// `getActiveContext`) and asserts the consolidated helpers resolve role+tenant
+// from the pushed context, then revert to the per-thread bridge after pop.
+test "GAP-0852 follow-up: consolidated helpers resolve role+tenant from pushed active context" {
+    const catalog = try exec.ensureCatalogInstance(std.testing.allocator);
+    defer exec.cleanupCatalogInstance();
+
+    // Per-thread (legacy bridge) holds DIFFERENT values; the pushed context must win.
+    fle.setCurrentUserRole("thread_role");
+    fle.setCurrentTenantId("thread_tenant");
+    defer fle.clearCurrentThreadState();
+
+    // With no active context, the consolidated helpers fall back to the bridge.
+    try std.testing.expect(exec.getActiveContext() == null);
+    try std.testing.expectEqualStrings("thread_role", fle.rolePreferringActiveContext().?);
+    try std.testing.expectEqualStrings("thread_tenant", fle.tenantPreferringActiveContext());
+
+    // Push a real request context via the production push API, scoped to a block
+    // so the matching pop runs deterministically before the post-pop assertions.
+    {
+        var ctx: exec.ExecutionContext = .{ .catalog = catalog, .fle_role = "ctx_role", .tenant_id = "ctx_tenant" };
+        const prev = exec.pushActiveContext(&ctx);
+        defer exec.popActiveContext(prev);
+
+        // The consolidated helpers must now resolve from the pushed context, NOT
+        // the per-thread map — this is the wiring the migrated graph_store /
+        // fle_hooks / value_utilities / planner sites rely on.
+        try std.testing.expectEqualStrings("ctx_role", fle.rolePreferringActiveContext().?);
+        try std.testing.expectEqualStrings("ctx_tenant", fle.tenantPreferringActiveContext());
+
+        // checkPropertyAccess (the pub entry that already used the active-context
+        // block) observes the same pushed context: for a NON-encrypted field it
+        // returns the value verbatim, proving it ran under the context cleanly.
+        const out = try fle.checkPropertyAccess(std.testing.allocator, "UnregisteredType", "plain_field", "plaintext", 1);
+        try std.testing.expectEqualStrings("plaintext", out);
+    }
+
+    // After pop, the helpers revert to the per-thread bridge.
+    try std.testing.expect(exec.getActiveContext() == null);
+    try std.testing.expectEqualStrings("thread_role", fle.rolePreferringActiveContext().?);
+    try std.testing.expectEqualStrings("thread_tenant", fle.tenantPreferringActiveContext());
+}
+
 // Worker for the concurrency regression. Each thread sets its OWN per-thread
 // role/tenant to a *wrong* value, then resolves through the context-preferring
 // helpers with its OWN request context — and must observe its own context
