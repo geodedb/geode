@@ -217,7 +217,21 @@ fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
 // Clients that need change tracking should poll via `readResource`.
 // When Geode gains a graph-topology event producer, swap these
 // handlers to a real implementation.
-// CANARY: REQ=REQ-MCP-RESOURCE-SUBSCRIBE-001; FEATURE="MCPResourceSubscribe"; ASPECT=UnsupportedSignal; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
+//
+// KNOWN ADVERTISEMENT CAVEAT (documented, tested in
+// tests/test_gap0516_mcp_capabilities.zig and docs/MCP_SERVER.md):
+// the pinned `mcp` library (v0.1.7) hardcodes
+// `"resources":{"subscribe":true,...}` in its `initialize` response
+// (mcp.zig buildInitialize ~3127) and exposes no ServerOptions field
+// to override it. Geode therefore cannot make the advertised
+// capability string match the handler behaviour without forking the
+// dependency. The authoritative, runtime-truthful contract is the
+// handler response itself: `resources/subscribe` and
+// `resources/unsubscribe` answer -32601 MethodNotFound. The
+// regression test pins BOTH facts (the stale advertisement and the
+// honest handler), so a future library version that drops the
+// advertisement will trip the test and prompt a doc update.
+// CANARY: REQ=REQ-MCP-RESOURCE-SUBSCRIBE-001; FEATURE="MCPResourceSubscribe"; ASPECT=UnsupportedSignal; STATUS=TESTED; TEST=tests/test_gap0516_mcp_capabilities.zig; OWNER=mcp; UPDATED=2026-06-10
 fn subscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
     _ = ctx;
     _ = uri;
@@ -225,7 +239,7 @@ fn subscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
 }
 
 // GAP-0516: paired with subscribeResourceHandler. See the note above.
-// CANARY: REQ=REQ-MCP-RESOURCE-SUBSCRIBE-002; FEATURE="MCPResourceUnsubscribe"; ASPECT=UnsupportedSignal; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
+// CANARY: REQ=REQ-MCP-RESOURCE-SUBSCRIBE-002; FEATURE="MCPResourceUnsubscribe"; ASPECT=UnsupportedSignal; STATUS=TESTED; TEST=tests/test_gap0516_mcp_capabilities.zig; OWNER=mcp; UPDATED=2026-06-10
 fn unsubscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
     _ = ctx;
     _ = uri;

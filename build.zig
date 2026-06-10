@@ -5050,6 +5050,32 @@ pub fn build(b: *std.Build) void {
     const gap0816_step = b.step("test-gap0816", "GAP-0816: LSP $/cancelRequest handling with -32800 responses");
     gap0816_step.dependOn(&run_gap0816_tests.step);
 
+    // GAP-0516: MCP resource-subscription contract + truthful capability
+    // reporting. Roots the regression file through src/mcp/server.zig exposed
+    // as `mcp_server`, mirroring the mcp_cli_mod import set so server.zig (and
+    // its tools/resources/prompts deps) link. The test drives the real
+    // mcp.Server.processMessage dispatch (initialize, resources/subscribe ->
+    // -32601, resources/unsubscribe -> -32601, implemented-subset success) and
+    // pins the known upstream advertisement caveat.
+    const gap0516_server_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/server.zig"), .target = target, .optimize = optimize });
+    gap0516_server_mod.addImport("mcp", mcp_mod);
+    gap0516_server_mod.addImport("geode", root_mod);
+    gap0516_server_mod.addImport("json", json_mod);
+    gap0516_server_mod.addImport("schema", schema_mod);
+    gap0516_server_mod.addImport("protobuf", protobuf_mod);
+    gap0516_server_mod.addImport("transport/quic", transport_quic_mod);
+    gap0516_server_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    gap0516_server_mod.addImport("build_options", build_options_mod);
+    gap0516_server_mod.link_libc = true;
+    const gap0516_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0516_mcp_capabilities.zig"), .target = target, .optimize = optimize });
+    gap0516_test_mod.addImport("mcp_server", gap0516_server_mod);
+    gap0516_test_mod.link_libc = true;
+    const gap0516_tests = b.addTest(.{ .root_module = gap0516_test_mod });
+    const run_gap0516_tests = b.addRunArtifact(gap0516_tests);
+    shardDep(test_step, &run_gap0516_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
+    gap0516_step.dependOn(&run_gap0516_tests.step);
+
     // GAP-0820..0824: LSP "honest non-support" contract — unadvertised feature
     // REQUESTS answer -32601 (MethodNotFound) and unadvertised NOTIFICATIONS are
     // silently tolerated (workspace/*, rename/prepareRename, codeAction,

@@ -869,6 +869,7 @@ REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegrati
 REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/MCP_LSP_BRIDGE.md
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/USER_AUTH.md
+REQ-DOC-MCP-SERVER-SUBSET,MCPServerSubsetDoc,Documentation,EXEMPT,,,mcp,2026-06-10,docs/MCP_SERVER.md
 REQ-DOCS-001,Docs,Documentation,TESTED,,,docs,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-DOCS-API-001,Docs,APIDocumentation,TESTED,,,docs,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-DOCUMENTATION-STRUCTURE-001,DocStructure,StructureTests,TESTED,,,claude,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -3429,8 +3430,8 @@ REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/cli
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
 REQ-MCP-GAP-0819,GqlInputChokepointResponse,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
-REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
-REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
+REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
+REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
