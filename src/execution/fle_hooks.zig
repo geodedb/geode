@@ -23,6 +23,24 @@ fn currentUserRolePreferringContext() ?[]const u8 {
     return fle_integration.getCurrentUserRole();
 }
 
+/// GAP-0852: resolve the current FLE tenant, preferring the active
+/// ExecutionContext's request-scoped `tenant_id` over the per-thread map. The
+/// FLE hooks do not receive a context parameter — they read the thread-local
+/// active context exactly the way `currentUserRolePreferringContext` and the
+/// GPS decrypt gate do — so the context becomes authoritative wherever one is
+/// pushed (the request boundary). When a context is present and carries a
+/// tenant, that tenant is used; the `"default"` namespace is reached ONLY for
+/// genuinely contextless internal callers (startup hydration, legacy paths),
+/// which is fail-closed: a wrong tenant in the AAD/key namespace makes
+/// decryption fail rather than expose another tenant's plaintext.
+fn currentTenantIdPreferringContext() []const u8 {
+    const exec_mod = @import("../execution.zig");
+    if (exec_mod.getActiveContext()) |ctx_ptr| {
+        return fle_integration.getCurrentTenantIdCtx(ctx_ptr);
+    }
+    return fle_integration.getCurrentTenantId();
+}
+
 /// GAP-0854 follow-up: the internal HMAC-chained security graph
 /// (`__geode_security`) must NEVER receive an FLE envelope. Its nodes/edges
 /// carry common labels (`User`, `Role`, `HAS_ROLE`) that collide with
@@ -79,9 +97,11 @@ pub fn encryptPropertyIfNeeded(
     const requires_encryption = fle_integration.fieldRequiresEncryption(node_type, field_name);
 
     // Create encryption context
-    // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
+    // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
+    // GAP-0852: prefer the request-scoped ExecutionContext tenant over the
+    // per-thread map so async/work-stealing executors stay tenant-correct.
     const ctx = fle_integration.EncryptionContext{
-        .tenant_id = fle_integration.getCurrentTenantId(),
+        .tenant_id = currentTenantIdPreferringContext(),
         .schema_name = node_type,
         .allocator = allocator,
         .current_user_role = currentUserRolePreferringContext(),
@@ -134,9 +154,11 @@ pub fn encryptEdgePropertyIfNeeded(
     const requires_encryption = fle_integration.fieldRequiresEncryption(edge_type, field_name);
 
     // Create encryption context
-    // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
+    // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
+    // GAP-0852: prefer the request-scoped ExecutionContext tenant over the
+    // per-thread map (see currentTenantIdPreferringContext).
     const ctx = fle_integration.EncryptionContext{
-        .tenant_id = fle_integration.getCurrentTenantId(),
+        .tenant_id = currentTenantIdPreferringContext(),
         .schema_name = edge_type,
         .allocator = allocator,
         .current_user_role = currentUserRolePreferringContext(),
@@ -220,9 +242,12 @@ pub fn decryptPropertyIfNeeded(
     }
 
     // Create encryption context
-    // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
+    // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
+    // GAP-0852: prefer the request-scoped ExecutionContext tenant over the
+    // per-thread map (see currentTenantIdPreferringContext) — the same active
+    // context the GPS gate above already consulted.
     const ctx = fle_integration.EncryptionContext{
-        .tenant_id = fle_integration.getCurrentTenantId(),
+        .tenant_id = currentTenantIdPreferringContext(),
         .schema_name = node_type,
         .allocator = allocator,
         .current_user_role = currentUserRolePreferringContext(),

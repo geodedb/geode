@@ -2,6 +2,17 @@ const std = @import("std");
 const gql_ast = @import("../gql/ast.zig");
 const fle_integration = @import("../fle_integration.zig");
 
+/// GAP-0852: resolve the FLE role for predicate rewriting (blind-index/searchable
+/// RBAC), preferring the active ExecutionContext's request-scoped `fle_role` over
+/// the per-thread map. Lazy import of execution avoids a planner↔execution cycle.
+fn fleRolePreferringContext() ?[]const u8 {
+    const exec_mod = @import("../execution.zig");
+    if (exec_mod.getActiveContext()) |ctx_ptr| {
+        return fle_integration.getCurrentUserRoleCtx(ctx_ptr);
+    }
+    return fle_integration.getCurrentUserRole();
+}
+
 // Field-Level Encryption Predicate Rewriting
 // CANARY: REQ=REQ-FLE-PLANNER-001; FEATURE="FieldLevelEncryption"; ASPECT=PLANNER; STATUS=TESTED; TEST=tests/e2e_where_subqueries.zig; OWNER=security; UPDATED=2026-01-15
 
@@ -215,7 +226,7 @@ fn walkExprForFLE(
                         .tenant_id = ctx.tenant_id,
                         .schema_name = ctx.schema_name,
                         .allocator = allocator,
-                        .current_user_role = fle_integration.getCurrentUserRole(),
+                        .current_user_role = fleRolePreferringContext(),
                     };
 
                     // Check if field is encrypted and searchable

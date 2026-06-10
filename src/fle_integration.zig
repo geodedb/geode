@@ -170,6 +170,41 @@ pub fn getCurrentUserRoleCtx(ctx: anytype) ?[]const u8 {
     return getCurrentUserRole();
 }
 
+/// GAP-0852: context-preferring FLE tenant reader (analog of `getCurrentUserRoleCtx`).
+///
+/// Prefers the request-scoped `ctx.tenant_id` (set at the request boundary
+/// alongside `setCurrentTenantId`) over the per-thread tenant map. This makes
+/// the EXECUTION CONTEXT — not the OS thread — authoritative for the FLE
+/// encryption namespace wherever a context is threaded, so tenant isolation
+/// survives a future async / work-stealing executor that moves a request across
+/// threads mid-flight.
+///
+/// SECURITY (GAP-0852): when a context is present and carries a non-null
+/// `tenant_id`, that tenant is used verbatim — the value NEVER silently
+/// collapses to the `"default"` namespace. Only a genuinely contextless caller
+/// (no context, or a context whose `tenant_id` is null) falls through to the
+/// per-thread map (and its documented `"default"` fallback) — that path serves
+/// internal/startup callers that legitimately have no tenant. Mixing a wrong
+/// tenant into the AAD/key-id namespace causes decryption to fail closed, so a
+/// stale per-thread tenant can never expose another tenant's plaintext.
+///
+/// `ctx` is `anytype` (rather than the concrete `execution.ExecutionContext`)
+/// purely to avoid a fle_integration ↔ execution import cycle; the only field it
+/// reads is `tenant_id`. `getCurrentTenantId()` (the per-thread reader) is left
+/// untouched so the legacy per-thread call sites keep their behavior.
+/// CANARY: REQ=REQ-MULTI-TENANT-FLE-003; FEATURE="FLE Multi-Tenancy"; ASPECT=ContextTenant; STATUS=TESTED; TEST=tests/test_gap0852_fle_request_context.zig; OWNER=security; UPDATED=2026-06-09
+pub fn getCurrentTenantIdCtx(ctx: anytype) []const u8 {
+    const T = @TypeOf(ctx);
+    if (comptime @typeInfo(T) == .pointer) {
+        if (comptime @hasField(@typeInfo(T).pointer.child, "tenant_id")) {
+            if (ctx.tenant_id) |t| return t;
+        }
+    } else if (comptime @hasField(T, "tenant_id")) {
+        if (ctx.tenant_id) |t| return t;
+    }
+    return getCurrentTenantId();
+}
+
 /// Clear all per-thread FLE state (tenant_id and role) for the current thread.
 /// MUST be called in the connection handler's defer block to prevent stale
 /// state from leaking into a subsequent connection that reuses the same thread.
@@ -664,13 +699,26 @@ pub fn checkPropertyAccess(
     value_str: []const u8,
     node_id: u64,
 ) ![]const u8 {
-    // Create encryption context with correct schema
-    // GAP-0281: Use per-thread tenant_id instead of hardcoded "default"
+    // Create encryption context with correct schema.
+    // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
+    // GAP-0852: prefer the active ExecutionContext's request-scoped tenant/role
+    // over the per-thread map so WHERE-clause FLE access checks stay correct
+    // under a future async / work-stealing executor. The execution import is
+    // lazy (function-body) to avoid a fle_integration ↔ execution top-level
+    // cycle; when no context is active (internal/legacy callers) we fall back to
+    // the per-thread readers verbatim.
+    const role_and_tenant = blk: {
+        const exec_mod = @import("execution.zig");
+        if (exec_mod.getActiveContext()) |ctx_ptr| {
+            break :blk .{ getCurrentUserRoleCtx(ctx_ptr), getCurrentTenantIdCtx(ctx_ptr) };
+        }
+        break :blk .{ getCurrentUserRole(), getCurrentTenantId() };
+    };
     const ctx = EncryptionContext{
-        .tenant_id = getCurrentTenantId(),
+        .tenant_id = role_and_tenant[1],
         .schema_name = type_name, // Use actual type name, not "default"
         .allocator = allocator,
-        .current_user_role = getCurrentUserRole(),
+        .current_user_role = role_and_tenant[0],
     };
 
     // Check if field is encrypted

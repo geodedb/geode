@@ -31,6 +31,18 @@ fn currentUserRolePreferringContext() ?[]const u8 {
     return fle_integration.getCurrentUserRole();
 }
 
+/// GAP-0852: resolve the current FLE tenant, preferring the active
+/// ExecutionContext's request-scoped `tenant_id` over the per-thread map (falls
+/// back to the per-thread map / its documented "default" only for genuinely
+/// contextless callers). Keeps decrypt-on-projection tenant-correct under a
+/// future async / work-stealing executor.
+fn currentTenantIdPreferringContext() []const u8 {
+    if (execution.getActiveContext()) |ctx_ptr| {
+        return fle_integration.getCurrentTenantIdCtx(ctx_ptr);
+    }
+    return fle_integration.getCurrentTenantId();
+}
+
 /// Write a string with proper RFC 8259 JSON escaping
 /// Handles GQL doubled single quotes ('') -> single quote (')
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-020; FEATURE="JSON Library Migration"; ASPECT=StringEscaping; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
@@ -247,7 +259,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                 const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
                                 const user_role = currentUserRolePreferringContext();
                                 const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = fle_integration.getCurrentTenantId(),
+                                    .tenant_id = currentTenantIdPreferringContext(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
                                     .current_user_role = user_role,
@@ -343,7 +355,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                             if (fle_integration.hasEncryptedFields()) {
                                 const type_name = edge.label;
                                 const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = fle_integration.getCurrentTenantId(),
+                                    .tenant_id = currentTenantIdPreferringContext(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
                                     .current_user_role = currentUserRolePreferringContext(),

@@ -4682,6 +4682,19 @@ pub fn build(b: *std.Build) void {
     const gap0844_ctx_step = b.step("test-gap0844-role-context", "GAP-0844 secondary regression (FLE role flows through ExecutionContext.fle_role)");
     gap0844_ctx_step.dependOn(&run_gap0844_ctx_tests.step);
 
+    // GAP-0852: FLE enforcement derives role AND tenant from the request
+    // ExecutionContext (authoritative), with the per-thread map as a documented
+    // legacy bridge; an absent tenant on a live context must not collapse to
+    // "default". Includes a bounded two-thread concurrency regression.
+    const gap0852_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0852_fle_request_context.zig"), .target = target, .optimize = optimize });
+    gap0852_test_mod.addImport("geode", root_mod);
+    gap0852_test_mod.link_libc = true;
+    const gap0852_tests = b.addTest(.{ .root_module = gap0852_test_mod });
+    const run_gap0852_tests = b.addRunArtifact(gap0852_tests);
+    shardDep(test_step, &run_gap0852_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0852_step = b.step("test-gap0852", "GAP-0852 regression (FLE role/tenant from request ExecutionContext; concurrent isolation)");
+    gap0852_step.dependOn(&run_gap0852_tests.step);
+
     // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
     const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
     perf_b_test_mod.addImport("geode", root_mod);
