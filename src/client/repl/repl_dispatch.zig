@@ -2483,7 +2483,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     var owned_scoped_gql: ?[]u8 = null;
     defer if (owned_scoped_gql) |buf| state.allocator.free(buf);
 
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-006; FEATURE="SourceChunkedExecution"; ASPECT=OutputSuppression; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-006; FEATURE="SourceChunkedExecution"; ASPECT=OutputSuppression; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
     // Check if output should be suppressed (during chunked execution)
     const suppress = if (@hasField(@TypeOf(state.*), "suppress_output")) state.suppress_output else false;
 
@@ -2818,7 +2818,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var batch_statements = try std.ArrayList(u8).initCapacity(state.allocator, contents.len);
     defer batch_statements.deinit(state.allocator);
 
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-001; FEATURE="SourceChunkedExecution"; ASPECT=StatementList; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-001; FEATURE="SourceChunkedExecution"; ASPECT=StatementList; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
     // Collect individual statements for chunked execution when file is large
     var statement_list = try std.ArrayList([]const u8).initCapacity(state.allocator, 0);
     defer {
@@ -2929,7 +2929,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             }
             try batch_statements.appendSlice(state.allocator, current_statement.items);
 
-            // CANARY: REQ=REQ-SOURCE-CHUNKED-002; FEATURE="SourceChunkedExecution"; ASPECT=CollectStatements; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
+            // CANARY: REQ=REQ-SOURCE-CHUNKED-002; FEATURE="SourceChunkedExecution"; ASPECT=CollectStatements; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
             // Also save individual statement for chunked execution
             const stmt_copy = try state.allocator.dupe(u8, current_statement.items);
             try statement_list.append(state.allocator, stmt_copy);
@@ -2981,7 +2981,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     // CANARY: REQ=REQ-SOURCE-PERF-005; FEATURE="SourceFilePerformance"; ASPECT=SingleRequestExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-003; FEATURE="SourceChunkedExecution"; ASPECT=SizeCheck; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-003; FEATURE="SourceChunkedExecution"; ASPECT=SizeCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
     // Issue #400: Execute in single request for small files, chunked for large files
     const max_single_batch_size: usize = 32 * 1024; // 32KB threshold for chunking
     const use_chunked = batch_statements.items.len > max_single_batch_size;
@@ -3000,7 +3000,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var was_interrupted = false;
 
     if (use_chunked) {
-        // CANARY: REQ=REQ-SOURCE-CHUNKED-004; FEATURE="SourceChunkedExecution"; ASPECT=ChunkedExecution; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
+        // CANARY: REQ=REQ-SOURCE-CHUNKED-004; FEATURE="SourceChunkedExecution"; ASPECT=ChunkedExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
         // Large file - execute statements in chunks to avoid server message size limit
         var chunk_msg_buf: [128]u8 = undefined;
         const chunk_msg = std.fmt.bufPrint(&chunk_msg_buf, "Large file ({d} bytes) - using chunked execution...", .{batch_statements.items.len}) catch "Chunked execution...";

@@ -20,7 +20,7 @@ This top register is authoritative as of 2026-06-09. Historical sections below a
 | Gap-ID | Severity | Area | Current evidence | Required completion |
 |---|---|---|---|---|
 | GAP-0256 | Critical | Supply chain / release | Release signing and SBOM publication remain blocked/open in historical register; local SBOM tooling exists but release artifacts are not proven signed and published. | Add release-pipeline SBOM generation, artifact signing, verification docs, and CI enforcement. |
-| GAP-0514 | Medium | Governance | **Partial (Phase 5, 2026-06-10).** CANARY IMPL debt reduced 547→493 (11.0%→9.9%; TESTED 78.7%→79.8%) by reconciling the top REPL/CLI/QUIC hotspots: stale reference-only promotions (markers already carrying a genuine `test_quic_condition_timedwait_cadence`/`test_gps_mcp_wire` ref) + harness-spec-backed promotions (each spec re-run green against the binary — `transaction_chunked_execution` 19/19, `query_file_flag_comprehensive` 30/30, `query_file_flag_edge_cases` 28/28, `cli_flags_comprehensive` 23/23, `query_output_formats` 22/22, `shell_source_batch` 50/50). Per-file: quic_connection_handler 40→22, cli/main 30→12, transport/quic 18→8, server_init 22→19, repl_dispatch 36→31. Commits `40121c11`/`2000406a`/`caf1e26d`/`514ca4c0`. **Still open** — 493 markers remain; survivors are genuinely uncovered (no paper promotions). Next sprint targets are enumerated per-file in the GAP-0514 Phase 5 section. | Re-run `make status-generate`, reconcile stale markers, and move implemented features to TESTED/BENCHED/COMPLETE only with matching tests. |
+| GAP-0514 | Medium | Governance | **Partial (Phase 5, 2026-06-10).** CANARY IMPL debt reduced 547→493 (11.0%→9.9%; TESTED 78.7%→79.8%) by reconciling the top REPL/CLI/QUIC hotspots: stale reference-only promotions (markers already carrying a genuine `test_quic_condition_timedwait_cadence`/`test_gps_mcp_wire` ref) + harness-spec-backed promotions (each spec re-run green against the binary — `transaction_chunked_execution` 19/19, `query_file_flag_comprehensive` 30/30, `query_file_flag_edge_cases` 28/28, `cli_flags_comprehensive` 23/23, `query_output_formats` 22/22, `shell_source_batch` 50/50). Per-file: quic_connection_handler 40→22, cli/main 30→12 (later corrected to 30→18 by the 2026-06-10 honesty-audit remediation, below), transport/quic 18→8, server_init 22→19, repl_dispatch 36→31 (later corrected to 36→36, below). Commits `40121c11`/`2000406a`/`caf1e26d`/`514ca4c0`. **Honesty-audit remediation (2026-06-10, commit follows):** a follow-up audit of commits `2000406a` and `caf1e26d` found **12 paper promotions**. After per-aspect verification (reading each spec's blocks vs. the marked code and re-running the candidate spec green), **6 were re-pointed with verified coverage** (CLI `REQ-CLI-CHUNKED-EXEC-001..006` → `transaction_chunked_execution.yml`, 19/19 green) and **6 were reverted to IMPL** (CLI `REQ-CLI-CHUNKED-EXEC-007` NullCheck — no coverage anywhere; REPL `REQ-SOURCE-CHUNKED-001/002/003/004/006` — no spec drives the REPL `source`-command path). **Still open** — post-remediation IMPL = 499 (10.0%), TESTED = 3975 (79.6%) per regenerated `status.csv`. Surviving markers in the reconciled hotspots are genuinely uncovered; the corrected accounting is in the GAP-0514 Phase 5 section. | Re-run `make status-generate`, reconcile stale markers, and move implemented features to TESTED/BENCHED/COMPLETE only with matching tests. |
 | ~~GAP-0516~~ | ~~Medium~~ | MCP | **Closed 2026-06-10** (commit `8937ac5e`). Document-the-subset path. Resource subscriptions stay intentionally unimplemented; `subscribeResourceHandler`/`unsubscribeResourceHandler` (`src/mcp/server.zig`) return `error.MethodNotFound`, which the mcp library maps to JSON-RPC `-32601` (spec §4.5) — the canonical "method not implemented" signal; clients poll via `resources/read`. New regression `tests/test_gap0516_mcp_capabilities.zig` (`zig build test-gap0516`) drives the REAL `mcp.Server.processMessage` dispatch (not just the handler fns): `initialize` returns serverInfo + capabilities; `resources/subscribe` and `resources/unsubscribe` both return `-32601`; the implemented subset (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `logging/setLevel`) returns success. **Known caveat pinned by the test:** the pinned `mcp` library (v0.1.7) hardcodes `resources.subscribe:true` in its `initialize` response and exposes no override, so the advertised string cannot be made truthful without forking the dependency — the authoritative, runtime-truthful contract is the handler's `-32601`, which the dispatch tests prove. A future library bump that drops the stale advertisement trips the caveat test on purpose. The two `REQ-MCP-RESOURCE-SUBSCRIBE-00{1,2}` CANARYs promoted EXEMPT→TESTED. New `docs/MCP_SERVER.md` documents the method subset + subscription contract. (The `completion/complete` dispatch path is intentionally not exercised end-to-end — the upstream library leaks the stringified params on that branch; the inline `completeHandler` test in `server.zig` covers it leak-free.) | ~~Either implement subscriptions or document the protocol subset and make capability reporting/tests prove it.~~ Documented subset + tested. ✅ Done. |
 | ~~GAP-0816~~ | ~~High~~ | LSP lifecycle | **Closed 2026-06-09** (commit `40e9c2fc`). `$/cancelRequest` is now wired into the comptime `notification_dispatch` table (`src/cli/lsp/server.zig`) and backed by a bounded `CancelRegistry` (fixed-capacity 64-slot FIFO ring; integer-vs-string ids disambiguated by a sign-tagged normalized key; structured/malformed ids rejected). `handleRequest` consults the registry at entry — BEFORE the auth gate and dispatch — so a request the client already asked to cancel is answered exactly once with JSON-RPC error `-32800` (RequestCancelled) and the entry is consumed (a later same-id request is served normally). Cancelling an unknown/already-completed id is a silent no-op (lingers until consumed or FIFO-evicted). Because the server processes messages strictly synchronously one-at-a-time there is no in-flight handler to interrupt; the entry-point consult is the spec-compliant (LSP 3.17 §3.17.10) race-free realization. A capturing Noop transport (`Transport.initNoopCapturing` + `Server.lastWrittenForTest`) lets the regression assert on the exact emitted frame. Regression `tests/test_gap0816_lsp_cancel.zig` (`zig build test-gap0816`): end-to-end cancel→-32800, consume-then-normal, unknown-id no-op, malformed-params no-op, string-id cancel, plus pure registry record/consume/idempotency/FIFO/structured-id-rejection — proven red→green. `test-gap0831` ($/ exempt) / `test-lsp` / `zig build` stay green. **Follow-up (reviewer Critical — cancel-id poisoning fixed):** the original registry was never cleared on response, so in this synchronous server a `$/cancelRequest` that arrives AFTER its target was answered (the COMMON case) was recorded and then wrongly `-32800`'d the NEXT request reusing that id. Added a bounded recently-answered ring (`AnsweredRing`, same`normalizeId` key space + FIFO discipline as `CancelRegistry`);`sendResult`/`sendError` and the post-gate point in `handleRequest` record the answered id and `CancelRegistry.clear()` any same-id pending cancel (belt-and-braces covering manual-JSON response paths); `handleCancelRequestEntry` consults the answered ring first and SKIPS recording a late cancel (LSP 3.17 §3.17.10 no-op). The full ordering matrix is documented in code above `handleCancelRequestEntry`. Regression adds the poisoning case (answered id → late cancel → reused id answers NORMALLY; proven red→green by disabling the answered-ring check),`AnsweredRing` pure unit tests, a `-32800`-echoes-the-cancelled-id assertion, and a corrected suite header (unknown id ≠ already-completed id). | Add a request table, cancellation propagation, `-32800` responses, and conformance coverage. ✅ Done. |
 | ~~GAP-0817~~ | ~~High~~ | LSP lifecycle | **Closed 2026-06-09** (commit `70e45dc7`). `initialize` now negotiates the position encoding from the client's `capabilities.general.positionEncodings` (LSP 3.17) via pure `Server.negotiatePositionEncoding`: prefer `utf-8` when offered (cheapest for Geode's UTF-8 byte-slice internals), else the protocol default `utf-16` (also for an empty/unknown/missing list), with `utf-32` honored only when it is the first recognized non-utf-8 offer in the client's stated preference order. The chosen encoding is stored per session (`Server.position_encoding`) and advertised back in the `initialize` result's `capabilities.positionEncoding` via `buildCapabilitiesObject`. Every incoming `Position.character` is routed through the encoding-aware `document.codeUnitsToByteColumn` at the request boundary (`extractTextDocumentPosition`) — translating the negotiated encoding's CODE UNITS to a UTF-8 byte column before the byte-based `getOffset` in the feature providers indexes the document. This closes the latent UTF-8/UTF-16 drift: a utf-16 client on a multi-byte line (`é`/emoji) previously landed hover/definition past the intended token. The converter is fail-safe on malformed UTF-8 (invalid lead byte → one code unit; always terminates) and clamps a past-end character to the line byte length. Regression `tests/test_gap0817_lsp_position_encoding.zig` (`zig build test-gap0817`): negotiation matrix, advertised value over the real `handleMessage` path (capturing transport), and code-unit↔byte-column mapping for `é🚀x` under utf-8/utf-16/utf-32 (emoji = 2 utf-16 units / 4 bytes; `é` = 1 unit / 2 bytes). The GAP-0831 guard treats `positionEncoding` as a data-only (non-method) capability. `test-gap0831` / `test-gap0818` / `test-gap0832` / `test-lsp` / `zig build` stay green. **Follow-up (reviewer Important — outbound positions now converted):** inbound was done, but responses still emitted BYTE columns to utf-16/utf-32 clients (wrong on multi-byte lines). Added `document.byteColumnToCodeUnits` (exact inverse of `codeUnitsToByteColumn`, same fail-safe/clamp posture) and a `Server.outboundChar(uri, line, byte_char)` helper that looks up the open document's line text and converts the provider's byte column to the negotiated encoding's code units (utf-8 passthrough; missing document degrades to passthrough). Applied at all four outbound emit sites: definition `Location`, documentSymbol `range` + `selectionRange`, references ranges, and `publishDiagnostics` start/end columns (the diagnostics document is guaranteed open by the early return in `sendDiagnostics`). Regression adds the `byteColumnToCodeUnits` matrix, an inbound↔outbound round-trip identity, and end-to-end `outboundChar` checks over a real opened document on the `é🚀x` line — utf-16 session reports code-unit columns, utf-8 session reports byte columns (proven red→green by disabling the outbound conversion). The negotiation doc-comment wording (utf-32 = first recognized non-utf-8 offer) was corrected. | Negotiate and store encoding per client and cover multi-byte ranges in tests. ✅ Done. |
@@ -2323,8 +2323,16 @@ This work is broken into phases because the test-infrastructure requirements dif
 
 ### Phase 5 — REPL/CLI/QUIC hotspot reconciliation + reference-only promotions — **PARTIAL (2026-06-10)**
 
+> **HONESTY-AUDIT CORRECTION (2026-06-10).** The original Phase 5 text below claimed "no paper
+> promotions" and that survivors are "genuinely uncovered." A follow-up audit found that claim was
+> **false for 12 markers** promoted in commits `2000406a` (5 REPL `SourceChunkedExecution`) and
+> `caf1e26d` (7 CLI `ChunkedExecution`). The errors and their remediation are recorded in the
+> **"Honesty-audit remediation"** subsection at the end of this Phase 5 section. The struck claims
+> below are retained for provenance but are corrected there.
+
 This round attacked the top REPL/CLI/QUIC hotspots predicted by the 2026-04-16 audit. Two
-mechanisms were used, both honest (no paper promotions — every referenced test was read and,
+mechanisms were used (~~both honest, no paper promotions~~ — **corrected: 12 of these promotions
+were paper; see remediation subsection** — every referenced test was read and,
 where it is a harness spec, run green against the current binary before the flip):
 
 1. **Stale reference-only promotions.** Many `STATUS=IMPL` markers already carried a genuine
@@ -2337,22 +2345,35 @@ where it is a harness spec, run green against the current binary before the flip
    spec green against this binary (`transaction_chunked_execution.yml` 19/19,
    `shell_source_batch.yml` 50/50, `query_file_flag_comprehensive.yml` 30/30,
    `query_file_flag_edge_cases.yml` 28/28, `cli_flags_comprehensive.yml` 23/23,
-   `query_output_formats.yml` 22/22 incl. 11 DOT tests).
+   `query_output_formats.yml` 22/22 incl. 11 DOT tests). ⚠️ **Corrected by the honesty audit:**
+   `query_file_flag_edge_cases.yml` passing 28/28 does NOT mean it covers chunked execution — its
+   size/boundary tests are `--help` stubs, so the 7 CLI chunked-exec markers it backed were paper
+   (6 re-pointed to `transaction_chunked_execution.yml`, 1 reverted). `shell_source_batch.yml`
+   passing 50/50 does NOT mean it covers the REPL `source` path — it drives CLI stdin batch
+   (`query -`), not the `source` command, so the 5 REPL chunked-source markers were paper (all
+   reverted). See the remediation subsection.
 
 **Per-file IMPL change (Phase 5):**
 
 | File | IMPL before | IMPL after | Promotions | Mechanism |
 |------|-------------|------------|------------|-----------|
 | `src/server/quic_connection_handler.zig` | 40 | 22 | 18 | stale cadence/gps_mcp_wire refs |
-| `src/client/repl/repl_dispatch.zig` | 36 | 31 | 5 | `transaction_chunked_execution.yml` |
-| `src/cli/main.zig` | 30 | 12 | 18 | query_file_flag / cli_flags / output_formats specs |
+| `src/client/repl/repl_dispatch.zig` | 36 | ~~31~~ **36** | ~~5~~ **0** | ~~`transaction_chunked_execution.yml`~~ **all 5 reverted (paper); spec drives CLI not REPL source** |
+| `src/cli/main.zig` | 30 | ~~12~~ **18** | ~~18~~ **17** | query_file_flag / cli_flags / output_formats specs; **CHUNKED-EXEC re-pointed to `transaction_chunked_execution.yml`, NullCheck reverted** |
 | `src/server/server_init.zig` | 22 | 19 | 3 | stale cadence refs |
 | `src/transport/quic.zig` | 18 | 8 | 10 | stale/structural cadence refs |
 
 - **Total IMPL:** 547 → 493 (−54; IMPL share 11.0% → 9.9%, TESTED 78.7% → 79.8%). Commits
-  `40121c11`, `2000406a`, `caf1e26d`, `514ca4c0`.
-- **Why still Partial, not Closed:** 493 IMPL markers remain — non-trivial governance debt. The
-  surviving hotspots are NOT cheaply promotable: they are genuinely uncovered (no existing test).
+  `40121c11`, `2000406a`, `caf1e26d`, `514ca4c0`. ⚠️ **Corrected (honesty audit, 2026-06-10):** 6 of
+  the −54 promotions were paper and have been reverted, so the honest figure after this branch's
+  GAP work is **IMPL = 499 (10.0%), TESTED = 3975 (79.6%)** per regenerated `status.csv`. See the
+  remediation subsection below.
+- **Why still Partial, not Closed:** ~~493~~ **499** IMPL markers remain (post-remediation; see
+  subsection) — non-trivial governance debt. The surviving hotspots are NOT cheaply promotable:
+  they are genuinely uncovered (no existing test). ⚠️ **This sentence was the false blanket claim
+  the honesty audit caught for the 12 chunked-execution markers** — those 12 were NOT all genuinely
+  covered; 6 had no coverage and have been reverted. The claim holds for the *remaining* survivors,
+  not for the 6 reverted markers.
 - **What the next sprint should target (top remaining IMPL files):**
   - `src/client/repl/repl_dispatch.zig` (31) — SourceInterrupt signal/TTY paths, InlineResults,
     FileHashCache re-source warning, TXN-ERROR retry. Needs a PTY/signal harness or new harness
@@ -2374,6 +2395,56 @@ where it is a harness spec, run green against the current binary before the flip
   and GAP-0830 (closed 2026-06-10) rooted standalone MCP regression files and fixed the
   `getCompletions` leak; the residual `lsp.zig`/`client.zig` dead-test items remain for the
   directory-rooting follow-up (already captured in the Phase 4 update above).
+
+#### Honesty-audit remediation (2026-06-10) — 12 paper promotions audited
+
+A follow-up honesty audit re-examined the Phase 5 chunked-execution promotions in commits
+`2000406a` (REPL) and `caf1e26d` (CLI) and found **12 paper promotions** — markers flipped to
+`STATUS=TESTED` against specs that do not actually exercise the marked code. Each was re-verified
+**per aspect** (reading the spec's test blocks against the marked source, and re-running the
+candidate spec green against the freshly built binary). Result: **6 re-pointed with verified
+coverage, 6 reverted to IMPL.** No marker was re-pointed on faith.
+
+**Root causes found:**
+
+1. **CLI `REQ-CLI-CHUNKED-EXEC-001..007`** pointed at `query_file_flag_edge_cases.yml`, whose
+   size/boundary tests (`file-flag-very-long-line` 10KB, `file-flag-out-of-memory` >16MB,
+   `file-flag-null-bytes`, …) are **`--help` placeholder stubs** — the spec's largest real `--file`
+   content is a few hundred bytes and never crosses the 16KB CLI chunking threshold. **Cross-wired.**
+   The correct spec is `transaction_chunked_execution.yml`, which drives `query --file` with files
+   of 30KB–243KB and `verify`s the data landed — re-run **19/19 green** against this binary.
+2. **REPL `REQ-SOURCE-CHUNKED-001..006`** pointed at `transaction_chunked_execution.yml`, but that
+   spec drives the **CLI** `query --file` path in `src/cli/main.zig` (16KB threshold), never the
+   **REPL `source`-command** path in `repl_dispatch.zig` (32KB threshold) where these markers live.
+   Audited every candidate spec including `shell_source_batch.yml`: it runs `geode query --insecure -`
+   (CLI stdin batch, max 690 bytes), **zero** `shell`-command sessions, **zero** `source`/`/source`
+   meta-command invocations. **No spec anywhere drives the REPL source path** → no genuine coverage.
+
+**Per-marker disposition:**
+
+| Marker | Aspect | File:line | Disposition | Evidence |
+|--------|--------|-----------|-------------|----------|
+| REQ-CLI-CHUNKED-EXEC-001 | LargeFileSupport | cli/main.zig:1235 | **Re-pointed → `transaction_chunked_execution.yml`** | 19/19 green; >16KB `--file` populates `file_statements` |
+| REQ-CLI-CHUNKED-EXEC-002 | StatementParsing | cli/main.zig:1291 | **Re-pointed → same** | multi-statement big files parsed/`;`-split |
+| REQ-CLI-CHUNKED-EXEC-003 | SizeDetection | cli/main.zig:1334 | **Re-pointed → same** | 16KB threshold branch hit by straddling files + `txn-exactly-32kb-boundary` |
+| REQ-CLI-CHUNKED-EXEC-004 | BatchExecution | cli/main.zig:1511 | **Re-pointed → same** | `executeChunkedQueries` invoked for large files |
+| REQ-CLI-CHUNKED-EXEC-005 | OptionsStruct | cli/main.zig:2113 | **Re-pointed → same** | `ChunkedQueryOptions` consumed by the chunked call |
+| REQ-CLI-CHUNKED-EXEC-006 | Execution | cli/main.zig:2132 | **Re-pointed → same** | txn-spanning/rollback/partial-failure/USE-GRAPH-carry verified |
+| REQ-CLI-CHUNKED-EXEC-007 | NullCheck | cli/main.zig:1372 | **Reverted → IMPL** | "missing query text" usage-error guard; no test reaches it with both null |
+| REQ-SOURCE-CHUNKED-001 | StatementList | repl_dispatch.zig:2821 | **Reverted → IMPL** | no spec drives REPL `source` path |
+| REQ-SOURCE-CHUNKED-002 | CollectStatements | repl_dispatch.zig:2932 | **Reverted → IMPL** | ditto |
+| REQ-SOURCE-CHUNKED-003 | SizeCheck (32KB) | repl_dispatch.zig:2984 | **Reverted → IMPL** | ditto |
+| REQ-SOURCE-CHUNKED-004 | ChunkedExecution | repl_dispatch.zig:3003 | **Reverted → IMPL** | ditto |
+| REQ-SOURCE-CHUNKED-006 | OutputSuppression | repl_dispatch.zig:2486 | **Reverted → IMPL** | ditto |
+
+(`REQ-SOURCE-CHUNKED-005` in `repl_loop.zig` was never promoted; it remained IMPL throughout.)
+
+**Net effect:** the corrected Phase 5 per-file deltas are `src/cli/main.zig` **30→18** (not 30→12;
+NullCheck reverted) and `src/client/repl/repl_dispatch.zig` **36→36** (not 36→31; all 5
+chunked-source promotions reverted). Regenerated `status.csv` after the edits: **IMPL = 499
+(10.0%), TESTED = 3975 (79.6%)** — the 6 reverts moved IMPL from 493 to 499. The
+`transaction_chunked_execution.yml` re-run output (19 passed, 0 failed) is the standing evidence
+for the 6 re-pointed CLI markers.
 
 ### Not in the Phase plan
 

@@ -1232,7 +1232,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var file_allocated: ?[]u8 = null;
     defer if (file_allocated) |allocated| allocator.free(allocated);
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-001; FEATURE="ChunkedExecution"; ASPECT=LargeFileSupport; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-001; FEATURE="ChunkedExecution"; ASPECT=LargeFileSupport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
     // For large files, we'll collect individual statements to enable chunked execution
     var file_statements: ?std.ArrayList([]const u8) = null;
     defer {
@@ -1288,7 +1288,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         defer allocator.free(contents);
 
         // Strip comments and collect individual statements
-        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
         var statements = std.ArrayList([]const u8).empty;
         var current_stmt = std.ArrayList(u8).empty;
         defer current_stmt.deinit(allocator);
@@ -1331,7 +1331,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
 
         // Calculate total size to determine if chunking is needed
-        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
         const max_single_query_size: usize = 16 * 1024; // 16KB threshold for chunking
         var total_size: usize = 0;
         for (statements.items) |stmt| {
@@ -1369,7 +1369,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
     // Allow null query_text when using chunked execution (file_statements is set)
     if (query_text == null and file_statements == null) {
         std.debug.print("Error: query text required\n", .{});
@@ -1508,7 +1508,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         insecure = true;
     }
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
     // Handle chunked execution for large files
     if (file_statements) |statements| {
         if (params.items.len > 0) {
@@ -2110,7 +2110,7 @@ fn executeBatchQueries(
     std.debug.print("\n", .{});
 }
 
-// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
 const ChunkedQueryOptions = struct {
     server_addr: []const u8,
     statements: []const []const u8,
@@ -2129,7 +2129,7 @@ const ChunkedQueryOptions = struct {
     role: ?[]const u8 = null, // GAP-0271: FLE role
 };
 
-// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
 /// Execute statements in chunks, batching multiple statements per request while staying under the size limit.
 /// Transaction-aware: never splits chunks within BEGIN/COMMIT boundaries.
 /// Context-aware: carries USE GRAPH forward to subsequent chunks on new connections.
