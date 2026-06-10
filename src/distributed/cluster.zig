@@ -133,15 +133,13 @@ pub fn gateUnreplicatedWrite() error{ ClusterNotLeader, ClusterWriteNotReplicabl
     return error.ClusterWriteNotReplicable;
 }
 
-// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateHelperStandaloneUnit; STATUS=TESTED; TEST=tests/test_cluster_coordinator_config.zig; OWNER=distributed; UPDATED=2026-06-10
-test "gateUnreplicatedWrite: standalone (no coordinator) allows the write" {
-    // Snapshot/restore the process-global coordinator so this test stays
-    // correct even if another test in the same binary registered one.
-    const saved = getGlobalClusterCoordinator();
-    clearGlobalClusterCoordinator();
-    defer if (saved) |c| setGlobalClusterCoordinator(c);
-    try gateUnreplicatedWrite();
-}
+// NOTE: the standalone-path unit test for gateUnreplicatedWrite lives in
+// tests/test_cluster_coordinator_config.zig (named step
+// test-cluster-coord-config). An inline `test` here would force analysis of
+// ClusterCoordinator (via setGlobalClusterCoordinator's parameter type) in
+// every unit-test module whose import closure reaches this file — and module
+// roots like graph_store.zig don't map "transport/quic", breaking the sharded
+// `zig build test` compile.
 
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = getEnvVarOwned(allocator, name) catch return false;
