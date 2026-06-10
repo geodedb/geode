@@ -1,7 +1,7 @@
 # Implementation Status - October 2025
 
-**Last Updated**: January 2026 (GAP-0111 fix)
-**Status**: Production Ready
+**Last Updated**: 2026-06-10 (GAP-0861 claim rebaseline)
+**Status**: DEVELOPMENT READY (single-tenant) — see [CLAUDE.md Known Limitations](../CLAUDE.md#known-limitations) for multi-tenant, distributed, and backup caveats
 
 ## Overview
 
@@ -13,7 +13,7 @@ This document provides the authoritative implementation status for Geode as of O
 
 | Feature | Status | Evidence |
 |---------|--------|----------|
-| GQL Parser | Complete | 100% ISO compliance (70/70 tests), src/gql/parser.zig |
+| GQL Parser | Complete | 70/70 named ISO conformance-suite cases pass (`tests/gql_iso_conformance.zig`), src/gql/parser.zig |
 | Query Planner | Complete | Cost-based optimization, src/planner/ |
 | Storage Engine | Complete | MVCC, WAL, src/storage/ |
 | Index System | Complete | 6 index types including HNSW |
@@ -55,10 +55,10 @@ The following critical security gaps were identified and fixed:
 
 ## Test Coverage
 
-- **Unit Tests**: 100% pass rate (393/393 Zig tests)
-- **Integration Tests**: 97.4% pass rate (1644/1688 tests)
-- **GQL Compliance**: 100% (70/70 ISO tests)
-- **CANARY Status**: 1,735 markers tracking 2,190+ requirements
+- **Local Test Baseline**: 166/175 named `zig build test-*` steps pass (6 FAIL / 3 TIMEOUT with file:line evidence — see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md))
+- **Integration Tests (geodetestlab)**: fresh `../geode-test-harness` run owed; prior ~97% / 1644-1688 kept as a dated historical snapshot
+- **GQL Conformance Suite**: 70/70 named ISO conformance-suite cases pass (scoped to that suite)
+- **CANARY Status**: ~4,900 markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate`)
 
 ## Build Verification
 

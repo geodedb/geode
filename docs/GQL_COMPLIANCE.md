@@ -1,14 +1,14 @@
 # GQL ISO/IEC 39075:2024 Compliance Guide
 
-Geode implements **100% compliance** with the ISO/IEC 39075:2024 Graph Query Language (GQL) standard, making it one of the most compliant GQL implementations available.
+Geode passes **70/70 cases of its ISO/IEC 39075:2024 GQL conformance suite** (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
 
 ## 📊 Compliance Overview
 
-- **Total Tests**: 70 comprehensive test cases
-- **Passing**: 70 tests (100% success rate)
-- **Failing**: 0 tests
+- **Conformance suite**: 70/70 cases pass (the named `tests/gql_iso_conformance.zig` suite)
 - **Standard**: ISO/IEC 39075:2024 Graph Query Language
-- **Last Updated**: January 14, 2026 (GAP-0182 resolved)
+- **Scope**: this is the curated conformance suite, not exhaustive ISO coverage; see residual limits in this guide
+- **How to run**: reachable via the sharded `zig build test` aggregate; note that the monolithic aggregate is currently blocked by a protobuf union-submessage limitation (see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md)) — re-run after that unblocks to refresh this number
+- **Last Updated**: 2026-06-10 (GAP-0861 claim rebaseline)
 
 ## ✅ Fully Supported Features
 
@@ -492,4 +492,4 @@ All core GQL features are now fully implemented. Future work focuses on:
 3. **Extended Compliance**: Support for future GQL standard extensions
 4. **GPU Acceleration**: Hardware-accelerated graph traversal operations
 
-Geode's 100% GQL compliance makes it the ideal choice for production use with modern graph applications requiring full standards-compliant query language support.
+Geode's 70/70 ISO conformance-suite pass rate and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.

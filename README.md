@@ -2,9 +2,9 @@
 
 **Feature-complete single-tenant graph database with industry-leading GQL compliance**
 
-[![GQL Compliance](https://img.shields.io/badge/GQL%20Compliance-100%25-brightgreen)](docs/GQL_COMPLIANCE.md)
-[![Test Coverage](https://img.shields.io/badge/Test%20Coverage-97.4%25-green)](docs/KNOWN_TEST_ISSUES.md)
-[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-2200%2B-blue)](docs/TODO.md)
+[![ISO Conformance Suite](https://img.shields.io/badge/ISO%20Conformance%20Suite-70%2F70-brightgreen)](docs/GQL_COMPLIANCE.md)
+[![Local Test Baseline](https://img.shields.io/badge/Local%20Test%20Baseline-166%2F175%20steps-green)](docs/KNOWN_TEST_ISSUES.md)
+[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-4900%2B-blue)](docs/TODO.md)
 [![Status](https://img.shields.io/badge/Status-Development%20Ready%20%28Single--Tenant%29-yellow)](docs/FEATURES_OVERVIEW.md)
 
 Geode is a feature-complete single-tenant graph database implementing the **ISO/IEC 39075:2024 Graph Query Language (GQL)** standard. Built in Zig for performance and reliability, Geode provides enterprise-grade features including advanced security, machine learning integration, and distributed query processing.
@@ -15,7 +15,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 ### **Standards Compliance**
 
-- **100% ISO/IEC 39075:2024 GQL Compliance** - Full standards implementation (70/70 tests)
+- **ISO/IEC 39075:2024 GQL Conformance Suite** - 70/70 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
 - **ACID Transactions** - Full MVCC with Serializable Snapshot Isolation (SSI)
 - **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
 
@@ -30,7 +30,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 - **13.18x I/O Performance** - Memory-mapped operations with optimization
 - **Cost-Based Query Planner** - Statistics-driven optimization
-- **Cloud-Ready** - S3 backup integration with compression
+- **Backup/Restore CLI** - `geode backup create` / `geode restore` (engine-backed, full graph data round-trip); S3 backup target supported. GQL `BACKUP`/`RESTORE` *statements* are not implemented (use the CLI). Payload compression currently records `.none` (no encoder wired); see [Known Limitations](CLAUDE.md#known-limitations).
 - **Multi-Shard Support** - Up to 32 shards with automatic coordination
 
 ## 🚀 Quick Start
@@ -183,7 +183,7 @@ COMMIT;
 
 ### **Core Components**
 
-- **GQL Parser/Lexer** - 100% ISO standard compliance with comprehensive syntax support
+- **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 70/70 named conformance suite (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
 - **Query Planner** - Cost-based optimization with real-time statistics integration
 - **Storage Engine** - MVCC with WAL, TDE encryption, and memory-mapped I/O
 - **Index System** - 6 index types: B-tree, Hash, Full-text, Spatial, Vector (HNSW), Interval
@@ -310,9 +310,9 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Test Coverage**
 
-- **97.4% Test Coverage** (1644/1688 tests passing)
+- **Local Test Baseline** - 166/175 named `zig build test-*` steps pass; see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for the canonical baseline (6 FAIL / 3 TIMEOUT with file:line evidence) and the geodetestlab integration suite (separate harness run owed)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
-- **CANARY Governance** - 1,735 governance markers tracking 2,190+ requirements
+- **CANARY Governance** - ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility
 - **GPU Acceleration** - Optional Vulkan/CUDA-based graph algorithm acceleration
 

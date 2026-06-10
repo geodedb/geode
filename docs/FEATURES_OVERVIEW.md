@@ -2,7 +2,7 @@
 
 ## 🏆 Enterprise Graph Database Platform
 
-Geode is a feature-complete **single-tenant** graph database with enterprise-grade features, achieving 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests). **DEVELOPMENT READY (single-tenant);** multi-tenant and distributed deployments require additional operator review — see Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
+Geode is a feature-complete **single-tenant** graph database with enterprise-grade features, passing 70/70 cases of its ISO/IEC 39075:2024 GQL conformance suite (`tests/gql_iso_conformance.zig` — scoped to that suite; see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) for residual limits). **DEVELOPMENT READY (single-tenant);** multi-tenant, distributed, and backup deployments require additional operator review — see Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
 
 ### ✅ **All Planned Features Complete** (October 16, 2025)
 
@@ -22,7 +22,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 
 ### **Graph Query Language (GQL)**
 
-- **100% ISO Compliance**: Full standards-compliant graph query processing (70/70 tests)
+- **ISO Conformance Suite**: 70/70 cases pass in the named conformance suite (scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 - **Advanced Pattern Matching**: Complex graph traversal patterns
 - **Aggregation & Analytics**: Built-in statistical functions
 - **Transaction Support**: ACID compliance with MVCC
@@ -147,7 +147,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **MVCC**: Multi-version concurrency control
 - **Memory-Mapped I/O**: 13.18x I/O performance improvement
-- **Cloud Backup**: S3-compatible with compression
+- **Cloud Backup**: S3-compatible backup/restore CLI (payload compression currently `.none`; see Known Limitations)
 - **WAL Optimization**: Write-ahead logging
 
 ### **Distributed Architecture**
@@ -166,8 +166,8 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Cloud Integration**
 
-- **S3 Backup**: Digital Ocean Spaces integration
-- **Compression**: Efficient storage with multiple formats
+- **S3 Backup**: Digital Ocean Spaces integration (CLI; GQL `BACKUP`/`RESTORE` statements not implemented)
+- **Compression**: backup payload currently stored uncompressed (`.none`; no encoder wired — see Known Limitations)
 - **Point-in-Time Recovery**: Granular backup restoration
 
 ## 📊 Analytics & Machine Learning
@@ -196,10 +196,10 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 - **User Management**: Administrative command suite
 
 ### **Testing & Quality**
-<!-- GAP-0118 FIX: Standardized test coverage numbers - Updated January 2026 -->
-- **97.4% Test Pass Rate**: Integration tests (1644/1688 passing)
-- **100% Unit Test Pass Rate**: 393/393 Zig unit tests passing
-- **CANARY System**: 2,178 governance markers (71.0% TESTED, 14.2% IMPL, 11.6% EXEMPT, 3.1% BENCHED)
+<!-- Rebaselined 2026-06-10 (GAP-0861) against the canonical local baseline -->
+- **Local Test Baseline**: 166/175 named `zig build test-*` steps pass (6 FAIL / 3 TIMEOUT, each with file:line evidence — see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md))
+- **Integration Suite (geodetestlab)**: a fresh `../geode-test-harness` run is owed; prior ~97% / 1644-1688 is kept as a dated historical snapshot in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md)
+- **CANARY System**: ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
 - **Performance Benchmarks**: Automated regression testing
 - **Cross-Platform**: Linux, macOS, Windows compatibility
 
@@ -214,7 +214,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Standards Compliance**
 
-- **ISO/IEC 39075:2024**: Graph Query Language standard (100% compliant, 70/70 tests)
+- **ISO/IEC 39075:2024**: Graph Query Language standard (70/70 named conformance-suite cases pass; scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 - **GDPR**: Audit logging and encryption at rest support GDPR compliance workflows (customer-side controls required for full compliance)
 - **SOX**: Tamper-protected audit trails and retention policies support SOX audit requirements (customer-side controls required for full compliance)
 - **HIPAA**: Encryption at rest (TDE) and audit logging support HIPAA technical safeguards (customer-side BAA and access controls required)
