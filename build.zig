@@ -1929,6 +1929,15 @@ pub fn build(b: *std.Build) void {
     const fts_e2e_step = b.step("test-fts-e2e", "FTS end-to-end: CREATE INDEX (nodes-first AND index-first) + CALL geode.fts.search");
     fts_e2e_step.dependOn(&run_fts_e2e_tests.step);
 
+    // Cluster-write-gates slice 3 (RED until the apply-side FTS hook lands):
+    // follower raft apply must maintain the fulltext index like the executor path.
+    const fts_apply_symmetry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fts_apply_symmetry.zig"), .target = target, .optimize = optimize }) });
+    fts_apply_symmetry_tests.root_module.addImport("geode", root_mod);
+    fts_apply_symmetry_tests.root_module.link_libc = true;
+    const run_fts_apply_symmetry_tests = b.addRunArtifact(fts_apply_symmetry_tests);
+    const fts_apply_symmetry_step = b.step("test-fts-apply-symmetry", "Raft apply must maintain the fulltext index like the executor path (GNC2 create + GUPD update)");
+    fts_apply_symmetry_step.dependOn(&run_fts_apply_symmetry_tests.step);
+
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
     match_call_tests.root_module.addImport("json", json_mod);

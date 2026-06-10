@@ -1,0 +1,177 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2024-2025 CodePros
+//
+// CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=FtsApplySymmetry; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
+//
+//! Cluster divergence hole (2026-06-10 audit, slice 3): the EXECUTOR maintains
+//! every covering fulltext index on node create / SET / delete via
+//! `fts_index_ops.maintainFulltextOnWrite` (src/execution/property_mutation.zig
+//! + crud_operations.zig), but the RAFT APPLY paths in
+//! src/distributed/cluster_replication.zig (GNC1/GNC2 create, GMRG merge, GUPD
+//! update) call the store mutators (`createNodeWithId`/`setNodeProperty`/...)
+//! DIRECTLY — so a FOLLOWER applying committed entries never updates its FTS
+//! index and follower `CALL geode.fts.search` silently diverges from the
+//! leader.
+//!
+//! These tests pin the SYMMETRY contract: applying a replicated payload to a
+//! store must leave every covering fulltext index in the same state the
+//! executor path would have. They are EXPECTED RED at HEAD (the search
+//! assertions see 0 hits / stale hits); the apply-side FTS maintenance hook
+//! (Task 13) turns them green WITHOUT modification — the maintenance plumbing
+//! (`maintainFulltextOnWrite`) resolves the adapter/store through the same
+//! process-global registry the executor uses, so an in-process apply has
+//! everything it needs.
+//!
+//! Harness mirrors tests/test_fts_e2e.zig (real store + real parser + real
+//! executor + real fts-storage engine — no mocks). Unique tokens ("zraven",
+//! "zosprey") guarantee hits can only come from the payload-applied writes.
+
+const std = @import("std");
+const testing = std.testing;
+const geode = @import("geode");
+
+const execution = geode.execution;
+const graph_store = geode.graph_store;
+const cr = geode.distributed.cluster_replication;
+
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+/// Harness mirrors tests/test_fts_e2e.zig.
+const Harness = struct {
+    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    tmp: std.testing.TmpDir,
+    data_dir: []u8,
+    ctx: execution.ExecutionContext,
+
+    pub fn init(allocator: std.mem.Allocator) !Harness {
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+        errdefer allocator.free(data_dir);
+
+        graph_store.setDataDirOverride(allocator, data_dir);
+        _ = graph_store.getGlobalStore(allocator);
+
+        const catalog = try execution.ensureCatalogInstance(allocator);
+        return .{
+            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .tmp = tmp,
+            .data_dir = data_dir,
+            .ctx = execution.ExecutionContext{ .catalog = catalog },
+        };
+    }
+
+    pub fn deinit(self: *Harness) void {
+        self.arena.deinit();
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(self.allocator, null);
+        self.allocator.free(self.data_dir);
+        self.tmp.cleanup();
+    }
+
+    pub fn runQuery(self: *Harness, query: []const u8) !execution.ExecutionResult {
+        const aa = self.arena.allocator();
+        var parsed = try geode.parseGql(query, aa);
+        defer parsed.deinit();
+        return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+    }
+
+    /// Run a statement whose result we don't inspect.
+    pub fn run(self: *Harness, query: []const u8) !void {
+        var r = try self.runQuery(query);
+        r.deinit(self.arena.allocator());
+    }
+
+    /// Number of `CALL geode.fts.search` hits for `term` in `index`.
+    pub fn searchCount(self: *Harness, index: []const u8, term: []const u8) !usize {
+        const aa = self.arena.allocator();
+        const gql = try std.fmt.allocPrint(aa, "CALL geode.fts.search('{s}', '{s}')", .{ index, term });
+        var r = try self.runQuery(gql);
+        defer r.deinit(aa);
+        return r.rows.len;
+    }
+};
+
+test "raft GNC2 create apply maintains the fulltext index like the executor path" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const a = testing.allocator;
+
+    // 1. Fulltext index on an EMPTY graph: backfill indexes nothing, so every
+    //    hit below can only come from write-path maintenance.
+    try h.run("CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext");
+
+    // 2. SANITY (executor path): a GQL CREATE is indexed by the live hook.
+    try h.run("CREATE (:Doc {body: 'executor zheron doc'})");
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zheron"));
+
+    // 3. FOLLOWER apply: a GNC2 multi-create payload carrying a :Doc node whose
+    //    body holds the unique token "zraven" — the exact path a follower runs
+    //    for a committed replicated CREATE.
+    const store = graph_store.getGlobalStore(a);
+    const labels = [_][]const u8{"Doc"};
+    const props = [_]cr.Prop{.{ .key = "body", .value = .{ .String = "replicated zraven doc" } }};
+    const nodes = [_]cr.NodeSpec{.{ .labels = &labels, .props = &props }};
+    const payload = try cr.serializeMultiCreate(a, graph_store.DEFAULT_GRAPH_NAME, &nodes, &.{});
+    defer a.free(payload);
+    _ = try cr.applyMultiCreatePayload(a, store, payload, 9001);
+
+    // Setup assertion (NOT the red): the node + property landed in the store.
+    const nid = cr.deriveMultiNodeId(9001, 0);
+    const body = store.getNodeProperty(nid, "body") orelse return error.AppliedNodeMissingBody;
+    try testing.expectEqualStrings("replicated zraven doc", body.String);
+
+    // 4. SYMMETRY CONTRACT — RED AT HEAD: the applied node must be searchable
+    //    exactly as if the executor had created it (expected 1, HEAD yields 0
+    //    because applyMultiCreatePayload never fires FTS maintenance).
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
+}
+
+test "raft GUPD update apply maintains the fulltext index (stale term dropped, new term indexed)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const a = testing.allocator;
+
+    try h.run("CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext");
+
+    // Executor-created doc, indexed by the live hook (sanity-proven).
+    try h.run("CREATE (:Doc {body: 'stale zraven token'})");
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
+
+    // FOLLOWER apply: a GUPD payload SETting body on that node by stable id —
+    // the exact path a follower runs for a committed replicated MATCH…SET.
+    const store = graph_store.getGlobalStore(a);
+    const ids = store.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "Doc") orelse return error.DocNodeMissing;
+    try testing.expectEqual(@as(usize, 1), ids.len);
+    const nid = ids[0];
+
+    const set_props = [_]cr.Prop{.{ .key = "body", .value = .{ .String = "fresh zosprey token" } }};
+    const updates = [_]cr.NodeUpdate{.{ .node_id = nid, .set_props = &set_props }};
+    const payload = try cr.serializeUpdate(a, graph_store.DEFAULT_GRAPH_NAME, &updates);
+    defer a.free(payload);
+    _ = try cr.applyUpdatePayload(a, store, payload);
+
+    // Setup assertion (NOT the red): the store property WAS overwritten.
+    const body = store.getNodeProperty(nid, "body") orelse return error.UpdatedNodeMissingBody;
+    try testing.expectEqualStrings("fresh zosprey token", body.String);
+
+    // SYMMETRY CONTRACT — RED AT HEAD: an executor SET re-runs delete-then-index
+    // (see tests/test_fts_maintenance.zig), so the NEW term must be searchable…
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zosprey"));
+    // …and the OLD term must be GONE (HEAD serves a STALE posting: still 1 hit).
+    try testing.expectEqual(@as(usize, 0), try h.searchCount("doc_idx", "zraven"));
+}

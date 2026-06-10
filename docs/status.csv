@@ -728,6 +728,7 @@ REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateTsIngest,TESTED,
 REQ-DIST-CLUSTER-FORWARD-SHARD,DistributedCluster,ForwardToShard,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-FORWARD-SHARD,DistributedCluster,ForwardToShard,TESTED,,,distributed,2026-05-26,tests/test_cluster_forward_to_shard.zig
 REQ-DIST-CLUSTER-FORWARD-SHARD-TEST-SURFACE,DistributedCluster,TestExposure,EXEMPT,,,distributed,2026-05-26,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY,DistributedCluster,FtsApplySymmetry,TESTED,,,distributed,2026-06-10,tests/test_fts_apply_symmetry.zig
 REQ-DIST-CLUSTER-LISTEN-ADDR,DistributedCluster,ClusterBindAddress,TESTED,,,distributed,2026-06-04,src/server/cluster_bootstrap.zig
 REQ-DIST-CLUSTER-PROPOSE-WRITE,ClusterCoordinator Public Propose,ProposeAndReplicate,TESTED,,,distributed,2026-05-26,tests/test_cluster_propose_write.zig
 REQ-DIST-CLUSTER-PROPOSE-WRITE,ClusterCoordinator Public Propose,ProposeWrite,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig
