@@ -5089,6 +5089,20 @@ pub fn build(b: *std.Build) void {
     const gap0817_step = b.step("test-gap0817", "GAP-0817: LSP positionEncoding negotiation with multi-byte coverage");
     gap0817_step.dependOn(&run_gap0817_tests.step);
 
+    // GAP-0825: LSP Content-Length / JSON transport framing conformance. Drives
+    // the REAL framer (`src/cli/lsp/framer.zig`) — a standalone, dependency-free
+    // module — so the test exercises the exact parser the stdio and TCP
+    // transports use. Wired as the named module `framer` (matching the source
+    // file's own `@import("framer.zig")` sibling-import contract).
+    const gap0825_framer_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/framer.zig"), .target = target, .optimize = optimize });
+    const gap0825_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0825_lsp_framing.zig"), .target = target, .optimize = optimize });
+    gap0825_test_mod.addImport("framer", gap0825_framer_mod);
+    const gap0825_tests = b.addTest(.{ .root_module = gap0825_test_mod });
+    const run_gap0825_tests = b.addRunArtifact(gap0825_tests);
+    shardDep(test_step, &run_gap0825_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0825_step = b.step("test-gap0825", "GAP-0825: LSP Content-Length framing conformance tests");
+    gap0825_step.dependOn(&run_gap0825_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.

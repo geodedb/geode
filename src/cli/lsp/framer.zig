@@ -30,6 +30,23 @@ const BUF_SIZE: usize = 4096;
 /// transport-level constant in transport.zig is the source of truth.
 pub const MAX_LSP_MESSAGE: usize = 16 * 1024 * 1024;
 
+/// GAP-0825: parse one header line, returning the Content-Length value if the
+/// line's field name is `Content-Length` (ASCII case-insensitive) and its
+/// value is a non-negative integer after trimming optional whitespace.
+///
+///   - `error.NotContentLength` — the line is some OTHER header; caller ignores it.
+///   - `error.InvalidContentLength` — the line IS a Content-Length header but the
+///     value is non-numeric / malformed; caller rejects the frame.
+fn parseContentLengthLine(line: []const u8) error{ NotContentLength, InvalidContentLength }!usize {
+    const name = "content-length";
+    const colon = std.mem.indexOfScalar(u8, line, ':') orelse return error.NotContentLength;
+    const field = line[0..colon];
+    if (!std.ascii.eqlIgnoreCase(field, name)) return error.NotContentLength;
+    // Trim OWS (spaces / tabs, RFC 7230 §3.2.3) from both ends of the value.
+    const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
+    return std.fmt.parseInt(usize, value, 10) catch return error.InvalidContentLength;
+}
+
 pub const Framer = struct {
     read_fn: ReadFn,
     read_ctx: *anyopaque,
@@ -122,13 +139,20 @@ pub const Framer = struct {
             first = false;
             const line = maybe_line.?;
             if (line.len == 0) break;
-            const prefix = "Content-Length: ";
-            if (std.mem.startsWith(u8, line, prefix)) {
-                const v = std.fmt.parseInt(usize, line[prefix.len..], 10) catch {
-                    return FramerError.InvalidContentLength;
-                };
+            // GAP-0825: LSP/HTTP header field NAMES are case-insensitive
+            // (RFC 7230 §3.2) and the optional whitespace (OWS) around the
+            // field value is also lenient. Match the `Content-Length` name
+            // ASCII-case-insensitively up to the colon, then trim OWS from
+            // the value before parsing. Unknown headers (Content-Type, any
+            // X-* extension) are silently ignored.
+            if (parseContentLengthLine(line)) |v| {
                 if (v > max_msg) return FramerError.InvalidContentLength;
                 content_length = v;
+            } else |err| switch (err) {
+                // Not a Content-Length line at all — tolerate it.
+                error.NotContentLength => {},
+                // A Content-Length line whose value did not parse — reject.
+                error.InvalidContentLength => return FramerError.InvalidContentLength,
             }
         }
         const len = content_length orelse return FramerError.MissingContentLength;

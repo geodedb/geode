@@ -3224,6 +3224,7 @@ REQ-LSP-SCHEMA-PROVIDER-001,LspPermissionAwareCompletion,LibExportSchemaChangeNo
 REQ-LSP-SCHEMA-PROVIDER-001,LspPermissionAwareCompletion,SchemaChangeNotifier,TESTED,,,lsp,2026-05-14,src/execution/schema_change_notifier.zig
 REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport.zig
 REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport_test.zig
+REQ-LSP-SEC-001,ContentLengthFramingConformance,ProtocolConformance,TESTED,,,lsp,2026-06-09,tests/test_gap0825_lsp_framing.zig
 REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers.zig
 REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers_test.zig
 REQ-LSP-SEC-004,EnvelopeValidatedDecode,SafeUnwrap,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
@@ -4017,6 +4018,7 @@ REQ-QUALITY-401-001,MatchOpsStagedParity,GoldenParity,TESTED,,,execution,2026-02
 REQ-QUALITY-401-002,MatchOpsBenchmarkCampaign,RefactorBenchmark,BENCHED,,,execution,2026-02-16,tests/benchmark_match_operations_campaign.zig
 REQ-QUALITY-461-001,CliTransportResponseAbstraction,GoldenParityJson,TESTED,,,cli,2026-02-16,tests/test_cli_transport_response_parity.zig
 REQ-QUALITY-461-002,CliTransportResponseAbstraction,GoldenParityTextFormats,TESTED,,,cli,2026-02-16,tests/test_cli_transport_response_parity.zig
+REQ-QUALITY-GAP-0828,DocumentStoreReopenNoLeak,MemorySafety,TESTED,,,lsp,2026-06-09,tests/test_gap0828_documentstore_reopen.zig
 REQ-QUALITY-GAP-406-001,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/utils/stdio.zig
 REQ-QUALITY-GAP-406-002,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/main.zig
 REQ-QUALITY-GAP-406-003,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/lsp/transport.zig
