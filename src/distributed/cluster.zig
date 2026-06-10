@@ -115,6 +115,34 @@ pub fn getGlobalClusterCoordinator() ?*ClusterCoordinator {
     return g_cluster_coordinator;
 }
 
+/// Fail-closed gate for durable write surfaces that have NO Raft replication
+/// slice (timeseries ingest, auth/policy/tenant/index/graph/constraint DDL,
+/// TDE/CDC/FLE). In cluster mode these writes would land on exactly one node
+/// and silently diverge — so they are refused loudly instead. Standalone mode
+/// is unaffected.
+///
+/// Mirrors the role semantics of `clusterWriteRole()`
+/// (src/execution/crud_operations.zig): no coordinator → standalone (allowed,
+/// unchanged local path); non-leader → `error.ClusterNotLeader` (clients retry
+/// against the leader); leader → `error.ClusterWriteNotReplicable` because the
+/// surface has no replication slice — applying it leader-local would diverge.
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateHelper; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+pub fn gateUnreplicatedWrite() error{ ClusterNotLeader, ClusterWriteNotReplicable }!void {
+    const coord = getGlobalClusterCoordinator() orelse return; // standalone: allowed
+    if (coord.role() != .leader) return error.ClusterNotLeader;
+    return error.ClusterWriteNotReplicable;
+}
+
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateHelperStandaloneUnit; STATUS=TESTED; TEST=tests/test_cluster_coordinator_config.zig; OWNER=distributed; UPDATED=2026-06-10
+test "gateUnreplicatedWrite: standalone (no coordinator) allows the write" {
+    // Snapshot/restore the process-global coordinator so this test stays
+    // correct even if another test in the same binary registered one.
+    const saved = getGlobalClusterCoordinator();
+    clearGlobalClusterCoordinator();
+    defer if (saved) |c| setGlobalClusterCoordinator(c);
+    try gateUnreplicatedWrite();
+}
+
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);

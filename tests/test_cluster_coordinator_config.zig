@@ -111,3 +111,14 @@ test "init rejects node_id 0 as InvalidId and leaks nothing" {
     };
     try std.testing.expectError(error.InvalidId, ClusterCoordinator.init(a, 0, cfg));
 }
+
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateHelperStandaloneUnit; STATUS=TESTED; TEST=tests/test_cluster_coordinator_config.zig; OWNER=distributed; UPDATED=2026-06-10
+test "gateUnreplicatedWrite: standalone (no coordinator) allows the write" {
+    // No test in this binary registers a global ClusterCoordinator, but
+    // snapshot/restore anyway so the assertion stays correct if one ever does.
+    const cluster = geode.distributed.cluster;
+    const saved = cluster.getGlobalClusterCoordinator();
+    cluster.clearGlobalClusterCoordinator();
+    defer if (saved) |c| cluster.setGlobalClusterCoordinator(c);
+    try cluster.gateUnreplicatedWrite();
+}
