@@ -280,15 +280,19 @@ Verified semantics (regression-covered by `tests/e2e_recursive_queries.zig`,
 the `test-recursive-cte` build step):
 
 - **Fixpoint evaluation** — execute the anchor, then re-run the recursive term
-  with the accumulated working set until no new rows are produced.
+  against only the previous iteration's NEW rows (the delta working set),
+  accumulating each iteration's output into the final result, until an iteration
+  produces no new rows (or the iteration cap is reached).
 - **`WHERE` in the recursive term IS applied** — it bounds/terminates the
   recursion by predicate (transitive closure, bounded depth).
 - **`UNION ALL` vs `UNION`** — `UNION ALL` keeps every produced row; `UNION`
   deduplicates against the accumulated set, which also terminates a cycle whose
   step only revisits already-seen rows.
 - **Cycle safety via an iteration cap** — a cyclic `UNION ALL` recursion with no
-  predicate is bounded by a hard cap of **100 iterations** (it terminates with a
-  finite, capped result rather than hanging).
+  predicate is bounded by a hard cap of **100 iterations** (the
+  `RECURSIVE_CTE_MAX_ITERATIONS` constant in
+  `src/execution/query_execution.zig`); it terminates with a finite, capped
+  result rather than hanging.
 
 Residual limits (not yet supported / not covered):
 

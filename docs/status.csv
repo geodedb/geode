@@ -673,7 +673,6 @@ REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,TESTED,,,engine,20
 REQ-COUNT-DISTINCT-GROUP-001,CountDistinct,GroupBy,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-COUNT-DISTINCT-GROUP-001,CountDistinctGroupAggregation,GroupAggregation,TESTED,,,engine,2025-12-28,src/execution/pattern_helpers.zig
 REQ-CRYPTO-RANDOM-001,CryptographicKeyGeneration,SECURITY,TESTED,,,security,2026-01-11,src/types/cryptographic.zig
-REQ-CTE-SPILL-001,CTEDiskSpilling,MemoryManagement,EXEMPT,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,,,eval,2026-01-09,src/eval.zig
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-DATE-INTERVAL-002,DateIntervalArithmetic,Subtraction,TESTED,,,eval,2026-01-09,src/eval.zig
@@ -1644,7 +1643,6 @@ REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,,,engine,2025-
 REQ-GQL-012,GROUP BY/Aggregation,MixedAggregateVarianceEnvelope,BENCHED,,,engine,2025-09-21,tests/benchmark_mixed_agg_variance.zig
 REQ-GQL-012,GROUP BY/Aggregation,MixedAggregationBreadth,TESTED,,,engine,2025-09-21,tests/test_groupby_mixed_aggregations.zig
 REQ-GQL-012,Planner ISO Enforcement,OrderByEnforcement,TESTED,,,planner,2025-09-25,tests/e2e_planner_order_enforcement.zig
-REQ-GQL-012,Recursive CTEs,CycleDetection,TESTED,,,planner,2025-09-25,src/planner/recursive.zig
 REQ-GQL-013,AdvancedUnionOperations,IntersectOperation,TESTED,,,engine,2025-10-03,tests/advanced_union_test.zig
 REQ-GQL-013,Transactions,MVCCVersionPruneVarianceEnvelope,BENCHED,,,txn,2025-09-21,tests/benchmark_mvcc_version_prune_variance.zig
 REQ-GQL-013,Transactions,SSIPhantomPrevention,TESTED,,,txn,2025-09-21,tests/canary_txn_ssi_phantom_prevention.zig
@@ -2179,8 +2177,6 @@ REQ-GQL-076,Materialized Views,RefreshScheduler,TESTED,,,engine,2025-09-22,src/c
 REQ-GQL-077,Full-Text Search,InvertedIndexCore,TESTED,,,engine,2025-09-22,src/canary.zig
 REQ-GQL-077,Full-Text Search,InvertedIndexQueryLatencyVarianceEnvelope,BENCHED,,,engine,2025-09-22,src/canary.zig
 REQ-GQL-077,Full-Text Search,InvertedIndexQueryLatencyVarianceEnvelope,BENCHED,,,engine,2025-09-22,tests/benchmark_inverted_index_lookup_variance.zig
-REQ-GQL-079,RecursiveExecution,CycleGuard,TESTED,,,engine,2025-09-23,src/planner/recursive.zig
-REQ-GQL-079,RecursiveExecution,FixpointDriver,TESTED,,,engine,2025-09-23,src/planner/recursive.zig
 REQ-GQL-079,RecursiveExecution,ParserRecognition,TESTED,,,engine,2025-09-26,src/gql/ast.zig
 REQ-GQL-079,RecursiveExecution,ParserRecognition,TESTED,,,engine,2025-09-26,tests/canary_parser_recursive_negative_cycle.zig
 REQ-GQL-080,Additional Data Types,ValueTags,TESTED,,,types,2025-09-27,src/canary.zig
@@ -4239,14 +4235,6 @@ REQ-QUIC-STREAM-001,QUICProtocol,Streaming,TESTED,,,transport,2026-01-16,tests/t
 REQ-QUIC-STREAM-CLEANUP-001,StreamMemoryManagement,DoubleFreePrevention,EXEMPT,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-TLS-001,QUICProtocol,TLS,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-QUIC-TLS-001,QUICProtocol,TLSHandshake,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-RECURSIVE-CTE-001,Recursive CTE Core Functions,QueryAnalysis,TESTED,,,planner,2026-01-10,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-001,RecursiveCTE,PathFinding,TESTED,,,planner,2026-01-09,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-002,Distinct Union Processing,SetOperations,TESTED,,,planner,2026-01-10,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-002,RecursiveCTE,TransitiveClosure,TESTED,,,planner,2026-01-09,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-003,Path Building,PathTracking,TESTED,,,planner,2026-01-10,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-004,DFS Cycle Detection,CycleDetection,EXEMPT,,,planner,2026-01-10,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-005,Union-Find Cycle Detection,CycleDetection,EXEMPT,,,planner,2026-01-10,src/planner/recursive.zig
-REQ-RECURSIVE-CTE-006,Topological Sort Cycle Detection,CycleDetection,EXEMPT,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-REFACTOR-EVAL-001,EvalRefactoring,LogicHelpers,TESTED,,,refactor,2026-01-30,src/eval/logic_helpers.zig
 REQ-REFACTOR-EVAL-002,EvalRefactoring,LogicHelpersImport,TESTED,,,refactor,2026-01-30,src/eval.zig
 REQ-REFACTOR-EVAL-003,EvalRefactoring,StringHelpers,TESTED,,,refactor,2026-01-30,src/eval/string_helpers.zig

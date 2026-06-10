@@ -43,6 +43,14 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+/// Maximum number of recursive-term iterations for a `WITH RECURSIVE` CTE
+/// fixpoint loop. Acts as the cycle/runaway guard: the recursive term sees only
+/// the previous iteration's NEW rows (the delta working set), and the loop stops
+/// once the working set is empty or this cap is reached, whichever comes first.
+/// Referenced by docs/GQL_COMPLIANCE.md and docs/KNOWN_TEST_ISSUES.md by name so
+/// the documented bound and the code cannot silently drift.
+const RECURSIVE_CTE_MAX_ITERATIONS: u32 = 100;
+
 /// Resolve a LIMIT or OFFSET value that may come from a literal or a $param reference.
 /// Returns the resolved usize value, or null if neither literal nor param is set.
 fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, param_names: []const []const u8, param_values: []const Value) ?usize {
@@ -1436,7 +1444,7 @@ fn executeCTE(
             }
 
             const columns = anchor_result.columns;
-            const max_depth: u32 = 100;
+            const max_depth: u32 = RECURSIVE_CTE_MAX_ITERATIONS;
             var iteration: u32 = 0;
 
             // Iterate: execute recursive term with working set as the CTE reference
@@ -2093,8 +2101,10 @@ pub fn executeLegacyQueryWithResolvedParams(
             // term of a `WITH RECURSIVE` CTE) emitted every element and never
             // terminated by predicate — it could only stop at the recursion
             // iteration cap. The predicate is evaluated in the same environment
-            // the RETURN items see (the unwound variable bound), matching the
-            // bare-RETURN WHERE semantics at the q.where_clause site above.
+            // the RETURN items see (the unwound variable bound). The truthiness
+            // coercion here (a non-zero Int counts as true) matches the CALL-path
+            // WHERE coercion sites, NOT the bare-RETURN WHERE site above — that
+            // one treats any Int as false (`else => false`).
             if (q.where_clause) |where_expr| {
                 const where_result = try eval.evalExpr(allocator, where_expr, unwind_env);
                 const passes_filter = switch (where_result) {

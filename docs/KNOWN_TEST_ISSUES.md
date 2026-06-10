@@ -164,7 +164,9 @@ The following features are skipped because they are not yet implemented:
 Recursive Common Table Expressions **are supported** (GAP-0268 wired the
 fixpoint executor; GAP-0859 added real end-to-end coverage and fixed a dropped
 `WHERE` in the recursive term). The fixpoint evaluator runs the anchor, then
-re-runs the recursive term against the accumulated working set to a fixpoint.
+re-runs the recursive term against only the previous iteration's NEW rows (the
+delta working set), accumulating each iteration's output into the final result
+until the working set is empty (or the iteration cap is hit).
 See [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) → "Common Table Expressions" for the
 verified forms and `tests/e2e_recursive_queries.zig` (`zig build
 test-recursive-cte`) for the regression suite.
@@ -177,8 +179,10 @@ test-recursive-cte`) for the regression suite.
 - `WHERE` in the recursive term bounds/terminates the recursion (transitive
   closure, bounded depth).
 - `UNION ALL` (keep all) vs `UNION` (dedup, terminates revisiting cycles).
-- Cycle safety via a hard **100-iteration cap** (cyclic `UNION ALL` recursion
-  terminates with a finite capped result, never hangs).
+- Cycle safety via a hard **100-iteration cap** (the
+  `RECURSIVE_CTE_MAX_ITERATIONS` constant in
+  `src/execution/query_execution.zig`) — cyclic `UNION ALL` recursion terminates
+  with a finite capped result, never hangs.
 
 **Residual limits:**
 
