@@ -82,10 +82,10 @@ GAP-0862 — closed — commit fd1b97cd (follow-up ef30537b) — Backup/restore 
 **Closed:** 34
 **Partial (open):** 1 — GAP-0514 (CANARY IMPL hygiene; 499 IMPL markers remain at ~10%; per-file next-sprint targets in register; not a functional defect)
 **Blocked:** 2 — GAP-0256 (release signing: cosign/CI-secret infra not provisioned for this project; unblock: provision cosign keypair + CI secrets under devnw org), GAP-0838 (cross-pod TLS cluster: upstream tls-pin propagation chain + two active 0.6.14 k8s defects; unblock: upstream devnw/zig-quic fix + re-test on 0.6.15+ with fixed image)
-**Won't-Do annotations (historical):** GAP-0526/GAP-0527/GAP-0528/GAP-0529 — platform dependency pinning (Zig hash, CI tags, Docker SHA, pre-commit SHA); deferred to platform governance / external controls; already closed in prior round.
+**Won't-Do annotations (historical):** GAP-0526 (glab CLI unavailable in env — workstation/tooling concern, not a code gap), GAP-0527 (stale 8-failure snapshot superseded by the GAP-0860 baseline), GAP-0528 (Dijkstra output-format spec issue in the external geode-test-harness repo), GAP-0529 (speculative multi-graph lock TODO comments without reproduction — reopen with evidence). Annotated in the historical body of GAP_ANALYSIS.md; none were in the 37-item register count.
 **Commit count this round:** ~78
 **Test baseline:** 167/175 named `zig build test-*` steps pass; 6 FAIL + 3 TIMEOUT documented with root-cause file:line in docs/KNOWN_TEST_ISSUES.md (canonical)
-**Platform issue operations:** SKIPPED — `glab` CLI unavailable in this environment; no GitLab issue closures were performed. This is consistent with the GAP-0526 won't-do policy (platform pinning governance deferred to external controls). Issue closures should be performed manually or via a CI pipeline with glab available.
+**Platform issue operations:** SKIPPED — `glab` CLI unavailable in this environment; no GitLab issue closures were performed. This is the standing GAP-0526 condition (glab unavailable in this environment). Issue closures should be performed manually or via a CI pipeline with glab available.
 
 **Notable product defects fixed along the way:**
 - FLE audit-chain corruption (`configureField` on any type FLE-encrypted `__geode_security` admin nodes, breaking HMAC chain on restart) — GAP-0854
