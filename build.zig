@@ -1091,7 +1091,8 @@ pub fn build(b: *std.Build) void {
     // GAP-0862: restore data-integrity regression — drives the REAL backup
     // engine (BackupManager) against the REAL GraphStore and asserts that
     // node/edge counts and sampled properties round-trip through backup+restore
-    // (uncompressed, zstd-compressed, and a checksum-rejection negative path).
+    // (uncompressed round-trip, zstd-rejection — see GAP-0880 — and a
+    // checksum-rejection negative path).
     const gap0862_backup_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_gap0862_backup_integrity.zig"),
         .target = target,
@@ -1102,6 +1103,25 @@ pub fn build(b: *std.Build) void {
     const run_gap0862_backup_tests = b.addRunArtifact(gap0862_backup_tests);
     const gap0862_backup_step = b.step("test-gap0862", "Run GAP-0862 backup/restore data-integrity regression");
     gap0862_backup_step.dependOn(&run_gap0862_backup_tests.step);
+
+    // GAP-0880: backup protocol upload ingestion + honest compression codec.
+    // Drives the REAL BackupManager paths the QUIC/gRPC upload handlers call:
+    // ingestUploadedBackup (verify -> persist -> durable registration), the
+    // real gzip encoder round-trip with truthful manifest codec, the
+    // UnsupportedCompression rejection for zstd, and the new
+    // UploadBackupRequest.payload wire field.
+    const gap0880_upload_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0880_backup_upload.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0880_upload_tests.root_module.addImport("geode", root_mod);
+    gap0880_upload_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    gap0880_upload_tests.root_module.addImport("protobuf", protobuf_mod);
+    gap0880_upload_tests.root_module.addImport("schema", schema_mod);
+    const run_gap0880_upload_tests = b.addRunArtifact(gap0880_upload_tests);
+    const gap0880_upload_step = b.step("test-gap0880", "Run GAP-0880 backup upload ingestion + compression truth regression");
+    gap0880_upload_step.dependOn(&run_gap0880_upload_tests.step);
 
     // GAP-0855a: webhook CDC sink real HTTP delivery + retries + auth header.
     // Drives the REAL WebhookSink (std.http.Client) against an in-test loopback

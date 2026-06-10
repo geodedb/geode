@@ -1284,11 +1284,18 @@ pub const UploadBackupRequest = struct {
     size_bytes: u64 = 0,
     checksum: []const u8 = "",
     session_id: []const u8 = "",
+    /// GAP-0880: the complete backup artifact bytes (BackupHeader + payload,
+    /// i.e. the exact bytes streamed by a prior BackupResponse). The server
+    /// verifies size/checksum and durably registers the backup before
+    /// reporting success; a request without payload bytes is rejected —
+    /// there is no metadata-only "upload slot" path.
+    payload: []const u8 = "",
 
     pub const _desc_table = .{
         .size_bytes = fd(1, .{ .scalar = .uint64 }),
         .checksum = fd(2, .{ .scalar = .string }),
         .session_id = fd(3, .{ .scalar = .string }),
+        .payload = fd(4, .{ .scalar = .bytes }),
     };
 
     pub fn deinit(self: *UploadBackupRequest, allocator: std.mem.Allocator) void {

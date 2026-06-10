@@ -34,6 +34,13 @@ pub const SimplifiedBackupManager = struct {
         return self.inner.restoreToPointInTime(restore_dir, target_time);
     }
 
+    /// Ingest an uploaded backup artifact (header + payload bytes), verify
+    /// integrity, persist it into the backup directory, and register it in
+    /// the durable metadata log (GAP-0880).
+    pub fn ingestUploadedBackup(self: *SimplifiedBackupManager, file_bytes: []const u8, expected_checksum: ?u64) !BackupMetadata {
+        return self.inner.ingestUploadedBackup(file_bytes, expected_checksum);
+    }
+
     /// Apply retention policy.
     pub fn runRetention(self: *SimplifiedBackupManager) !void {
         return self.inner.runRetention();

@@ -403,6 +403,8 @@ REQ-AUTO-INDEX-SCAN-002,AutoIdIndex,RelationshipLabelIndexScan,IMPL,,,engine,202
 REQ-AUTO-INDEX-SCAN-003,AutoIdIndex,MultiHopGroupByLabelIndex,IMPL,,,engine,2026-02-07,src/execution/match_operations.zig
 REQ-AUTO-INDEX-SCAN-004,AutoIdIndex,MultiHopLabelIndex,IMPL,,,engine,2026-02-07,src/execution/match_operations.zig
 REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,TESTED,,,cli,2026-01-10,src/cli/backup_cli.zig
+REQ-BACKUP-COMPRESS-001,BackupGzipCompression,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig
+REQ-BACKUP-COMPRESS-001,BackupGzipCompression,TEST,TESTED,,,backup,2026-06-10,tests/test_gap0880_backup_upload.zig
 REQ-BACKUP-ERROR-HANDLING-001,BackupErrorHandling,Security,TESTED,,,cli,2026-01-16,src/cli/backup_cli.zig
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,SECURITY,TESTED,,,storage,2026-01-13,src/storage/backup.zig
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,TEST,TESTED,,,storage,2026-01-13,src/storage/backup.zig
@@ -418,6 +420,8 @@ REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,TESTED,,,cli,2026-01-09,src/c
 REQ-BACKUP-RESTORE-003,Backup Restore Manager,LocalRestoreImpl,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-TLS-001,BackupTLS,CertVerification,TESTED,,,cli,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-BACKUP-TLS-001,BackupTLSCertVerification,Security,TESTED,,,cli,2026-01-13,src/cli/backup_cli.zig
+REQ-BACKUP-UPLOAD-001,BackupUploadIngestion,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig
+REQ-BACKUP-UPLOAD-001,BackupUploadIngestion,TEST,TESTED,,,backup,2026-06-10,tests/test_gap0880_backup_upload.zig
 REQ-BENCH-PLANNER-001,Planner Cost Benchmarks,PerformanceTesting,BENCHED,,,core,2026-01-13,src/tools/run_variance_benches.zig
 REQ-BENCH-RAFT-001,Raft Variance Benchmarks,DistributedTesting,BENCHED,,,core,2026-01-13,src/tools/run_variance_benches.zig
 REQ-BENCH-RAFT-002,Synthetic Raft Commit Variance,DistributedTesting,BENCHED,,,core,2026-01-13,src/tools/run_variance_benches.zig

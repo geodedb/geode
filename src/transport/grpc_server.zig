@@ -2978,7 +2978,9 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
     const backup_dir = "./server_backups";
     var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
-        .compression = if (req.compress) .zstd else .none,
+        // GAP-0880: gzip is the only compression codec with a real encoder;
+        // never request zstd (no encoder — UnsupportedCompression).
+        .compression = if (req.compress) .gzip else .none,
         .encryption = false,
         .retention_days = 30,
     }) catch |err| {
@@ -3057,7 +3059,9 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     }
 
     var mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{
-        .compression = .zstd,
+        // Restore reads the codec from each backup file's header; keep the
+        // honest default (.none) — .zstd has no encoder (GAP-0880).
+        .compression = .none,
         .encryption = false,
         .retention_days = 30,
     }) catch |err| {
@@ -3130,6 +3134,9 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         },
     }
 
+    // GAP-0880: real upload ingestion (mirror of the QUIC handler). The
+    // request must carry the complete backup artifact bytes; the old
+    // metadata-only path created an EMPTY file and reported fake success.
     if (req.size_bytes == 0 or req.checksum.len == 0) {
         const resp = schema.UploadBackupResponse{
             .success = false,
@@ -3137,18 +3144,49 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         };
         return encodeMessage(allocator, resp);
     }
+    if (req.payload.len == 0) {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Upload payload required: metadata-only upload is not supported"),
+        };
+        return encodeMessage(allocator, resp);
+    }
+    if (req.payload.len != req.size_bytes) {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try std.fmt.allocPrint(allocator, "Upload size mismatch: declared {d} bytes, received {d}", .{ req.size_bytes, req.payload.len }),
+        };
+        return encodeMessage(allocator, resp);
+    }
+    const expected_checksum = std.fmt.parseInt(u64, req.checksum, 16) catch {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Invalid checksum: expected hex CRC32 from BackupResponse"),
+        };
+        return encodeMessage(allocator, resp);
+    };
 
-    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "./uploaded_backups") catch {};
-    const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
-    // Create empty placeholder file for upload slot
-    if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
-        file.close(std.Io.Threaded.global_single_threaded.io());
-    } else |_| {}
+    var upload_mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{}) catch |err| {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try std.fmt.allocPrint(allocator, "Upload init failed: {s}", .{@errorName(err)}),
+        };
+        return encodeMessage(allocator, resp);
+    };
+    defer upload_mgr.deinit();
+
+    const ingested = upload_mgr.ingestUploadedBackup(req.payload, expected_checksum) catch |err| {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try std.fmt.allocPrint(allocator, "Upload rejected: {s}", .{@errorName(err)}),
+        };
+        return encodeMessage(allocator, resp);
+    };
 
     const resp = schema.UploadBackupResponse{
         .success = true,
-        .message = try allocator.dupe(u8, "Upload slot ready"),
-        .upload_path = path,
+        .message = try allocator.dupe(u8, "Backup uploaded, verified, and registered"),
+        .upload_path = try std.fmt.allocPrint(allocator, "./server_backups/full_{x}.backup", .{ingested.backup_id}),
     };
     return encodeMessage(allocator, resp);
 }

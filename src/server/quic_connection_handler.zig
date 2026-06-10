@@ -6542,7 +6542,10 @@ fn handleClientMessage(
             defer graph_store.releaseStoreLock();
             const backup_dir = "./server_backups";
             const backup_config = BackupConfig{
-                .compression = if (backup_req.compress) .zstd else .none,
+                // GAP-0880: gzip is the only compression codec with a real
+                // encoder; never request zstd (no encoder — it would fail
+                // with UnsupportedCompression).
+                .compression = if (backup_req.compress) .gzip else .none,
                 .encryption = false,
                 .retention_days = 30,
             };
@@ -6654,7 +6657,10 @@ fn handleClientMessage(
             }
 
             const backup_config = BackupConfig{
-                .compression = .zstd,
+                // Restore reads the codec from each backup file's header;
+                // the config codec is irrelevant here. Keep the honest
+                // default (.none) — .zstd has no encoder (GAP-0880).
+                .compression = .none,
                 .encryption = false,
                 .retention_days = 30,
             };
@@ -6714,19 +6720,42 @@ fn handleClientMessage(
                     return;
                 }
             }
+            // GAP-0880: real upload ingestion. The request must carry the
+            // complete backup artifact bytes; the old metadata-only path
+            // created an EMPTY file and reported fake success.
             if (upload_req.size_bytes == 0 or upload_req.checksum.len == 0) {
-                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid upload request") } });
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid upload request: missing size or checksum") } });
                 return;
             }
+            if (upload_req.payload.len == 0) {
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Upload payload required: metadata-only upload is not supported") } });
+                return;
+            }
+            if (upload_req.payload.len != upload_req.size_bytes) {
+                const msg_text = try std.fmt.allocPrint(gpa, "Upload size mismatch: declared {d} bytes, received {d}", .{ upload_req.size_bytes, upload_req.payload.len });
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
+                return;
+            }
+            const expected_checksum = std.fmt.parseInt(u64, upload_req.checksum, 16) catch {
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid checksum: expected hex CRC32 from BackupResponse") } });
+                return;
+            };
 
-            std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "./uploaded_backups") catch {};
-            const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
-            // Create empty placeholder file
-            if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
-                file.close(std.Io.Threaded.global_single_threaded.io());
-            } else |_| {}
+            var upload_mgr = SimplifiedBackupManager.init(gpa, "./server_backups", .{}) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Upload init failed: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
+                return;
+            };
+            defer upload_mgr.deinit();
 
-            try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Upload slot ready"), .upload_path = path } });
+            const ingested = upload_mgr.ingestUploadedBackup(upload_req.payload, expected_checksum) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Upload rejected: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
+                return;
+            };
+
+            const stored_path = try std.fmt.allocPrint(gpa, "./server_backups/full_{x}.backup", .{ingested.backup_id});
+            try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Backup uploaded, verified, and registered"), .upload_path = stored_path } });
         },
     }
 }

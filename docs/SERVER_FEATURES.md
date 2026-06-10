@@ -164,7 +164,10 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 
 - Multipart upload for files >5MB (configurable)
 - Exponential backoff retry (base 100ms, max 3 retries)
-- Compression: zstd, gzip, lz4, snappy
+- Compression: `none` or `gzip` only (GAP-0880) — the backup engine applies a
+  real gzip/DEFLATE encoder when requested and records the codec actually
+  applied; `zstd`/`lz4`/`snappy` encoders are NOT bundled and are rejected
+  with `UnsupportedCompression`
 - Encryption: AES-256 with envelope encryption
 - Checksum validation: SHA-256
 
@@ -931,7 +934,8 @@ pub const Config = struct {
 
 **Flags**:
 
-- `0x01`: Compressed (zstd)
+- `0x01`: Compressed (reserved — no frame-level compression is implemented;
+  backup payload compression is gzip-only, see GAP-0880)
 - `0x02`: Encrypted (additional layer beyond TLS)
 - `0x04`: Fragmented (multi-frame message)
 - `0x08`: Priority (high-priority frame)

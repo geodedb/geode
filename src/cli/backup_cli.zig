@@ -1884,7 +1884,9 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
     }
 
     const config = backup_types.BackupConfig{
-        .compression = if (compress) .zstd else .none,
+        // GAP-0880: gzip is the only compression codec with a real encoder;
+        // never request zstd (no encoder — UnsupportedCompression).
+        .compression = if (compress) .gzip else .none,
         .encryption = false,
         .retention_days = 30,
     };
@@ -1941,8 +1943,18 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
 
 fn decompressData(data: []const u8, compression: backup_types.CompressionType, allocator: std.mem.Allocator) ![]u8 {
     if (compression == .none) return allocator.dupe(u8, data);
+    if (compression == .gzip) {
+        // GAP-0880: gzip backups are produced by the real DEFLATE encoder.
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        var in: std.Io.Reader = .fixed(data);
+        var flate_stream: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+        _ = flate_stream.reader.streamRemaining(&out.writer) catch |err| return err;
+        return try out.toOwnedSlice();
+    }
     if (compression == .zstd) {
-        // Zig 0.15 zstd API - use Decompress struct with Io.Reader/Writer
+        // Decompress-only: no zstd encoder exists, but old artifacts whose
+        // header records .zstd must still restore.
         var out: std.Io.Writer.Allocating = .init(allocator);
         defer out.deinit();
         var in: std.Io.Reader = .fixed(data);
