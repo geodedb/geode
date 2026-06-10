@@ -3419,6 +3419,243 @@ fn clusterReplicateDelete(
     };
 }
 
+/// Replicate an eligible `MATCH (n:Label [{props}]) [WHERE …] SET …/REMOVE …`
+/// through Raft. Called ONLY when this node is the cluster leader.
+///
+/// THE SILENT-DIVERGENCE FIX: at HEAD this path mutated the leader's local store
+/// directly and never proposed anything (followers kept the old value). Here the
+/// LEADER resolves the MATCH set to explicit STABLE node ids AND evaluates the
+/// SET expressions to CONCRETE scalar values (binding the matched node, so
+/// `n.v + 1` is computed on the leader's value), then ships a GUPD payload.
+/// Followers NEVER re-MATCH and NEVER re-evaluate an expression — they apply the
+/// concrete per-node (set, remove, add-label, remove-label) tuples by id.
+///
+/// Scope (fail-closed for anything else, so the write never lands leader-local):
+///   * single-chain, single head-node MATCH (no relationship hops / multi-chain),
+///   * SET n.prop = <scalar-expr> / SET n:Label / REMOVE n.prop / REMOVE n:Label
+///     all targeting the matched node variable,
+///   * `SET n = {map}` (AllProperties) is OUT of this slice → fail closed,
+///   * a RETURN that projects matched data is not resolvable pre-commit → fail closed,
+///   * a resolved set larger than the GUPD cap → fail closed.
+///
+/// Returns `error.ClusterWriteNotReplicable` for any shape outside the slice.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=LeaderProposeUpdate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+fn clusterReplicateMatchSet(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+) !ExecutionResult {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+
+    // A RETURN that projects matched data is not resolvable pre-commit (the read
+    // races the not-yet-applied write); fail closed for this slice.
+    if (q.ret.items.len > 0) return error.ClusterWriteNotReplicable;
+
+    // A WITH projection / FILTER / GROUP BY layered onto the update is out of this
+    // slice (its post-MATCH transform is not modeled by the GUPD outcome) — fail
+    // closed rather than silently dropping it.
+    if (q.with_clause != null or q.filter_clause != null) return error.ClusterWriteNotReplicable;
+
+    // Only a single-chain, single head-node MATCH is replicable here. A
+    // relationship/edge-property SET (`MATCH ()-[r]->() SET r.x = 1`) or a
+    // multi-chain MATCH resolves bindings outside this slice — fail closed.
+    if (q.match.chains.len != 1) return error.ClusterWriteNotReplicable;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return error.ClusterWriteNotReplicable;
+    const node_pattern = chain.head orelse return error.ClusterWriteNotReplicable;
+    const match_var = node_pattern.name orelse return error.ClusterWriteNotReplicable;
+
+    // Every SET/REMOVE clause must target the matched node variable and be a
+    // replicable form. Validate up front so we fail closed BEFORE touching Raft.
+    for (q.set_clauses) |sc| {
+        switch (sc) {
+            .Property => |prop| if (!std.mem.eql(u8, prop.target.object, match_var))
+                return error.ClusterWriteNotReplicable,
+            .Labels => |ls| if (!std.mem.eql(u8, ls.node, match_var))
+                return error.ClusterWriteNotReplicable,
+            // SET n = {map} replaces ALL props (non-scalar shape) — out of slice.
+            .AllProperties => return error.ClusterWriteNotReplicable,
+        }
+    }
+    for (q.remove_clauses) |rc| {
+        switch (rc) {
+            .Property => |prop| if (!std.mem.eql(u8, prop.object, match_var))
+                return error.ClusterWriteNotReplicable,
+            .Labels => |ls| if (!std.mem.eql(u8, ls.node, match_var))
+                return error.ClusterWriteNotReplicable,
+        }
+    }
+
+    const read_store = graph_store.getWritableGlobalStore(allocator);
+    const filter_graph = current_graph orelse "default";
+    const filter_tenant = try tenantFilterFromContext(context);
+
+    // Resolve the MATCH set to stable candidate ids (tenant-honored, GAP-0840).
+    const evaluated_match_props = evaluatePatternProps(allocator, node_pattern.props, context) catch
+        return error.ClusterWriteNotReplicable;
+    defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
+
+    const candidate_ids = try collectCandidateNodeIds(
+        allocator,
+        read_store,
+        filter_graph,
+        filter_tenant,
+        node_pattern.labels,
+        evaluated_match_props,
+    );
+    defer allocator.free(candidate_ids);
+
+    var updates = std.ArrayList(cluster_replication.NodeUpdate).empty;
+    // Each NodeUpdate owns four heap slices allocated from `allocator`; free them
+    // (plus the outer list) on every exit path — `allocator` is not assumed to be
+    // an arena. The Prop.value scalars and the label/prop key slices are borrowed
+    // (AST-owned or store-owned), so only the OUTER slices are freed.
+    defer {
+        for (updates.items) |u| {
+            allocator.free(u.set_props);
+            allocator.free(u.remove_props);
+            allocator.free(u.add_labels);
+            allocator.free(u.remove_labels);
+        }
+        updates.deinit(allocator);
+    }
+
+    for (candidate_ids) |node_id| {
+        const node = read_store.nodes.getPtr(node_id) orelse continue;
+        if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_match_props)) continue;
+
+        // Bind the matched node so SET expressions (`n.v + 1`, `n.k`) evaluate on
+        // THIS leader's concrete value — followers never re-evaluate.
+        var names = [_][]const u8{match_var};
+        var values = [_]Value{Value{ .Node = node }};
+        const env = Env{
+            .allocator = allocator,
+            .names = &names,
+            .values = &values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
+        };
+
+        if (q.where_clause) |where_expr| {
+            const where_result = eval.evalExpr(allocator, where_expr, env) catch
+                return error.ClusterWriteNotReplicable;
+            const keep = switch (where_result) {
+                .Bool => |b| b,
+                else => false,
+            };
+            if (!keep) continue;
+        }
+
+        var set_props = std.ArrayList(cluster_replication.Prop).empty;
+        errdefer set_props.deinit(allocator);
+        var remove_props = std.ArrayList([]const u8).empty;
+        errdefer remove_props.deinit(allocator);
+        var add_labels = std.ArrayList([]const u8).empty;
+        errdefer add_labels.deinit(allocator);
+        var remove_labels = std.ArrayList([]const u8).empty;
+        errdefer remove_labels.deinit(allocator);
+
+        for (q.set_clauses) |sc| {
+            switch (sc) {
+                .Property => |prop| {
+                    const val = eval.evalExpr(allocator, prop.value, env) catch
+                        return error.ClusterWriteNotReplicable;
+                    const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                    try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
+                },
+                .Labels => |ls| {
+                    for (ls.labels) |label| try add_labels.append(allocator, label);
+                },
+                .AllProperties => unreachable, // rejected in the validation pass above
+            }
+        }
+        for (q.remove_clauses) |rc| {
+            switch (rc) {
+                .Property => |prop| try remove_props.append(allocator, prop.property),
+                .Labels => |ls| {
+                    for (ls.labels) |label| try remove_labels.append(allocator, label);
+                },
+            }
+        }
+
+        // Detach the four owned slices, then append. If `append` OOMs, free the
+        // just-detached slices so nothing leaks (the errdefers above no longer
+        // cover them — the ArrayLists are now empty).
+        const owned_set = try set_props.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_set);
+        const owned_remove = try remove_props.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_remove);
+        const owned_add = try add_labels.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_add);
+        const owned_rem_labels = try remove_labels.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_rem_labels);
+
+        try updates.append(allocator, .{
+            .node_id = node_id,
+            .set_props = owned_set,
+            .remove_props = owned_remove,
+            .add_labels = owned_add,
+            .remove_labels = owned_rem_labels,
+        });
+    }
+
+    // Bounds: refuse to propose a payload larger than the GUPD cap (fail-closed).
+    if (updates.items.len > cluster_replication.MAX_UPDATE_NODES)
+        return error.ClusterWriteNotReplicable;
+
+    const empty_result = ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+
+    // Nothing matched → semantically a no-op; short-circuit WITHOUT proposing.
+    if (updates.items.len == 0) return empty_result;
+
+    const payload = cluster_replication.serializeUpdate(allocator, filter_graph, updates.items) catch |err| switch (err) {
+        cluster_replication.CodecError.UnsupportedPropertyType,
+        cluster_replication.CodecError.CorruptPayload,
+        => return error.ClusterWriteNotReplicable,
+        else => return err,
+    };
+    defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+    const cmd = raft_consensus.Command{ .graph_mutation = .{
+        .graph = filter_graph,
+        .mutation_type = .update,
+        .data = payload,
+        .txn_id = null,
+    } };
+    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+        error.NotLeader => return error.ClusterNotLeader,
+        else => return err,
+    };
+    // Block until the entry is applied locally (apply happens on quorum commit).
+    try coord.waitForApplied(idx, 5000);
+
+    return empty_result;
+}
+
+/// Cluster write routing for a bare `MATCH … SET/REMOVE` query (no CREATE / MERGE
+/// / DELETE keyword). Returns `null` in standalone (no coordinator) mode so the
+/// dispatcher takes the unchanged local MATCH path. On the leader it replicates
+/// the update through Raft (or fails closed). On a follower it rejects the write
+/// (error.ClusterNotLeader — clients retry the leader). THIS CLOSES THE SILENT
+/// LEADER-ONLY DIVERGENCE: MATCH…SET/REMOVE was previously never cluster-gated.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=ExecutorRouteUpdate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+pub fn executeClusterMatchUpdateIfNeeded(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+) !?ExecutionResult {
+    switch (try clusterWriteRole()) {
+        .standalone => return null,
+        .leader => return try clusterReplicateMatchSet(allocator, q, current_graph, context),
+    }
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: in cluster mode the DELETE is ordered through Raft on

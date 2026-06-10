@@ -248,9 +248,28 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
         },
 
         .update => {
-            // Slice A: update replication is a follow-up slice. Skip explicitly,
-            // naming the unknown-payload-version posture.
-            log.warn("raft apply: graph_mutation update not wired in this slice (unknown/unsupported payload) — skipping", &.{
+            // Slice D: MATCH…SET / MATCH…REMOVE replication — closes the
+            // silent-divergence gap. The leader resolves the MATCH set to explicit
+            // STABLE node ids AND evaluates the SET expressions to concrete scalars,
+            // then ships a GUPD payload; every node (leader + followers) replays it
+            // here, applying set/remove props + label add/remove by stable id.
+            // Apply is idempotent — a set overwrites, a remove of an absent key /
+            // an add of an existing label / a remove of an absent label all no-op —
+            // so re-applying a committed entry after restart is safe.
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=ApplyUpdate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+            if (cluster_replication.isUpdatePayload(gm.data)) {
+                const applied = try cluster_replication.applyUpdatePayload(allocator, store, gm.data);
+                log.info("raft apply: replicated match-set/remove update", &.{
+                    Attr.uint("nodes", applied),
+                    Attr.string("graph", graph_name),
+                });
+                return allocator.alloc(u8, 0);
+            }
+
+            // Unknown update payload version: log-and-skip (mixed-version posture,
+            // consistent with the create/delete/merge branches — an unknown magic
+            // is not transient).
+            log.warn("raft apply: unknown update payload version — skipping", &.{
                 Attr.string("graph", graph_name),
                 Attr.uint("data_len", gm.data.len),
             });

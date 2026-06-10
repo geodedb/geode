@@ -1749,6 +1749,23 @@ pub fn executeLegacyQueryWithResolvedParams(
     // Check if there's a MATCH pattern
     if (q.match.chains.len > 0) {
         const match_graph = if (context.session_state) |session| session.graph else null;
+
+        // Cluster write routing for a bare `MATCH … SET/REMOVE` (no CREATE/MERGE/
+        // DELETE keyword). At HEAD this fell straight through to the local MATCH
+        // path, so a leader SET mutated ONLY the leader's store (SILENT
+        // DIVERGENCE) and a follower wrote locally too. The gate makes both fail
+        // closed: a follower rejects (error.ClusterNotLeader), the leader resolves
+        // stable ids + concrete values and replicates a GUPD through Raft. In
+        // standalone mode the helper returns null and the unchanged local path
+        // runs. A non-replicable shape fails closed (error.ClusterWriteNotReplicable).
+        // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=DispatchRouteUpdate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+        if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) {
+            const crud = @import("crud_operations.zig");
+            if (try crud.executeClusterMatchUpdateIfNeeded(allocator, q, match_graph, context)) |cluster_result| {
+                return cluster_result;
+            }
+        }
+
         return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, match_graph);
     }
 

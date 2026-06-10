@@ -693,6 +693,157 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     return node_id;
 }
 
+// ===========================================================================
+// GUPD — deterministic MATCH…SET / MATCH…REMOVE replication (leader-resolved)
+// ===========================================================================
+//
+// Slice D of the cluster-replication fix — closes the SILENT-DIVERGENCE gap:
+// MATCH…SET / MATCH…REMOVE without CREATE/MERGE/DELETE was NOT cluster-gated at
+// all, so a leader SET mutated ONLY the leader's local store (followers kept the
+// old value). Like DELETE/MERGE, SET/REMOVE reference PRE-EXISTING nodes by their
+// STABLE store ids; THE LEADER resolves the MATCH set AND evaluates the SET
+// expressions to CONCRETE scalar values under its execution path, then ships the
+// (node_id, concrete-set-props, removed-prop-keys, added-labels, removed-labels)
+// tuples here. Followers NEVER re-MATCH and NEVER re-evaluate an expression like
+// `n.v + 1` (which would diverge on a different starting value).
+//
+// One GUPD entry carries up to MAX_UPDATE_NODES per-node update records (a
+// `MATCH (n:L) SET n.v = 2` binds many nodes). The leader fails closed
+// (error.ClusterWriteNotReplicable) above the cap rather than truncating.
+//
+// Apply is idempotent on every node, including across restart re-apply: a set is
+// an overwrite-by-id, a remove of an absent key is a clean no-op, an add of an
+// existing label is a no-op, and a remove of an absent label is a no-op (the
+// store primitives tolerate all four). The persisted graph is the dedup oracle.
+//
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=UpdateCodec; STATUS=TESTED; TEST=tests/test_raft_apply.zig; OWNER=distributed; UPDATED=2026-06-09
+
+/// 4-byte magic prefix identifying a GUPD MATCH…SET/REMOVE payload.
+pub const MAGIC_UPDATE = [4]u8{ 'G', 'U', 'P', 'D' };
+
+/// Max per-node update records a single GUPD entry may carry. Bounds-checked at
+/// both serialize and apply time so a corrupt/oversized payload cannot OOM.
+pub const MAX_UPDATE_NODES: usize = 4096;
+
+/// A leader-resolved per-node update: the stable `node_id` plus the concrete
+/// property sets, the property keys to remove, and the labels to add / remove.
+/// All `set_props` values are concrete scalars evaluated on the leader.
+pub const NodeUpdate = struct {
+    node_id: u64,
+    set_props: []const Prop = &.{},
+    remove_props: []const []const u8 = &.{},
+    add_labels: []const []const u8 = &.{},
+    remove_labels: []const []const u8 = &.{},
+};
+
+pub fn isUpdatePayload(data: []const u8) bool {
+    return data.len >= MAGIC_UPDATE.len and std.mem.eql(u8, data[0..MAGIC_UPDATE.len], &MAGIC_UPDATE);
+}
+
+fn appendStrList(list: *std.ArrayList(u8), a: std.mem.Allocator, items: []const []const u8) !void {
+    try appendU16(list, a, items.len);
+    for (items) |s| try appendStr16(list, a, s);
+}
+
+/// Serialize a leader-resolved MATCH…SET/REMOVE outcome (one or more per-node
+/// updates) into a self-describing GUPD payload. All `set_props` values must be
+/// supported scalars (the caller maps them via clusterPropValue, fail-closed on
+/// non-scalars). Rejects (fail-closed) more than `MAX_UPDATE_NODES` records.
+pub fn serializeUpdate(
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    updates: []const NodeUpdate,
+) ![]u8 {
+    if (updates.len > MAX_UPDATE_NODES) return CodecError.UnsupportedPropertyType;
+
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+
+    try list.appendSlice(allocator, &MAGIC_UPDATE);
+    try appendStr16(&list, allocator, graph);
+
+    try appendU16(&list, allocator, updates.len);
+    for (updates) |u| {
+        try appendU64(&list, allocator, u.node_id);
+        try appendProps(&list, allocator, u.set_props);
+        try appendStrList(&list, allocator, u.remove_props);
+        try appendStrList(&list, allocator, u.add_labels);
+        try appendStrList(&list, allocator, u.remove_labels);
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Deterministically apply a GUPD payload to `store`. For each per-node record,
+/// in payload order: set the concrete properties, remove the named property keys,
+/// add the labels, then remove the labels — all keyed by the leader-resolved
+/// stable node id. Idempotent on every node and across restart re-apply (set is
+/// an overwrite; remove-absent / add-existing / remove-absent label are all clean
+/// no-ops; a label add/remove on an absent node is swallowed). Returns the number
+/// of node-update records applied.
+pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !usize {
+    _ = allocator;
+    if (!isUpdatePayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
+
+    const graph = try r.str16();
+    store.createGraph(graph) catch |err| switch (err) {
+        error.GraphAlreadyExists => {},
+        else => return err,
+    };
+
+    const update_count = try r.readU16();
+    if (update_count > MAX_UPDATE_NODES) return CodecError.CorruptPayload;
+
+    var ui: usize = 0;
+    while (ui < update_count) : (ui += 1) {
+        const node_id = try r.readU64();
+
+        // set_props
+        const nset = try r.readU16();
+        var si: usize = 0;
+        while (si < nset) : (si += 1) {
+            const p = try readProp(&r);
+            // Idempotent: setNodeProperty no-ops if the node is absent and
+            // overwrites in place otherwise.
+            try store.setNodeProperty(node_id, p.key, p.value);
+        }
+
+        // remove_props
+        const nrem = try r.readU16();
+        var ri: usize = 0;
+        while (ri < nrem) : (ri += 1) {
+            const key = try r.str16();
+            // removeNodeProperty no-ops on an absent node OR an absent key.
+            store.removeNodeProperty(node_id, key);
+        }
+
+        // add_labels
+        const nadd = try r.readU16();
+        var ai: usize = 0;
+        while (ai < nadd) : (ai += 1) {
+            const label = try r.str16();
+            store.addNodeLabel(node_id, label) catch |err| switch (err) {
+                error.NodeNotFound => {}, // idempotent: absent node is a no-op
+                else => return err,
+            };
+        }
+
+        // remove_labels
+        const ndel = try r.readU16();
+        var di: usize = 0;
+        while (di < ndel) : (di += 1) {
+            const label = try r.str16();
+            store.removeNodeLabel(node_id, label) catch |err| switch (err) {
+                error.NodeNotFound => {}, // idempotent: absent node is a no-op
+                else => return err,
+            };
+        }
+    }
+
+    return update_count;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1089,4 +1240,176 @@ test "GMRG truncated payload is rejected, not crashed" {
     const full = try serializeMerge(a, "default", 9, &props);
     defer a.free(full);
     try std.testing.expectError(CodecError.CorruptPayload, applyMergePayload(a, &store, full[0 .. full.len - 3]));
+}
+
+// ---------------------------------------------------------------------------
+// GUPD MATCH…SET / MATCH…REMOVE tests
+// ---------------------------------------------------------------------------
+
+test "GUPD set round-trips: SET n.v = 2 overwrites by stable id" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    // Leader-matched node at a stable id with v=1 (the SetRepl regression shape).
+    try store.createNodeWithId(33, &.{"SetRepl"}, "default");
+    try store.setNodeProperty(33, "v", .{ .Int = 1 });
+
+    const set_props = [_]Prop{.{ .key = "v", .value = .{ .Int = 2 } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 33, .set_props = &set_props }};
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+    try std.testing.expect(isUpdatePayload(payload));
+
+    const applied = try applyUpdatePayload(a, &store, payload);
+    try std.testing.expectEqual(@as(usize, 1), applied);
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(33, "v").?.Int);
+}
+
+test "GUPD apply is idempotent across restart re-apply (set-by-id overwrite)" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(7, &.{"S"}, "default");
+    const set_props = [_]Prop{.{ .key = "name", .value = .{ .String = "carol" } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 7, .set_props = &set_props }};
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+
+    _ = try applyUpdatePayload(a, &store, payload);
+    _ = try applyUpdatePayload(a, &store, payload); // restart replay — clean overwrite
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    try std.testing.expectEqualStrings("carol", store.getNodeProperty(7, "name").?.String);
+}
+
+test "GUPD remove of an absent prop is a clean no-op" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(9, &.{"S"}, "default");
+    try store.setNodeProperty(9, "keep", .{ .Int = 5 });
+
+    const removes = [_][]const u8{ "ghost", "alsoMissing" };
+    const updates = [_]NodeUpdate{.{ .node_id = 9, .remove_props = &removes }};
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+
+    _ = try applyUpdatePayload(a, &store, payload);
+    _ = try applyUpdatePayload(a, &store, payload); // re-apply — still a no-op
+    // The untouched property survives; the absent removes did nothing.
+    try std.testing.expectEqual(@as(i64, 5), store.getNodeProperty(9, "keep").?.Int);
+    try std.testing.expect(store.getNodeProperty(9, "ghost") == null);
+}
+
+test "GUPD remove of a present prop deletes it" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(11, &.{"S"}, "default");
+    try store.setNodeProperty(11, "drop", .{ .Int = 1 });
+    try store.setNodeProperty(11, "keep", .{ .Int = 2 });
+
+    const removes = [_][]const u8{"drop"};
+    const updates = [_]NodeUpdate{.{ .node_id = 11, .remove_props = &removes }};
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+
+    _ = try applyUpdatePayload(a, &store, payload);
+    try std.testing.expect(store.getNodeProperty(11, "drop") == null);
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(11, "keep").?.Int);
+}
+
+test "GUPD label add/remove round-trips by stable id" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(13, &.{"Base"}, "default");
+
+    const adds = [_][]const u8{"Added"};
+    const removes = [_][]const u8{"Base"};
+    const updates = [_]NodeUpdate{.{ .node_id = 13, .add_labels = &adds, .remove_labels = &removes }};
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+
+    _ = try applyUpdatePayload(a, &store, payload);
+    _ = try applyUpdatePayload(a, &store, payload); // re-apply: add-existing / remove-absent are no-ops
+
+    const node = store.getNodePtr(13).?;
+    var has_added = false;
+    var has_base = false;
+    for (node.labels) |l| {
+        if (std.mem.eql(u8, l, "Added")) has_added = true;
+        if (std.mem.eql(u8, l, "Base")) has_base = true;
+    }
+    try std.testing.expect(has_added);
+    try std.testing.expect(!has_base);
+}
+
+test "GUPD multi-node update payload sets every bound node" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(100, &.{"M"}, "default");
+    try store.createNodeWithId(101, &.{"M"}, "default");
+    try store.createNodeWithId(102, &.{"M"}, "default");
+
+    const sp = [_]Prop{.{ .key = "v", .value = .{ .Int = 2 } }};
+    const updates = [_]NodeUpdate{
+        .{ .node_id = 100, .set_props = &sp },
+        .{ .node_id = 101, .set_props = &sp },
+        .{ .node_id = 102, .set_props = &sp },
+    };
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+
+    const applied = try applyUpdatePayload(a, &store, payload);
+    try std.testing.expectEqual(@as(usize, 3), applied);
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(100, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(101, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(102, "v").?.Int);
+}
+
+test "GUPD cross-store convergence: two stores apply same payload -> identical state" {
+    const a = std.testing.allocator;
+    var s1 = try GraphStore.init(a);
+    defer s1.deinit();
+    var s2 = try GraphStore.init(a);
+    defer s2.deinit();
+
+    try s1.createNodeWithId(50, &.{"C"}, "default");
+    try s2.createNodeWithId(50, &.{"C"}, "default");
+
+    const sp = [_]Prop{.{ .key = "v", .value = .{ .Int = 9 } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 50, .set_props = &sp }};
+    const payload = try serializeUpdate(a, "default", &updates);
+    defer a.free(payload);
+
+    _ = try applyUpdatePayload(a, &s1, payload);
+    _ = try applyUpdatePayload(a, &s2, payload);
+    try std.testing.expectEqual(@as(i64, 9), s1.getNodeProperty(50, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 9), s2.getNodeProperty(50, "v").?.Int);
+}
+
+test "GUPD over-cap update set is rejected at serialize time" {
+    const a = std.testing.allocator;
+    const big = try a.alloc(NodeUpdate, MAX_UPDATE_NODES + 1);
+    defer a.free(big);
+    for (big, 0..) |*u, i| u.* = .{ .node_id = @intCast(i) };
+    try std.testing.expectError(CodecError.UnsupportedPropertyType, serializeUpdate(a, "default", big));
+}
+
+test "GUPD truncated payload is rejected, not crashed" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const sp = [_]Prop{.{ .key = "v", .value = .{ .Int = 1 } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 1, .set_props = &sp }};
+    const full = try serializeUpdate(a, "default", &updates);
+    defer a.free(full);
+    try std.testing.expectError(CodecError.CorruptPayload, applyUpdatePayload(a, &store, full[0 .. full.len - 3]));
 }

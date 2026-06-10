@@ -544,3 +544,128 @@ test "merge command with unknown payload magic is skipped (no error, no mutation
     // Graph is still ensured (idempotent).
     try std.testing.expect(store.graphs.contains("default"));
 }
+
+// ---------------------------------------------------------------------------
+// Slice D: GUPD MATCH…SET / MATCH…REMOVE replication (the silent-divergence fix).
+// The leader resolves stable ids + concrete evaluated values; .update applies the
+// per-node (set, remove, add-label, remove-label) tuples deterministically.
+// ---------------------------------------------------------------------------
+
+test "GUPD update command applies SET by stable id and is idempotent (apply twice)" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    // A leader-matched node at a stable id with the seed value v=1 (SetRepl shape).
+    try store.createNodeWithId(60, &.{"SetRepl"}, "default");
+    try store.setNodeProperty(60, "v", .{ .Int = 1 });
+
+    const set_props = [_]cr.Prop{.{ .key = "v", .value = .{ .Int = 2 } }};
+    const updates = [_]cr.NodeUpdate{.{ .node_id = 60, .set_props = &set_props }};
+    const payload = try cr.serializeUpdate(allocator, "default", &updates);
+    defer allocator.free(payload);
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .update,
+        .data = payload,
+        .txn_id = null,
+    } };
+
+    const r1 = try raft_apply.applyCommand(allocator, &store, cmd, 5);
+    defer allocator.free(r1);
+    const r2 = try raft_apply.applyCommand(allocator, &store, cmd, 6); // restart replay
+    defer allocator.free(r2);
+
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(60, "v").?.Int);
+}
+
+test "GUPD update command: remove of an absent prop is a clean no-op" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(61, &.{"S"}, "default");
+    try store.setNodeProperty(61, "keep", .{ .Int = 7 });
+
+    const removes = [_][]const u8{"ghost"};
+    const updates = [_]cr.NodeUpdate{.{ .node_id = 61, .remove_props = &removes }};
+    const payload = try cr.serializeUpdate(allocator, "default", &updates);
+    defer allocator.free(payload);
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .update,
+        .data = payload,
+        .txn_id = null,
+    } };
+
+    const result = try raft_apply.applyCommand(allocator, &store, cmd, 8);
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(i64, 7), store.getNodeProperty(61, "keep").?.Int);
+    try std.testing.expect(store.getNodeProperty(61, "ghost") == null);
+}
+
+test "GUPD update command: unknown payload magic is skipped (no error, no mutation)" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(62, &.{"S"}, "default");
+    try store.setNodeProperty(62, "v", .{ .Int = 1 });
+
+    const result = try raft_apply.applyCommand(allocator, &store, .{
+        .graph_mutation = .{
+            .graph = "default",
+            .mutation_type = .update,
+            .data = "no-magic-here", // not GUPD
+            .txn_id = null,
+        },
+    }, 9);
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+    // The unknown payload mutated nothing — the seed value is untouched.
+    try std.testing.expectEqual(@as(i64, 1), store.getNodeProperty(62, "v").?.Int);
+    try std.testing.expect(store.graphs.contains("default"));
+}
+
+test "GUPD update command: two stores apply same multi-node payload -> identical state" {
+    const allocator = std.testing.allocator;
+    var s1 = try GraphStore.init(allocator);
+    defer s1.deinit();
+    var s2 = try GraphStore.init(allocator);
+    defer s2.deinit();
+
+    inline for (.{ &s1, &s2 }) |s| {
+        try s.createNodeWithId(70, &.{"M"}, "default");
+        try s.createNodeWithId(71, &.{"M"}, "default");
+    }
+
+    const sp = [_]cr.Prop{.{ .key = "v", .value = .{ .Int = 3 } }};
+    const updates = [_]cr.NodeUpdate{
+        .{ .node_id = 70, .set_props = &sp },
+        .{ .node_id = 71, .set_props = &sp },
+    };
+    const payload = try cr.serializeUpdate(allocator, "default", &updates);
+    defer allocator.free(payload);
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .update,
+        .data = payload,
+        .txn_id = null,
+    } };
+
+    const r1 = try raft_apply.applyCommand(allocator, &s1, cmd, 11);
+    defer allocator.free(r1);
+    const r2 = try raft_apply.applyCommand(allocator, &s2, cmd, 11);
+    defer allocator.free(r2);
+
+    try std.testing.expectEqual(@as(i64, 3), s1.getNodeProperty(70, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 3), s1.getNodeProperty(71, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 3), s2.getNodeProperty(70, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 3), s2.getNodeProperty(71, "v").?.Int);
+}
