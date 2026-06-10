@@ -1102,10 +1102,12 @@ Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 
 **Step-Up MFA** (GAP-0884):
 
-- Privileged operations require fresh MFA elevation based on an explicit
+- `SecurityManager.requireStepUp` decides elevation from an explicit
   operation classification (read / write / admin / security_admin) of real
   procedure and auth-DDL identifiers — `classifyOperation` in
   `src/security/geode_auth_lib.zig`; unknown operations fail closed.
+- Note: this is a library-level policy API; wiring it into the statement /
+  procedure dispatch path as an enforcement gate is planned, not yet done.
 - Regression: `zig build test-gap0884`.
 
 **Risk-Based MFA** (scaffold only): `src/security/mfa_risk.zig` computes a
