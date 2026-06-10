@@ -137,7 +137,7 @@ fi
 
 # CLI restore from the backup file must report success.
 RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
-assert_contains "CLI restore reports completion" "$RESTORE_OUT" "Restore completed successfully|RESTORE:"
+assert_contains "CLI restore reports completion" "$RESTORE_OUT" "Restore completed successfully|RESTORE: (Restore initiated successfully|Point-in-time restore completed|Full backup restore completed)"
 
 # CLI backup list must run and not error out (directory scan).
 LIST_OUT=$($BIN backup list --dir "$BACKUP_DIR" 2>&1)

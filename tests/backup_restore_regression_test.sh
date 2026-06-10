@@ -103,7 +103,7 @@ fi
 
 # Test 3: CLI restore
 RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
-assert_match "CLI restore" "$RESTORE_OUT" "Restore completed successfully|RESTORE:"
+assert_match "CLI restore" "$RESTORE_OUT" "Restore completed successfully|RESTORE: (Restore initiated successfully|Point-in-time restore completed|Full backup restore completed)"
 
 # Test 4: CLI restore of a non-existent file fails (negative)
 MISSING_OUT=$($BIN restore "$BACKUP_DIR/does-not-exist.backup" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1 || true)

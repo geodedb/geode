@@ -548,7 +548,6 @@ REQ-CLI-AUTH-HELPERS-001,CLI Auth Helpers,Offline,IMPL,,,cli,2026-02-24,src/cli/
 REQ-CLI-AUTHN-001,CLIAuthn,ProviderConfig,TESTED,,,cli,2026-02-04,src/cli/authn_cli.zig
 REQ-CLI-AUTO-001,GQL Query Auto-detection,UserExperience,TESTED,,,cli,2025-10-04,tests/cli_gql_autodetection_regression_test.sh
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,,,cli,2025-10-04,tests/cli_gql_autodetection_basic_test.sh
-REQ-CLI-BACKUP-001,CLI Backup System,UnitTests,TESTED,,,cli,2026-02-05,tests/test_cli_backup_unit.zig
 REQ-CLI-BACKUP-INFO-001,CLIBackupInfo,FileMetadata,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-BACKUP-INTEGRATION-001,CLIBackup,RemoteBackup,TESTED,,,claude,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,TESTED,,,claude,2026-02-05,tests/test_server_backup_api_integration.zig
