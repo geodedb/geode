@@ -810,6 +810,41 @@ fn isMatchVar(match_var_names: []const []const u8, name: []const u8) bool {
     return false;
 }
 
+// Apply a hop endpoint NodePattern's inline props to a newly created node.
+// Mirrors `executeCreate`'s hop path (endpoint-prop application after node
+// resolution) using the same Env/eval machinery as the relationship-props
+// block in `executeCreateForBatchWithTracking` — this batch path carries no
+// query parameters, so the Env is empty.
+fn applyEndpointProps(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    node_pattern: ast.NodePattern,
+    node_id: u64,
+) !void {
+    const props = node_pattern.props orelse return;
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+    for (props) |prop| {
+        const value = try eval.evalExpr(allocator, prop.value.*, env);
+        try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
+    }
+}
+
+// True when a hop endpoint is a MATCH variable that failed to bind for this
+// row (the GAP-0336 conservative-skip rule). Resolved for BOTH endpoints
+// BEFORE either node is created so a skipped hop never leaves an orphan
+// newly-created endpoint behind (e.g. `MATCH (a) CREATE (new:X)-[:R]->(a)`
+// with `a` absent from the row's bindings must not create `new`).
+fn hopEndpointSkips(
+    endpoint: ast.NodePattern,
+    created_nodes: *const std.StringHashMap(u64),
+    matched_bindings: *const std.StringHashMap(u64),
+    match_var_names: []const []const u8,
+) bool {
+    const var_name = endpoint.name orelse return false;
+    if (created_nodes.contains(var_name)) return false;
+    return matched_bindings.count() > 0 and isMatchVar(match_var_names, var_name);
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-017; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatchWithTracking; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation.
 //
@@ -903,42 +938,52 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
         // Handle relationship creation
         for (chain.hops) |hop| {
+            // Resolve BOTH endpoints' skip-status BEFORE creating either node:
+            // if one endpoint is a MATCH variable that failed to bind for this
+            // row, the whole hop is skipped and no orphan endpoint node may be
+            // created (or counted) for the other side.
+            if (hopEndpointSkips(hop.left, &created_nodes, &matched_bindings, match_var_names) or
+                hopEndpointSkips(hop.right, &created_nodes, &matched_bindings, match_var_names))
+            {
+                continue;
+            }
+
             // For batch CREATE from MATCH, nodes must already exist in bindings
             const left_id = if (hop.left.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
-                } else if (matched_bindings.count() > 0 and isMatchVar(match_var_names, var_name)) {
-                    continue; // MATCH variable that failed to bind for this row — skip
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.left.labels);
+                    try applyEndpointProps(allocator, store, hop.left, new_id);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
+                try applyEndpointProps(allocator, store, hop.left, new_id);
                 break :blk new_id;
             };
 
             const right_id = if (hop.right.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
-                } else if (matched_bindings.count() > 0 and isMatchVar(match_var_names, var_name)) {
-                    continue; // MATCH variable that failed to bind for this row — skip
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.right.labels);
+                    try applyEndpointProps(allocator, store, hop.right, new_id);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
+                try applyEndpointProps(allocator, store, hop.right, new_id);
                 break :blk new_id;
             };
 

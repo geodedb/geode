@@ -147,6 +147,32 @@ const Harness = struct {
         try testing.expectEqual(geode.eval.Value{ .Int = expected_nodes }, res.rows[0][nodes_idx.?]);
         try testing.expectEqual(geode.eval.Value{ .Int = expected_rels }, res.rows[0][rels_idx.?]);
     }
+
+    /// Run a single-row/single-column read query (e.g. `RETURN count(n) AS c`)
+    /// through the real executor and assert the integer result.
+    fn expectCount(
+        self: *const Harness,
+        allocator: std.mem.Allocator,
+        query: []const u8,
+        expected: i64,
+    ) !void {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        var parsed = try geode.parseGql(query, aa);
+        defer parsed.deinit();
+
+        const prev_scratch = query_arena.pushScratchAllocator(aa);
+        defer query_arena.popScratchAllocator(prev_scratch);
+
+        var res = try execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+        defer res.deinit(aa);
+
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        try testing.expectEqual(@as(usize, 1), res.rows[0].len);
+        try testing.expectEqual(geode.eval.Value{ .Int = expected }, res.rows[0][0]);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -189,4 +215,11 @@ test "MATCH…CREATE new node + edge: nodes_created=1, relationships_created=1" 
         1,
         1,
     );
+
+    // The new endpoint node must actually carry its inline properties.
+    // Pre-fix, the hop-endpoint creation arm in
+    // `executeCreateForBatchWithTracking` created `new` with labels only and
+    // silently dropped `{k: 1}`.
+    try h.expectCount(allocator, "MATCH (n:CcNew) RETURN count(n) AS c", 1);
+    try h.expectCount(allocator, "MATCH (n:CcNew {k: 1}) RETURN count(n) AS c", 1);
 }
