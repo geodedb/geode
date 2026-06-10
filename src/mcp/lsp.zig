@@ -4,6 +4,23 @@ const std = @import("std");
 // MCP LSP Tools for Geode - GQL validation, completions, and hover information
 // Enables AI/LLM systems to validate and understand GQL queries
 
+// GAP-0830: MCP/LSP bridge contract. This file is the bridge between the
+// MCP server's `tools/call` dispatch (src/mcp/tools.zig) and Geode's GQL
+// language services. Four MCP tool names map to the four public entry
+// points below:
+//   validate    -> validateQuery
+//   complete    -> getCompletions
+//   hover       -> getHover
+//   diagnostics -> getDiagnostics (alias of validateQuery)
+// The contract — exposed features, auth posture, transport, ownership,
+// threading, the GAP-0819 input chokepoint, and the GAP-0818 latent-RLS
+// pre-condition — is documented authoritatively in docs/MCP_LSP_BRIDGE.md.
+// All four entry points are pure (no global mutation; caller owns the
+// returned JSON bytes) and run their `query` through
+// validateAndSanitizeGqlInput before any lexer/parser work. The governance
+// test tests/test_gap0830_mcp_lsp_bridge.zig pins this contract.
+// CANARY: REQ=REQ-MCP-LSP-BRIDGE-001; FEATURE="MCPLSPBridgeContract"; ASPECT=BridgeContract; STATUS=TESTED; TEST=tests/test_gap0830_mcp_lsp_bridge.zig; OWNER=mcp; UPDATED=2026-06-10
+
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-048; FEATURE="JSON Library Migration"; ASPECT=MCPLSP; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const json_lib = @import("json");
 
@@ -209,7 +226,22 @@ pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32
     };
 
     var completions = try std.ArrayList(CompletionItem).initCapacity(allocator, 32);
-    defer completions.deinit(allocator);
+    // GAP-0830: the add*Keywords / addFunctions / addTypes helpers `dupe`
+    // each label/detail/documentation/insertText into the CompletionItem.
+    // formatCompletionResponse copies them into the JSON output but does NOT
+    // take ownership, so the duped slices must be freed here. Previously only
+    // the array backing store was freed, leaking every item string (the
+    // pre-existing getCompletions leak flagged in docs/GAP_ANALYSIS.md
+    // Phase 4). Free per-item strings first, then the array.
+    defer {
+        for (completions.items) |item| {
+            allocator.free(item.label);
+            if (item.detail) |d| allocator.free(d);
+            if (item.documentation) |doc| allocator.free(doc);
+            if (item.insert_text) |it| allocator.free(it);
+        }
+        completions.deinit(allocator);
+    }
 
     // Get the context at cursor position
     const context = getContextAtPosition(query, line, column);

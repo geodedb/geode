@@ -1,7 +1,8 @@
 # MCP LSP Bridge
 
-**Last updated:** 2026-05-06
+**Last updated:** 2026-06-10
 **Owner:** mcp / lsp
+**Requirement:** `REQ-MCP-LSP-BRIDGE-001` (bridge contract; CANARY in `src/mcp/lsp.zig`)
 **Status:** Living document; refer to GAP-0818 for the latent-RLS pre-condition.
 
 This document is the authoritative reference for the four LSP-bridge
@@ -9,6 +10,11 @@ tools exposed by the Geode MCP server. It captures public surface,
 ownership semantics, threading expectations, and the row-level
 security (RLS) pre-condition that operators must understand before
 enabling tenant-aware policies.
+
+The bridge contract is governed by requirement
+`REQ-MCP-LSP-BRIDGE-001` (CANARY marker at the top of
+`src/mcp/lsp.zig`, STATUS=TESTED) and pinned by the governance test
+`tests/test_gap0830_mcp_lsp_bridge.zig` (`zig build test-gap0830`).
 
 ## Why this exists
 
@@ -76,11 +82,42 @@ On any rejection the entry point returns a
 error-severity diagnostic naming the rejection reason. No diagnostic
 position is asserted (line/column are 0).
 
+## Transport and dispatch
+
+The bridge is reached over the MCP server's transports (stdio for
+local clients such as Claude Desktop; HTTP for networked clients) via
+the `tools/call` JSON-RPC method. `src/mcp/server.zig` validates the
+bearer token at the transport boundary (default `auth_mode = .bearer`,
+SEC-08) and routes `tools/call` to `src/mcp/tools.zig:callTool`, which
+dispatches by tool name to the typed function below. The four bridge
+tools are **read-only language services**: they never touch the graph
+backend and require no QUIC endpoint (unlike the `query`/`schema`/
+`explain`/`catalogs`/`graphs` tools).
+
+## Auth posture
+
+- The MCP server derives a single per-server `Principal` from the
+  bearer token at init (GPS Phase 5, `source = .mcp_handler`). All
+  bridge calls run under that principal; there is no per-connection
+  multi-user threading yet (deferred to Phase 6+).
+- The bridge functions themselves perform **no authorization** beyond
+  the GAP-0819 input chokepoint — they are pure parser/metadata
+  lookups over the supplied query text and expose no row data. The
+  RLS pre-condition below governs when tenant-aware policies may be
+  safely attached to MCP-reachable databases.
+
 ## Ownership and threading
 
 - All four functions are pure with respect to their input. They do not
   mutate global state. They allocate JSON output strings owned by the
   caller's allocator.
+- `getCompletions` internally `dupe`s each completion item's
+  label/detail/documentation/insertText, encodes them into the JSON
+  response, and frees those per-item slices before returning (the
+  caller only frees the single returned JSON buffer). The earlier
+  implementation freed only the item array and leaked every duped
+  string; that leak was fixed under GAP-0830 and is regression-covered
+  by `tests/test_gap0830_mcp_lsp_bridge.zig`.
 - The MCP server (`src/mcp/server.zig`) is single-threaded as of
   2026-05-06; tool calls run sequentially under the server's auth
   layer. There is no per-call locking.
@@ -107,8 +144,21 @@ attach tenant-aware RLS policies (those that depend on
 `current_user()` or `current_tenant()`) to any database that is
 reachable through the MCP server.
 
+## Verification
+
+- `zig build test-gap0830` — governance test exercising all four
+  bridge entry points: `validate`/`diagnostics` (valid + invalid +
+  alias equivalence), `complete`, `hover` (known keyword + unknown
+  word), and the GAP-0819 input chokepoint (empty / embedded-NUL /
+  oversize rejection). Leak-checked under `std.testing.allocator`, so
+  it also guards the `getCompletions` ownership fix.
+
 ## Cross-references
 
+- GAP-0830 (bridge contract doc + CANARY + governance test) — closed
+  2026-06-10 by this documentation, the `REQ-MCP-LSP-BRIDGE-001`
+  CANARY in `src/mcp/lsp.zig`, the `getCompletions` leak fix, and
+  `tests/test_gap0830_mcp_lsp_bridge.zig`.
 - GAP-0818 (latent RLS pre-condition) — closed 2026-05-06 by this
   documentation.
 - GAP-0819 (MCP GQL input chokepoint) — closed 2026-05-06 with
@@ -117,7 +167,7 @@ reachable through the MCP server.
   `rejectIfOversized`.
 - GAP-0510 (RLS expression engine wiring) — closed 2026-04-11; see
   the Known Limitations section of `CLAUDE.md`.
-- GitLab tracking issues: `#754` (GAP-0818), `#668` (GAP-0819),
-  `#793` (LSP-SEC-007).
+- GitLab tracking issues: `#547` (GAP-0830), `#754` (GAP-0818),
+  `#668` (GAP-0819), `#793` (LSP-SEC-007).
 
 CANARY: REQ=REQ-DOC-MCP-LSP-BRIDGE; FEATURE="MCPLSPBridgeDoc"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-05-06

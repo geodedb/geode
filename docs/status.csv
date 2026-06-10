@@ -3430,6 +3430,7 @@ REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/cli
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
 REQ-MCP-GAP-0819,GqlInputChokepointResponse,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
+REQ-MCP-LSP-BRIDGE-001,MCPLSPBridgeContract,BridgeContract,TESTED,,,mcp,2026-06-10,src/mcp/lsp.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig

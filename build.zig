@@ -5076,6 +5076,33 @@ pub fn build(b: *std.Build) void {
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
 
+    // GAP-0830: MCP/LSP bridge governance test. Exercises the four bridge
+    // entry points (lsp.validateQuery / getCompletions / getHover /
+    // getDiagnostics) that MCP tools/call dispatch routes to, proving the
+    // bridge contract documented in docs/MCP_LSP_BRIDGE.md (and pinned by the
+    // REQ-MCP-LSP-BRIDGE-001 CANARY in src/mcp/lsp.zig) is real and stable.
+    // Roots the file through src/mcp/mod.zig (exposed as `mcp_bridge`) so
+    // lsp.zig and its gql_parser/recommendations deps link via the geode
+    // module — same module-rooting rationale as the mcp_cli_mod import set.
+    const gap0830_bridge_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/mod.zig"), .target = target, .optimize = optimize });
+    gap0830_bridge_mod.addImport("mcp", mcp_mod);
+    gap0830_bridge_mod.addImport("geode", root_mod);
+    gap0830_bridge_mod.addImport("json", json_mod);
+    gap0830_bridge_mod.addImport("schema", schema_mod);
+    gap0830_bridge_mod.addImport("protobuf", protobuf_mod);
+    gap0830_bridge_mod.addImport("transport/quic", transport_quic_mod);
+    gap0830_bridge_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    gap0830_bridge_mod.addImport("build_options", build_options_mod);
+    gap0830_bridge_mod.link_libc = true;
+    const gap0830_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0830_mcp_lsp_bridge.zig"), .target = target, .optimize = optimize });
+    gap0830_test_mod.addImport("mcp_bridge", gap0830_bridge_mod);
+    gap0830_test_mod.link_libc = true;
+    const gap0830_tests = b.addTest(.{ .root_module = gap0830_test_mod });
+    const run_gap0830_tests = b.addRunArtifact(gap0830_tests);
+    shardDep(test_step, &run_gap0830_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0830_step = b.step("test-gap0830", "GAP-0830: MCP/LSP bridge contract governance test");
+    gap0830_step.dependOn(&run_gap0830_tests.step);
+
     // GAP-0820..0824: LSP "honest non-support" contract — unadvertised feature
     // REQUESTS answer -32601 (MethodNotFound) and unadvertised NOTIFICATIONS are
     // silently tolerated (workspace/*, rename/prepareRename, codeAction,
