@@ -614,6 +614,85 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     return removed;
 }
 
+// ===========================================================================
+// GMRG — deterministic MERGE "matched + ON MATCH SET" replication
+// ===========================================================================
+//
+// Slice C of the cluster-replication fix. THE CRITICAL DETERMINISM RULE: the
+// MERGE match-or-create decision is made ONCE on the LEADER and shipped as a
+// concrete OUTCOME; followers NEVER re-evaluate the match (their scan order
+// could differ → divergence).
+//
+//   * NOT MATCHED  → outcome = create. The leader reuses the existing GNC1
+//     node-create codec (serializeNodeCreate), so the create rides the
+//     already-idempotent, raft-index-keyed create apply path. No new codec.
+//   * MATCHED, no ON MATCH SET → no-op. The leader short-circuits WITHOUT
+//     proposing anything (nothing mutates — semantically correct and cheap).
+//   * MATCHED, with ON MATCH SET → this GMRG payload. It carries the
+//     leader-resolved STABLE node id + the concrete property values; apply
+//     idempotently `setNodeProperty`s by that id on every node (the matched id
+//     is stable, so re-apply after restart is a clean overwrite — naturally
+//     idempotent).
+//
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MERGE; FEATURE="DistributedCluster"; ASPECT=MergeCodec; STATUS=TESTED; TEST=tests/test_raft_apply.zig; OWNER=distributed; UPDATED=2026-06-09
+
+/// 4-byte magic prefix identifying a GMRG merge "matched + ON MATCH SET" payload.
+pub const MAGIC_MERGE = [4]u8{ 'G', 'M', 'R', 'G' };
+
+pub fn isMergePayload(data: []const u8) bool {
+    return data.len >= MAGIC_MERGE.len and std.mem.eql(u8, data[0..MAGIC_MERGE.len], &MAGIC_MERGE);
+}
+
+/// Serialize a MERGE "matched existing node + ON MATCH SET" outcome: the
+/// leader-resolved stable `node_id` plus the concrete property values to set.
+/// All values must be supported scalars; anything else returns
+/// `error.UnsupportedPropertyType` and the caller falls back / fails closed.
+pub fn serializeMerge(
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    node_id: u64,
+    props: []const Prop,
+) ![]u8 {
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+
+    try list.appendSlice(allocator, &MAGIC_MERGE);
+    try appendStr16(&list, allocator, graph);
+    try appendU64(&list, allocator, node_id);
+    try appendProps(&list, allocator, props);
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Deterministically apply a GMRG payload to `store`: idempotently set the
+/// resolved properties on the leader-resolved stable node id. If the node is
+/// absent (it should always be present — the leader matched it), the property
+/// writes are clean no-ops. Returns the node id. Naturally idempotent across
+/// restart re-apply (set-by-id overwrites in place).
+pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !u64 {
+    _ = allocator;
+    if (!isMergePayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
+
+    const graph = try r.str16();
+    store.createGraph(graph) catch |err| switch (err) {
+        error.GraphAlreadyExists => {},
+        else => return err,
+    };
+
+    const node_id = try r.readU64();
+
+    const nprops = try r.readU16();
+    var pi: usize = 0;
+    while (pi < nprops) : (pi += 1) {
+        const p = try readProp(&r);
+        // Idempotent: setNodeProperty no-ops if the node is absent and overwrites
+        // in place otherwise.
+        try store.setNodeProperty(node_id, p.key, p.value);
+    }
+    return node_id;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -961,4 +1040,53 @@ test "GDEL truncated payload is rejected, not crashed" {
     const full = try serializeDelete(a, "default", &edge_ids, &node_ids);
     defer a.free(full);
     try std.testing.expectError(CodecError.CorruptPayload, applyDeletePayload(a, &store, full[0 .. full.len - 3]));
+}
+
+// ---------------------------------------------------------------------------
+// GMRG merge (matched + ON MATCH SET) tests
+// ---------------------------------------------------------------------------
+
+test "GMRG merge round-trips: matched node + ON MATCH SET overwrites by id" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    // Leader-matched node at a stable id with an initial value.
+    try store.createNodeWithId(77, &.{"M"}, "default");
+    try store.setNodeProperty(77, "v", .{ .Int = 1 });
+
+    const props = [_]Prop{.{ .key = "v", .value = .{ .Int = 2 } }};
+    const payload = try serializeMerge(a, "default", 77, &props);
+    defer a.free(payload);
+    try std.testing.expect(isMergePayload(payload));
+
+    const node_id = try applyMergePayload(a, &store, payload);
+    try std.testing.expectEqual(@as(u64, 77), node_id);
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(77, "v").?.Int);
+}
+
+test "GMRG apply is idempotent across restart re-apply (set-by-id overwrite)" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(5, &.{"M"}, "default");
+    const props = [_]Prop{.{ .key = "name", .value = .{ .String = "bob" } }};
+    const payload = try serializeMerge(a, "default", 5, &props);
+    defer a.free(payload);
+
+    _ = try applyMergePayload(a, &store, payload);
+    _ = try applyMergePayload(a, &store, payload); // restart replay — clean overwrite
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    try std.testing.expectEqualStrings("bob", store.getNodeProperty(5, "name").?.String);
+}
+
+test "GMRG truncated payload is rejected, not crashed" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const props = [_]Prop{.{ .key = "v", .value = .{ .Int = 1 } }};
+    const full = try serializeMerge(a, "default", 9, &props);
+    defer a.free(full);
+    try std.testing.expectError(CodecError.CorruptPayload, applyMergePayload(a, &store, full[0 .. full.len - 3]));
 }

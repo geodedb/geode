@@ -217,10 +217,40 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
             return allocator.alloc(u8, 0);
         },
 
-        .update, .merge => {
-            // Slice A: update/merge replication is a follow-up slice. Skip
-            // explicitly, naming the unknown-payload-version posture.
-            log.warn("raft apply: graph_mutation update/merge not wired in this slice (unknown/unsupported payload) — skipping", &.{
+        .merge => {
+            // Slice C: MERGE replication. The leader decides match-or-create ONCE
+            // and ships a concrete outcome — followers NEVER re-evaluate the match.
+            //   * NOT MATCHED → leader proposes a .create (GNC1) command, applied
+            //     by the .create branch above; the .merge branch never sees it.
+            //   * MATCHED + ON MATCH SET → a GMRG payload, decoded here and applied
+            //     idempotently by stable node id (set-by-id overwrite). The matched
+            //     id is stable, so re-apply after restart is a clean no-op overwrite.
+            //   * MATCHED, no ON MATCH SET → the leader short-circuits (no propose),
+            //     so this branch never fires for that case either.
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MERGE; FEATURE="DistributedCluster"; ASPECT=ApplyMerge; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+            if (cluster_replication.isMergePayload(gm.data)) {
+                const node_id = try cluster_replication.applyMergePayload(allocator, store, gm.data);
+                log.info("raft apply: replicated merge (matched + ON MATCH SET)", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("graph", graph_name),
+                });
+                return allocator.alloc(u8, 0);
+            }
+
+            // Unknown merge payload version: log-and-skip (mixed-version posture,
+            // consistent with the create/delete branches — an unknown magic is not
+            // transient).
+            log.warn("raft apply: unknown merge payload version — skipping", &.{
+                Attr.string("graph", graph_name),
+                Attr.uint("data_len", gm.data.len),
+            });
+            return allocator.alloc(u8, 0);
+        },
+
+        .update => {
+            // Slice A: update replication is a follow-up slice. Skip explicitly,
+            // naming the unknown-payload-version posture.
+            log.warn("raft apply: graph_mutation update not wired in this slice (unknown/unsupported payload) — skipping", &.{
                 Attr.string("graph", graph_name),
                 Attr.uint("data_len", gm.data.len),
             });

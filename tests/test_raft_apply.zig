@@ -425,3 +425,122 @@ test "GDEL truncated payload is rejected, not crashed" {
     defer allocator.free(full);
     try std.testing.expectError(cr.CodecError.CorruptPayload, cr.applyDeletePayload(allocator, &store, full[0 .. full.len - 3]));
 }
+
+// ---------------------------------------------------------------------------
+// Slice C: MERGE replication
+// ---------------------------------------------------------------------------
+// The NOT-MATCHED MERGE outcome rides the GNC1 .create apply path (raft-index-
+// keyed id, idempotent re-apply). The MATCHED + ON MATCH SET outcome is a GMRG
+// payload applied on the .merge branch (set-by-id, naturally idempotent).
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MERGE; FEATURE="DistributedCluster"; ASPECT=ApplyMergeIntegration; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-06-09
+
+test "MERGE create outcome (GNC1) applies idempotently: apply twice -> 1 node" {
+    // The NOT-MATCHED MERGE ships the SAME GNC1 create payload twice would imply
+    // two raft entries, but a single committed entry re-applied (restart replay)
+    // keys off the same raft index -> 1 node. This mirrors the create-apply
+    // idempotency the MERGE create-outcome inherits.
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const labels = [_][]const u8{"MergeRepl"};
+    const props = [_]cr.Prop{.{ .key = "k", .value = .{ .Int = 1 } }};
+    const payload = try cr.serializeNodeCreate(allocator, "default", &labels, &props);
+    defer allocator.free(payload);
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } };
+
+    const r1 = try raft_apply.applyCommand(allocator, &store, cmd, 12);
+    defer allocator.free(r1);
+    const r2 = try raft_apply.applyCommand(allocator, &store, cmd, 12); // restart replay
+    defer allocator.free(r2);
+
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 1), store.countNodesByLabel("default", "MergeRepl", null));
+    try std.testing.expectEqual(@as(i64, 1), store.getNodeProperty(12, "k").?.Int);
+}
+
+test "MERGE create outcome: two stores apply same payload -> identical single node" {
+    const allocator = std.testing.allocator;
+    var s1 = try GraphStore.init(allocator);
+    defer s1.deinit();
+    var s2 = try GraphStore.init(allocator);
+    defer s2.deinit();
+
+    const labels = [_][]const u8{"MergeRepl"};
+    const props = [_]cr.Prop{.{ .key = "k", .value = .{ .Int = 1 } }};
+    const payload = try cr.serializeNodeCreate(allocator, "default", &labels, &props);
+    defer allocator.free(payload);
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } };
+
+    const a = try raft_apply.applyCommand(allocator, &s1, cmd, 21);
+    defer allocator.free(a);
+    const b = try raft_apply.applyCommand(allocator, &s2, cmd, 21);
+    defer allocator.free(b);
+
+    // Both stores minted the same id (= raft index) and exactly one node.
+    try std.testing.expect(s1.nodes.contains(21) and s2.nodes.contains(21));
+    try std.testing.expectEqual(@as(usize, 1), s1.nodes.count());
+    try std.testing.expectEqual(@as(usize, 1), s2.nodes.count());
+}
+
+test "GMRG merge command applies ON MATCH SET by stable id and is idempotent" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    // A leader-matched node at a stable id.
+    try store.createNodeWithId(50, &.{"MergeRepl"}, "default");
+    try store.setNodeProperty(50, "v", .{ .Int = 1 });
+
+    const props = [_]cr.Prop{.{ .key = "v", .value = .{ .Int = 2 } }};
+    const payload = try cr.serializeMerge(allocator, "default", 50, &props);
+    defer allocator.free(payload);
+
+    const cmd: Command = .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .merge,
+        .data = payload,
+        .txn_id = null,
+    } };
+
+    const r1 = try raft_apply.applyCommand(allocator, &store, cmd, 5);
+    defer allocator.free(r1);
+    const r2 = try raft_apply.applyCommand(allocator, &store, cmd, 6); // re-apply
+    defer allocator.free(r2);
+
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(50, "v").?.Int);
+}
+
+test "merge command with unknown payload magic is skipped (no error, no mutation)" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const result = try raft_apply.applyCommand(allocator, &store, .{
+        .graph_mutation = .{
+            .graph = "default",
+            .mutation_type = .merge,
+            .data = "no-magic-here", // not GMRG
+            .txn_id = null,
+        },
+    }, 9);
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+    // Graph is still ensured (idempotent).
+    try std.testing.expect(store.graphs.contains("default"));
+}

@@ -2605,16 +2605,190 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
     };
 }
 
+/// Resolve a list of `ON CREATE SET` / `ON MATCH SET` clauses targeting the
+/// merged node variable into concrete scalar `cluster_replication.Prop` entries,
+/// appended to `out`. Returns `error.ClusterWriteNotReplicable` for any clause
+/// this slice cannot replicate deterministically (a `.Labels` / `.AllProperties`
+/// form, a non-scalar value, or a `.Property` targeting some other variable),
+/// so the leader fails closed instead of writing leader-local.
+fn resolveMergeSetProps(
+    allocator: std.mem.Allocator,
+    set_items: []const ast.SetClause,
+    var_name: ?[]const u8,
+    context: ExecutionContext,
+    out: *std.ArrayList(cluster_replication.Prop),
+) !void {
+    if (set_items.len == 0) return;
+    const target_var = var_name orelse return error.ClusterWriteNotReplicable;
+    for (set_items) |set_clause| {
+        switch (set_clause) {
+            .Property => |prop| {
+                if (!std.mem.eql(u8, prop.target.object, target_var))
+                    return error.ClusterWriteNotReplicable;
+                const value = eval.evalExpr(allocator, prop.value, envFromContext(allocator, context)) catch
+                    return error.ClusterWriteNotReplicable;
+                const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
+                try out.append(allocator, .{ .key = prop.target.property, .value = pv });
+            },
+            // SET label / SET = {map} are not in the replicable MERGE slice.
+            .Labels, .AllProperties => return error.ClusterWriteNotReplicable,
+        }
+    }
+}
+
+/// Replicate an eligible node `MERGE (:Label {props})` through Raft and return
+/// its result. Called ONLY when this node is the cluster leader.
+///
+/// THE CRITICAL DETERMINISM RULE: the match-or-create decision is made ONCE on
+/// the LEADER and shipped as a concrete OUTCOME. Followers NEVER re-evaluate the
+/// match (their scan order could differ → divergence). Outcomes:
+///   * NOT MATCHED → reuse the GNC1 node-create codec (merge props + ON CREATE
+///     SET resolved to concrete scalars). The create rides the already-
+///     idempotent, raft-index-keyed create apply path.
+///   * MATCHED, no ON MATCH SET → NO-OP: short-circuit WITHOUT proposing
+///     anything (nothing mutates — semantically correct and cheap, so the
+///     second MERGE of the same key is free).
+///   * MATCHED, with ON MATCH SET → ship a GMRG payload (leader-resolved stable
+///     id + concrete props), applied idempotently by id on every node.
+///
+/// CONCURRENT-MERGE RACE: between the leader's match evaluation and the raft
+/// commit, another committed entry could create the same node (two concurrent
+/// MERGEs of the same key). Geode serializes leader writes through
+/// proposeWrite + waitForApplied per statement, so this is bounded by the
+/// single-writer leader model; it is documented as a known limitation rather
+/// than re-introducing non-deterministic follower-side matching.
+///
+/// Returns `error.ClusterWriteNotReplicable` for any shape outside the slice (a
+/// relationship MERGE, a RETURN clause, or a non-scalar/label/map SET), so the
+/// write fails closed instead of being applied leader-local.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MERGE; FEATURE="DistributedCluster"; ASPECT=LeaderProposeMerge; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+fn clusterReplicateMerge(
+    allocator: std.mem.Allocator,
+    m: ast.MergeStatement,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+) !ExecutionResult {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+
+    // RETURN clause projects the merged node + `created` flag — not determinable
+    // pre-commit (the create id is the raft index, unknown until applied). Fail
+    // closed for this slice.
+    if (m.return_clause != null) return error.ClusterWriteNotReplicable;
+
+    // Only a single-node MERGE (no relationship hops) is replicable here. A
+    // relationship MERGE `(a)-[r]->(b)` resolves matched endpoints + edge
+    // semantics that are out of this slice — fail closed.
+    if (m.pattern.chains.len != 1) return error.ClusterWriteNotReplicable;
+    const chain = m.pattern.chains[0];
+    if (chain.hops.len != 0) return error.ClusterWriteNotReplicable;
+    const node_pattern = chain.head orelse return error.ClusterWriteNotReplicable;
+
+    const read_store = graph_store.getWritableGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
+    const filter_tenant = try tenantFilterFromContext(context);
+
+    // Evaluate the MERGE match locally on the leader (same predicate the local
+    // path uses) — this is the ONE authoritative match-or-create decision.
+    const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
+    defer freeEvaluatedPatternProps(allocator, evaluated_props);
+
+    const matched_id = try findFirstMatchingNodeId(
+        allocator,
+        read_store,
+        target_graph,
+        filter_tenant,
+        node_pattern.labels,
+        evaluated_props,
+    );
+
+    const empty_result = ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+
+    if (matched_id) |node_id| {
+        // MATCHED. With no ON MATCH SET this is a NO-OP — short-circuit without
+        // proposing anything (nothing mutates). The second MERGE of the same key
+        // in the regression takes this cheap path.
+        if (m.on_match.len == 0) return empty_result;
+
+        // MATCHED + ON MATCH SET: resolve to concrete props and ship a GMRG
+        // payload applied idempotently by the leader-resolved stable id.
+        var set_props = std.ArrayList(cluster_replication.Prop).empty;
+        defer set_props.deinit(allocator);
+        try resolveMergeSetProps(allocator, m.on_match, node_pattern.name, context, &set_props);
+        if (set_props.items.len == 0) return empty_result;
+
+        const payload = cluster_replication.serializeMerge(allocator, target_graph, node_id, set_props.items) catch |err| switch (err) {
+            cluster_replication.CodecError.UnsupportedPropertyType => return error.ClusterWriteNotReplicable,
+            else => return err,
+        };
+        defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+        const cmd = raft_consensus.Command{ .graph_mutation = .{
+            .graph = target_graph,
+            .mutation_type = .merge,
+            .data = payload,
+            .txn_id = null,
+        } };
+        const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+            error.NotLeader => return error.ClusterNotLeader,
+            else => return err,
+        };
+        try coord.waitForApplied(idx, 5000);
+        return empty_result;
+    }
+
+    // NOT MATCHED → create. Reuse the GNC1 node-create codec: merge pattern props
+    // PLUS ON CREATE SET, both resolved to concrete scalars on the leader.
+    var props = std.ArrayList(cluster_replication.Prop).empty;
+    defer props.deinit(allocator);
+    if (node_pattern.props) |plist| {
+        const env = envFromContext(allocator, context);
+        for (plist) |p| {
+            const val = eval.evalExpr(allocator, p.value.*, env) catch
+                return error.ClusterWriteNotReplicable;
+            const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+            try props.append(allocator, .{ .key = p.key, .value = pv });
+        }
+    }
+    try resolveMergeSetProps(allocator, m.on_create, node_pattern.name, context, &props);
+
+    const payload = cluster_replication.serializeNodeCreate(allocator, target_graph, node_pattern.labels, props.items) catch |err| switch (err) {
+        cluster_replication.CodecError.UnsupportedPropertyType => return error.ClusterWriteNotReplicable,
+        else => return err,
+    };
+    defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+    const cmd = raft_consensus.Command{ .graph_mutation = .{
+        .graph = target_graph,
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } };
+    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+        error.NotLeader => return error.ClusterNotLeader,
+        else => return err,
+    };
+    try coord.waitForApplied(idx, 5000);
+    return empty_result;
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    // Cluster write routing: MERGE is not in the Raft-replicable slice yet, so
-    // in cluster mode it must fail closed rather than be written to a single
-    // node's local store. See tests/cluster/netns_cluster_replication_test.sh.
+    // Cluster write routing: in cluster mode the MERGE is ordered through Raft on
+    // the leader and never applied to a single node's local store. A follower
+    // fails closed (error.ClusterNotLeader — clients retry the leader); the leader
+    // makes the match-or-create decision ONCE and replicates a concrete outcome
+    // (GNC1 create / GMRG matched-set / no-op), or fails closed for shapes outside
+    // the slice. See tests/test_cluster_replicable_mutations.zig.
+    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MERGE; FEATURE="DistributedCluster"; ASPECT=ExecutorProposeMerge; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
     switch (try clusterWriteRole()) {
         .standalone => {},
-        .leader => return error.ClusterWriteNotReplicable,
+        .leader => return clusterReplicateMerge(allocator, m, current_graph, context),
     }
 
     const store = graph_store.getWritableGlobalStore(allocator);
