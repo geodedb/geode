@@ -310,8 +310,17 @@
             // 2026-05-29: bumped to 942641c so the embedded client shares
             // quic a1858c1's revert of the rejected short-header shedding
             // experiment.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.11#e66fdf5ef76e087bd09fbb13e7a5e59188bde497",
-            .hash = "geode_client_zig-0.2.10-8ysbV3dnCQCcuJ8gE9yMqmSqbiTCIup_ilcORmB2UIoJ",
+            // 2026-06-10: bumped to 9ba815e (GAP-0849) — client now sends
+            // tenant_id (field 3), graph (field 7), and role (field 8) in the
+            // HELLO handshake, matching the geode server's HelloRequest wire
+            // format (server already consumes all three: see
+            // quic_connection_handler.zig:4768/4789/4816). This commit does NOT
+            // change geode-client-zig's quic pin (diff e66fdf5..9ba815e of
+            // build.zig.zon is empty), so the single-quic-module convergence
+            // constraint is preserved. Commit is on origin/main (ahead of the
+            // v0.2.11 tag), hence ref=main.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=main#9ba815e2915e4b2434ca69f851309961dd136f5d",
+            .hash = "geode_client_zig-0.2.10-8ysbV2SDCQBKYACvejZHsPbEJZmUEk6mVehs2RZQ3I2P",
         },
 
         // =======================================================================
