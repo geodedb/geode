@@ -5050,6 +5050,27 @@ pub fn build(b: *std.Build) void {
     const gap0816_step = b.step("test-gap0816", "GAP-0816: LSP $/cancelRequest handling with -32800 responses");
     gap0816_step.dependOn(&run_gap0816_tests.step);
 
+    // GAP-0820..0824: LSP "honest non-support" contract — unadvertised feature
+    // REQUESTS answer -32601 (MethodNotFound) and unadvertised NOTIFICATIONS are
+    // silently tolerated (workspace/*, rename/prepareRename, codeAction,
+    // inlayHint, and the willSave/didSave/willSaveWaitUntil save lifecycle).
+    // Roots the regression file through a single server.zig module (`lsp_server`)
+    // so it reaches `buildCapabilitiesObject` and the capturing transport. Same
+    // module-diamond avoidance rationale as gap0816/gap0831/gap0832.
+    const gap0820_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0820_server_mod.addImport("geode", root_mod);
+    gap0820_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0820_server_mod.link_libc = true;
+    const gap0820_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0820_0824_lsp_nonsupport.zig"), .target = target, .optimize = optimize });
+    gap0820_test_mod.addImport("lsp_server", gap0820_server_mod);
+    gap0820_test_mod.addImport("geode", root_mod);
+    gap0820_test_mod.link_libc = true;
+    const gap0820_tests = b.addTest(.{ .root_module = gap0820_test_mod });
+    const run_gap0820_tests = b.addRunArtifact(gap0820_tests);
+    shardDep(test_step, &run_gap0820_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0820_step = b.step("test-gap0820-0824", "GAP-0820..0824: LSP honest non-support contract (-32601 requests, tolerated notifications)");
+    gap0820_step.dependOn(&run_gap0820_tests.step);
+
     // GAP-0817: LSP positionEncoding negotiation. Roots the regression file
     // through a single server.zig module (`lsp_server`) so it reaches
     // `Server.negotiatePositionEncoding`, `document_mod.codeUnitsToByteColumn`,

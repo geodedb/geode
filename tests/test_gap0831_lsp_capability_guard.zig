@@ -68,6 +68,27 @@ const non_method_capability_keys = [_][]const u8{
     "positionEncoding",
 };
 
+// GAP-0820 (and GAP-0821..0824 added in follow-on commits): capabilities
+// Geode's LSP server INTENTIONALLY does not advertise (the "honest non-support"
+// contract). Each is the inverse of the
+// truthfulness guarantee this file enforces: GAP-0831 proves every advertised
+// capability has a handler; these prove the deliberately-unadvertised
+// capabilities are NOT advertised (so the unadvertised feature requests fall
+// through to -32601, and the unadvertised notifications are silently tolerated
+// — see tests/test_gap0820_0824_lsp_nonsupport.zig for the behavioral proof).
+// This list is checked against the live `buildCapabilitiesObject` keys below so
+// a future change that starts advertising any of them without wiring a handler
+// trips this guard.
+const IntentionallyUnsupportedCapability = struct {
+    capability: []const u8,
+    gap: []const u8,
+};
+const intentionally_unsupported_capabilities = [_]IntentionallyUnsupportedCapability{
+    .{ .capability = "workspace", .gap = "GAP-0820" }, // workspace/* family
+    .{ .capability = "workspaceSymbolProvider", .gap = "GAP-0820" },
+    .{ .capability = "executeCommandProvider", .gap = "GAP-0820" },
+};
+
 // `textDocumentSync` is a sync capability, not a request-handler capability:
 // it governs the textDocument/did{Open,Change,Close} NOTIFICATIONS, not a
 // request/response method. It maps to notifications, handled separately below.
@@ -251,6 +272,28 @@ test "GAP-0831: every wired notification is either lifecycle-exempt or sync-back
         // did* notifications require textDocumentSync.
         if (sliceContains(&text_document_sync_notifications, method)) {
             try testing.expect(sync_advertised);
+        }
+    }
+}
+
+test "GAP-0831 + honest-non-support: intentionally-unsupported capabilities are NOT advertised" {
+    // Inverse-direction guard for the honest non-support contract: each
+    // capability Geode deliberately does not implement must be absent from the
+    // advertised set. If a future change starts advertising one without wiring
+    // the corresponding handler, this trips (and GAP-0831's forward direction
+    // would then also flag the missing handler).
+    const alloc = testing.allocator;
+    const keys = try advertisedCapabilityKeys(alloc);
+    defer freeKeys(alloc, keys);
+
+    for (intentionally_unsupported_capabilities) |entry| {
+        if (sliceContains(keys, entry.capability)) {
+            std.debug.print(
+                "{s}: capability '{s}' is INTENTIONALLY UNSUPPORTED but is now advertised " ++
+                    "— either implement+wire its handler or keep it unadvertised\n",
+                .{ entry.gap, entry.capability },
+            );
+            return error.IntentionallyUnsupportedCapabilityAdvertised;
         }
     }
 }

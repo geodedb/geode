@@ -3194,6 +3194,7 @@ REQ-LSP-CANCEL-001,CancelRequestRegistry,NotificationHandler,TESTED,,,lsp,2026-0
 REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,AdvertisedCapabilities,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
 REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,BidirectionalGuard,TESTED,,,lsp,2026-06-09,tests/test_gap0831_lsp_capability_guard.zig
 REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,DispatchTable,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
+REQ-LSP-CAP-001,HonestNonSupport,NonSupportContract,TESTED,,,lsp,2026-06-09,tests/test_gap0820_0824_lsp_nonsupport.zig
 REQ-LSP-EMBEDDED-E2E-001,LspPermissionAwareCompletion,EmbeddedTcpAuthGate,TESTED,,,lsp,2026-05-14,tests/test_lsp_embedded_e2e.zig
 REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/features.zig
 REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server.zig
