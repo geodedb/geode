@@ -135,6 +135,13 @@ pub const document_mod = document;
 pub const features_mod = features;
 pub const schema_provider_mod_export = schema_provider_mod;
 
+/// GAP-0818 enforcement gate: re-export the auth module so the gate
+/// regression pack (tests/test_gap0818_gate.zig) rooting the LSP server
+/// through `lsp_server` can hand-build `AuthState` values without a
+/// relative `@import("auth.zig")` (same module-diamond rationale as the
+/// re-exports above).
+pub const auth_mod_export = auth_mod;
+
 pub const ServerCapabilities = struct {
     textDocumentSync: i32 = 1, // Full sync
     hoverProvider: bool = true,
@@ -1448,9 +1455,24 @@ pub const Server = struct {
     /// `--no-auth` path) so both ends of the auth dispatch wire up an
     /// identical session shape. Takes ownership of `state` on success;
     /// on any failure path it releases `state` before returning.
-    fn publishVerifiedState(self: *Server, state: auth_mod.AuthState) auth_mod.AuthError!void {
+    /// Public so the GAP-0818 gate regression (tests/test_gap0818_gate.zig)
+    /// can pin the unverified-refusal path without driving the JSON-RPC
+    /// transport; production callers remain `bindSession` / `bindUnauthSession`.
+    pub fn publishVerifiedState(self: *Server, state: auth_mod.AuthState) auth_mod.AuthError!void {
         var st = state;
         errdefer st.deinit(self.allocator);
+
+        // GAP-0818 enforcement gate: refuse to publish a session whose
+        // principal was never verified. The SchemaProvider and
+        // ExecutionContext built below both carry the (client-asserted)
+        // tenant — publishing them for an unverified AuthState would let
+        // tenant-scoped schema / RLS-filtered data be served to a caller
+        // auth never vouched for. `bindSession` only reaches here after
+        // `AuthState.verify` succeeds and `bindUnauthSession` synthesizes
+        // a verified null-tenant state, so this is a chokepoint assert
+        // against future callers/refactors, pinned by
+        // tests/test_gap0818_gate.zig.
+        if (!st.verified) return auth_mod.AuthError.InvalidToken;
 
         // Allocate the SchemaProvider on the heap so the DDL notifier
         // can hold a stable pointer (see registerInvalidation contract
@@ -1502,12 +1524,24 @@ pub const Server = struct {
     /// The returned slices borrow from `self.auth` (freed in `deinit`);
     /// callers must use the context only for the duration of a single
     /// request handler, which is always synchronous here.
+    ///
+    /// CANARY: REQ=REQ-LSP-CALLER-IDENTITY-001; FEATURE="LspCallerIdentity"; ASPECT=VerifiedPrincipalGate; STATUS=TESTED; TEST=tests/test_gap0818_gate.zig:"callerContext for an unverified principal exposes no tenant"; OWNER=lsp; UPDATED=2026-06-10
     pub fn callerContext(self: *const Server) features.LspContext {
         if (self.auth == null) return features.LspContext.stdio;
         // Borrow directly from the stored AuthState (not a by-value copy)
         // so the derived session-handle slice points at the inline buffer
         // that lives for the duration of the request handler.
         const a: *const auth_mod.AuthState = &self.auth.?;
+        // GAP-0818 enforcement gate: the tenant in AuthState is
+        // CLIENT-ASSERTED (initializeOptions.geode.tenant). Only a
+        // principal that passed `AuthState.verify` may have its asserted
+        // identity exposed to the data-serving providers. With no
+        // verified principal the context collapses to the anonymous
+        // stdio default — whose null tenant can never match a
+        // tenant-scoped SchemaProvider (`LspContext.schemaTenantMatches`),
+        // so tenant-scoped schema is unreachable regardless of what the
+        // request gate upstream did. Pinned by tests/test_gap0818_gate.zig.
+        if (!a.verified) return features.LspContext.stdio;
         return .{
             .tenant_id = a.tenant_id,
             .user_id = if (a.user.len > 0) a.user else null,

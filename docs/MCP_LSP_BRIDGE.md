@@ -144,6 +144,21 @@ attach tenant-aware RLS policies (those that depend on
 `current_user()` or `current_tenant()`) to any database that is
 reachable through the MCP server.
 
+**Enforcement gate (landed 2026-06-10):** the unverified-principal
+half of the pre-condition is now enforced in code on the LSP side —
+when auth provides no VERIFIED principal, the LSP serves no
+tenant-scoped schema: `Server.callerContext()` collapses an unverified
+`AuthState` to the anonymous (null-tenant) context, which the provider
+tenant gate (`LspContext.schemaTenantMatches`) never matches against a
+tenant-scoped SchemaProvider, and `Server.publishVerifiedState()`
+refuses to build tenant-carrying session state for an unverified
+principal. Pinned by `zig build test-gap0818-gate`. The bridge tools
+themselves remain static (no SchemaProvider, no store) and the MCP
+Principal is derived with `tenant_id = null` always. The residual —
+verified tenant DERIVATION for authenticated principals (the LSP
+tenant is still client-asserted) — keeps the operator action above in
+force.
+
 ## Verification
 
 - `zig build test-gap0830` — governance test exercising all four

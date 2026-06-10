@@ -5185,6 +5185,26 @@ pub fn build(b: *std.Build) void {
     const gap0818_step = b.step("test-gap0818", "GAP-0818: LSP providers enforce caller tenant identity (cross-tenant leak regression)");
     gap0818_step.dependOn(&run_gap0818_tests.step);
 
+    // GAP-0818 enforcement gate: no VERIFIED principal -> no tenant-scoped
+    // schema/RLS-filtered data from LSP/MCP. Roots the regression through a
+    // single module at server.zig (exposed as `lsp_server`, same diamond
+    // rationale as gap0832) so the test reaches `Server.callerContext`,
+    // `Server.publishVerifiedState`, and the re-exported auth/features/
+    // schema_provider modules.
+    const gap0818_gate_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0818_gate_server_mod.addImport("geode", root_mod);
+    gap0818_gate_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0818_gate_server_mod.link_libc = true;
+    const gap0818_gate_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0818_gate.zig"), .target = target, .optimize = optimize });
+    gap0818_gate_test_mod.addImport("lsp_server", gap0818_gate_server_mod);
+    gap0818_gate_test_mod.addImport("geode", root_mod);
+    gap0818_gate_test_mod.link_libc = true;
+    const gap0818_gate_tests = b.addTest(.{ .root_module = gap0818_gate_test_mod });
+    const run_gap0818_gate_tests = b.addRunArtifact(gap0818_gate_tests);
+    shardDep(test_step, &run_gap0818_gate_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0818_gate_step = b.step("test-gap0818-gate", "GAP-0818 enforcement gate: unverified principal gets no tenant-scoped LSP data");
+    gap0818_gate_step.dependOn(&run_gap0818_gate_tests.step);
+
     // GAP-0832: validated decode for the LSP JSON-RPC request envelope.
     // Roots the regression file through a single module at server.zig
     // (exposed as `lsp_server`) so the test reaches `Server.decodeEnvelope`,

@@ -3193,6 +3193,8 @@ REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,DefinitionContext,TESTED,,,lsp,202
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,DiagnosticsTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,HoverTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,LeakRegression,TESTED,,,lsp,2026-06-09,tests/test_gap0818_lsp_context.zig
+REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,VerifiedPrincipalGate,TESTED,,,lsp,2026-06-10,src/cli/lsp/server.zig
+REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,VerifiedPrincipalGate,TESTED,,,lsp,2026-06-10,tests/test_gap0818_gate.zig
 REQ-LSP-CANCEL-001,CancelRequestRegistry,AnsweredRing,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
 REQ-LSP-CANCEL-001,CancelRequestRegistry,BoundedRing,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
 REQ-LSP-CANCEL-001,CancelRequestRegistry,EndToEnd,TESTED,,,lsp,2026-06-09,tests/test_gap0816_lsp_cancel.zig

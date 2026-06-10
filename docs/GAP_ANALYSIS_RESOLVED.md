@@ -4798,6 +4798,51 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
   - Commit `2b03d9ad` — the LSP-SEC-008 bind-policy work IS the requested guard: `lsp_server.validateBindPolicy` refuses non-loopback binds that are unauthenticated (`allow_unauth` or no verifier) at runtime, and `tests/test_gap0885_lsp_hardening.zig` pins both directions — the unauthenticated bind-all combinations error, and the legitimate authenticated `--lsp-bind-all` path (verifier present, `allow_unauth = false`) stays legal.
   - GitLab issue [#823](https://gitlab.com/devnw/codepros/geode/geode/-/issues/823) (confidential) ready to close.
 
+### SEC-SESS-LOG-01: Session token printed to stderr after `session rotate` (Resolved 2026-06-10)
+
+- **Original Gap:** `session rotate` printed the freshly rotated session token to stderr (`src/cli/session_cli.zig:569-570`) — SEC-SESS-LOG-01 (Low, Risk 16).
+- **CWE:** CWE-532 (Insertion of Sensitive Information into Log File)
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `c28d94c6` — `fix: close SEC-SESS-LOG-01 - no session token on stderr after rotate`.
+  - All rotate output flows through the testable seam `session_cli.writeRotateResult`, which writes only the success confirmation; the token lives solely in `~/.geode/credentials.json`.
+  - Regression: `tests/test_sec_sess_log.zig` (`zig build test-sec-sess-log`) pins the output token-free (full token + 16-char prefix asserted absent); verified RED on the old behavior.
+  - GitLab issue [#820](https://gitlab.com/devnw/codepros/geode/geode/-/issues/820) ready to close.
+
+### SEC-INFRA-03: Cluster bearer token rotation (Resolved 2026-06-10)
+
+- **Original Gap:** `GEODE_CLUSTER_TOKEN` was a single shared bearer secret with no rotation mechanism — SEC-INFRA-03 (Medium, Risk 15).
+- **CWE:** CWE-798 (Use of Hard-coded/Unrotatable Credentials)
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `6ace7483` — `fix: close SEC-INFRA-03 - dual-token cluster bearer rotation`.
+  - Inbound cluster auth (federation HELLO over QUIC + gRPC, Raft frames, 2PC, cluster RPC) accepts `GEODE_CLUSTER_TOKEN` or `GEODE_CLUSTER_TOKEN_PREVIOUS` during the rotation overlap window (both constant-time, SEC-07 padded eql, evaluated unconditionally); outbound always sends the primary; PREVIOUS alone never authenticates. QUIC/gRPC federation handlers delegate to the shared `cluster_auth` validator (new export `geode.distributed.cluster_auth`).
+  - Zero-downtime 3-phase procedure documented in `src/distributed/README.md` (corrected to accept-both-before-send-new by commit `64397910`).
+  - Regression: `tests/test_sec_infra03_token_rotation.zig` (`zig build test-sec-infra03`, 11/11; verified RED pre-fix).
+  - GitLab issue [#743](https://gitlab.com/devnw/codepros/geode/geode/-/issues/743) ready to close.
+
+### SEC-S3-SIGV2-01: S3 backup signing migrated to SigV4 (Resolved 2026-06-10)
+
+- **Original Gap:** S3 backup signed requests with legacy SigV2 (HMAC-SHA1) — SEC-S3-SIGV2-01 (Low, Risk 8, provider-deprecation hardening).
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `b79fc5f7` — `fix: close SEC-S3-SIGV2-01 + SEC-CLI-01`.
+  - New `src/storage/s3_sigv4.zig` implements full AWS Signature Version 4 header signing (canonical request → string-to-sign → kSecret→kDate→kRegion→kService→kSigning HMAC-SHA256 chain; x-amz-date + x-amz-content-sha256 + sorted canonical headers; RFC 3986 path/query canonicalization); `src/storage/s3_backup.zig` signs every operation with it (PUT/GET object, multipart initiate/part/complete) — the SigV2 `sign()` is gone. `s3_backup.zig` was also modernized to Zig 0.16 (fetch-era `std.http.Client`, real part-ETag capture) and is compiled again.
+  - KAT evidence: `zig build test-s3-sigv4` (15/15) reproduces the published AWS docs vectors byte-exact (GET/PUT/lifecycle/list-objects signatures + canonical-request hash + iam signing-key derivation, cross-checked against CPython hmac); verified RED first.
+  - SigV4 works for the documented S3-compatible targets (DO Spaces); `S3Config` plumbing unchanged.
+  - GitLab issue [#824](https://gitlab.com/devnw/codepros/geode/geode/-/issues/824) ready to close.
+
+### SEC-CLI-01: `--insecure-tls-skip-verify` gated in release CLI paths (Resolved 2026-06-10)
+
+- **Original Gap:** `--insecure-tls-skip-verify` (and the deprecated `--insecure` alias) remained freely available in release CLI paths — SEC-CLI-01 (Low, Risk 6).
+- **CWE:** CWE-295 (Improper Certificate Validation)
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commits `b79fc5f7` + `4a5f4bba` — flag gating + the `GEODE_SERVER_ADDRESS` env-path follow-up.
+  - New pure-policy `src/cli/insecure_tls_gate.zig` (`validateInsecureTls`) mirrors the GAP-0850 startup-guard pattern: under production posture (release build OR `GEODE_ENV=production`) the flag is refused at parse time (exit 1) unless `GEODE_ALLOW_INSECURE_TLS=1` is also set; every accepted use prints a loud MITM warning. Enforced at all 6 parse sites (query/shell/login in `src/cli/main.zig`; backup/restore/cloud in `src/cli/backup_cli.zig`) and on the implicit `GEODE_SERVER_ADDRESS` `?insecure=true` env path.
+  - Pinned by `zig build test-s3-sigv4` (gate policy + live debug-posture tests).
+  - GitLab issue [#744](https://gitlab.com/devnw/codepros/geode/geode/-/issues/744) ready to close.
+
 ### F-04: Buffered stdin reader for LSP transport (Resolved 2026-05-06)
 
 - **Original Gap:** LSP transport read loop made one syscall per byte; F-04 (PerfScore 100, P0).
