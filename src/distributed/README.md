@@ -20,13 +20,19 @@ overlap window (`src/distributed/cluster_auth.zig`):
   `GEODE_CLUSTER_TOKEN` is unset the node stays in standalone mode and
   rejects everything, regardless of `GEODE_CLUSTER_TOKEN_PREVIOUS`.
 
-Rotation procedure (no flag-day, no quorum loss):
+Rotation procedure (no flag-day, no quorum loss). A running process only
+sees the env values it started with, so the accept-both phase must complete
+on **every** node before any node starts *sending* the new token:
 
-1. On every node set `GEODE_CLUSTER_TOKEN_PREVIOUS=<old-token>` and
-   `GEODE_CLUSTER_TOKEN=<new-token>`, then rolling-restart the cluster.
-   Restarted nodes send the new token; not-yet-restarted nodes still send
-   the old one — both are accepted everywhere during the overlap.
-2. Once all nodes run with the new primary, remove
+1. On every node set `GEODE_CLUSTER_TOKEN=<old-token>` (unchanged) and
+   `GEODE_CLUSTER_TOKEN_PREVIOUS=<new-token>`, then rolling-restart.
+   All nodes still send the old token; restarted nodes additionally
+   accept the new one. No auth failures at any point during the roll.
+2. On every node swap to `GEODE_CLUSTER_TOKEN=<new-token>` and
+   `GEODE_CLUSTER_TOKEN_PREVIOUS=<old-token>`, then rolling-restart.
+   Restarted nodes send the new token; every node (restarted or not)
+   accepts both, so mixed-version traffic stays authenticated.
+3. Once all nodes run with the new primary, remove
    `GEODE_CLUSTER_TOKEN_PREVIOUS` and rolling-restart again. The old token
    is now rejected cluster-wide.
 

@@ -50,11 +50,14 @@ pub fn validateTokenWithRotation(password: []const u8, primary: ?[]const u8, pre
 /// token) is also accepted on inbound validation. Outbound paths
 /// (buildClusterHelloRequest, Raft/2PC envelopes) always send the primary.
 ///
-/// Zero-downtime rotation procedure (see src/distributed/README.md):
-///   1. On every node set GEODE_CLUSTER_TOKEN_PREVIOUS=<old> and
-///      GEODE_CLUSTER_TOKEN=<new>; rolling restart.
-///   2. After all nodes are on the new primary, drop
-///      GEODE_CLUSTER_TOKEN_PREVIOUS; rolling restart.
+/// Zero-downtime rotation procedure — 3 phases (see src/distributed/README.md).
+/// A node only picks up new env values on restart, so the accept-both phase
+/// must complete on every node BEFORE any node starts sending the new token:
+///   A. GEODE_CLUSTER_TOKEN=<old>, GEODE_CLUSTER_TOKEN_PREVIOUS=<new>;
+///      rolling restart (everyone accepts both, still sends old).
+///   B. GEODE_CLUSTER_TOKEN=<new>, GEODE_CLUSTER_TOKEN_PREVIOUS=<old>;
+///      rolling restart (senders switch to new; old still accepted).
+///   C. Drop GEODE_CLUSTER_TOKEN_PREVIOUS; rolling restart.
 ///
 /// Uses constant-time comparison with 256-byte padded buffers to prevent
 /// timing side-channels. Returns true only if the password matches the
