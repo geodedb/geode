@@ -5116,6 +5116,25 @@ pub fn build(b: *std.Build) void {
     const gap0828_step = b.step("test-gap0828", "GAP-0828: DocumentStore reopen/deinit leak regression");
     gap0828_step.dependOn(&run_gap0828_tests.step);
 
+    // GAP-0826: LSP performance/stress pack. Roots the file through a single
+    // server.zig module (`lsp_server`) so it reaches `Server.handleMessage`,
+    // the capturing Noop transport via `transport_mod`, and the re-exported
+    // `features_mod` / `schema_provider_mod_export` for the large-schema case.
+    // Same module-diamond avoidance rationale as gap0816/gap0817/gap0831/gap0832.
+    const gap0826_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0826_server_mod.addImport("geode", root_mod);
+    gap0826_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0826_server_mod.link_libc = true;
+    const gap0826_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0826_lsp_stress.zig"), .target = target, .optimize = optimize });
+    gap0826_test_mod.addImport("lsp_server", gap0826_server_mod);
+    gap0826_test_mod.addImport("geode", root_mod);
+    gap0826_test_mod.link_libc = true;
+    const gap0826_tests = b.addTest(.{ .root_module = gap0826_test_mod });
+    const run_gap0826_tests = b.addRunArtifact(gap0826_tests);
+    shardDep(test_step, &run_gap0826_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0826_step = b.step("test-gap0826", "GAP-0826: LSP performance/stress pack (large docs/schemas, cancellation churn)");
+    gap0826_step.dependOn(&run_gap0826_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.

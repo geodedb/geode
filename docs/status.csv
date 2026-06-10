@@ -3195,6 +3195,7 @@ REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,AdvertisedCapabilities,TESTED,,,ls
 REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,BidirectionalGuard,TESTED,,,lsp,2026-06-09,tests/test_gap0831_lsp_capability_guard.zig
 REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,DispatchTable,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
 REQ-LSP-CAP-001,HonestNonSupport,NonSupportContract,TESTED,,,lsp,2026-06-09,tests/test_gap0820_0824_lsp_nonsupport.zig
+REQ-LSP-CONFORMANCE-001,Lsp317ConformancePack,LifecycleAndJsonRpc,TESTED,,,lsp,2026-06-09,tests/test_gap0827_lsp_conformance.zig
 REQ-LSP-EMBEDDED-E2E-001,LspPermissionAwareCompletion,EmbeddedTcpAuthGate,TESTED,,,lsp,2026-05-14,tests/test_lsp_embedded_e2e.zig
 REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/features.zig
 REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server.zig
@@ -3234,6 +3235,7 @@ REQ-LSP-SEC-004,JsonHelpers,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_
 REQ-LSP-SEC-004,JsonHelpersWired,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/server_invalid_params_test.zig
 REQ-LSP-SEMTOK-001,SemanticTokens,SyntaxHighlight,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
 REQ-LSP-SIGHEP-001,SignatureHelp,FunctionParams,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
+REQ-LSP-STRESS-001,LspStressPack,LargeScaleAndCancellation,TESTED,,,lsp,2026-06-09,tests/test_gap0826_lsp_stress.zig
 REQ-LSP-SYMBOLS-001,DocumentSymbols,OutlineView,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
 REQ-M10-CONSTANTS-001,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,core,2025-10-17,src/execution.zig
 REQ-M10-CONSTANTS-002,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,security,2025-10-17,src/security/rls_core.zig

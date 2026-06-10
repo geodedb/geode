@@ -43,6 +43,16 @@ pub const transport_mod = transport;
 /// module-diamond check).
 pub const document_mod = document;
 
+/// GAP-0826: re-export the features + schema_provider modules so the
+/// out-of-tree stress pack (tests/test_gap0826_lsp_stress.zig) rooting the
+/// LSP server through `lsp_server` can drive `features.provideCompletion`
+/// against a real, large `schema_provider.SchemaProvider` without a relative
+/// `@import("features.zig")` / `@import("schema_provider.zig")` (which would
+/// register those files in a second module and trip Zig 0.16's module-diamond
+/// check — the exact reason transport_mod/document_mod are re-exported).
+pub const features_mod = features;
+pub const schema_provider_mod_export = schema_provider_mod;
+
 pub const ServerCapabilities = struct {
     textDocumentSync: i32 = 1, // Full sync
     hoverProvider: bool = true,
@@ -1560,7 +1570,7 @@ pub const Server = struct {
             try result.put(self.allocator, "contents", .{ .object = contents });
             try response.put(self.allocator, "result", .{ .object = result });
 
-            try self.sendJsonValue(.{ .object = response });
+            try self.sendOwnedJsonValue(.{ .object = response });
         } else {
             try self.sendResult(id, .null);
         }
@@ -1603,6 +1613,22 @@ pub const Server = struct {
                         self.allocator.free(text);
                     }
                 }
+                // GAP-0826: free the allocator-owned `.detail`. The
+                // features.provideCompletion ownership contract is: the
+                // schema-LABEL / edge-type branches use a STATIC literal detail
+                // (kind == .Class / .Reference), while the keyword / function /
+                // type / procedure / property branches allocPrint their detail.
+                // The historical cleanup here freed only `insertText`, leaking
+                // every allocated `.detail` once completion produced non-label
+                // items for an OPEN document — surfaced by the GAP-0826 stress
+                // pack. Mirror the ownership split features_test.zig already
+                // encodes: free detail for every kind EXCEPT the static-detail
+                // label/edge kinds.
+                if (item.detail) |detail| {
+                    if (item.kind != .Class and item.kind != .Reference) {
+                        self.allocator.free(detail);
+                    }
+                }
             }
             self.allocator.free(items);
         }
@@ -1633,7 +1659,7 @@ pub const Server = struct {
         try response.put(self.allocator, "id", id);
         try response.put(self.allocator, "result", .{ .array = array });
 
-        try self.sendJsonValue(.{ .object = response });
+        try self.sendOwnedJsonValue(.{ .object = response });
     }
 
     /// GAP-0056: pure helper — extracted for unit testability.
@@ -1685,7 +1711,7 @@ pub const Server = struct {
             try result.put(self.allocator, "range", .{ .object = range });
 
             try response.put(self.allocator, "result", .{ .object = result });
-            try self.sendJsonValue(.{ .object = response });
+            try self.sendOwnedJsonValue(.{ .object = response });
         } else {
             try self.sendResult(id, .null);
         }
@@ -1858,7 +1884,7 @@ pub const Server = struct {
         try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
         try response.put(self.allocator, "id", id);
         try response.put(self.allocator, "result", .{ .array = array });
-        try self.sendJsonValue(.{ .object = response });
+        try self.sendOwnedJsonValue(.{ .object = response });
     }
 
     fn handleSignatureHelp(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
@@ -1944,7 +1970,7 @@ pub const Server = struct {
             }
 
             try response.put(self.allocator, "result", .{ .object = result });
-            try self.sendJsonValue(.{ .object = response });
+            try self.sendOwnedJsonValue(.{ .object = response });
         } else {
             try self.sendResult(id, .null);
         }
@@ -2015,7 +2041,7 @@ pub const Server = struct {
         try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
         try response.put(self.allocator, "id", id);
         try response.put(self.allocator, "result", .{ .array = array });
-        try self.sendJsonValue(.{ .object = response });
+        try self.sendOwnedJsonValue(.{ .object = response });
     }
 
     fn handleSemanticTokensFull(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
@@ -2053,7 +2079,7 @@ pub const Server = struct {
 
         try result.put(self.allocator, "data", .{ .array = data_arr });
         try response.put(self.allocator, "result", .{ .object = result });
-        try self.sendJsonValue(.{ .object = response });
+        try self.sendOwnedJsonValue(.{ .object = response });
     }
 
     fn sendDiagnostics(self: *Server, uri: []const u8) !void {
@@ -2198,5 +2224,26 @@ pub const Server = struct {
         const json_str = try std.json.Stringify.valueAlloc(self.allocator, value, .{});
         defer self.allocator.free(json_str);
         try self.transport.writeMessage(json_str);
+    }
+
+    /// GAP-0826: serialize + send `value`, then RECURSIVELY release the
+    /// container allocations (ObjectMaps / Arrays) it owns. The feature
+    /// handlers (completion / documentSymbol / references / semanticTokens /
+    /// hover / signatureHelp / definition) build a nested JSON-RPC response
+    /// tree by hand and historically called bare `sendJsonValue`, which only
+    /// serializes — leaving every ObjectMap/Array backing buffer leaked once a
+    /// real (non-empty) response was produced for an OPEN document. (The
+    /// unknown-document early-returns route through `sendResult`, whose own
+    /// `defer response.deinit` hid the leak from the existing tests, which only
+    /// ever query unopened documents.) The leak-detecting stress pack
+    /// (tests/test_gap0826_lsp_stress.zig) surfaced it via 500+ requests on an
+    /// OPEN document. `deinitJsonValue` frees only the `.object`/`.array`
+    /// container backings — it never touches `.string` bytes (which are static
+    /// literals or borrowed from the parsed request / schema cache here), so
+    /// this is leak-free AND double-free-free.
+    fn sendOwnedJsonValue(self: *Server, value: std.json.Value) !void {
+        var v = value;
+        defer deinitJsonValue(self.allocator, &v);
+        try self.sendJsonValue(v);
     }
 };
