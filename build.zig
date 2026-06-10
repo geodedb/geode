@@ -4705,6 +4705,17 @@ pub fn build(b: *std.Build) void {
     const gap0839_step = b.step("test-gap0839-tenant-lifecycle", "GAP-0839 regression (CALL geode.tenant.* lifecycle surface + durable registry + admin_tenant authz)");
     gap0839_step.dependOn(&run_gap0839_tests.step);
 
+    // GAP-0847: tenant drop cascade + refuse-without-cascade data/child guards.
+    const gap0847_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0847_tenant_drop_cascade.zig"), .target = target, .optimize = optimize });
+    gap0847_test_mod.addImport("geode", root_mod);
+    gap0847_test_mod.addImport("rls", rls_mod);
+    gap0847_test_mod.addImport("rls_types", rls_types_mod);
+    const gap0847_tests = b.addTest(.{ .root_module = gap0847_test_mod });
+    const run_gap0847_tests = b.addRunArtifact(gap0847_tests);
+    shardDep(test_step, &run_gap0847_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0847_step = b.step("test-gap0847", "GAP-0847 regression (tenant drop cascade data deletion + refuse-without-cascade guard)");
+    gap0847_step.dependOn(&run_gap0847_tests.step);
+
     // GAP-0839 CLI: the `geode tenant` subcommand's pure query-string builder
     // (`buildTenantCallQuery`). The test imports `src/cli/tenant_cli.zig`
     // directly — it exercises only the deterministic argv → CALL-string layer

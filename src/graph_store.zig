@@ -3688,6 +3688,33 @@ pub const GraphStore = struct {
         return result;
     }
 
+    // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="PerTenantIsolation"; ASPECT=BulkEdgeAccess; STATUS=TESTED; TEST=tests/test_gap0847_tenant_drop_cascade.zig; OWNER=enterprise; UPDATED=2026-06-10
+    // GAP-0847: Return only edge ids belonging to the specified tenant (or all if
+    // tenant is null). Mirrors `getAllNodesForTenant`; used by the tenant-drop
+    // cascade to collect a tenant's edges for referential-consistency deletion
+    // (edges deleted before their endpoint nodes).
+    pub fn getAllEdgesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
+        var count: usize = 0;
+        var iter = self.edges.iterator();
+        while (iter.next()) |entry| {
+            if (tenant) |tid| {
+                if (!std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) continue;
+            }
+            count += 1;
+        }
+        var result = try allocator.alloc(u64, count);
+        iter = self.edges.iterator();
+        var i: usize = 0;
+        while (iter.next()) |entry| {
+            if (tenant) |tid| {
+                if (!std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) continue;
+            }
+            result[i] = entry.key_ptr.*;
+            i += 1;
+        }
+        return result;
+    }
+
     pub fn getNodeCount(self: *GraphStore) usize {
         return self.nodes.count();
     }

@@ -2237,6 +2237,75 @@ pub const HierarchyManager = struct {
         return node.path;
     }
 
+    // GAP-0847: does `tenant_id` have at least one registered child? The tenant
+    // drop path uses this to refuse a non-cascade drop of a parent tenant (its
+    // descendants would be orphaned in the hierarchy and unreachable for authz).
+    // Returns false for an unknown tenant (nothing to protect).
+    pub fn hasChildren(self: *HierarchyManager, tenant_id: []const u8) bool {
+        const node = self.tenant_hierarchy.get(tenant_id) orelse return false;
+        return node.children.items.len > 0;
+    }
+
+    // GAP-0847: snapshot the direct children of `tenant_id` into a caller-owned
+    // slice (each element duped with `caller_allocator`; free with `freeChildren`).
+    // Returns an empty slice for an unknown or leaf tenant. The cascade drop walks
+    // this set recursively (children-first) so a parent is removed only after all
+    // its descendants.
+    pub fn getChildrenAlloc(self: *HierarchyManager, caller_allocator: std.mem.Allocator, tenant_id: []const u8) ![][]const u8 {
+        const node = self.tenant_hierarchy.get(tenant_id) orelse return caller_allocator.alloc([]const u8, 0);
+        const out = try caller_allocator.alloc([]const u8, node.children.items.len);
+        errdefer caller_allocator.free(out);
+        var built: usize = 0;
+        errdefer for (out[0..built]) |c| caller_allocator.free(c);
+        for (node.children.items) |child| {
+            out[built] = try caller_allocator.dupe(u8, child);
+            built += 1;
+        }
+        return out;
+    }
+
+    pub fn freeChildren(caller_allocator: std.mem.Allocator, children: [][]const u8) void {
+        for (children) |c| caller_allocator.free(c);
+        caller_allocator.free(children);
+    }
+
+    // GAP-0847: remove `tenant_id` from the hierarchy, freeing its owned path,
+    // children list, metadata, and map key, and detaching it from its parent's
+    // children list so the parent no longer references a freed child string.
+    // Returns `error.TenantNotFound` if absent and `error.TenantHasChildren` if
+    // the node still has descendants (the caller must drop children first — the
+    // drop cascade walks bottom-up, so this is a guard, not an expected path).
+    pub fn removeTenant(self: *HierarchyManager, tenant_id: []const u8) !void {
+        const node_ptr = self.tenant_hierarchy.getPtr(tenant_id) orelse return error.TenantNotFound;
+        if (node_ptr.children.items.len > 0) return error.TenantHasChildren;
+
+        // Detach from parent's children list (the parent stores an OWNED dupe of
+        // this tenant's id — find and free it).
+        if (node_ptr.parent_id) |pid| {
+            if (self.tenant_hierarchy.getPtr(pid)) |parent_node| {
+                var idx: usize = 0;
+                while (idx < parent_node.children.items.len) : (idx += 1) {
+                    if (std.mem.eql(u8, parent_node.children.items[idx], tenant_id)) {
+                        const removed = parent_node.children.swapRemove(idx);
+                        self.allocator.free(removed);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Remove the entry and free its owned allocations. fetchRemove returns the
+        // owned key + value so we can free both deterministically.
+        const kv = self.tenant_hierarchy.fetchRemove(tenant_id) orelse return error.TenantNotFound;
+        var node = kv.value;
+        for (node.path) |seg| self.allocator.free(seg);
+        self.allocator.free(node.path);
+        for (node.children.items) |child| self.allocator.free(child);
+        node.children.deinit(self.allocator);
+        node.metadata.deinit();
+        self.allocator.free(kv.key);
+    }
+
     // GAP-0846: number of registered tenants. Read-path hot loops use this to
     // keep the exact-match fast path (zero hierarchy overhead) when no hierarchy
     // has been provisioned — `count() == 0` means "no hierarchy configured".

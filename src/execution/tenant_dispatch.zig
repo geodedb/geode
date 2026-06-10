@@ -55,6 +55,7 @@ const principal_mod = @import("../security/principal.zig");
 const user_mgmt = @import("../security/user_management.zig");
 const tenant_registry = @import("../security/tenant_registry.zig");
 const tenant_quota = @import("../security/tenant_quota.zig");
+const graph_store = @import("../graph_store.zig");
 const rls_core = @import("rls");
 const rls_types = @import("rls_types");
 
@@ -194,6 +195,13 @@ fn literalInt(expr: *const ast.Expr) error{ TypeMismatch, IntegerOverflow }!i64 
             .Pos => try literalInt(u.expr),
             else => error.TypeMismatch,
         },
+        else => error.TypeMismatch,
+    };
+}
+
+fn literalBool(expr: *const ast.Expr) !bool {
+    return switch (expr.*) {
+        .Bool => |b| b,
         else => error.TypeMismatch,
     };
 }
@@ -388,22 +396,113 @@ fn handleShow(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
     return try maybeYield(allocator, result, call_stmt);
 }
 
-/// `geode.tenant.drop(tenant_id)` → 1 row (tenant_id, dropped).
+/// `geode.tenant.drop(tenant_id[, cascade])` → 1 row (tenant_id, dropped, nodes_deleted, edges_deleted).
+///
+/// GAP-0847 safe drop semantics. The pre-GAP-0847 drop removed ONLY the registry
+/// record and ORPHANED the tenant's data (nodes/edges stayed tagged with a
+/// tenant id that no longer existed) AND left the GAP-0838 hierarchy node
+/// dangling. The corrected semantics:
+///
+///   • `cascade` (2nd arg) defaults to FALSE.
+///   • A NON-cascade drop is REFUSED (`error.TenantHasData`) when the tenant
+///     still has data rows (nodes or edges tagged with its id), and REFUSED
+///     (`error.TenantHasChildren`) when it has child tenants in the hierarchy —
+///     so an operator never silently orphans data or descendants.
+///   • A `cascade = true` drop deletes the tenant's edges FIRST, then its nodes
+///     (referential consistency), recursively drops child tenants bottom-up,
+///     removes the hierarchy node, and finally removes the registry record.
+///
+/// Deletion uses the existing per-tenant scan primitives (`getAllEdgesForTenant`
+/// / `getAllNodesForTenant`) and the existing `deleteEdge`/`deleteNode` store
+/// methods, which route through the storage adapter vtable (WAL + durable
+/// segment delete) when one is wired — so a cascade drop is durable and audited
+/// exactly like any other delete, with an additional summary audit line here.
+/// Other tenants' rows are never touched (the scan filters strictly on tenant id).
 fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !ExecutionResult {
     const a = try args(call_stmt);
-    if (a.len != 1) return error.InvalidArgs;
+    if (a.len != 1 and a.len != 2) return error.InvalidArgs;
     const tenant_id = try literalString(a[0]);
+    const cascade: bool = if (a.len == 2) try literalBool(a[1]) else false;
 
     const reg = try resolveRegistry();
+    // The tenant must exist before we touch any data — surface TenantNotFound.
+    if (!reg.contains(tenant_id)) return tenant_registry.RegistryError.TenantNotFound;
+
+    // ── Child-tenant guard (hierarchy). ──────────────────────────────────────
+    // A parent with children may only be dropped with cascade (which drops the
+    // children first, bottom-up). Without cascade we refuse rather than orphan.
+    const engine_ptr = rls_types.getGlobalExprRLSEngine();
+    if (engine_ptr) |ep| {
+        const engine: *rls_core.RLSEngine = @ptrCast(@alignCast(ep));
+        if (engine.hierarchy_manager.hasChildren(tenant_id)) {
+            if (!cascade) return error.TenantHasChildren;
+            try dropChildrenCascade(allocator, engine, tenant_id);
+        }
+    }
+
+    // ── Data guard + cascade deletion. ───────────────────────────────────────
+    var nodes_deleted: usize = 0;
+    var edges_deleted: usize = 0;
+    if (graph_store.getCurrentGlobalStore()) |store| {
+        // Count first so a non-cascade drop can refuse without mutating anything.
+        const edge_ids = try store.getAllEdgesForTenant(allocator, tenant_id);
+        defer allocator.free(edge_ids);
+        const node_ids = try store.getAllNodesForTenant(allocator, tenant_id);
+        defer allocator.free(node_ids);
+
+        if ((edge_ids.len > 0 or node_ids.len > 0) and !cascade) {
+            return error.TenantHasData;
+        }
+
+        if (cascade) {
+            // Edges before nodes: deleting a node first would leave dangling
+            // adjacency entries the edge delete relies on for slot routing.
+            for (edge_ids) |eid| {
+                store.deleteEdge(eid);
+                edges_deleted += 1;
+            }
+            for (node_ids) |nid| {
+                store.deleteNode(nid);
+                nodes_deleted += 1;
+            }
+        }
+    }
+
+    // ── Hierarchy cleanup (self). ────────────────────────────────────────────
+    if (engine_ptr) |ep| {
+        const engine: *rls_core.RLSEngine = @ptrCast(@alignCast(ep));
+        engine.hierarchy_manager.removeTenant(tenant_id) catch |err| switch (err) {
+            error.TenantNotFound => {}, // never populated — benign
+            else => log.warn("tenant_admin.hierarchy_remove_failed", &.{
+                Attr.string("tenant", tenant_id),
+                Attr.string("error", @errorName(err)),
+            }),
+        };
+    }
+
+    // ── Registry record removal (last — data + hierarchy already gone). ──────
     try reg.drop(tenant_id);
 
-    const columns = try allocator.alloc([]const u8, 2);
+    // Summary audit: subject is logged by the authz gate; here we record the
+    // destructive outcome (counts) so a cascade drop is attributable.
+    log.info("tenant_admin.drop", &.{
+        Attr.string("tenant", tenant_id),
+        Attr.string("cascade", if (cascade) "true" else "false"),
+        Attr.int("nodes_deleted", @intCast(nodes_deleted)),
+        Attr.int("edges_deleted", @intCast(edges_deleted)),
+    });
+
+    const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "tenant_id");
     columns[1] = try allocator.dupe(u8, "dropped");
+    columns[2] = try allocator.dupe(u8, "nodes_deleted");
+    columns[3] = try allocator.dupe(u8, "edges_deleted");
     const rows = try allocator.alloc([]Value, 1);
-    rows[0] = try allocator.alloc(Value, 2);
+    rows[0] = try allocator.alloc(Value, 4);
     rows[0][0] = Value{ .Str = try allocator.dupe(u8, tenant_id) };
     rows[0][1] = Value{ .Bool = true };
+    rows[0][2] = Value{ .Int = @intCast(nodes_deleted) };
+    rows[0][3] = Value{ .Int = @intCast(edges_deleted) };
 
     const result = ExecutionResult{
         .columns = columns,
@@ -412,6 +511,64 @@ fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
         .owns_value_memory = true,
     };
     return try maybeYield(allocator, result, call_stmt);
+}
+
+/// GAP-0847: recursively cascade-drop every descendant of `tenant_id`,
+/// bottom-up. For each direct child we recurse first (so grandchildren go
+/// before children), then delete the child's data rows, then remove the child
+/// from the hierarchy AND the registry. The parent itself is handled by the
+/// caller. Children are snapshotted before mutation so we don't iterate a list
+/// we are concurrently shrinking.
+fn dropChildrenCascade(
+    allocator: std.mem.Allocator,
+    engine: *rls_core.RLSEngine,
+    tenant_id: []const u8,
+) !void {
+    const children = try engine.hierarchy_manager.getChildrenAlloc(allocator, tenant_id);
+    defer rls_core.HierarchyManager.freeChildren(allocator, children);
+
+    for (children) |child| {
+        // Recurse first: grandchildren before this child.
+        try dropChildrenCascade(allocator, engine, child);
+
+        // Delete the child's data rows (edges before nodes).
+        var c_nodes: usize = 0;
+        var c_edges: usize = 0;
+        if (graph_store.getCurrentGlobalStore()) |store| {
+            const edge_ids = try store.getAllEdgesForTenant(allocator, child);
+            defer allocator.free(edge_ids);
+            const node_ids = try store.getAllNodesForTenant(allocator, child);
+            defer allocator.free(node_ids);
+            for (edge_ids) |eid| {
+                store.deleteEdge(eid);
+                c_edges += 1;
+            }
+            for (node_ids) |nid| {
+                store.deleteNode(nid);
+                c_nodes += 1;
+            }
+        }
+
+        // Children were dropped depth-first above, so removeTenant(child) can
+        // only fail with TenantNotFound here — both members of its error set are
+        // benign (the node is already gone / has no descendants left).
+        engine.hierarchy_manager.removeTenant(child) catch {};
+
+        // Registry record for the child (best-effort: a child registered in the
+        // hierarchy may or may not also be in the registry).
+        const reg = resolveRegistry() catch null;
+        if (reg) |r| r.drop(child) catch |err| switch (err) {
+            tenant_registry.RegistryError.TenantNotFound => {},
+            else => return err,
+        };
+
+        log.info("tenant_admin.drop", &.{
+            Attr.string("tenant", child),
+            Attr.string("cascade", "true"),
+            Attr.int("nodes_deleted", @intCast(c_nodes)),
+            Attr.int("edges_deleted", @intCast(c_edges)),
+        });
+    }
 }
 
 /// `geode.tenant.set_quota(tenant_id, max_connections, max_concurrent_queries,
