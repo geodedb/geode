@@ -598,7 +598,11 @@ pub const KeyRegistry = struct {
     /// schedules are deterministic under test (GAP-0890).
     pub fn scheduleRotation(self: *KeyRegistry, policy: RotationPolicy, now_epoch: i64) bool {
         if (self.active) |k| {
-            const age: u64 = @intCast(now_epoch - k.created_unix_epoch);
+            // Clamp negative age (backwards clock) to 0 instead of
+            // panicking on the @intCast in safe builds (same posture
+            // as rotateInternal).
+            const delta = now_epoch - k.created_unix_epoch;
+            const age: u64 = if (delta > 0) @intCast(delta) else 0;
             if (age >= policy.max_age_secs) return true; // hard age limit
             if (age >= policy.min_interval_secs) return true; // periodic rotation window
             return false;
