@@ -2869,6 +2869,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    // GAP-0846 hardening: tenant-check the edge OBJECT itself, not
+                    // just its endpoints (symmetry with the left-anchor branch at
+                    // ~2813/2834). Fail-closed, cheap string compare.
+                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
@@ -2888,6 +2892,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    // GAP-0846 hardening: tenant-check the edge OBJECT itself
+                    // (symmetry with the left-anchor branch). Fail-closed.
+                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
@@ -2926,7 +2933,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // clears + refills the buffer; left-to-right `and`
                     // short-circuit ensures the from_node result is
                     // computed before the buffer is reused for to_node.
-                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
+                    // GAP-0846 hardening: also tenant-check the edge OBJECT
+                    // (symmetry with the left/right-anchor label branches);
+                    // fail-closed cheap string compare, short-circuited first.
+                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
@@ -2938,7 +2948,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 if (rel_dir == .left or rel_dir == .undirected) {
                     // rls_row_local aliasing: see note on the parallel
                     // .right/.undirected branch above.
-                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
+                    // GAP-0846 hardening: edge-object tenant check (symmetry).
+                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
@@ -5311,6 +5322,15 @@ fn executeSingleHopEdgeTraversal(
             // Get the target node
             const right_node_id = if (edge_set.use_from) edge.from_id else edge.to_id;
             const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+            // GAP-0846 hardening: tenant-filter the RIGHT (target) node too. The
+            // left node was already tenant-checked by the caller and the edge by
+            // passesTenantFilterEdge above, but the target endpoint was NOT —
+            // a cross-tenant edge whose target sits in a tenant the session
+            // cannot reach (hierarchy-denied sibling/ancestor) would otherwise
+            // leak the target row. Fail-closed, hierarchy-aware.
+            if (!std.mem.eql(u8, right_node_ptr.graph_name, left_node.graph_name)) continue;
+            if (!passesTenantFilter(right_node_ptr.*, filter_tenant)) continue;
 
             // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
             // Filter right node by labels if specified
