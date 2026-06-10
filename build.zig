@@ -4662,6 +4662,20 @@ pub fn build(b: *std.Build) void {
     const run_insecure_gate_tests = b.addRunArtifact(insecure_gate_tests);
     shardDep(test_step, &run_insecure_gate_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // SEC-INFRA-03 regression: dual-token (primary + previous) cluster
+    // bearer rotation. Inbound validation accepts GEODE_CLUSTER_TOKEN or
+    // GEODE_CLUSTER_TOKEN_PREVIOUS during the overlap window; outbound
+    // always sends the primary. Reuses cluster_auth_test_mod (libc for
+    // getenv/setenv).
+    const sec_infra03_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec_infra03_token_rotation.zig"), .target = target, .optimize = optimize });
+    sec_infra03_test_mod.addImport("cluster_auth", cluster_auth_test_mod);
+    sec_infra03_test_mod.link_libc = true;
+    const sec_infra03_tests = b.addTest(.{ .root_module = sec_infra03_test_mod });
+    const run_sec_infra03_tests = b.addRunArtifact(sec_infra03_tests);
+    shardDep(test_step, &run_sec_infra03_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_infra03_step = b.step("test-sec-infra03", "SEC-INFRA-03: cluster bearer token rotation (primary + previous overlap window)");
+    sec_infra03_step.dependOn(&run_sec_infra03_tests.step);
+
     // GAP-0741 / SEC-KMS-01 regression: vault_kms_provider.validateVaultPath
     // unit tests (inline in the module).  Run the tests that live inside the
     // module itself; the file is not yet wired into production but the

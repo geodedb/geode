@@ -1123,7 +1123,7 @@ REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,CertificateMapping,IMPL,,,cli,2026-02-09,src/
 REQ-GAP-0259-RWLOCK-001,AsyncPersistence,RwLockMigration,IMPL,,,storage,2026-02-13,src/graph_store.zig
 REQ-GAP-0284-ALTER-USER-GRPC,PasswordResetEnforcement,GrpcAlterUserParse,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-GAP-0284-ALTER-USER-GRPC-WIRE,PasswordResetEnforcement,GrpcExecuteIntercept,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
-REQ-GAP-0284-FEDERATION-GRPC-AUTH,FederationAuth,GrpcServerValidation,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
+REQ-GAP-0284-FEDERATION-GRPC-AUTH,FederationAuth,GrpcServerValidation,IMPL,,,security,2026-06-10,src/transport/grpc_server.zig
 REQ-GAP-0284-FEDERATION-GRPC-WIRE,FederationAuth,GrpcHelloCheck,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-GAP-0284-PWD-RESET-BLOCK-GRPC,PasswordResetEnforcement,GrpcExecuteBlock,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-GAP-0284-PWD-VALIDATE-GRPC,PasswordPolicyEnforcement,GrpcFallbackValidation,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
@@ -1133,7 +1133,7 @@ REQ-GAP-0481-NO-PASSWORD-HINT-LOG,AuthSecurity,SecurityAudit,TESTED,,,security,2
 REQ-GAP-0489-BLAKE2B-MIGRATION,Blake2bToArgon2idAutoMigration,SecurityAudit,TESTED,,,security,2026-02-18,src/security/test_blake2b_migration.zig
 REQ-GAP-0490-FEDERATION-CLIENT-AUTH,FederationAuth,ClientToken,TESTED,,,security,2026-02-18,src/distributed/federation.zig
 REQ-GAP-0490-FEDERATION-CLIENT-AUTH,FederationAuth,ClientToken,TESTED,,,security,2026-02-18,src/distributed/test_federation_auth.zig
-REQ-GAP-0490-FEDERATION-SERVER-AUTH,FederationAuth,ServerValidation,TESTED,,,security,2026-02-18,src/server/quic_connection_handler.zig
+REQ-GAP-0490-FEDERATION-SERVER-AUTH,FederationAuth,ServerValidation,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig
 REQ-GAP-0490-FEDERATION-SERVER-AUTH,FederationAuth,ServerValidation,TESTED,,,security,2026-02-18,src/server/test_federation_server_auth.zig
 REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,security,2026-02-18,src/security/rls_core.zig
 REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,security,2026-02-18,src/security/test_rls_injection.zig
@@ -4330,6 +4330,8 @@ REQ-SEC-DATA-001,Security,DataSecurity,TESTED,,,security,2026-01-16,tests/test_g
 REQ-SEC-DATA-MASK-001,Security,DataMasking,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-FLE-001,Security,FLE,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-INFRA-01-METRIC,InsecureRefusalMetric,Metrics,IMPL,,,security,2026-04-16,src/distributed/cluster_auth.zig
+REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,DualTokenValidation,TESTED,,,security,2026-06-10,src/distributed/cluster_auth.zig
+REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,Regression,TESTED,,,security,2026-06-10,tests/test_sec_infra03_token_rotation.zig
 REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-KMS-001,Security,KMS,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-MFA-001,Security,MFA,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig

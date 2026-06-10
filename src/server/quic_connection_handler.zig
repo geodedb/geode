@@ -4340,20 +4340,14 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 /// Validate federation HELLO using GEODE_CLUSTER_TOKEN.
 /// GAP-0490: Both nodes must share the same cluster token.
 /// Returns true only if username is "geode-cluster" AND password matches token.
-// CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+/// SEC-INFRA-03: delegates to the shared cluster_auth validator (constant-time
+/// compare) so the dual-token rotation overlap window
+/// (GEODE_CLUSTER_TOKEN_PREVIOUS) applies to federation HELLOs too.
+// CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-06-10
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_CLUSTER_TOKEN") else null;
-    const expected_tok = expected orelse return false;
-    if (expected_tok.len == 0 or password.len == 0) return false;
-    // SEC-07: No early length check — pad both independently to prevent length-leak timing
-    var buf_a: [256]u8 = [_]u8{0} ** 256;
-    var buf_b: [256]u8 = [_]u8{0} ** 256;
-    const n_pw = @min(password.len, 256);
-    const n_ex = @min(expected_tok.len, 256);
-    @memcpy(buf_a[0..n_pw], password[0..n_pw]);
-    @memcpy(buf_b[0..n_ex], expected_tok[0..n_ex]);
-    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
+    if (comptime builtin.os.tag == .windows) return false;
+    return geode.distributed.cluster_auth.validateClusterToken(password);
 }
 
 /// Parse an ALTER USER <name> SET PASSWORD '<pwd>' statement from raw query text.

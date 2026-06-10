@@ -347,6 +347,11 @@ pub const distributed = struct {
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
+    /// SEC-INFRA-03: shared cluster bearer-token validator (dual-token
+    /// rotation). Exported so transport-layer federation auth (QUIC + gRPC
+    /// handlers, which live in the exe module) can delegate without a
+    /// file-path import that would split cluster_auth.zig across modules.
+    pub const cluster_auth = @import("distributed/cluster_auth.zig");
     pub const raft = @import("raft");
     pub const query_planner = @import("distributed/query_planner.zig");
     pub const twophase = @import("distributed/twophase.zig");

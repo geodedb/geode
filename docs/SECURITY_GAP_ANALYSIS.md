@@ -12,7 +12,7 @@ This file now contains only open/deferred security gaps. Historical and not-a-ga
 | SEC-SESS-LOG-01 | Low | 16 | Session token printed to stderr after `session rotate`. | `src/cli/session_cli.zig:569-570` | #820 | Open |
 | SEC-S3-SIGV2-01 | Low | 8 | S3 backup signing still needs SigV4 migration/hardening. | `src/storage/s3_backup.zig:351-356` | #824 | Open |
 | SEC-MFA-FIPS-01 | Info | 4 | TOTP HMAC-SHA1 only; add SHA-256/SHA-512 for FIPS-mode customers. | `src/security/mfa_risk.zig` | #821 | Backlog |
-| SEC-INFRA-03 | Medium | 15 | Cluster token is a single shared bearer secret with no rotation. | `src/distributed/cluster_auth.zig:17-56` | #743 | Open / deferred |
+| SEC-INFRA-03 | Medium | 15 | Cluster token is a single shared bearer secret with no rotation. **Closed 2026-06-10**: dual-token rotation — inbound validation accepts `GEODE_CLUSTER_TOKEN` or `GEODE_CLUSTER_TOKEN_PREVIOUS` during the overlap window (both constant-time); outbound always sends the primary; QUIC/gRPC federation handlers now delegate to the shared `cluster_auth` validator. Procedure documented in `src/distributed/README.md`; pinned by `zig build test-sec-infra03`. | `src/distributed/cluster_auth.zig` | #743 | Closed 2026-06-10 — move to resolved at round close-out |
 | SEC-CLI-01 | Low | 6 | `--insecure-tls-skip-verify` remains available in release CLI paths. | `src/cli/main.zig`; `src/cli/cli_dispatcher.zig` | #744 | Open / deferred |
 | SEC-MON-01 | Low | 6 | Metrics endpoint auth remains a timing-oracle concern when re-implemented/exposed. | `src/monitoring/metrics_server.zig` | #674 | Open / deferred |
 | SEC-INFRA-02 | Medium | 2 | nginx h2c residual on Grafana vhost. | `config/nginx/conf.d/geode.conf` | #740 | Open / deferred |
