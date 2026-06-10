@@ -258,3 +258,6 @@ scratch_*.zig
 
 # OTel docker-compose local artifacts
 otel-output/
+
+# Stray server-side backup artifacts from CLI backup tests
+server_backups/

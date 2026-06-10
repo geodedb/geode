@@ -6059,6 +6059,13 @@ pub const GraphStore = struct {
                     var sp_iter = storage_props.iterator();
                     while (sp_iter.next()) |sp_entry| {
                         self.allocator.free(sp_entry.key_ptr.*);
+                        // GAP-0862: getAllNodeProperties hands back decoded
+                        // StorageProperty VALUES whose String/Ext payloads are
+                        // freshly allocated; fromStorageProperty above made an
+                        // independent store-owned copy, so the source value must
+                        // be freed here or every loaded string/ext property leaks
+                        // on each restart/restore load.
+                        graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
                     }
                     storage_props.deinit();
                 }
@@ -6174,6 +6181,9 @@ pub const GraphStore = struct {
                             var edge_sp_iter = edge_storage_props.iterator();
                             while (edge_sp_iter.next()) |sp_entry| {
                                 self.allocator.free(sp_entry.key_ptr.*);
+                                // GAP-0862: free decoded String/Ext value bytes
+                                // (fromStorageProperty made an independent copy).
+                                graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
                             }
                             edge_storage_props.deinit();
                         }

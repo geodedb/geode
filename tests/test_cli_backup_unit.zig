@@ -128,12 +128,16 @@ test "BackupManager compression reflected in header" {
     defer mgr.deinit();
 
     const meta = try mgr.createFullBackup();
-    try expectEqual(backup.CompressionType.zstd, meta.compression);
+    // GAP-0862: the requested compression (.zstd) is recorded TRUTHFULLY as the
+    // type actually applied. No zstd encoder is available in this toolchain, so
+    // the engine stores the payload uncompressed and records .none — recording
+    // .zstd while storing raw bytes made restore fail with error.BadMagic.
+    try expectEqual(backup.CompressionType.none, meta.compression);
 
     const backup_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
     defer allocator.free(backup_path);
     const header = try readBackupHeader(backup_path);
-    try expectEqual(backup.CompressionType.zstd, header.compression);
+    try expectEqual(backup.CompressionType.none, header.compression);
 }
 
 test "Backup directory creation and cleanup" {

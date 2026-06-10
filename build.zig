@@ -1088,6 +1088,21 @@ pub fn build(b: *std.Build) void {
     const gap0857_lib_api_step = b.step("test-gap0857", "Run GAP-0857 embedded server API gate test");
     gap0857_lib_api_step.dependOn(&run_gap0857_lib_api_tests.step);
 
+    // GAP-0862: restore data-integrity regression — drives the REAL backup
+    // engine (BackupManager) against the REAL GraphStore and asserts that
+    // node/edge counts and sampled properties round-trip through backup+restore
+    // (uncompressed, zstd-compressed, and a checksum-rejection negative path).
+    const gap0862_backup_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0862_backup_integrity.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0862_backup_tests.root_module.addImport("geode", root_mod);
+    gap0862_backup_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    const run_gap0862_backup_tests = b.addRunArtifact(gap0862_backup_tests);
+    const gap0862_backup_step = b.step("test-gap0862", "Run GAP-0862 backup/restore data-integrity regression");
+    gap0862_backup_step.dependOn(&run_gap0862_backup_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)

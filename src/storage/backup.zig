@@ -239,8 +239,12 @@ pub const BackupManager = struct {
         const payload = try readPerGraphStoragePayload(self.allocator, data_dir);
         defer self.allocator.free(payload);
 
-        const compressed = try compressData(payload, self.config.compression, self.allocator);
+        const compress_result = try compressData(payload, self.config.compression, self.allocator);
+        const compressed = compress_result.data;
         defer self.allocator.free(compressed);
+        // GAP-0862: persist the compression actually applied, not the requested
+        // type — otherwise restore tries to decompress raw bytes and fails.
+        const effective_compression = compress_result.effective;
 
         const final_payload = if (self.config.encryption)
             try encryptData(compressed, self.enc_key, self.allocator)
@@ -263,7 +267,7 @@ pub const BackupManager = struct {
             .version = BACKUP_VERSION,
             .backup_type = .full,
             .timestamp = timestamp,
-            .compression = self.config.compression,
+            .compression = effective_compression,
             .encrypted = self.config.encryption,
             .payload_len = final_payload.len,
             .checksum = checksum,
@@ -277,7 +281,7 @@ pub const BackupManager = struct {
             .timestamp = timestamp,
             .backup_type = .full,
             .size_bytes = @as(u64, @intCast(@sizeOf(BackupHeader) + final_payload.len)),
-            .compression = self.config.compression,
+            .compression = effective_compression,
             .encrypted = self.config.encryption,
             .checksum = checksum,
         };
@@ -542,19 +546,41 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
 
     var file_count: u32 = 0;
 
-    // Include graph_registry.dat if it exists.
-    const reg_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
-    defer allocator.free(reg_path);
-    const has_registry = if (std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), reg_path, .{})) |_| true else |_| false;
-    if (has_registry) {
-        try appendFileEntry(&buffer, allocator, reg_path, "graph_registry.dat");
-        file_count += 1;
-    }
+    // Archive every top-level entry under data_dir: `graph_registry.dat` plus
+    // each per-graph storage directory (`{data_dir}/<graph_uuid>/...`, the
+    // canonical sharded-engine layout — see graph_storage_adapter.zig). The
+    // legacy code archived a `{data_dir}/graphs/` subtree that DOES NOT EXIST
+    // at the data_dir level (the real per-graph dirs are direct children of
+    // data_dir), so backups captured only the registry and never any graph
+    // data — making every restore produce an empty store (GAP-0862).
+    const io_rp = std.Io.Threaded.global_single_threaded.io();
+    var root = std.Io.Dir.cwd().openDir(io_rp, data_dir, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return buffer.toOwnedSlice(allocator);
+        return err;
+    };
+    defer root.close(io_rp);
 
-    // Include the full graph-storage directory tree rooted at graphs/.
-    const graphs_dir_path = try std.fmt.allocPrint(allocator, "{s}/graphs", .{data_dir});
-    defer allocator.free(graphs_dir_path);
-    file_count += try appendDirectoryTree(&buffer, allocator, graphs_dir_path, "graphs");
+    var root_iter = root.iterate();
+    while (try root_iter.next(io_rp)) |entry| {
+        // Never archive prior backup artifacts (defensive: in case a caller
+        // points backup_dir at data_dir).
+        if (std.mem.endsWith(u8, entry.name, ".backup")) continue;
+        if (std.mem.eql(u8, entry.name, "backup_metadata.log")) continue;
+
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ data_dir, entry.name });
+        defer allocator.free(full_path);
+
+        switch (entry.kind) {
+            .file => {
+                try appendFileEntry(&buffer, allocator, full_path, entry.name);
+                file_count += 1;
+            },
+            .directory => {
+                file_count += try appendDirectoryTree(&buffer, allocator, full_path, entry.name);
+            },
+            else => {},
+        }
+    }
 
     // Patch file_count into the header.
     const count_bytes = std.mem.toBytes(file_count);
@@ -614,17 +640,32 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
     }
 }
 
-fn compressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) ![]u8 {
-    if (compression == .none) return allocator.dupe(u8, data);
+/// Result of compressData: the (possibly uncompressed) payload plus the
+/// compression type that was ACTUALLY applied to it. The caller MUST persist
+/// `effective` into the backup header, never the requested type — the stdlib
+/// zstd codec available in this toolchain is decompress-only, so a requested
+/// `.zstd`/`.lz4`/`.gzip` falls back to `.none` on disk. Recording the
+/// requested type while storing raw bytes was GAP-0862: it produced backups
+/// that could not be restored (decompress saw raw bytes -> error.BadMagic),
+/// and the DEFAULT BackupConfig requests `.zstd`, so every default backup was
+/// un-restorable.
+const CompressResult = struct {
+    data: []u8,
+    effective: CompressionType,
+};
 
-    if (compression == .zstd) {
-        // Zig 0.15 std.compress.zstd doesn't have compression support yet
-        // Fall back to uncompressed data
-        log.warn("zstd compression not available in Zig 0.15, using uncompressed", &.{});
-        return allocator.dupe(u8, data);
+fn compressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) !CompressResult {
+    if (compression == .none) {
+        return .{ .data = try allocator.dupe(u8, data), .effective = .none };
     }
 
-    return error.UnsupportedCompression;
+    // The stdlib zstd codec in this toolchain is decompress-only; no encoder is
+    // available for zstd/lz4/gzip. Store uncompressed and record the truthful
+    // on-disk format so the restore path reads the bytes correctly.
+    log.warn("compression encoder unavailable; storing uncompressed", &.{
+        Attr.string("requested", @tagName(compression)),
+    });
+    return .{ .data = try allocator.dupe(u8, data), .effective = .none };
 }
 
 fn decompressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) ![]u8 {
