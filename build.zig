@@ -4754,6 +4754,19 @@ pub fn build(b: *std.Build) void {
     const gap0843_step = b.step("test-gap0843-tenant-tde", "GAP-0843 regression (per-tenant TDE key isolation + real page encrypt)");
     gap0843_step.dependOn(&run_gap0843_tests.step);
 
+    // GAP-0881: crypto truth — real HMAC-SHA3 (FIPS 198-1 via stdlib, not the
+    // old SHA3(key||data) placeholder) + TDE status() derives loaded/key_id
+    // from an actual key-manager load instead of a hardcoded dummy. Needs libc
+    // for the std.c.setenv/getenv that install/read GEODE_TDE_KEY.
+    const gap0881_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0881_crypto_truth.zig"), .target = target, .optimize = optimize });
+    gap0881_test_mod.addImport("geode", root_mod);
+    gap0881_test_mod.link_libc = true; // std.c.setenv / std.c.getenv for GEODE_TDE_KEY
+    const gap0881_tests = b.addTest(.{ .root_module = gap0881_test_mod });
+    const run_gap0881_tests = b.addRunArtifact(gap0881_tests);
+    shardDep(test_step, &run_gap0881_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0881_step = b.step("test-gap0881", "GAP-0881 regression (real HMAC-SHA3 construction + TDE status key-material truth)");
+    gap0881_step.dependOn(&run_gap0881_tests.step);
+
     // GAP-0842: prominent --insecure-allow-all startup banner contract.
     const gap0842_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0842_insecure_allow_all_banner.zig"), .target = target, .optimize = optimize });
     gap0842_test_mod.addImport("geode", root_mod);

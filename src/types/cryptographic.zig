@@ -508,18 +508,18 @@ pub const Hmac = struct {
                 hmac.final(digest[0..64]);
             },
             .HMAC_SHA3_256 => {
-                // Placeholder for SHA3 HMAC
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(key);
-                hasher.update(data);
-                hasher.final(digest[0..32]);
+                // GAP-0881: real FIPS 198-1 HMAC over SHA3-256 (stdlib generic
+                // ipad/opad construction), replacing the old SHA3(key||data)
+                // placeholder which was not an HMAC.
+                var hmac = std.crypto.auth.hmac.Hmac(std.crypto.hash.sha3.Sha3_256).init(key);
+                hmac.update(data);
+                hmac.final(digest[0..32]);
             },
             .HMAC_SHA3_512 => {
-                // Placeholder for SHA3 HMAC
-                var hasher = std.crypto.hash.sha3.Sha3_512.init(.{});
-                hasher.update(key);
-                hasher.update(data);
-                hasher.final(digest[0..64]);
+                // GAP-0881: real FIPS 198-1 HMAC over SHA3-512 (see above).
+                var hmac = std.crypto.auth.hmac.Hmac(std.crypto.hash.sha3.Sha3_512).init(key);
+                hmac.update(data);
+                hmac.final(digest[0..64]);
             },
         }
 
@@ -536,7 +536,14 @@ pub const Hmac = struct {
         const expected = try compute(self.alg, self.key, data, allocator);
         defer expected.deinit(allocator);
 
-        return std.crypto.timing_safe.eql([32]u8, self.digest[0..32].*, expected.digest[0..32].*);
+        // GAP-0881: compare the FULL digest (the old code only compared the
+        // first 32 bytes, silently truncating 64-byte SHA-512/SHA3-512 MACs).
+        if (self.digest.len != expected.digest.len) return false;
+        return switch (self.alg.digestSize()) {
+            32 => std.crypto.timing_safe.eql([32]u8, self.digest[0..32].*, expected.digest[0..32].*),
+            64 => std.crypto.timing_safe.eql([64]u8, self.digest[0..64].*, expected.digest[0..64].*),
+            else => unreachable,
+        };
     }
 
     pub fn toString(self: Hmac, allocator: std.mem.Allocator) ![]u8 {
