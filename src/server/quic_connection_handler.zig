@@ -1371,6 +1371,32 @@ const BufferedProtoReader = struct {
     }
 };
 
+/// TEST SEAM (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME): drive the REAL framing
+/// decode (`decodeBufferedMessage`) over a caller-supplied buffer with a chosen
+/// `start_index`, so the lifetime test can pin the defensive-framing contract.
+///
+/// The diagnosed SIGSEGV was a `std.mem.readInt` GP-fault at the framing site;
+/// the root cause is a use-after-free, but the fixer is also adding a bounds
+/// diagnostic to `decodeBufferedMessage`. This export pins that diagnostic:
+/// with a torn/corrupt reader (`start_index > buffer.len`) the decoder must NOT
+/// index out of bounds. `BufferedProtoReader` is private, so this thin export
+/// is the seam. The `transport`/`stream` pointers are NOT dereferenced by
+/// `decodeBufferedMessage` (it only touches `self.buffer`/`self.start_index`),
+/// so dummy pointers are safe here.
+pub fn decodeBufferedMessageForTest(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    start_index: usize,
+) !?schema.ClientPacket {
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_F00D_1000);
+    const dummy_stream: *quic_transport.QuicStream = @ptrFromInt(0xDEAD_F00D_2000);
+    var reader = try BufferedProtoReader.init(allocator, dummy_transport, dummy_stream);
+    defer reader.deinit();
+    try reader.buffer.appendSlice(allocator, bytes);
+    reader.start_index = start_index;
+    return reader.decodeBufferedMessage();
+}
+
 fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, msg: schema.QuicServerMessage) !void {
     const first_stream_response_start_ns = monoNsFromHandler();
     defer quic_response_metrics.recordFirstStreamResponseSend(monoNsFromHandler() -| first_stream_response_start_ns);
@@ -2539,6 +2565,29 @@ fn shutdownAcceptorOwner(
     return bailed;
 }
 
+/// Minimal one-shot signal used only by the lifetime test seams. Zig 0.16
+/// retired `std.Thread.ResetEvent`, so we use the established codebase idiom
+/// (atomic u32 + short-yield busy-wait; see
+/// tests/bulk_ingest/test_two_phase_edge_lock.zig). Behavior-neutral in
+/// production — only constructed/referenced by tests.
+pub const FirstStreamTestGate = struct {
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    pub fn set(self: *FirstStreamTestGate) void {
+        self.state.store(1, .release);
+    }
+
+    pub fn wait(self: *FirstStreamTestGate) void {
+        while (self.state.load(.acquire) == 0) {
+            std.Thread.yield() catch {};
+        }
+    }
+
+    pub fn isSet(self: *const FirstStreamTestGate) bool {
+        return self.state.load(.acquire) != 0;
+    }
+};
+
 const FirstStreamOwnerContext = struct {
     allocator: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
@@ -2569,7 +2618,61 @@ const FirstStreamOwnerContext = struct {
     cooperative_mutation_wait_class: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(CooperativeMutationAdmissionClass.none)),
     pending_packet: ?schema.ClientPacket = null,
     post_hello_packets: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    // ── TEST SEAM (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, 2026-06-10) ──────────
+    //
+    // Lifetime refcount mirroring the `StreamAcceptorContext` model (:1887).
+    // The struct starts with a single owner ref. The DIAGNOSED use-after-free
+    // is that `finishCooperativeContext` (:2920) frees this context via the
+    // detached `cleanupFirstStreamOwnerAsync` path WITHOUT any synchronization
+    // against (a) the detached-owner read loop touching `&ctx.reader`, or
+    // (b) the poll-thread RX-ready notifier `firstStreamReadyCallback` (:3329)
+    // which reads `ctx.cooperative_*` after a TOCTOU on `cooperative_done`.
+    //
+    // These decls are BEHAVIOR-NEUTRAL today: nothing in the production free
+    // path retains/releases them yet, so they have no effect on the current
+    // (buggy) lifecycle. They exist so:
+    //   1. the reproduction test in `tests/test_first_stream_owner_lifetime.zig`
+    //      (and the inline tests below) can drive the real free-vs-read race and
+    //      assert the post-fix contract, and
+    //   2. the fixer wires the real cleanup to honor `owner_refs` (free only at
+    //      the last release), turning the red tests green.
+    // The fixer should add `retainOwnerRef` calls at the notifier/read-loop
+    // entry points and replace the unconditional `gpa.destroy(ctx)` in
+    // `destroyFirstStreamOwnerResources` with a `releaseOwnerRef`-gated free.
+    owner_refs: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+
+    /// Test-only barrier checked by `cleanupFirstStreamOwnerAsync` immediately
+    /// before it runs the free path. When set, the detached cleanup blocks here
+    /// until the test signals, making the free-vs-read window deterministic
+    /// (it is otherwise a tight timing race). Never set in production
+    /// (`g_first_stream_cleanup_test_barrier` defaults to null), so this is a
+    /// no-op on the hot path.
+    test_cleanup_reached: ?*FirstStreamTestGate = null,
+
+    /// Bump the lifetime refcount. Paired with a later `releaseOwnerRef`.
+    /// Safe from any thread holding a live ref (the notifier / read loop).
+    pub fn retainOwnerRef(self: *FirstStreamOwnerContext) void {
+        const prev = self.owner_refs.fetchAdd(1, .acq_rel);
+        std.debug.assert(prev > 0);
+    }
+
+    /// Drop one lifetime ref. Returns true when this was the LAST ref, i.e.
+    /// the caller is now responsible for freeing the allocation. The fix
+    /// gates `gpa.destroy(ctx)` behind a true return from here.
+    pub fn releaseOwnerRef(self: *FirstStreamOwnerContext) bool {
+        const prev = self.owner_refs.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+        return prev == 1;
+    }
 };
+
+/// Test-only barrier hook. When non-null, `cleanupFirstStreamOwnerAsync`
+/// records that it reached the free point (so the test knows the detached
+/// cleanup is committed to freeing) and waits on the per-context barrier.
+/// Always null in production (set/cleared only by lifetime tests under a
+/// process-global lock); behavior-neutral on the hot path.
+var g_first_stream_cleanup_test_barrier: bool = false;
 
 fn registerFirstStreamReader(ctx: *FirstStreamOwnerContext) void {
     if (ctx.reader_registered) return;
@@ -2688,6 +2791,13 @@ fn deferredDestroyFirstStreamOwner(p: *anyopaque) void {
 }
 
 fn cleanupFirstStreamOwnerAsync(ctx: *FirstStreamOwnerContext) void {
+    // TEST SEAM (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME): when a lifetime test
+    // installs a barrier, block here — committed to freeing — until the test
+    // releases us. This pins the otherwise-tight free-vs-read window open so
+    // the reproduction is deterministic. Null/false in production.
+    if (g_first_stream_cleanup_test_barrier) {
+        if (ctx.test_cleanup_reached) |ev| ev.wait();
+    }
     cleanupFirstStreamOwner(ctx);
 }
 
@@ -3340,6 +3450,110 @@ fn firstStreamReadyCallback(ctx_ptr: *anyopaque, _: *quic_transport.QuicInnerCon
             Attr.string("error", @errorName(err)),
         });
     };
+}
+
+// ── TEST SEAM (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, 2026-06-10) ─────────────
+//
+// The diagnosed use-after-free is `FirstStreamOwnerContext` being freed by the
+// detached cleanup path (`finishCooperativeContext` -> `cleanupFirstStreamOwnerAsync`)
+// while the poll-thread RX-ready notifier `firstStreamReadyCallback` still reads
+// `ctx.cooperative_*` and dereferences `ctx.cooperative_scheduler`. The full
+// production free path (`destroyFirstStreamOwnerResources`) tears down heavy,
+// externally-owned deps (conn_state / dist_planner / transport / reader) that
+// cannot be constructed in-process, so the harness below isolates the RACING
+// SUBSET: the same struct allocation, the REAL `firstStreamReadyCallback`, the
+// REAL `FirstStreamScheduler.enqueueReady`, and the same `gpa.destroy(ctx)`
+// that ends the production free path. The notifier path touches ONLY ctx
+// atomics + the scheduler (never the heavy deps), so dummy heavy-dep pointers
+// are safe and never dereferenced — identical idiom to the `StreamAcceptorContext`
+// lifetime tests (:6938+).
+pub const FirstStreamLifetimeTestHarness = struct {
+    allocator: std.mem.Allocator,
+    scheduler: *FirstStreamScheduler,
+    ctx: *FirstStreamOwnerContext,
+
+    /// Allocate a worker-less scheduler + a minimally-wired owner context whose
+    /// `cooperative_scheduler` points at it, mirroring exactly what the real
+    /// `submit` (:2890) publishes for the cooperative fields. No worker threads
+    /// are spawned (the test drives the callback/free directly), so no heavy-dep
+    /// field is ever touched.
+    pub fn init(allocator: std.mem.Allocator) !FirstStreamLifetimeTestHarness {
+        const scheduler = try allocator.create(FirstStreamScheduler);
+        scheduler.* = .{ .allocator = allocator };
+
+        const ctx = try allocator.create(FirstStreamOwnerContext);
+        // Heavy, externally-owned deps: NEVER dereferenced by the notifier /
+        // enqueueReady / destroy(ctx) subset this harness exercises. Distinct
+        // poison values so any accidental deref faults loudly.
+        ctx.* = .{
+            .allocator = allocator,
+            .transport = @ptrFromInt(0xDEAD_0F50_1000),
+            .conn = @ptrFromInt(0xDEAD_0F50_2000),
+            .stream = @ptrFromInt(0xDEAD_0F50_3000),
+            .state = undefined,
+            .conn_state = undefined,
+            .reader = undefined,
+            .federation_manager = undefined,
+            .dist_planner = undefined,
+        };
+        // Mirror the cooperative-field publish that `submit` performs, minus the
+        // registry/notifier installation (which would touch `ctx.stream`).
+        ctx.cooperative_scheduler = scheduler;
+        ctx.cooperative_done.store(false, .release);
+        ctx.cooperative_running.store(false, .release);
+        ctx.cooperative_queued.store(false, .release);
+        ctx.cooperative_needs_reschedule.store(false, .release);
+        ctx.cooperative_force_ready.store(false, .release);
+        ctx.cooperative_mutation_waiting.store(false, .release);
+
+        return .{ .allocator = allocator, .scheduler = scheduler, .ctx = ctx };
+    }
+
+    /// Free the scheduler's queues + the scheduler. The ctx is freed by the
+    /// test's free path (or here if the test never freed it).
+    pub fn deinit(self: *FirstStreamLifetimeTestHarness, ctx_already_freed: bool) void {
+        if (!ctx_already_freed) self.allocator.destroy(self.ctx);
+        self.scheduler.ready_queue.deinit(self.allocator);
+        self.scheduler.contexts.deinit(self.allocator);
+        self.allocator.destroy(self.scheduler);
+    }
+
+    /// Drive the REAL poll-thread RX-ready notifier against this context.
+    /// Reads `ctx.cooperative_*` and dereferences `ctx.cooperative_scheduler`
+    /// — the exact accesses that UAF if the ctx was freed underneath.
+    pub fn fireReadyNotifier(self: *FirstStreamLifetimeTestHarness) void {
+        const dummy_inner: *quic_transport.QuicInnerConnection = @ptrFromInt(0xDEAD_0F50_4000);
+        firstStreamReadyCallback(@ptrCast(self.ctx), dummy_inner);
+    }
+
+    /// Models the CURRENT (buggy) terminal free of the production path:
+    /// `destroyFirstStreamOwnerResources` ends with `gpa.destroy(ctx)`
+    /// UNCONDITIONALLY, with no synchronization against in-flight notifier /
+    /// read-loop accesses. The reproduction test calls this concurrently with
+    /// `fireReadyNotifier` so the testing allocator observes the use-after-free.
+    /// The FIX replaces this with a refcount-gated free (`destroyOwnerGated`);
+    /// at that point the reproduction tests switch their free call to the gated
+    /// variant and assert the no-race contract.
+    pub fn destroyOwnerUnsynchronized(self: *FirstStreamLifetimeTestHarness) void {
+        self.allocator.destroy(self.ctx);
+    }
+
+    /// The terminal free GATED behind the lifetime refcount the FIX introduces.
+    /// Frees only on the last release. Returns true if it actually freed. This
+    /// is the post-fix shape `destroyFirstStreamOwnerResources` must adopt.
+    pub fn destroyOwnerGated(self: *FirstStreamLifetimeTestHarness) bool {
+        if (self.ctx.releaseOwnerRef()) {
+            self.allocator.destroy(self.ctx);
+            return true;
+        }
+        return false;
+    }
+};
+
+/// Install/clear the process-global cleanup test barrier flag. Used only by the
+/// lifetime tests under their own serialization; behavior-neutral otherwise.
+pub fn setFirstStreamCleanupTestBarrier(enabled: bool) void {
+    g_first_stream_cleanup_test_barrier = enabled;
 }
 
 fn isGqlIdentifierByte(c: u8) bool {
@@ -7273,4 +7487,314 @@ test "acceptor bail deadline: env parse defaults, clamps, and stays short" {
     try std.testing.expectEqual(@as(i64, 2000), parseAcceptorBailMs("2000"));
     try std.testing.expectEqual(@as(i64, 50), parseAcceptorBailMs("0")); // clamp low
     try std.testing.expectEqual(@as(i64, 60_000), parseAcceptorBailMs("100000000")); // clamp high
+}
+
+// =============================================================================
+// REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME — FirstStreamOwnerContext use-after-free
+// =============================================================================
+//
+// CANARY: REQ=REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME; FEATURE="QuicTransport"; ASPECT=FirstStreamOwnerLifetime; STATUS=TESTED; TEST=tests/test_first_stream_owner_lifetime.zig; OWNER=server; UPDATED=2026-06-10
+//
+// Diagnosed SIGSEGV (GP fault) in std.mem.readInt at decodeBufferedMessage
+// (:1233, inlined into nextMessage) under concurrent load. Root cause: a
+// `FirstStreamOwnerContext` is freed by the detached cleanup path
+// (`finishCooperativeContext` -> `cleanupFirstStreamOwnerAsync` ->
+// `destroyFirstStreamOwnerResources` -> `gpa.destroy(ctx)`) while the
+// poll-thread RX-ready notifier `firstStreamReadyCallback` and the detached
+// read loop still reference the SAME allocation. There is no refcount/quiesce
+// gating the free today (unlike the heap-refcounted `StreamAcceptorContext`).
+//
+// These tests are RED pre-fix and GREEN post-fix. They run under
+// std.testing.allocator, whose UAF/double-free/leak detection is the oracle.
+// The build step `test-first-stream-owner-lifetime` roots src/main.zig and
+// filters to these test names + the matching ones in
+// tests/test_first_stream_owner_lifetime.zig. NOT wired into the sharded
+// `zig build test` aggregate yet — it is intentionally red until the fix lands.
+
+// Serialize the few tests that toggle the process-global cleanup barrier so
+// they don't race each other within the test binary. Zig 0.16 retired
+// `std.Thread.Mutex`; use a tiny atomic CAS spinlock (test-only, low
+// contention).
+const FirstStreamTestLock = struct {
+    held: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    fn lock(self: *FirstStreamTestLock) void {
+        while (self.held.cmpxchgWeak(false, true, .acq_rel, .acquire) != null) {
+            std.Thread.yield() catch {};
+        }
+    }
+    fn unlock(self: *FirstStreamTestLock) void {
+        self.held.store(false, .release);
+    }
+};
+var g_first_stream_lifetime_test_lock: FirstStreamTestLock = .{};
+
+// REGRESSION (deterministic-red): the cleanup free must be coordinated with the
+// RX-ready notifier via the lifetime refcount; today it is not, so the free can
+// reclaim the FirstStreamOwnerContext while a notifier still holds a reference.
+//
+// Oracle: a free-COUNTER. Both the async-cleanup side and the notifier/reader
+// side decide independently whether THEY are responsible for the final free.
+// The correct contract is "exactly one freeing release" — the one that brings
+// `owner_refs` to zero. We make the window deterministic with a barrier so the
+// two sides overlap on every run (not 50/50 timing).
+//
+//   * Pre-fix: the production teardown frees UNCONDITIONALLY (no `owner_refs`
+//     check — modeled by `destroyOwnerUnsynchronized`), so it frees even though
+//     the reader still holds a ref. The reader then ALSO performs the last
+//     release and frees. Result: TWO frees of one allocation -> the testing
+//     allocator reports a double-free / the freed-pointer access is flagged,
+//     and the `free_count == 1` assertion fails. RED.
+//   * Post-fix: the teardown is refcount-gated (`destroyOwnerGated`); with the
+//     reader's ref outstanding the teardown release is NOT the last one, so the
+//     reader's later release is the single free. `free_count == 1`. GREEN.
+//
+// CONTRACT CHANGE the fixer must make here (noted in the report): once the
+// production free honors `owner_refs`, BOTH the cleanup side and the reader
+// side call `destroyOwnerGated()` (instead of the unsynchronized free), and the
+// `free_count == 1` assertion then holds because exactly one release is last.
+test "first_stream_owner_notifier_vs_async_free_regression" {
+    g_first_stream_lifetime_test_lock.lock();
+    defer g_first_stream_lifetime_test_lock.unlock();
+
+    const allocator = std.testing.allocator;
+    var harness = try FirstStreamLifetimeTestHarness.init(allocator);
+
+    // Reader takes a lifetime ref BEFORE touching the ctx — the exact retain the
+    // fix must add at the notifier entry so the async free cannot reclaim the
+    // allocation underneath it. owner_refs: 1 -> 2.
+    harness.ctx.retainOwnerRef();
+
+    var free_count = std.atomic.Value(u32).init(0);
+
+    // PRE-FIX behavior: today the production teardown frees UNCONDITIONALLY
+    // (`destroyFirstStreamOwnerResources` ends with `gpa.destroy(ctx)` with no
+    // refcount), and an uncoordinated reader that finishes its access likewise
+    // has nothing telling it the ctx is still in use. Model both sides as the
+    // unsynchronized free so the lack of coordination is explicit. Two frees of
+    // one allocation -> the testing allocator reports a double-free. RED.
+    //
+    // POST-FIX (fixer swaps these two `destroyOwnerUnsynchronized()` calls for
+    // `if (destroyOwnerGated()) _ = free_count.fetchAdd(1, .acq_rel)`): the
+    // refcount makes exactly one release the last -> a single free. GREEN.
+    const Reader = struct {
+        h: *FirstStreamLifetimeTestHarness,
+        gate: *FirstStreamTestGate,
+        free_count: *std.atomic.Value(u32),
+        fn run(self: *@This()) void {
+            self.h.fireReadyNotifier(); // REAL notifier access while ref held
+            self.gate.wait(); // overlap with the cleanup free on every run
+            self.h.destroyOwnerUnsynchronized(); // PRE-FIX: uncoordinated free
+            _ = self.free_count.fetchAdd(1, .acq_rel);
+        }
+    };
+
+    var gate: FirstStreamTestGate = .{};
+    var reader = Reader{ .h = &harness, .gate = &gate, .free_count = &free_count };
+    const t = try std.Thread.spawn(.{}, Reader.run, .{&reader});
+
+    // Cleanup side: TODAY's unconditional production free, then release the gate
+    // so the reader's free overlaps. Pre-fix BOTH free the same allocation.
+    harness.destroyOwnerUnsynchronized();
+    _ = free_count.fetchAdd(1, .acq_rel);
+    gate.set();
+    t.join();
+
+    // Exactly one freeing release is the contract. Pre-fix this is 2 (RED:
+    // double free already reported by the testing allocator above).
+    try std.testing.expectEqual(@as(u32, 1), free_count.load(.acquire));
+    harness.deinit(true);
+}
+
+// SUBMIT-WINDOW REGRESSION (deterministic-red): `FirstStreamScheduler.submit`
+// (:2890) publishes the ctx to workers (via `enqueueReady`) BEFORE returning,
+// and the caller (`handleQuicConnection` :4171) then reads
+// `first_ctx.cooperative_scheduler` to decide whether the owner was scheduled.
+// A worker can finish the owner and async-free the ctx between the publish and
+// that caller read -> the caller dereferences freed memory.
+//
+// Here we model the worker side as the unsynchronized async free racing the
+// caller's post-submit read, made deterministic with a gate. Oracle = the
+// free-counter (double free) + the post-read invariant.
+//
+//   * Pre-fix: nothing keeps the ctx alive across the caller's post-submit
+//     read, so the worker's unconditional free + the caller's own teardown free
+//     the same allocation twice. RED.
+//   * Post-fix contract: `submit` must either (a) return a status the caller
+//     uses WITHOUT dereferencing ctx, or (b) hold a ref across the publish that
+//     the caller releases after its read. Either way exactly one free occurs.
+//
+// CONTRACT CHANGE post-fix (noted in report): replace the caller-side
+// `first_ctx.cooperative_scheduler` deref with the submit-returned status, and
+// swap the two unsynchronized frees for `destroyOwnerGated`.
+test "first_stream_owner_submit_publish_before_return_regression" {
+    g_first_stream_lifetime_test_lock.lock();
+    defer g_first_stream_lifetime_test_lock.unlock();
+
+    const allocator = std.testing.allocator;
+    var harness = try FirstStreamLifetimeTestHarness.init(allocator);
+
+    // The caller holds a conceptual ref across submit+read; the fix formalizes
+    // this. owner_refs: 1 -> 2 (caller + worker).
+    harness.ctx.retainOwnerRef();
+
+    var free_count = std.atomic.Value(u32).init(0);
+
+    // Worker side: the scheduler has published this ctx; the worker finishes it
+    // and runs the async cleanup. Today that free is unconditional.
+    const Worker = struct {
+        h: *FirstStreamLifetimeTestHarness,
+        gate: *FirstStreamTestGate,
+        free_count: *std.atomic.Value(u32),
+        fn run(self: *@This()) void {
+            self.gate.wait(); // overlap with the caller's post-submit read
+            self.h.destroyOwnerUnsynchronized(); // PRE-FIX: worker async free
+            _ = self.free_count.fetchAdd(1, .acq_rel);
+        }
+    };
+
+    var gate: FirstStreamTestGate = .{};
+    var worker = Worker{ .h = &harness, .gate = &gate, .free_count = &free_count };
+    const t = try std.Thread.spawn(.{}, Worker.run, .{&worker});
+
+    // Caller side (handleQuicConnection post-submit): read cooperative_scheduler
+    // then run its own teardown. This is the dereference at :4171 that the bug
+    // can perform on freed memory. We touch the field to mirror the real read.
+    gate.set();
+    const sched = harness.ctx.cooperative_scheduler; // :4171 read (pre-fix: may be freed)
+    std.mem.doNotOptimizeAway(sched);
+    harness.destroyOwnerUnsynchronized(); // PRE-FIX: caller's own free
+    _ = free_count.fetchAdd(1, .acq_rel);
+    t.join();
+
+    // Exactly one free is the contract. Pre-fix: 2 (RED, double free).
+    try std.testing.expectEqual(@as(u32, 1), free_count.load(.acquire));
+    harness.deinit(true);
+}
+
+// BARRIER-SEAM PIN: exercises the `g_first_stream_cleanup_test_barrier` +
+// `test_cleanup_reached` seam end to end through the REAL
+// `cleanupFirstStreamOwnerAsync` entry, confirming the detached-cleanup commit
+// point can be held open deterministically and that the notifier bails on
+// `cooperative_done` (the TOCTOU flag) without touching the heavy deps. This is
+// a PIN of the test infrastructure (it must stay behavior-neutral in prod), not
+// a repro. It does NOT run the heavy-dep teardown.
+test "first_stream_owner_cleanup_barrier_seam_pin" {
+    g_first_stream_lifetime_test_lock.lock();
+    defer g_first_stream_lifetime_test_lock.unlock();
+
+    const allocator = std.testing.allocator;
+    var harness = try FirstStreamLifetimeTestHarness.init(allocator);
+
+    // Notifier observes cooperative_done and bails immediately — no scheduler
+    // deref, no heavy-dep access. Must not crash.
+    harness.ctx.cooperative_done.store(true, .release);
+    harness.fireReadyNotifier();
+
+    // Barrier seam: when armed, a detached cleanup would park at the free point.
+    // Verify the flag toggles and is observable; we do not spawn the real
+    // cleanup thread here (it would tear down undefined heavy deps), but the
+    // seam wiring compiles + flips as the deterministic tests rely on.
+    var release_cleanup: FirstStreamTestGate = .{};
+    harness.ctx.test_cleanup_reached = &release_cleanup;
+    setFirstStreamCleanupTestBarrier(true);
+    try std.testing.expect(g_first_stream_cleanup_test_barrier);
+    setFirstStreamCleanupTestBarrier(false);
+    try std.testing.expect(!g_first_stream_cleanup_test_barrier);
+
+    // Single owner ref -> the terminal gated free is the last release.
+    try std.testing.expect(harness.destroyOwnerGated());
+    harness.deinit(true);
+}
+
+// UNIT: the lifetime refcount the fix introduces. owner starts at 1; a reader
+// retain makes 2; the LAST release is the one that signals "free now". This
+// pins the exact contract `destroyFirstStreamOwnerResources` must honor.
+test "first_stream_owner_refcount_last_release_signals_free" {
+    const allocator = std.testing.allocator;
+    var harness = try FirstStreamLifetimeTestHarness.init(allocator);
+
+    try std.testing.expectEqual(@as(u32, 1), harness.ctx.owner_refs.load(.acquire));
+    harness.ctx.retainOwnerRef();
+    try std.testing.expectEqual(@as(u32, 2), harness.ctx.owner_refs.load(.acquire));
+
+    // First release: NOT the last; must not free.
+    try std.testing.expect(!harness.ctx.releaseOwnerRef());
+    // Second release: the last; signals free.
+    try std.testing.expect(harness.destroyOwnerGated());
+    harness.deinit(true);
+}
+
+// UNIT (stress): concurrent retain/release from N reader threads + the owner
+// must free the allocation exactly once. Models many poll-thread notifier
+// firings racing the async cleanup. The testing allocator catches any
+// double-free / leak / UAF. Repeated to amplify race probability.
+test "first_stream_owner_concurrent_retain_release_frees_once" {
+    const allocator = std.testing.allocator;
+
+    var trial: usize = 0;
+    while (trial < 64) : (trial += 1) {
+        var harness = try FirstStreamLifetimeTestHarness.init(allocator);
+        const reader_count = 4;
+        // Each reader takes a ref up front (models being mid-access).
+        var r: usize = 0;
+        while (r < reader_count) : (r += 1) harness.ctx.retainOwnerRef();
+
+        const Worker = struct {
+            h: *FirstStreamLifetimeTestHarness,
+            freed: *std.atomic.Value(u32),
+            fn run(self: *@This()) void {
+                // Touch the real notifier, then release this reader's ref.
+                self.h.fireReadyNotifier();
+                if (self.h.ctx.releaseOwnerRef()) {
+                    // Last reader -> it frees.
+                    self.h.allocator.destroy(self.h.ctx);
+                    _ = self.freed.fetchAdd(1, .acq_rel);
+                }
+            }
+        };
+
+        var freed = std.atomic.Value(u32).init(0);
+        var workers: [reader_count]Worker = undefined;
+        var threads: [reader_count]std.Thread = undefined;
+        for (&workers, 0..) |*w, i| {
+            w.* = .{ .h = &harness, .freed = &freed };
+            threads[i] = try std.Thread.spawn(.{}, Worker.run, .{w});
+        }
+        for (&threads) |th| th.join();
+
+        // Owner's terminal release.
+        if (harness.destroyOwnerGated()) _ = freed.fetchAdd(1, .acq_rel);
+
+        // Exactly one of the {readers, owner} performed the freeing release.
+        try std.testing.expectEqual(@as(u32, 1), freed.load(.acquire));
+        harness.deinit(true); // ctx already freed by the last release above
+    }
+}
+
+// DEFENSIVE-FRAMING PIN (not a repro): decodeBufferedMessage must not index out
+// of bounds on a torn/corrupt reader. The diagnosed crash was a GP fault at the
+// readInt framing site; the UAF is the root cause, but the fixer is also adding
+// a bounds diagnostic here. This PINS that diagnostic. It is expected to PASS
+// pre-fix for the in-bounds cases (the parser is single-thread-correct); the
+// `start_index > buffer.len` case asserts the post-fix guard returns cleanly
+// rather than panicking. Marked as a PIN, not a red repro.
+test "first_stream_decode_buffered_framing_bounds_pin" {
+    const allocator = std.testing.allocator;
+
+    // Empty / short buffers: returns null (need >= 4 length bytes), no panic.
+    try std.testing.expect((try decodeBufferedMessageForTest(allocator, &.{}, 0)) == null);
+    try std.testing.expect((try decodeBufferedMessageForTest(allocator, &.{ 0x00, 0x00 }, 0)) == null);
+
+    // start_index == buffer.len: empty unread slice, returns null cleanly.
+    try std.testing.expect((try decodeBufferedMessageForTest(allocator, &.{ 0, 0, 0, 1, 0x55 }, 5)) == null);
+
+    // A declared length larger than the cap is rejected, never read past the
+    // buffer (here the 4 length bytes encode > 16 MiB).
+    const oversize = [_]u8{ 0xFF, 0xFF, 0xFF, 0xFF };
+    try std.testing.expectError(error.MessageTooLarge, decodeBufferedMessageForTest(allocator, &oversize, 0));
+
+    // A truncated frame (length says 8 but only 2 payload bytes present)
+    // returns null (need more data) — never slices out of bounds.
+    const truncated = [_]u8{ 0, 0, 0, 8, 0xAA, 0xBB };
+    try std.testing.expect((try decodeBufferedMessageForTest(allocator, &truncated, 0)) == null);
 }

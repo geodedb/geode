@@ -5607,6 +5607,67 @@ pub fn build(b: *std.Build) void {
     const conn_pool_lifetime_step = b.step("test-handle-quic-connection-pool-lifetime", "Run pooled.ThreadPool init+deinit thread-leak regression test");
     conn_pool_lifetime_step.dependOn(&run_conn_pool_lifetime_tests.step);
 
+    // REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME — FirstStreamOwnerContext use-after-free.
+    //
+    // The reproduction tests are INLINE in src/server/quic_connection_handler.zig
+    // (named `first_stream_owner_*` / `first_stream_decode_*`), because the
+    // scheduler + owner-context + notifier internals are intentionally NOT
+    // exported through the `geode` root module (circular dependency — see
+    // src/lib.zig:652). The handler is reachable only through the full server
+    // graph (src/unified_entry.zig -> src/server/main.zig -> the handler), so we
+    // reuse the geode executable's fully-wired root module (`geode_exe`, defined
+    // above) as the test root and filter to these tests' names. This is the only
+    // way to compile + run the handler's inline tests with all ~50 server deps
+    // resolved without hand-replicating the import list.
+    //
+    // tests/test_first_stream_owner_lifetime.zig is the documented home for the
+    // test plan + CANARY and a geode-reachable supporting assertion; the
+    // deterministic-red repro lives inline and runs through this filtered step.
+    //
+    // INTENTIONALLY RED until the lifetime fix lands — NOT wired into the
+    // sharded `zig build test` aggregate yet. The fixer re-adds it once green.
+    //
+    // We build a FRESH test module rooted at the same source as the executable
+    // (src/unified_entry.zig) and copy the executable module's fully-wired
+    // import table + link settings into it. A fresh module is required so the
+    // artifact is compiled in TEST mode (reusing geode_exe.root_module directly
+    // compiles the exe object, which discovers zero inline tests).
+    const first_stream_lifetime_mod = b.createModule(.{
+        .root_source_file = b.path("src/first_stream_owner_lifetime_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        var it = geode_exe.root_module.import_table.iterator();
+        while (it.next()) |entry| {
+            first_stream_lifetime_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    first_stream_lifetime_mod.link_libc = true;
+    if (enable_openssl) {
+        first_stream_lifetime_mod.linkSystemLibrary("ssl", .{});
+        first_stream_lifetime_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        first_stream_lifetime_mod.linkSystemLibrary("dl", .{});
+    }
+    first_stream_lifetime_mod.addOptions("openssl_config", openssl_options);
+    const first_stream_lifetime_tests = b.addTest(.{
+        .root_module = first_stream_lifetime_mod,
+        .filters = &.{ "first_stream_owner_", "first_stream_decode_" },
+    });
+    const run_first_stream_lifetime_tests = b.addRunArtifact(first_stream_lifetime_tests);
+    const first_stream_lifetime_step = b.step("test-first-stream-owner-lifetime", "Run FirstStreamOwnerContext use-after-free reproduction (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME, RED until fix)");
+    first_stream_lifetime_step.dependOn(&run_first_stream_lifetime_tests.step);
+
+    // geode-reachable supporting suite for the same REQ (framing-pin lives here;
+    // imports only the public `geode` surface).
+    const first_stream_lifetime_doc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_first_stream_owner_lifetime.zig"), .target = target, .optimize = optimize });
+    first_stream_lifetime_doc_mod.addImport("geode", root_mod);
+    const first_stream_lifetime_doc_tests = b.addTest(.{ .root_module = first_stream_lifetime_doc_mod });
+    const run_first_stream_lifetime_doc_tests = b.addRunArtifact(first_stream_lifetime_doc_tests);
+    first_stream_lifetime_step.dependOn(&run_first_stream_lifetime_doc_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
