@@ -169,6 +169,54 @@ case-insensitive (normalized to lowercase per RQ-0022).
 Implementation: [`src/execution/storage_dispatch.zig`](../src/execution/storage_dispatch.zig)
 (`fle_table`); access policy: [`src/execution/procedure_access.zig`](../src/execution/procedure_access.zig).
 
+### Administrative surface (GAP-0853)
+
+**The `CALL geode.fle.*` procedures ARE the supported administrative surface for
+FLE policy/catalog configuration. There is no GQL FLE DDL, and none is planned.**
+
+Rationale: standard GQL (ISO/IEC 39075:2024) defines no FLE DDL, so any DDL form
+would be a non-standard Geode extension to the grammar. Keeping FLE
+administration on `CALL` procedures keeps the surface **versionable and additive**
+(new keys/procedures can ship without grammar changes), routes every call —
+read AND write — through the single GPS procedure gate (see authz below), and
+matches the established admin surface for other subsystems
+(`CALL geode.tenant.*`, `CALL geode.fts.*`, `CALL geode.ts.*`).
+
+#### Authorization (who may call)
+
+Every `CALL geode.fle.*` invocation passes through the mandatory GPS dispatch
+gate (`procedure_registry.executeProcedure`, `REQ-GPS-PROC-001`) **before** the
+procedure body runs. The gate classifies each procedure as read-only or mutating
+([`src/execution/procedure_access.zig`](../src/execution/procedure_access.zig)
+`classifyProcedureName`) and remaps that to a GPS action; a principal is denied
+(`error.Unauthorized`) unless its role/policy permits that action on the
+procedure resource (fail-closed for unknown principals/procedures):
+
+| Procedure | Classification | GPS action | Who may call |
+|-----------|----------------|------------|--------------|
+| `geode.fle.configureField` | mutating | `.write` | Admin role, or a role/policy explicitly granted `write` on the procedure. This is the declare/mutate path. |
+| `geode.fle.getFieldConfig` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
+| `geode.fle.listEncryptedFields` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
+
+`configureField` declares **which** fields are encrypted; it does **not** grant
+decryption. Reading decrypted plaintext is a separate, per-field authorization
+(the `visibility` roles set on the field plus the `decrypt_field` /
+`READ_PLAINTEXT` privilege) — see [Permissions](#permissions) below.
+
+#### The internal security graph is never FLE-encrypted (GAP-0854)
+
+FLE **never** applies to the internal `__geode_security` graph — the HMAC-chained
+store that holds users, roles, policies, and grants. That graph is excluded from
+FLE encrypt **and** decrypt at every node site
+([`src/graph_store.zig`](../src/graph_store.zig) `isSecurityGraphName`), because
+FLE-encrypting an admin record would corrupt the plaintext-computed audit HMAC
+chain and trip `AuthChainTampered` on restart. So a `configureField('User', …)`
+call cannot accidentally encrypt the security graph's own `User` records; it
+configures FLE only for application-graph data. The security graph remains
+protected at rest by TDE. See the GAP-0854 closure in
+[`docs/GAP_ANALYSIS.md`](GAP_ANALYSIS.md) and regression
+`tests/test_gap0854_fle_chain.zig`.
+
 ### Procedure reference
 
 #### `CALL geode.fle.configureField(type_name, field_name [, config])`
