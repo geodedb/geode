@@ -424,6 +424,17 @@ fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
     const tenant_id = try literalString(a[0]);
     const cascade: bool = if (a.len == 2) try literalBool(a[1]) else false;
 
+    // ── Reserved-tenant guard (GAP-0847 follow-up). ─────────────────────────
+    // The reserved DEFAULT_TENANT_ID ("default") is the implicit scope for every
+    // untagged row in the store. A cascade drop of "default" would scan-match and
+    // delete every such row, then remove the sentinel registry record — i.e. wipe
+    // the whole single-tenant store. Refuse before touching any data, regardless
+    // of cascade. (The registry-side drop also enforces this, but we fail fast and
+    // with a tenant-specific error here, before scanning.)
+    if (std.mem.eql(u8, tenant_id, graph_store.DEFAULT_TENANT_ID)) {
+        return tenant_registry.RegistryError.TenantReserved;
+    }
+
     const reg = try resolveRegistry();
     // The tenant must exist before we touch any data — surface TenantNotFound.
     if (!reg.contains(tenant_id)) return tenant_registry.RegistryError.TenantNotFound;
@@ -455,16 +466,9 @@ fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
         }
 
         if (cascade) {
-            // Edges before nodes: deleting a node first would leave dangling
-            // adjacency entries the edge delete relies on for slot routing.
-            for (edge_ids) |eid| {
-                store.deleteEdge(eid);
-                edges_deleted += 1;
-            }
-            for (node_ids) |nid| {
-                store.deleteNode(nid);
-                nodes_deleted += 1;
-            }
+            const counts = deleteTenantRows(store, edge_ids, node_ids);
+            edges_deleted = counts.edges;
+            nodes_deleted = counts.nodes;
         }
     }
 
@@ -513,6 +517,35 @@ fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
     return try maybeYield(allocator, result, call_stmt);
 }
 
+/// GAP-0847: shared scan-result deletion for a single tenant. Deletes EDGES
+/// before NODES (deleting a node first would leave dangling adjacency entries
+/// the edge delete relies on for slot routing), returning the count actually
+/// issued. The caller owns / frees the id slices.
+///
+/// Failure posture (residual, documented in GAP_ANALYSIS.md): `deleteEdge` /
+/// `deleteNode` are infallible at this seam — adapter-tier delete failures are
+/// logged-and-swallowed by the store per the codebase-wide delete posture, so a
+/// cascade under adapter failure can OVER-report deleted counts and still proceed
+/// to registry removal. In-memory / OOM failures surface earlier (during the scan
+/// `getAll*ForTenant`, which is `try`) and abort cleanly BEFORE registry removal.
+fn deleteTenantRows(
+    store: *graph_store.GraphStore,
+    edge_ids: []const u64,
+    node_ids: []const u64,
+) struct { edges: usize, nodes: usize } {
+    var edges: usize = 0;
+    var nodes: usize = 0;
+    for (edge_ids) |eid| {
+        store.deleteEdge(eid);
+        edges += 1;
+    }
+    for (node_ids) |nid| {
+        store.deleteNode(nid);
+        nodes += 1;
+    }
+    return .{ .edges = edges, .nodes = nodes };
+}
+
 /// GAP-0847: recursively cascade-drop every descendant of `tenant_id`,
 /// bottom-up. For each direct child we recurse first (so grandchildren go
 /// before children), then delete the child's data rows, then remove the child
@@ -539,14 +572,9 @@ fn dropChildrenCascade(
             defer allocator.free(edge_ids);
             const node_ids = try store.getAllNodesForTenant(allocator, child);
             defer allocator.free(node_ids);
-            for (edge_ids) |eid| {
-                store.deleteEdge(eid);
-                c_edges += 1;
-            }
-            for (node_ids) |nid| {
-                store.deleteNode(nid);
-                c_nodes += 1;
-            }
+            const counts = deleteTenantRows(store, edge_ids, node_ids);
+            c_edges = counts.edges;
+            c_nodes = counts.nodes;
         }
 
         // Children were dropped depth-first above, so removeTenant(child) can

@@ -64,6 +64,8 @@ pub const RegistryError = error{
     TenantAlreadyExists,
     TenantNotFound,
     InvalidTenantId,
+    TenantHasChildren,
+    TenantReserved,
 };
 
 /// One persisted tenant record. `quota` is optional: a null quota means the
@@ -193,9 +195,30 @@ pub const TenantRegistry = struct {
     /// Drop a tenant from the registry. Returns TenantNotFound if absent.
     /// Note: this removes the lifecycle record only; it does NOT delete the
     /// tenant's data rows (that is a separate, heavier operation deferred here).
+    ///
+    /// GAP-0847 follow-up — two registry-side safety guards independent of any
+    /// external engine being wired:
+    ///   • The reserved `DEFAULT_TENANT_ID` ("default") can NEVER be dropped
+    ///     (`TenantReserved`). It is the sentinel scope for every untagged row;
+    ///     cascading it would delete the whole store.
+    ///   • A tenant that any OTHER registry record lists as its `parent` cannot
+    ///     be dropped (`TenantHasChildren`). This closes the seam where the
+    ///     expr-RLS hierarchy engine (the tenant_dispatch child guard) is not
+    ///     wired: the durable registry's parent links are the source of truth
+    ///     for the hierarchy, so we refuse to orphan descendants here too.
     pub fn drop(self: *TenantRegistry, tenant_id: []const u8) !void {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        if (std.mem.eql(u8, tenant_id, DEFAULT_TENANT_ID)) return RegistryError.TenantReserved;
+
+        // Refuse if any other record names this tenant as its parent.
+        var it = self.tenants.valueIterator();
+        while (it.next()) |rec| {
+            if (rec.parent) |p| {
+                if (std.mem.eql(u8, p, tenant_id)) return RegistryError.TenantHasChildren;
+            }
+        }
 
         const entry = self.tenants.fetchRemove(tenant_id) orelse return RegistryError.TenantNotFound;
         var rec = entry.value;
@@ -558,6 +581,34 @@ test "TenantRegistry: drop removes the tenant" {
     try std.testing.expectError(RegistryError.TenantNotFound, reg.drop("acme"));
 }
 
+test "TenantRegistry: drop refuses the reserved default tenant" {
+    var reg = TenantRegistry.init(std.testing.allocator);
+    defer reg.deinit();
+    // "default" is never created (it is the implicit sentinel scope), but even if
+    // an operator registers it, dropping it is refused.
+    try reg.create(DEFAULT_TENANT_ID, null);
+    try std.testing.expectError(RegistryError.TenantReserved, reg.drop(DEFAULT_TENANT_ID));
+    try std.testing.expect(reg.contains(DEFAULT_TENANT_ID));
+}
+
+test "TenantRegistry: drop refuses a parent with children (registry-side hierarchy guard)" {
+    var reg = TenantRegistry.init(std.testing.allocator);
+    defer reg.deinit();
+    try reg.create("acme", null);
+    try reg.create("acme-bu1", "acme");
+
+    // Dropping the parent while a child names it as parent is refused — closing
+    // the seam where the expr-RLS hierarchy engine is not wired.
+    try std.testing.expectError(RegistryError.TenantHasChildren, reg.drop("acme"));
+    try std.testing.expect(reg.contains("acme"));
+    try std.testing.expect(reg.contains("acme-bu1"));
+
+    // After the child is dropped (it is a leaf), the parent drops cleanly.
+    try reg.drop("acme-bu1");
+    try reg.drop("acme");
+    try std.testing.expect(!reg.contains("acme"));
+}
+
 test "TenantRegistry: list snapshots all records" {
     var reg = TenantRegistry.init(std.testing.allocator);
     defer reg.deinit();
@@ -593,11 +644,11 @@ test "TenantRegistry: durable round-trip (persist + hydrate after reopen)" {
         try reg.create("acme", null);
         try reg.create("acme-bu1", "acme");
         try reg.setQuota("acme-bu1", 7, 3, 11, 999);
-        try reg.drop("acme"); // drop persists too; only acme-bu1 should remain... but
-        // acme-bu1 had acme as parent — drop only removes the record, not children,
-        // which is fine for this durability assertion. Re-add acme to keep parent
-        // resolvable on reload (registry does not cascade).
-        try reg.create("acme", null);
+        // Exercise drop-persistence on a throwaway LEAF tenant (the parent "acme"
+        // can no longer be dropped while "acme-bu1" names it as parent — see the
+        // registry-side hierarchy guard). create/drop must both rewrite the file.
+        try reg.create("scratch", null);
+        try reg.drop("scratch");
     }
 
     // Reopen: a fresh registry must hydrate the persisted tenants.

@@ -346,3 +346,46 @@ test "GAP-0847: dropping an unknown tenant returns TenantNotFound" {
         fx.run("CALL geode.tenant.drop('ghost', true)"),
     );
 }
+
+// ---------------------------------------------------------------------------
+// 7. reserved "default" tenant can NEVER be dropped (GAP-0847 follow-up)
+// ---------------------------------------------------------------------------
+
+test "GAP-0847: dropping the reserved 'default' tenant is refused (TenantReserved)" {
+    const allocator = testing.allocator;
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(true);
+
+    var fx = try Fixture.init(allocator);
+    defer fx.deinit();
+
+    try fx.store.createGraph("g1");
+    // Untagged rows land in the DEFAULT_TENANT_ID scope. A cascade drop of
+    // "default" would scan-match and delete EVERY such row — it must be refused.
+    try seedTenantData(fx.store, "g1", graph_store.DEFAULT_TENANT_ID, 3); // 3 nodes, 2 edges
+    try testing.expectEqual(
+        @as(usize, 3),
+        try countTenantNodes(fx.store, allocator, graph_store.DEFAULT_TENANT_ID),
+    );
+
+    // Both cascade and non-cascade drops of "default" are refused with the
+    // tenant-specific TenantReserved error, BEFORE any data is touched.
+    try testing.expectError(
+        tenant_registry.RegistryError.TenantReserved,
+        fx.run("CALL geode.tenant.drop('default', true)"),
+    );
+    try testing.expectError(
+        tenant_registry.RegistryError.TenantReserved,
+        fx.run("CALL geode.tenant.drop('default')"),
+    );
+
+    // The default-scoped data survived the refusal — nothing was deleted.
+    try testing.expectEqual(
+        @as(usize, 3),
+        try countTenantNodes(fx.store, allocator, graph_store.DEFAULT_TENANT_ID),
+    );
+    try testing.expectEqual(
+        @as(usize, 2),
+        try countTenantEdges(fx.store, allocator, graph_store.DEFAULT_TENANT_ID),
+    );
+}

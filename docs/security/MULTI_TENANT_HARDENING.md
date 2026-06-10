@@ -316,6 +316,27 @@ dangling. The corrected semantics:
   when a storage adapter is wired, and it emits a summary `tenant_admin.drop`
   audit line with the deleted node/edge counts. The per-tenant scan filters
   strictly on `tenant_id`, so **other tenants' data is never touched**.
+- The reserved **`default`** tenant (`graph_store.DEFAULT_TENANT_ID`, the implicit
+  scope of every untagged row) can **never** be dropped — `drop('default'[, …])`
+  is refused with `error.TenantReserved` **before any data is scanned**, with or
+  without `cascade`. Cascading it would delete every untagged row in a
+  single-tenant store. This is enforced both at the `CALL` dispatcher and in
+  `TenantRegistry.drop`.
+- The **registry itself** also refuses to drop a tenant that any other record
+  names as its `parent` (`error.TenantHasChildren`), independent of whether the
+  expr-RLS hierarchy engine is wired — the durable registry's parent links are
+  the source of truth for the hierarchy.
+
+> **Failure-path residual (operator note).** The adapter-tier `deleteEdge` /
+> `deleteNode` calls follow the codebase-wide delete posture: a *storage-adapter*
+> delete failure is logged and swallowed rather than propagated. Consequently a
+> cascade drop running against a failing adapter can **over-report** the
+> `nodes_deleted` / `edges_deleted` counts and still proceed to remove the
+> registry record. In-memory / out-of-memory failures, by contrast, surface
+> during the up-front per-tenant scan (`getAllEdgesForTenant` /
+> `getAllNodesForTenant`, which are fallible) and **abort the drop cleanly before
+> any registry record is removed**. Treat the returned counts as best-effort, not
+> a transactional guarantee, when investigating an adapter-error window.
 
 `drop` returns a row with `tenant_id`, `dropped`, `nodes_deleted`,
 `edges_deleted`. Examples:
