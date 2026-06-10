@@ -176,3 +176,19 @@ test "GAP-0820: workspace/* requests -> -32601, notification tolerated, no works
         \\{"jsonrpc":"2.0","method":"workspace/didChangeWorkspaceFolders","params":{"event":{"added":[],"removed":[]}}}
     );
 }
+
+// ---------------------------------------------------------------------------
+// GAP-0821 — rename / prepareRename: explicit non-support
+// ---------------------------------------------------------------------------
+
+test "GAP-0821: rename + prepareRename requests -> -32601, renameProvider absent" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newCapturingServer(alloc);
+    defer srv.deinit();
+
+    try assertCapabilityAbsent(alloc, "renameProvider");
+
+    try expectMethodNotFound(alloc, &srv, "textDocument/rename", 30);
+    try expectMethodNotFound(alloc, &srv, "textDocument/prepareRename", 31);
+}

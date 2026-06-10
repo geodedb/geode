@@ -87,6 +87,7 @@ const intentionally_unsupported_capabilities = [_]IntentionallyUnsupportedCapabi
     .{ .capability = "workspace", .gap = "GAP-0820" }, // workspace/* family
     .{ .capability = "workspaceSymbolProvider", .gap = "GAP-0820" },
     .{ .capability = "executeCommandProvider", .gap = "GAP-0820" },
+    .{ .capability = "renameProvider", .gap = "GAP-0821" }, // rename/prepareRename
 };
 
 // `textDocumentSync` is a sync capability, not a request-handler capability:
