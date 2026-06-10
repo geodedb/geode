@@ -793,14 +793,33 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
 // Result struct for tracking created entities
 const CreateBatchResult = struct {
+    // Sum of nodes + relationships (kept for compatibility; prefer the
+    // per-kind counts below — summing them mislabeled relationships as
+    // nodes in the MATCH…CREATE summary row).
     created_count: i64,
+    created_nodes_count: i64,
+    created_relationships_count: i64,
     created_nodes: std.StringHashMap(u64),
     created_relationships: std.StringHashMap(Value),
 };
 
+fn isMatchVar(match_var_names: []const []const u8, name: []const u8) bool {
+    for (match_var_names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-017; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatchWithTracking; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-// Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation
-pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), current_graph: ?[]const u8) !CreateBatchResult {
+// Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation.
+//
+// `match_var_names` is the set of node-variable names that appear in the
+// query's MATCH pattern. A hop endpoint whose name is a MATCH variable but is
+// absent from `matched_bindings` failed to bind for this row, so the hop is
+// conservatively skipped (the GAP-0336 anonymous-node footgun). A name that is
+// NOT a MATCH variable is a NEW variable introduced by the CREATE pattern
+// (e.g. `MATCH (a) CREATE (a)-[:R]->(new:Label)`) and MUST be created.
+pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), match_var_names: []const []const u8, current_graph: ?[]const u8) !CreateBatchResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
     var created_relationships_count: i64 = 0;
@@ -888,8 +907,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             const left_id = if (hop.left.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
-                } else if (matched_bindings.count() > 0) {
-                    continue; // Skip if node not found in batch mode
+                } else if (matched_bindings.count() > 0 and isMatchVar(match_var_names, var_name)) {
+                    continue; // MATCH variable that failed to bind for this row — skip
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
@@ -907,8 +926,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             const right_id = if (hop.right.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
-                } else if (matched_bindings.count() > 0) {
-                    continue; // Skip if node not found in batch mode
+                } else if (matched_bindings.count() > 0 and isMatchVar(match_var_names, var_name)) {
+                    continue; // MATCH variable that failed to bind for this row — skip
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
@@ -962,6 +981,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     if (batch_stmt_txn_open) try batch_stmt_txn.commit();
     return CreateBatchResult{
         .created_count = created_nodes_count + created_relationships_count,
+        .created_nodes_count = created_nodes_count,
+        .created_relationships_count = created_relationships_count,
         .created_nodes = created_nodes,
         .created_relationships = created_relationships,
     };

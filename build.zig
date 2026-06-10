@@ -2942,6 +2942,21 @@ pub fn build(b: *std.Build) void {
     const raft_apply_step = b.step("test-raft-apply", "Run Raft apply callback command-routing tests (GAP-0520 + slice-A edge create)");
     raft_apply_step.dependOn(&run_raft_apply_tests.step);
 
+    // MATCH…CREATE summary-counter mislabel regression: the implicit summary
+    // row must report nodes_created and relationships_created SEPARATELY (the
+    // bug reported a pure edge create as nodes_created: 1).
+    const match_create_counters_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_match_create_counters.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    match_create_counters_test_mod.addImport("geode", root_mod);
+    const match_create_counters_tests = b.addTest(.{ .root_module = match_create_counters_test_mod });
+    const run_match_create_counters_tests = b.addRunArtifact(match_create_counters_tests);
+    shardDep(test_step, &run_match_create_counters_tests.step, 1, test_shard_loads, test_shard_index);
+    const match_create_counters_step = b.step("test-match-create-counters", "Regression: MATCH…CREATE summary must report nodes_created and relationships_created separately");
+    match_create_counters_step.dependOn(&run_match_create_counters_tests.step);
+
     // Root cause #6 follow-up: durable raft hard-state (currentTerm/votedFor) +
     // log across a process restart. A FileStorage-backed RaftNode must restore
     // its term after deinit + re-init on the same dir. Regression for
