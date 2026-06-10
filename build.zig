@@ -5249,6 +5249,21 @@ pub fn build(b: *std.Build) void {
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
 
+    // GAP-0884: MFA step-up operation classification. Pins the explicit
+    // OperationClass mapping (read/write/admin/security_admin) inside
+    // requireStepUp(), replacing the substring "admin"/"write" heuristic:
+    // read ops containing "admin" must NOT step up, and privileged ops with
+    // bland names (geode.fle.configureField, geode.auth.*) MUST. Unknown
+    // identifiers fail closed (write class => step-up).
+    const gap0884_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0884_stepup_classification.zig"), .target = target, .optimize = optimize });
+    gap0884_test_mod.addImport("geode_auth", auth_mod);
+    gap0884_test_mod.link_libc = true;
+    const gap0884_tests = b.addTest(.{ .root_module = gap0884_test_mod });
+    const run_gap0884_tests = b.addRunArtifact(gap0884_tests);
+    shardDep(test_step, &run_gap0884_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
+    gap0884_step.dependOn(&run_gap0884_tests.step);
+
     // GAP-0885b: LSP/MCP hardening batch (LSP-SEC-002/005/008). Roots the
     // regression file through src/cli/lsp/server.zig (exposed as
     // `lsp_server`, same wiring rationale as gap0831/gap0832) for the URI

@@ -1095,19 +1095,22 @@ pub fn evaluatePolicy(
 
 **Supported Methods**:
 
-1. **TOTP**: Time-based one-time passwords (RFC 6238)
-2. **SMS**: Text message codes
-3. **Email**: Email verification codes
-4. **Hardware tokens**: U2F/FIDO2
+1. **TOTP**: Time-based one-time passwords (RFC 6238) — implemented (`src/security/mfa.zig`)
+2. **Recovery codes**: one-time backup codes — implemented
 
-**Risk-Based MFA**:
+Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 
-- Risk score calculation based on:
-  - Login location
-  - Device fingerprint
-  - Time of day
-  - Previous behavior
-- Adaptive MFA: require MFA only for high-risk requests
+**Step-Up MFA** (GAP-0884):
+
+- Privileged operations require fresh MFA elevation based on an explicit
+  operation classification (read / write / admin / security_admin) of real
+  procedure and auth-DDL identifiers — `classifyOperation` in
+  `src/security/geode_auth_lib.zig`; unknown operations fail closed.
+- Regression: `zig build test-gap0884`.
+
+**Risk-Based MFA** (scaffold only): `src/security/mfa_risk.zig` computes a
+risk score from deterministic placeholder factors. Real signals (login
+location, device fingerprint, behavioral history) are planned, not wired.
 
 **Recovery Codes**:
 

@@ -2569,7 +2569,7 @@ REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,,,security,2025-09-26,src/
 REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,,,security,2025-09-26,tests/test_auth_mfa_flows.zig
 REQ-GQL-MFA-007,MFA recovery code used,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-007,Session step-up metadata,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig
-REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig
+REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,,,security,2026-06-10,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,,,security,2025-09-26,tests/test_session_step_up.zig
 REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,,,security,2025-09-26,tests/test_session_step_up.zig
@@ -4337,6 +4337,8 @@ REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,Regression,TESTED,,,securit
 REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-KMS-001,Security,KMS,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-MFA-001,Security,MFA,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-SEC-MFA-STEPUP-CLASS-001,MFA step-up operation classification,SECURITY,TESTED,,,security,2026-06-10,src/security/geode_auth_lib.zig
+REQ-SEC-MFA-STEPUP-CLASS-001,MFA step-up operation classification,SECURITY,TESTED,,,security,2026-06-10,tests/test_gap0884_stepup_classification.zig
 REQ-SEC-MIG-01,MigrationSignatureVerification,IntegrityCheck,TESTED,,,migration,2026-04-10,src/migration/lock.zig
 REQ-SEC-MIG-01,MigrationSignatureVerification,UnitTest,TESTED,,,migration,2026-04-10,src/migration/mod.zig
 REQ-SEC-MIG-04,CrossProcessMigrationLock,FileLock,TESTED,,,migration,2026-04-10,src/migration/lock.zig

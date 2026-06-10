@@ -76,6 +76,116 @@ pub const PolicyId = u64;
 pub const Action = enum { create, read, update, delete, execute, grant, revoke, all };
 pub const Resource = enum { graph, node, edge, property, index, user, role, permission, query, transaction, system };
 
+// ---- MFA step-up operation classification (GAP-0884) ----
+// Replaces the old substring heuristic (`"admin"`/`"write"` anywhere in the
+// action string) with an explicit classification of REAL operation
+// identifiers: dotted procedure names (the `CALL geode.*` dispatch names from
+// src/execution/procedure_access.zig / auth_dispatch.zig / admin_ddl.zig /
+// storage_dispatch.zig) and legacy snake_case session-action identifiers.
+//
+// Matching rules are exact names or ANCHORED namespace prefixes (the same
+// convention procedure_registry.zig dispatches on, e.g. "geode.auth.") —
+// never substring scans, so a read-only operation whose name merely contains
+// "admin" is not misclassified.
+//
+// Fail-closed posture: an identifier that matches no rule classifies as
+// `.write` — every class except `.read` requires step-up, so unknown
+// operations always demand fresh MFA elevation.
+// CANARY: REQ=REQ-SEC-MFA-STEPUP-CLASS-001; FEATURE="MFA step-up operation classification"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_gap0884_stepup_classification.zig; OWNER=security; UPDATED=2026-06-10
+pub const OperationClass = enum { read, write, admin, security_admin };
+
+/// Read-only procedure names (mirrors the read-only classification in
+/// src/execution/procedure_access.zig for the security-relevant namespaces).
+const stepup_read_operations = [_][]const u8{
+    // FTS / time-series read procedures
+    "geode.fts.search",
+    "geode.ts.range",
+    "geode.ts.last",
+    "geode.ts.bucket_avg",
+    "geode.ts.sample_by",
+    // FLE metadata reads
+    "geode.fle.getFieldConfig",
+    "geode.fle.listEncryptedFields",
+    // auth introspection (list/show only — every other geode.auth.* mutates)
+    "geode.auth.user_list",
+    "geode.auth.user_show",
+    "geode.auth.user_permissions",
+    "geode.auth.role_list",
+    "geode.auth.policy_list",
+    "geode.auth.apikey_list",
+    "geode.auth.apikey_check_scope",
+    // RLS introspection
+    "geode.rls.list_deny_policies",
+    "geode.rls.policy_count",
+    // storage / catalog introspection
+    "geode.storage.stats",
+    "geode.storage.integrity",
+    "db.labels",
+    "db.relationshipTypes",
+    "db.propertyKeys",
+    "db.indexes",
+    "db.constraints",
+    "dbms.procedures",
+    "dbms.functions",
+};
+
+/// Data-write procedure names (mutating but not privilege-changing).
+const stepup_write_operations = [_][]const u8{
+    "geode.ts.insert",
+    "geode.ts.insert_many",
+};
+
+/// Security-administration namespaces: auth DDL handlers, FLE catalog
+/// mutation, RLS policy mutation, TDE/audit administration. Anchored
+/// prefixes — the read-only exceptions are matched exactly above, first.
+const stepup_security_admin_prefixes = [_][]const u8{
+    "geode.auth.",
+    "geode.fle.",
+    "geode.rls.",
+    "tde.",
+    "audit.",
+};
+
+/// Legacy snake_case session-action identifier prefixes (anchored).
+const stepup_admin_prefixes = [_][]const u8{ "admin_", "admin." };
+const stepup_read_prefixes = [_][]const u8{ "read_", "show_", "list_" };
+
+fn matchesAnyPrefix(op: []const u8, prefixes: []const []const u8) bool {
+    for (prefixes) |p| {
+        if (std.ascii.startsWithIgnoreCase(op, p)) return true;
+    }
+    return false;
+}
+
+/// Classify a real operation identifier into an explicit OperationClass.
+/// Unknown identifiers fail closed as `.write` (step-up required).
+pub fn classifyOperation(operation: []const u8) OperationClass {
+    // 1. Exact known-operation tables (case-insensitive, matching the
+    //    case-insensitive procedure dispatch in procedure_access.zig).
+    for (stepup_read_operations) |n| {
+        if (std.ascii.eqlIgnoreCase(operation, n)) return .read;
+    }
+    for (stepup_write_operations) |n| {
+        if (std.ascii.eqlIgnoreCase(operation, n)) return .write;
+    }
+    // 2. Anchored namespace / identifier-prefix rules (never substring).
+    if (matchesAnyPrefix(operation, &stepup_security_admin_prefixes)) return .security_admin;
+    if (matchesAnyPrefix(operation, &stepup_admin_prefixes)) return .admin;
+    if (matchesAnyPrefix(operation, &stepup_read_prefixes)) return .read;
+    // 3. Fail closed: unknown operations classify as write (=> step-up).
+    return .write;
+}
+
+/// Step-up policy per class: only `.read` is exempt. `.write` keeps parity
+/// with the pre-GAP-0884 intent (write-class actions stepped up) and makes
+/// the unknown->write fallback fail-closed.
+pub fn operationRequiresStepUp(class: OperationClass) bool {
+    return switch (class) {
+        .read => false,
+        .write, .admin, .security_admin => true,
+    };
+}
+
 pub const User = struct {
     id: UserId,
     username: []const u8,
@@ -886,9 +996,11 @@ pub const SecurityManager = struct {
     }
 
     /// Returns true when a privileged action requires a fresh step-up (MFA) before proceeding.
-    /// Placeholder policy: if action appears "admin" or "write" and no unexpired elevation.
-    /// Future: integrate per-action sensitivity levels & policy engine.
-    /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
+    /// GAP-0884: explicit OperationClass-based policy — `classifyOperation` maps the real
+    /// operation identifier (procedure name / auth DDL handler / legacy session-action id)
+    /// to read | write | admin | security_admin; only `read` is exempt from step-up.
+    /// Unknown identifiers fail closed (classified as write => step-up required).
+    /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_gap0884_stepup_classification.zig; OWNER=security; UPDATED=2026-06-10
     pub fn requireStepUp(self: *Self, token: []const u8, action: []const u8) bool {
         const s = self.sessions.get(token) orelse return true; // unknown session => demand step-up / re-auth
         const now = compat_milliTimestamp();
@@ -897,10 +1009,10 @@ pub const SecurityManager = struct {
                 return false; // still elevated
             }
         }
-        // naive sensitivity heuristic
-        if (std.mem.indexOf(u8, action, "admin") != null or std.mem.indexOf(u8, action, "write") != null) return true;
-        // default: no elevation required
-        return false;
+        // GAP-0884: explicit operation classification (no substring scans).
+        // Only read-class operations are exempt; unknown identifiers
+        // classify as write and therefore fail closed (step-up required).
+        return operationRequiresStepUp(classifyOperation(action));
     }
 
     /// Marks the session as having completed a successful step-up (MFA) for a bounded lifetime.
