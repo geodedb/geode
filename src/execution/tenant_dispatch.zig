@@ -56,6 +56,7 @@ const user_mgmt = @import("../security/user_management.zig");
 const tenant_registry = @import("../security/tenant_registry.zig");
 const tenant_quota = @import("../security/tenant_quota.zig");
 const graph_store = @import("../graph_store.zig");
+const cluster_mod = @import("../distributed/cluster.zig");
 const rls_core = @import("rls");
 const rls_types = @import("rls_types");
 
@@ -88,6 +89,16 @@ pub fn execute(
 
     // ── Authorization gate (fail-closed): admin_tenant on every op. ──────────
     try requireAdminTenant(allocator, context, proc_name);
+
+    // ── Cluster fail-closed gate (mutating ops only) ─────────────────────────
+    // The durable tenant_registry + GAP-0838 hierarchy + quota manager are all
+    // per-node with no Raft slice — an ungated create/drop/set_quota lands on
+    // ONE node and silently diverges. Placed AFTER requireAdminTenant so an
+    // unauthorized caller still sees the authz error first; for an authorized
+    // caller the gate error name (ClusterNotLeader / ClusterWriteNotReplicable)
+    // reaches the wire unmasked. Reads (list/show) stay open.
+    // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateTenantOps; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+    if (is_create or is_drop or is_set_quota) try cluster_mod.gateUnreplicatedWrite();
 
     if (is_create) return try handleCreate(allocator, call_stmt);
     if (is_list) return try handleList(allocator, call_stmt);

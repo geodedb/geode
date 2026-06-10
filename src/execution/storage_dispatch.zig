@@ -67,6 +67,52 @@ const cdc_mod = @import("../streaming/cdc_enhanced.zig");
 const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 const fle_integration = @import("../fle_integration.zig");
+const cluster_mod = @import("../distributed/cluster.zig");
+
+// ---------------------------------------------------------------------------
+// Cluster fail-closed gating (mutating TDE/CDC/FLE procedures only).
+//
+// These procedure families mutate per-node state (TDE key/KMS/rotation config
+// + on-disk config files, the node-local CDC engine, the durable FLE field
+// catalog) with no Raft slice — an ungated mutation lands on exactly ONE node
+// and silently diverges in cluster mode. Status/get/list/test/verify/benchmark
+// procedures stay open. Standalone mode is unaffected (gate is a no-op).
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateStorageProcs; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+// ---------------------------------------------------------------------------
+const tde_mutating_set = std.StaticStringMap(void).initComptime(.{
+    .{ "tde.initialize_key_hierarchy", {} },
+    .{ "tde.rotate_keys", {} },
+    .{ "tde.configure_kms", {} },
+    .{ "tde.configure_key_provider", {} },
+    .{ "tde.configure_mock_kms", {} }, // writes mock_kms_config.json on disk
+    .{ "tde.configure_rotation_schedule", {} },
+    .{ "tde.configure_adaptive_rotation", {} },
+    .{ "tde.configure_provider", {} },
+    .{ "tde.configure_rotation", {} },
+    .{ "tde.configure_external_kms", {} },
+    .{ "tde.zeroize_keys", {} },
+    .{ "tde.cleanup_key_hierarchy", {} },
+    .{ "tde.backup_encrypted", {} },
+    .{ "tde.encrypt_backup", {} },
+    .{ "tde.create_encrypted_backup", {} },
+    .{ "tde.restore_with_keys", {} },
+    .{ "tde.restore_with_historical_keys", {} },
+});
+
+const cdc_mutating_set = std.StaticStringMap(void).initComptime(.{
+    .{ "cdc.enable", {} },
+    .{ "cdc.disable", {} },
+    .{ "cdc.start", {} },
+    .{ "cdc.stop", {} },
+    .{ "cdc.pause", {} },
+    .{ "cdc.resume", {} },
+    .{ "cdc.set_guardrail", {} },
+    .{ "cdc.reset_guardrails", {} },
+    .{ "cdc.configure_adaptive_flush", {} },
+    .{ "cdc.configure_change_stream", {} },
+    .{ "cdc.set_retention_policy", {} },
+    .{ "cdc.cleanup_expired_events", {} },
+});
 
 // TDE globals
 pub var global_tde_mutex: std.Io.Mutex = std.Io.Mutex.init;
@@ -157,6 +203,8 @@ pub fn executeTde(
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
     if (tde_table.get(proc_name)) |handler| {
+        // Cluster fail-closed: see GateStorageProcs (mutating procs only).
+        if (tde_mutating_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
         return try handler(allocator, call_stmt);
     }
     return null;
@@ -2142,6 +2190,8 @@ pub fn executeCdc(
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
     if (cdc_table.get(proc_name)) |handler| {
+        // Cluster fail-closed: see GateStorageProcs (mutating procs only).
+        if (cdc_mutating_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
         return try handler(allocator, call_stmt);
     }
     return null;
@@ -2811,6 +2861,10 @@ pub fn executeFle(
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
     if (fle_table.get(proc_name)) |handler| {
+        // Cluster fail-closed: see GateStorageProcs. configureField writes the
+        // durable HMAC-chained FLE field catalog; getfieldconfig /
+        // listencryptedfields are reads and stay open.
+        if (std.mem.eql(u8, proc_name, "geode.fle.configurefield")) try cluster_mod.gateUnreplicatedWrite();
         return try handler(allocator, call_stmt);
     }
     return null;
