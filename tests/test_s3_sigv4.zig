@@ -297,3 +297,27 @@ test "insecure-tls gate: env truthiness parsing" {
 test "insecure-tls gate: live evaluation permits flag in debug test binary" {
     try gate.evaluateLive(true);
 }
+
+// SEC-CLI-01 follow-up: the implicit insecure-enable triggered by
+// GEODE_SERVER_ADDRESS (test-harness convenience path in cmdQuery /
+// cmdAuthLogin, src/cli/main.zig) routes through the SAME
+// `enforceOrExit` → `validateInsecureTls` policy as the explicit flag —
+// there is no separate decision function. This test pins the decisions
+// that path inherits: refused in production posture without the override,
+// allowed in the Debug builds the harness actually runs.
+test "insecure-tls gate: implicit GEODE_SERVER_ADDRESS path uses the same policy" {
+    // Release binary with the env var set, no acknowledgement: refused.
+    try testing.expectError(
+        error.InsecureTlsRefused,
+        gate.validateInsecureTls(true, true, false, false),
+    );
+    // GEODE_ENV=production, no acknowledgement: refused.
+    try testing.expectError(
+        error.InsecureTlsRefused,
+        gate.validateInsecureTls(true, false, true, false),
+    );
+    // Debug build (harness contract): allowed, with the loud warning.
+    try gate.validateInsecureTls(true, false, false, false);
+    // Production posture WITH explicit acknowledgement: allowed.
+    try gate.validateInsecureTls(true, true, false, true);
+}

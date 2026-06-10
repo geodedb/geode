@@ -1523,8 +1523,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     const server_addr = server orelse (env_server_for_query orelse "127.0.0.1:3141");
     // When falling back to the env-var route, the harness uses self-signed
     // certs; default insecure unless the user already opted in.
+    // SEC-CLI-01 follow-up: this implicit insecure-enable goes through the
+    // same production-posture gate as the explicit flag (see line 1090) —
+    // a release binary (or GEODE_ENV=production) refuses unless
+    // GEODE_ALLOW_INSECURE_TLS=1, and accepted paths print the loud warning.
+    // The harness runs Debug builds, so its convenience contract is preserved.
     if (server == null and env_server_for_query != null and !insecure) {
         insecure = true;
+        insecure_tls_gate.enforceOrExit(); // SEC-CLI-01 (implicit via GEODE_SERVER_ADDRESS)
     }
 
     // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
@@ -3579,7 +3585,11 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     var password_file: ?[]const u8 = null;
     var save_session = false; // NEW: --save-session flag
     // Default to insecure when GEODE_SERVER_ADDRESS is set (test harness uses self-signed certs)
+    // SEC-CLI-01 follow-up: implicit insecure-enable routes through the same
+    // production-posture gate as the explicit flag below — refused in a
+    // release build / GEODE_ENV=production without GEODE_ALLOW_INSECURE_TLS=1.
     var insecure = env_server != null;
+    if (insecure) insecure_tls_gate.enforceOrExit(); // SEC-CLI-01 (implicit via GEODE_SERVER_ADDRESS)
 
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
