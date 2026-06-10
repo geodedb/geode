@@ -4,31 +4,174 @@
 
 A full Language Server Protocol implementation for GQL/Geode has been created to provide IDE support for `.gql` files. The LSP server provides real-time syntax checking, code completion, hover documentation, and more.
 
-## Status: ✅ 100% COMPLETE AND TESTED
+## Status (2026-06-10)
 
-**What's Implemented:**
+This page is the authoritative description of the LSP server's *shipped* surface.
+The single source of truth in code is `src/cli/lsp/server.zig`: the comptime
+`request_dispatch` / `notification_dispatch` tables and `buildCapabilitiesObject`.
+A comptime truthfulness guard (GAP-0831) makes it impossible to advertise a
+capability without a wired handler, or to wire a feature request without
+advertising it — see [Capability truthfulness guard](#capability-truthfulness-guard).
 
-- ✅ LSP protocol structures (JSON-RPC 2.0)
-- ✅ Transport layer (Content-Length headers over stdio)
-- ✅ Document state management
-- ✅ Initialize/initialized/shutdown/exit lifecycle
-- ✅ Document synchronization (didOpen, didChange, didClose)
-- ✅ Diagnostics (syntax errors from GQL parser)
-- ✅ Hover support (documentation for 100+ GQL keywords, functions, types)
-- ✅ Completion support (keywords, functions, types)
-- ✅ CLI subcommand (`geode lsp`)
-- ✅ Editor integration documentation
-- ✅ All Zig 0.15 API compatibility issues resolved
-- ✅ Successful compilation verified
-- ✅ Manual testing completed (initialize handshake confirmed)
+### Implemented request handlers
 
-**Testing Status:**
+Every row below corresponds to one entry in `request_dispatch` (`src/cli/lsp/server.zig`)
+and an advertised capability built by `buildCapabilitiesObject`. The "pinned by"
+column names the gap regression test (`zig build <step>`) that pins the behavior.
 
-- ✅ Build successful: `zig-out/bin/geode` (18MB)
-- ✅ Help command works: `geode lsp --help`
-- ✅ Initialize request/response verified via manual JSON-RPC test
-- ✅ Server capabilities correctly advertised
-- ✅ Cross-platform stdio handling implemented and tested
+| Method | Advertised capability | Pinned by |
+|---|---|---|
+| `initialize` | (lifecycle) | `test-gap0827` (lifecycle/JSON-RPC error shape), `test-gap0817` (position-encoding negotiation in result) |
+| `shutdown` | (lifecycle) | `test-gap0827` |
+| `textDocument/hover` | `hoverProvider: true` | `test-gap0818` (tenant gate), `test-gap0831` (truthfulness) |
+| `textDocument/completion` | `completionProvider` (`triggerCharacters: [".", ":", "$"]`) | `test-gap0818`, `test-gap0831` |
+| `textDocument/definition` | `definitionProvider: true` | `test-gap0818`, `test-gap0831` |
+| `textDocument/formatting` | `documentFormattingProvider: true` | `test-gap0831` |
+| `textDocument/documentSymbol` | `documentSymbolProvider: true` | `test-gap0831` |
+| `textDocument/signatureHelp` | `signatureHelpProvider` (`triggerCharacters: ["(", ","]`) | `test-gap0831` |
+| `textDocument/references` | `referencesProvider: true` | `test-gap0831` |
+| `textDocument/semanticTokens/full` | `semanticTokensProvider` (`full: true` + legend) | `test-gap0831` |
+
+### Implemented notification handlers
+
+Every row corresponds to one entry in `notification_dispatch`. Notifications never
+produce a response of their own.
+
+| Method | Backed by | Pinned by |
+|---|---|---|
+| `initialized` | lifecycle flag | `test-gap0827` |
+| `exit` | lifecycle flag (clean exit) | `test-gap0827` |
+| `textDocument/didOpen` | `textDocumentSync: 1` (Full sync) | `test-gap0827`, `test-gap0828` |
+| `textDocument/didChange` | `textDocumentSync: 1` | `test-gap0827`, `test-gap0826` (250-version churn) |
+| `textDocument/didClose` | `textDocumentSync: 1` | `test-gap0827`, `test-gap0828` |
+| `$/cancelRequest` | base protocol (`$/` namespace, capability-exempt) | `test-gap0816` |
+
+### Diagnostics
+
+Diagnostics are published via `textDocument/publishDiagnostics` on `didOpen` /
+`didChange` (debounced). They are sourced from Geode's GQL parser (`parseGql`) and
+are gated on caller tenant identity (GAP-0818) so a multi-byte / multi-tenant
+client never sees another tenant's label in a diagnostic hint. Outbound positions
+are converted to the negotiated encoding (GAP-0817). Pinned by `test-gap0818`
+(tenant gate) and `test-gap0821` (multi-label MATCH diagnostic).
+
+### Protocol correctness (shipped)
+
+- **`$/cancelRequest` (GAP-0816).** Geode processes messages strictly
+  synchronously, so a cancel can never race an in-flight handler in-process. The
+  spec-compliant realization is a bounded FIFO registry (`CancelRegistry`, 64
+  slots): `$/cancelRequest` records the id; `handleRequest` consults it at entry
+  and short-circuits with JSON-RPC **-32800 (RequestCancelled)**, consuming the
+  entry so a later legitimate id reuse is unaffected. An `AnsweredRing`
+  anti-poisoning guard prevents a cancel that arrives after a request was already
+  answered from poisoning a future request that reuses the same id. Pinned by
+  `test-gap0816`.
+- **Position encoding negotiation (GAP-0817).** `initialize` negotiates the
+  encoding from `capabilities.general.positionEncodings` (LSP 3.17): prefer
+  `utf-8` (cheapest for Geode's UTF-8 byte-slice internals), else the protocol
+  default `utf-16`, with `utf-32` honored only when it is the first recognized
+  non-`utf-8` offer. The choice is stored per session and advertised back as
+  `capabilities.positionEncoding`. Every inbound `Position.character` is converted
+  from the negotiated encoding's code units to a UTF-8 byte column
+  (`codeUnitsToByteColumn`); every outbound position is converted back
+  (`byteColumnToCodeUnits`). Both converters are fail-safe on malformed UTF-8 and
+  clamp past-end columns. Pinned by `test-gap0817`.
+- **Validated envelope decode (GAP-0832 / GAP-0827).** A malformed JSON-RPC
+  envelope yields **-32600 (Invalid Request)**. A root that is not an object, a
+  non-string `method`, or a present-but-structured `id` (object/array — not a
+  valid JSON-RPC id) is rejected with -32600 and `"id": null` rather than being
+  silently dispatched as a notification. Pinned by `test-gap0832`, `test-gap0827`.
+- **Lifecycle gates (GAP-0827).** A request other than `initialize` received
+  before `initialize` is answered **-32002 (ServerNotInitialized)**; a second
+  `initialize` is **-32600**; any request after `shutdown` is **-32600**. `exit`
+  still flips the clean-exit flag post-`shutdown`. Pinned by `test-gap0827`.
+- **Content-Length framing (GAP-0825).** The framer accepts case-insensitive
+  `Content-Length` headers and tolerates extra/`Content-Type` headers per the
+  base protocol. Pinned by `test-gap0825`.
+
+### Authentication / caller-identity posture (GAP-0818)
+
+Caller identity is threaded through completion, hover, definition, and diagnostics
+as an `LspContext` (`src/cli/lsp/context.zig`: `tenant_id`, `user_id`,
+`session_id`, all nullable). On the stdio path the context is the unauthenticated
+single-tenant `LspContext.stdio` (no tenant, no user, no session); on the
+embedded-TCP path the server binds a **derived session handle** at `initialize`
+(it never reuses the raw client token) and constructs the per-session context from
+the verified `AuthState`. Tenant-scoped schema data is only consulted when the
+caller's tenant matches the provider's tenant (`schemaTenantMatches`), so a
+mis-wired or reused provider degrades to the static, tenant-independent language
+metadata instead of leaking another tenant's labels/properties. Pinned by
+`test-gap0818`.
+
+> **Honest residual (GAP-0818 / GAP-0848):** on the embedded-TCP path the
+> session `AuthState.tenant_id` is currently **client-asserted** (taken from the
+> HELLO frame), not yet independently re-derived server-side from the
+> authenticated principal. The auth-layer refactor that makes the tenant
+> server-authoritative is tracked separately and is out of scope for the LSP
+> providers themselves; the providers correctly *enforce* whatever tenant the
+> session carries. Single-tenant stdio is unaffected (no tenant, no assertion).
+
+### Explicit non-support (capability-trimmed, tested)
+
+These methods are **deliberately not implemented** and **not advertised**. The
+contract is honest non-support: an unadvertised feature **request** is answered
+with **-32601 (MethodNotFound)** echoing the request id (so the client fails fast
+instead of blocking on a read timeout), and an unadvertised **notification** is
+silently tolerated (no response, no crash) per JSON-RPC 2.0 §5. All pinned by
+`test-gap0820-0824`, with the inverse-direction "no handler" assertion in
+`test-gap0831`.
+
+| Method(s) | Kind | Gap |
+|---|---|---|
+| `workspace/symbol`, `workspace/configuration`, `workspace/applyEdit`, `workspace/executeCommand` | request → -32601 | GAP-0820 |
+| `workspace/didChangeWorkspaceFolders` | notification → tolerated | GAP-0820 |
+| `textDocument/rename`, `textDocument/prepareRename` | request → -32601 (`renameProvider` absent) | GAP-0821 |
+| `textDocument/codeAction` | request → -32601 (`codeActionProvider` absent) | GAP-0822 |
+| `textDocument/inlayHint` | request → -32601 (`inlayHintProvider` absent) | GAP-0823 |
+| `textDocument/willSaveWaitUntil` | request → -32601 | GAP-0824 |
+| `textDocument/willSave`, `textDocument/didSave` | notification → tolerated | GAP-0824 |
+
+`textDocumentSync` is advertised as the bare integer `1` (Full sync) with **no**
+`save` / `willSave` / `willSaveWaitUntil` members — the capability shape itself is
+honest about the lack of save support.
+
+### Capability truthfulness guard
+
+The dispatch tables (`request_dispatch` / `notification_dispatch`) are the single
+source of truth: `handleRequest` / `handleNotification` run an `inline for` over
+them, and the introspected `handled_request_methods` / `handled_notification_methods`
+lists are **derived at comptime from those same tables**. `buildCapabilitiesObject`
+is the single place that decides what is advertised, and both `handleInitialize`
+and the guard test call it. `tests/test_gap0831_lsp_capability_guard.zig`
+(`zig build test-gap0831`) asserts bidirectionally: (a) every advertised feature
+capability has a wired handler, and (b) every wired feature request method has an
+advertised capability. Deleting a dispatch row simultaneously removes the dispatch
+branch and shrinks the introspected list, so the guard trips
+(`CapabilityWithoutHandler`) — closing the branch-removal blind spot that produced
+the GAP-0056 advertised-but-stub regression. `positionEncoding` is treated as a
+data-only (non-method) capability and is exempt.
+
+### Conformance & stress coverage
+
+| Suite | Step | What it drives |
+|---|---|---|
+| LSP 3.17 / JSON-RPC 2.0 conformance | `test-gap0827` | Lifecycle gates, error-object shape, unknown-method/notification handling, structured-id rejection |
+| Content-Length framing | `test-gap0825` | Case-insensitive header, tolerated extra headers, framing edge cases |
+| Performance / stress pack | `test-gap0826` | >=1 MiB single-`didOpen`, 600 sequential mixed requests, 150-request burst + cancel storm, 1000-label schema completion bound-check, 250-version `didChange` storm — all leak-checked, CI-safe (no wall-clock assertions) |
+| DocumentStore reopen/deinit | `test-gap0828` | Reopen-without-close, 256 churn cycles, 64-URI reopen — leak-checked |
+| Honest non-support contract | `test-gap0820-0824` | -32601 for unadvertised requests, tolerance for unadvertised notifications |
+| Caller-identity / tenant gate | `test-gap0818` | Cross-tenant leak regression on completion/hover/definition/diagnostics |
+| Capability truthfulness guard | `test-gap0831` | Bidirectional capability↔handler guard |
+| Validated decode | `test-gap0832` | Malformed-envelope -32600 handling |
+| Cancel semantics | `test-gap0816` | -32800 RequestCancelled, FIFO registry, AnsweredRing anti-poisoning |
+| Position encoding | `test-gap0817` | utf-8/utf-16/utf-32 negotiation + inbound/outbound multi-byte conversion |
+| Full LSP unit + e2e + auth-gate | `test-lsp` | The complete LSP test runner |
+
+### Build & cross-platform
+
+- Builds into the unified `zig-out/bin/geode` binary; launch with `geode lsp`.
+- Cross-platform stdio handling (`getStdinHandle`) and Zig 0.16 stdlib APIs — see
+  [API Compatibility Notes](#api-compatibility-notes).
 
 ## Architecture
 
@@ -36,11 +179,18 @@ A full Language Server Protocol implementation for GQL/Geode has been created to
 
 ```
 src/cli/lsp/
-├── protocol.zig    # LSP protocol types and JSON-RPC structures
-├── transport.zig   # stdio transport with Content-Length headers
-├── document.zig    # Document state management
-├── features.zig    # Language features (hover, completion, diagnostics)
-└── server.zig      # Main LSP server implementation
+├── protocol.zig          # LSP protocol types and JSON-RPC structures
+├── transport.zig         # transport abstraction (stdio + capturing Noop for tests)
+├── framer.zig            # Content-Length framing (case-insensitive header — GAP-0825)
+├── document.zig          # Document state + position-encoding conversion (GAP-0817)
+├── context.zig           # LspContext caller identity (tenant/user/session — GAP-0818)
+├── features.zig          # Language features (hover, completion, definition, diagnostics)
+├── completion_context.zig# cursor-position analyzer for completion
+├── schema_provider.zig   # lazy, tenant-scoped schema lookup for completion/hover
+├── semantic.zig          # semantic-tokens token classification
+├── auth.zig              # per-session auth/verify hooks
+├── json_helpers.zig      # JSON envelope decode/encode helpers
+└── server.zig            # Main LSP server: dispatch tables + capabilities + lifecycle
 ```
 
 ### Key Components
@@ -186,17 +336,20 @@ The LSP server uses Geode's existing GQL parser (`parseGql` from `src/lib.zig`) 
 
 ### Performance
 
-- Incremental document updates supported
-- Efficient document storage with hash map lookups
+- Full-document `didChange` replacement (incremental sync is not advertised)
+- Efficient document storage with hash-map lookups
 - Minimal memory overhead for document state
-- Parser runs on-demand for diagnostics
+- Parser runs on-demand for diagnostics, debounced on rapid `didChange`
+- LSP response trees are recursively freed after send (`sendOwnedJsonValue`); the
+  whole feature path is leak-checked by `test-gap0826`
 
 ### Protocol Compliance
 
-- Implements LSP 3.17 specification
-- JSON-RPC 2.0 transport
-- Supports both Full and Incremental text synchronization
-- Proper capability negotiation during initialization
+- Implements the LSP 3.17 specification (conformance pinned by `test-gap0827`)
+- JSON-RPC 2.0 transport with Content-Length framing (`test-gap0825`)
+- Full text synchronization (`textDocumentSync: 1`) — incremental sync is not advertised
+- Position-encoding negotiation: utf-8 / utf-16 / utf-32 (`test-gap0817`)
+- Proper capability negotiation during initialization, kept truthful by the GAP-0831 comptime guard
 
 ## Testing
 
@@ -233,7 +386,7 @@ Create a sample `.gql` file and use it with an LSP-enabled editor to test:
 - Syntax error highlighting
 - Hover documentation
 - Code completion
-- Go-to-definition (when implemented)
+- Go-to-definition
 
 ## Example .gql File for Testing
 
@@ -246,26 +399,39 @@ ORDER BY similarity ASC
 LIMIT 10
 ```
 
-## Future Enhancements
+## Shipped vs. deliberately unsupported
 
-### Short-term
+The items historically listed here as "future enhancements" have largely shipped.
+This section records their *current* state honestly.
 
-1. Fix remaining Zig 0.15 API compatibility issues
-2. Add integration tests
-3. Implement document formatting
-4. Implement go-to-definition for variables
+### Shipped
 
-### Long-term
+- ✅ Document formatting (`textDocument/formatting`)
+- ✅ Go-to-definition for variables (`textDocument/definition`)
+- ✅ Semantic highlighting (`textDocument/semanticTokens/full`)
+- ✅ Symbol outline (`textDocument/documentSymbol`)
+- ✅ Find references (`textDocument/references`)
+- ✅ Signature help for functions (`textDocument/signatureHelp`)
+- ✅ Integration / conformance / stress tests (see [Conformance & stress coverage](#conformance--stress-coverage))
 
-1. Semantic highlighting (textDocument/semanticTokens)
-2. Symbol outline (textDocument/documentSymbol)
-3. Find references (textDocument/references)
-4. Rename refactoring (textDocument/rename)
-5. Code actions (quick fixes, refactorings)
-6. Signature help for functions
-7. Inlay hints for types
-8. Call hierarchy
-9. Type hierarchy
+### Deliberately unsupported (honest non-support, tested)
+
+These are **intentionally not implemented** and **not advertised** — see
+[Explicit non-support](#explicit-non-support-capability-trimmed-tested). A request
+for any of them is answered with **-32601**; an unsupported notification is
+tolerated.
+
+- ✗ Rename refactoring (`textDocument/rename` / `prepareRename`) — GAP-0821
+- ✗ Code actions / quick fixes (`textDocument/codeAction`) — GAP-0822
+- ✗ Inlay hints (`textDocument/inlayHint`) — GAP-0823
+- ✗ Save lifecycle (`willSave` / `willSaveWaitUntil` / `didSave`) — GAP-0824
+- ✗ Workspace family (`workspace/*`) — GAP-0820
+- ✗ Call hierarchy / type hierarchy — not implemented, not advertised
+
+### Known residual
+
+- The tenant carried on the embedded-TCP session is currently client-asserted —
+  see the [GAP-0818 honest residual](#authentication--caller-identity-posture-gap-0818).
 
 ## API Compatibility Notes
 
@@ -456,7 +622,7 @@ See `editors/README.md` for complete setup instructions.
 ---
 
 *Implementation Date: October 28, 2025*
-*Updated: January 2, 2026*
-*Status: ✅ COMPLETE - All features implemented, compiled, and tested*
-*Build: zig-out/bin/geode (18MB binary)*
+*Last reconciled against `src/cli/lsp/server.zig`: 2026-06-10 (GAP-0829 — post-Pass-3 LSP work).*
+*Source of truth: `request_dispatch` / `notification_dispatch` tables + `buildCapabilitiesObject`; the GAP-0831 comptime guard keeps this doc honest.*
+*Build: unified `zig-out/bin/geode` binary.*
 *Launch: `./zig-out/bin/geode lsp`*

@@ -32,9 +32,20 @@ Implemented capabilities:
 | `textDocument/semanticTokens/full`  | `features.zig:provideSemanticTokensFull`        | No                |
 | `textDocument/formatting`           | `features.zig:provideFormatting`                | No                |
 
-Not yet wired (see "Follow-on work" below):
+**Explicit non-support (honest, tested — GAP-0820..0824):**
 `textDocument/codeAction`, `workspace/executeCommand`, `workspace/symbol`,
-`textDocument/rename`, `textDocument/rangeFormatting`.
+`workspace/applyEdit`, `workspace/configuration`, `textDocument/rename`,
+`textDocument/prepareRename`, `textDocument/inlayHint`, and
+`textDocument/willSaveWaitUntil` are **deliberately unadvertised**; a request for
+any of them is answered with JSON-RPC **-32601 (MethodNotFound)** (id echoed), and
+`workspace/didChangeWorkspaceFolders` / `textDocument/willSave` /
+`textDocument/didSave` notifications are silently tolerated. This is not a stub:
+the contract is pinned by `tests/test_gap0820_0824_lsp_nonsupport.zig`
+(`zig build test-gap0820-0824`) and the inverse-direction guard in
+`tests/test_gap0831_lsp_capability_guard.zig`. See
+[`docs/LSP_IMPLEMENTATION.md`](LSP_IMPLEMENTATION.md#explicit-non-support-capability-trimmed-tested)
+for the full matrix. (`textDocument/rangeFormatting` is likewise not advertised —
+only whole-document `formatting`.)
 
 ## Architecture
 
@@ -184,6 +195,12 @@ Without a notifier the TTL alone bounds staleness to ≤5 seconds.
   precedence the QUIC handler uses.
 
 ## Follow-on work (out of scope for this plan)
+
+> **Current state (GAP-0820..0824, 2026-06-10):** the methods named in Plans B–D
+> below currently ship as **honest non-support** (-32601, unadvertised) — see the
+> "Explicit non-support" note above. These plans would *replace* that
+> non-support contract if/when pursued; until then the -32601 behavior is the
+> tested, intended contract, not a missing wire-up.
 
 - **Plan B**: `textDocument/codeAction` quick fixes (auto-rename to closest
   label, add `LIMIT`, wrap `CREATE` as `MERGE`, etc.).
