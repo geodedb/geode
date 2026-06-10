@@ -700,3 +700,119 @@ test "cluster: MATCH...SET replicates (silent divergence regression)" {
         return err;
     };
 }
+
+// ---------------------------------------------------------------------------
+// Test 5: MATCH ... CREATE edge between EXISTING nodes replicates
+// (silent-divergence regression, confirmed live on a 3-pod k8s cluster).
+// ---------------------------------------------------------------------------
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ReplicateMatchCreateEdge; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+test "cluster: MATCH…CREATE edge between existing nodes replicates to followers" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var cluster = startCluster(gpa, aa, io) catch |err| {
+        if (err == error.SkipZigTest) return error.SkipZigTest;
+        return err;
+    };
+    defer cluster.deinit();
+
+    // Seed both endpoints through the (working) replicable CREATE path so every
+    // follower already holds the two nodes before the edge write.
+    try seedReplicableNode(&cluster, "McSrc", "CREATE (n:McSrc {id:1})");
+    try seedReplicableNode(&cluster, "McDst", "CREATE (n:McDst {id:2})");
+
+    // THE LIVE BUG: at HEAD `MATCH (a),(b) CREATE (a)-[:R]->(b)` bypasses
+    // clusterWriteRole() entirely — the leader returns 00000 success, writes
+    // the edge to its LOCAL store only, and never proposes through Raft. The
+    // followers never see the edge -> error.ReplicationIncomplete (silent
+    // divergence).
+    assertMutationReplicates(
+        &cluster,
+        "MatchCreateEdge",
+        "MATCH (a:McSrc {id:1}), (b:McDst {id:2}) CREATE (a)-[:MCL]->(b)",
+        "MATCH (:McSrc)-[r:MCL]->(:McDst) RETURN count(r) AS c",
+        "\"c\":1",
+    ) catch |err| {
+        std.debug.print(
+            "\n[repl] SILENT DIVERGENCE: leader applied `MATCH…CREATE (a)-[:MCL]->(b)`\n" ++
+                "       locally (00000 success) but it NEVER replicated through Raft --\n" ++
+                "       followers report 0 :MCL edges. MATCH…CREATE bypasses\n" ++
+                "       clusterWriteRole() on the leader.\n",
+            .{},
+        );
+        return err;
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: MATCH ... CREATE edge sent to a FOLLOWER must fail closed.
+// ---------------------------------------------------------------------------
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=MatchCreateFollowerFailClosed; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var cluster = startCluster(gpa, aa, io) catch |err| {
+        if (err == error.SkipZigTest) return error.SkipZigTest;
+        return err;
+    };
+    defer cluster.deinit();
+
+    // Seed both endpoints via the replicable CREATE path so the follower holds
+    // them locally (the MATCH must succeed; only the CREATE must be refused).
+    try seedReplicableNode(&cluster, "McFSrc", "CREATE (n:McFSrc {id:1})");
+    try seedReplicableNode(&cluster, "McFDst", "CREATE (n:McFDst {id:2})");
+
+    // Re-resolve the leader RIGHT BEFORE picking a follower (leadership can
+    // move during the seeding phase) and pick a HEALTHY non-leader node.
+    drainAll(&cluster.captures, &cluster.children, gpa, io);
+    const cur_leader = currentLeaderIdx(&cluster.captures) orelse return error.LeaderDidNotHold;
+    var follower_idx: ?usize = null;
+    for (0..3) |i| {
+        if (i != cur_leader and isNodeHealthy(&cluster.captures, i)) {
+            follower_idx = i;
+            break;
+        }
+    }
+    const fidx = follower_idx orelse return error.NoHealthyFollower;
+    const follower_ip = NODE_IPS[fidx];
+
+    // THE LIVE BUG (follower half): at HEAD the follower accepts this write
+    // (00000 success), applies the edge to its LOCAL store only, and never
+    // forwards/rejects -> a follower holds data the rest of the cluster does
+    // not. It must instead be rejected with error.ClusterNotLeader.
+    const rej_out = runQuery(gpa, io, aa, follower_ip, "MATCH (a:McFSrc {id:1}), (b:McFDst {id:2}) CREATE (a)-[:FOLLOWERMCL]->(b)") catch |err| {
+        std.debug.print("[repl] follower MATCH…CREATE probe {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
+        return error.FollowerWriteProbeFailed;
+    };
+    defer gpa.free(rej_out);
+    if (std.mem.indexOf(u8, rej_out, "ClusterNotLeader") == null) {
+        std.debug.print(
+            "\n[repl] FOLLOWER ACCEPTED MATCH…CREATE (expected ClusterNotLeader rejection):\n{s}\n",
+            .{rej_out},
+        );
+        return error.FollowerAcceptedMatchCreate;
+    }
+
+    // And nothing may have landed in the follower's local store (divergence).
+    sleepMs(1500);
+    drainAll(&cluster.captures, &cluster.children, gpa, io);
+    const fr_read = runQuery(gpa, io, aa, follower_ip, "MATCH (:McFSrc)-[r:FOLLOWERMCL]->(:McFDst) RETURN count(r) AS c") catch return error.FollowerWriteProbeFailed;
+    defer gpa.free(fr_read);
+    if (std.mem.indexOf(u8, fr_read, "\"c\":0") == null) {
+        std.debug.print("[repl] FOLLOWER SILENTLY APPLIED MATCH…CREATE (divergence): {s}\n", .{fr_read});
+        return error.FollowerAppliedWriteLocally;
+    }
+}
