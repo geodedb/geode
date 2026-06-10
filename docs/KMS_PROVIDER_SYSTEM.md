@@ -115,12 +115,24 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 
 ## Security & Compliance Features
 
-### Envelope Encryption Architecture
+### Key Hierarchy Architecture
 
-- **Master Key**: Stored securely in KMS provider (Vault, HSM, etc.)
-- **Data Encryption Key (DEK)**: Generated per-database, wrapped by master key
-- **Key Hierarchy**: Separate keys for data pages and WAL records
-- **Metadata**: Complete audit trail with algorithm, nonce, and authentication tag
+- **Master Key**: Loaded from `GEODE_TDE_KEY` (or KMS-wrapped equivalent),
+  stored securely in the KMS provider (Vault, HSM, etc.).
+- **Derived keys**: The master key derives **domain-separated** data and backup
+  keys via `SHA-256(master || domain)`
+  ([`src/security/tde_hierarchy.zig`](../src/security/tde_hierarchy.zig)). These
+  domains separate **data pages vs. backups**, **not** database from database or
+  tenant from tenant. Every per-graph storage engine is wired with the **same**
+  master-derived key (`GraphConfig.encryption_key` in
+  [`src/graph_store.zig`](../src/graph_store.zig)).
+- **Key scope**: At-rest TDE (pages, WAL, backups) is **instance-wide** under
+  one master key — there is **no** per-database or per-tenant at-rest key. A
+  master-key compromise spans all data. Per-tenant at-rest encryption is deferred
+  — see [Per-Tenant At-Rest Encryption (Deferred)](design/TDE_PER_TENANT_KEYS_DEFERRED.md)
+  (GAP-0851 / GAP-0290). Per-tenant cryptographic boundaries that ship today are
+  field-level (FLE) — see [Field-Level Encryption](FIELD_LEVEL_ENCRYPTION.md).
+- **Metadata**: Complete audit trail with algorithm, nonce, and authentication tag.
 
 ### Enterprise Security
 

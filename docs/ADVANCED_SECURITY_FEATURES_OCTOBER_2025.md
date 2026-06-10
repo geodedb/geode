@@ -54,6 +54,14 @@ ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 - **Algorithm**: AES-256-GCM (NIST SP 800-38D compliant)
 - **Key Management**: External KMS support (Vault, AWS KMS)
 - **Page Encryption**: Automatic encryption/decryption at storage layer
+- **Key scope**: At-rest TDE (pages, WAL, backups) uses a **single instance
+  master key** (`GEODE_TDE_KEY`), **not** per-tenant keys. A master-key
+  compromise spans every tenant's at-rest data; for cryptographic at-rest
+  separation between tenants, isolate per tenant at the instance / data-directory
+  level. Per-tenant at-rest encryption is deferred — see
+  [Per-Tenant At-Rest Encryption (Deferred)](design/TDE_PER_TENANT_KEYS_DEFERRED.md)
+  (GAP-0851 / GAP-0290). Per-tenant cryptographic boundaries that *do* ship today
+  are field-level (FLE) — see [Field-Level Encryption](FIELD_LEVEL_ENCRYPTION.md).
 
 ### Security Enhancements (January 2026)
 
