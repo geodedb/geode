@@ -365,7 +365,7 @@ python3 scripts/test/extended_test_runner.py geodetestlab/specs/specific_test.ym
 - Use `make verify-fast` during development
 - Run fuzz and bench tests separately
 - Parallelize independent test suites
-- Use embedded server mode for CLI tests
+- Spawn the `geode serve` binary as a subprocess for CLI tests (the library does not host an in-process server — see GAP-0857)
 
 ## Known Test Limitations
 

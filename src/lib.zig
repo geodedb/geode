@@ -523,7 +523,9 @@ pub fn makeEnv(allocator: std.mem.Allocator, id_names: []const []const u8, id_va
 ///
 /// ## Library Mode Embedding Guide
 ///
-/// Geode can be embedded in applications in two modes:
+/// Geode can be embedded in applications in two supported modes — query-only
+/// (in-process) and client (talking to a separate server over QUIC). Hosting an
+/// in-process server is NOT supported (see the GAP-0857 note below).
 ///
 /// ### 1. Query-Only Mode (Recommended for most use cases)
 /// Use `parse()`, `parseGql()`, and `execute()` functions directly to:
@@ -566,59 +568,64 @@ pub fn makeEnv(allocator: std.mem.Allocator, id_names: []const []const u8, id_va
 /// const response = try client.query("MATCH (n) RETURN n");
 /// ```
 ///
-/// ### 3. Full Server Mode (Advanced)
-/// For embedded server scenarios requiring full QUIC transport:
-/// - Use the CLI module directly (requires transport dependencies)
-/// - Or spawn the geode binary as a managed subprocess
-///
-/// Note: The `runServerWithArgs()` function returns `NotImplemented` because
-/// the server requires the full transport stack which is not exposed in the
-/// library interface to keep dependencies minimal.
+/// ### Embedded server mode is NOT supported (GAP-0857)
+/// The library does not expose an in-process server runner. Running a server
+/// requires the full QUIC + TLS transport stack, which is intentionally kept out
+/// of the library interface so embedders do not inherit those dependencies.
+/// `server.runServerWithArgs()` therefore always fails with the documented
+/// `server.EmbeddingError.EmbeddedServerUnsupported` error and never starts a
+/// server. To run a server, use one of the supported alternatives instead:
+///   1. Subprocess: spawn the `geode serve` binary as a managed child process
+///      and talk to it over QUIC (see Client Mode above).
+///   2. CLI module: link the `geode` CLI entry point directly in an application
+///      that is willing to pull in the full transport stack.
+///   3. Query-only mode: for in-process needs that do not require a network
+///      server, use `geode.parse()` / `geode.execute()` directly (see above).
 ///
 /// See docs/API_REFERENCE.md for complete embedding examples.
 pub const server = struct {
-    /// Server embedding error types
+    /// Server embedding error types.
     pub const EmbeddingError = error{
-        /// Server functionality requires CLI module or subprocess
-        NotImplemented,
-        /// Server initialization failed
+        /// The library cannot host an in-process server: the QUIC+TLS transport
+        /// stack is not exposed through the library interface. Returned by
+        /// `runServerWithArgs`. The error name is part of the public contract —
+        /// callers may branch on it to fall back to a supported alternative
+        /// (subprocess `geode serve`, the CLI module, or query-only mode).
+        EmbeddedServerUnsupported,
+        /// Server initialization failed.
         InitializationFailed,
     };
 
-    /// Attempts to run a server with the given arguments.
-    /// NOTE: This returns `NotImplemented` - see the embedding guide above for recommended patterns.
-    /// For embedded server functionality, use one of these approaches:
-    /// 1. Query-only mode using parse() and execute() directly
-    /// 2. Client mode connecting to a running server
-    /// 3. Subprocess mode spawning the geode binary
+    /// Embedded server mode is not supported by the library (GAP-0857).
+    ///
+    /// This function NEVER starts a server. It always returns
+    /// `EmbeddingError.EmbeddedServerUnsupported`. Use a supported alternative:
+    ///   1. Subprocess: spawn the `geode serve` binary as a managed child process.
+    ///   2. CLI module: link the `geode` CLI entry point directly.
+    ///   3. Query-only mode: use `geode.parse()` and `geode.execute()` in-process.
+    ///
+    /// `isServerModeAvailable()` returns `false` so callers can detect this
+    /// without triggering the error.
     pub fn runServerWithArgs(allocator: std.mem.Allocator, args: [][:0]u8) EmbeddingError!void {
         _ = allocator;
         _ = args;
-        std.debug.print(
-            \\Geode Library Mode: Server embedding not directly supported.
-            \\
-            \\Recommended patterns:
-            \\  1. Query-only: Use geode.parse() and geode.execute() for in-process queries
-            \\  2. Client mode: Connect to a running geode server via QUIC
-            \\  3. Subprocess: Spawn 'geode serve' as a managed child process
-            \\
-            \\See src/lib.zig documentation or docs/API_REFERENCE.md for examples.
-            \\
-        , .{});
-        return EmbeddingError.NotImplemented;
+        return EmbeddingError.EmbeddedServerUnsupported;
     }
 
-    /// Check if server mode is available (always false for library embedding)
+    /// Whether the library can host an in-process server. Always `false`: see
+    /// `runServerWithArgs` and the GAP-0857 note above for supported alternatives.
     pub fn isServerModeAvailable() bool {
         return false;
     }
 
-    /// Get recommended embedding pattern based on use case
+    /// Get the recommended embedding pattern for a given use case. Embedded
+    /// server hosting is not offered; the `embedded_server` case points at the
+    /// supported subprocess alternative.
     pub fn getRecommendedPattern(use_case: EmbeddingUseCase) []const u8 {
         return switch (use_case) {
             .local_queries => "Query-only mode: Use parse() and execute() directly",
             .distributed_queries => "Client mode: Connect to geode server via QUIC",
-            .embedded_server => "Subprocess mode: Spawn 'geode serve' as child process",
+            .embedded_server => "Embedded server unsupported: spawn 'geode serve' as a subprocess instead",
             .testing => "Query-only mode: Use parse() for syntax validation",
         };
     }

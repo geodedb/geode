@@ -1077,6 +1077,17 @@ pub fn build(b: *std.Build) void {
     lib_unit_tests.root_module.addImport("build_options", build_options_mod);
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
+    // GAP-0857: embedded server API is gated with a documented unsupported error.
+    const gap0857_lib_api_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0857_lib_api.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0857_lib_api_tests.root_module.addImport("geode", root_mod);
+    const run_gap0857_lib_api_tests = b.addRunArtifact(gap0857_lib_api_tests);
+    const gap0857_lib_api_step = b.step("test-gap0857", "Run GAP-0857 embedded server API gate test");
+    gap0857_lib_api_step.dependOn(&run_gap0857_lib_api_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)
@@ -2605,6 +2616,8 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     shardDep(test_step, &run_lib_unit_tests.step, 10, test_shard_loads, test_shard_index);
+    // GAP-0857: embedded server API gate (declared near lib_unit_tests above).
+    shardDep(test_step, &run_gap0857_lib_api_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ext_builtins_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_exe_unit_tests.step, 8, test_shard_loads, test_shard_index);
     // GAP-0844: the FLE role-isolation regression lives as an inline test in
