@@ -77,16 +77,22 @@ pub const GeodeMcpServer = struct {
         // later expose an unauthenticated HTTP listener on a public
         // interface. Authenticated modes may bind non-loopback.
         if (options.auth_mode == .none and !isLoopbackBind(options.http_bind)) {
-            std.debug.print("ERROR: MCP auth_mode 'none' requires a loopback http_bind (got '{s}'). " ++
-                "Bind 127.0.0.1/::1/localhost, or configure bearer auth for non-loopback binds.\n", .{options.http_bind});
+            // Silent under `zig test`: the regression suite intentionally hits
+            // this guard, and stderr output fails the build-runner test step.
+            if (!@import("builtin").is_test) {
+                std.debug.print("ERROR: MCP auth_mode 'none' requires a loopback http_bind (got '{s}'). " ++
+                    "Bind 127.0.0.1/::1/localhost, or configure bearer auth for non-loopback binds.\n", .{options.http_bind});
+            }
             return McpAuthError.InsecureNoAuthBind;
         }
 
         // SEC-08: Refuse to start MCP server without bearer token when auth is required
         if (options.auth_mode == .bearer and options.bearer_token == null) {
-            std.debug.print("ERROR: MCP server requires a bearer token when auth_mode is 'bearer' (the default). " ++
-                "Set --mcp-token or pass bearer_token in Options. " ++
-                "To disable auth (NOT recommended), explicitly set auth_mode to .none.\n", .{});
+            if (!@import("builtin").is_test) {
+                std.debug.print("ERROR: MCP server requires a bearer token when auth_mode is 'bearer' (the default). " ++
+                    "Set --mcp-token or pass bearer_token in Options. " ++
+                    "To disable auth (NOT recommended), explicitly set auth_mode to .none.\n", .{});
+            }
             return error.MissingBearerToken;
         }
 
@@ -197,23 +203,11 @@ pub const GeodeMcpServer = struct {
     };
 };
 
-/// LSP-SEC-008: classify an MCP `http_bind` host as loopback. Accepts the
-/// IPv4 loopback block (127.0.0.0/8), IPv6 `::1` (bracketed or bare), and
-/// the literal `localhost`. Wildcards (`0.0.0.0`, `::`) and any routable
-/// address are non-loopback.
-pub fn isLoopbackBind(host: []const u8) bool {
-    if (std.mem.eql(u8, host, "localhost")) return true;
-    const h = std.mem.trim(u8, host, "[]");
-    if (std.mem.eql(u8, h, "::1")) return true;
-    if (std.mem.startsWith(u8, h, "127.")) {
-        // Require an IPv4-looking tail so "127.evil.example" is rejected.
-        for (h["127.".len..]) |c| {
-            if (!(std.ascii.isDigit(c) or c == '.')) return false;
-        }
-        return h.len > "127.".len;
-    }
-    return false;
-}
+/// LSP-SEC-008: classify an MCP `http_bind` host as loopback. Thin alias to
+/// the shared single-source implementation in `src/net_policy.zig` (exported
+/// via the `geode` module) so this security control cannot drift from the
+/// LSP side's `isLoopbackHost` (src/cli/lsp/server.zig).
+pub const isLoopbackBind = @import("geode").net_policy.isLoopbackHost;
 
 // =============================================================================
 // MCP Handler Implementations

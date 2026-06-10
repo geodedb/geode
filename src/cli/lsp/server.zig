@@ -104,24 +104,11 @@ pub fn validateBindPolicy(policy: struct {
     if (!policy.has_verifier) return BindPolicyError.InsecureNonLoopbackBind;
 }
 
-/// LSP-SEC-008: classify a bind host string as loopback. Accepts the
-/// IPv4 loopback block (127.0.0.0/8), IPv6 `::1` (bracketed or bare), and
-/// the literal `localhost`. Anything else — including the wildcard binds
-/// `0.0.0.0` / `::` — is non-loopback.
-pub fn isLoopbackHost(host: []const u8) bool {
-    if (std.mem.eql(u8, host, "localhost")) return true;
-    const h = std.mem.trim(u8, host, "[]");
-    if (std.mem.eql(u8, h, "::1")) return true;
-    if (std.mem.startsWith(u8, h, "127.")) {
-        // Require the remainder to look like an IPv4 tail (digits/dots only)
-        // so e.g. "127.evil.example" does not classify as loopback.
-        for (h["127.".len..]) |c| {
-            if (!(std.ascii.isDigit(c) or c == '.')) return false;
-        }
-        return h.len > "127.".len;
-    }
-    return false;
-}
+/// LSP-SEC-008: classify a bind host string as loopback. Thin alias to the
+/// shared single-source implementation in `src/net_policy.zig` (exported via
+/// the `geode` module) so this security control cannot drift from the MCP
+/// side's `isLoopbackBind` (src/mcp/server.zig).
+pub const isLoopbackHost = geode.net_policy.isLoopbackHost;
 
 /// GAP-0832: re-export the transport module so out-of-tree test files
 /// (tests/test_gap0832_lsp_decode.zig) that root the LSP server through the

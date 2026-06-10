@@ -762,7 +762,7 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
             .allow_unauth = allow_unauth,
             .has_verifier = false,
         }) catch {
-            std.debug.print("Error: --listen on non-loopback host '{s}' requires an authenticated listener; use `geode serve --lsp-bind-all` or bind 127.0.0.1/::1 (LSP-SEC-008)\n", .{host});
+            std.debug.print("Error: non-loopback --listen host '{s}' requires server-side authentication; use `geode serve --lsp-bind-all` (authenticated) or bind 127.0.0.1/::1/localhost (LSP-SEC-008)\n", .{host});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
 

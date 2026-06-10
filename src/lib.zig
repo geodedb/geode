@@ -333,6 +333,10 @@ pub const index = struct {
 // Re-export wire-neutral protocol value types for distributed coordination.
 pub const protocol = @import("protocol.zig");
 
+// LSP-SEC-008: shared loopback-bind classification (single source of truth
+// for the LSP standalone listener and the MCP HTTP transport bind policy).
+pub const net_policy = @import("net_policy.zig");
+
 // Distributed systems modules
 pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
