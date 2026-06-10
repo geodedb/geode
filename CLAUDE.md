@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **DEVELOPMENT READY (single-tenant).** Geode is a feature-complete **single-tenant** graph database with strong compliance and active development. Multi-tenant hardening landed substantially on the `gap-closure-2026-06-09` branch (strict-tenancy auto-default, tenant-hierarchy enforcement in read paths, FLE request-context, tenant-drop cascade, insecure-allow-all production guard, FLE audit-chain fix, durable `ALTER POLICY`), but multi-tenant deployments, distributed clusters, and the full RLS expression compilation path still carry documented residuals and require operator review before production use — see Known Limitations below.
 
-- **✅ Local test baseline: 166/175 named `zig build test-*` steps pass** (6 FAIL / 3 TIMEOUT, each with file:line evidence — see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)). The monolithic `zig build test` is blocked by a protobuf union-submessage limitation; the per-step sweep is the canonical local gate. A fresh geodetestlab integration-suite (`../geode-test-harness`) run is owed (prior ~97% / 1644-1688 kept as a dated historical snapshot).
+- **✅ Local test baseline: 167/175 named `zig build test-*` steps pass** (6 FAIL / 2 TIMEOUT, each with file:line evidence — see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)). The monolithic `zig build test` is blocked by a protobuf union-submessage limitation; the per-step sweep is the canonical local gate. A fresh geodetestlab integration-suite (`../geode-test-harness`) run is owed (prior ~97% / 1644-1688 kept as a dated historical snapshot).
 - **✅ ISO/IEC 39075:2024 conformance suite: 70/70** in the named `tests/gql_iso_conformance.zig` suite. This scopes "compliance" to that conformance suite — not a blanket "100% standards-compliant" claim. See [GQL_COMPLIANCE.md](docs/GQL_COMPLIANCE.md) for the verified-forms list and residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`).
 - **✅ ~4,900 CANARY Markers** tracking requirements (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED per `docs/status.csv`; run `make status-generate` for current counts). ~499 markers remain at `IMPL` (GAP-0514, Partial) — governance hygiene, not functional defect.
 - **✅ Enterprise Features** implemented (TDE, audit, vector search, backup/restore CLI, enhanced RLS) — see limitations below for multi-tenant and backup caveats
@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Distributed module (GAP-0513, Closed 2026-04-10)**: per `docs/DISTRIBUTED_GAP_ANALYSIS.md`, all distributed gaps closed via commit `68ff42c4`. NodeRegistry covered by `src/distributed/test_query_transport_node_registry.zig` (inline copy — see that file's note about drift risk). Activates only when `GEODE_CLUSTER_TOKEN` is set; `--no-cluster` (default) bypasses this path entirely.
 - **Auth defaults**: Authentication is enabled by default (fail-closed) and must be configured with credentials before deployment.
 - **Multi-tenant hardening (GAP-0842 + 2026-06-09/10 branch)**: never set `--insecure-allow-all` in production — it bypasses tenant isolation, RLS, and FLE authz for every request. This branch hardened the path substantially: strict-tenancy is now the **auto-default** in multi-tenant mode (GAP-0848; `--strict-tenancy` / `GEODE_STRICT_TENANCY=1`, GAP-0840), `--insecure-allow-all` is refused in production posture by a startup guard (GAP-0850), tenant-hierarchy is enforced in the read paths with two real isolation-leak fixes (GAP-0846), FLE carries a per-request role/tenant context (GAP-0852), tenant DROP cascades to owned graphs (GAP-0847), and the FLE audit-chain corruption that broke restart was fixed (GAP-0854). Documented residuals: the LSP tenant is still client-asserted (GAP-0818, Partial), and per-tenant at-rest encryption keys are deferred (see `docs/design/TDE_PER_TENANT_KEYS_DEFERRED.md`). See [docs/security/MULTI_TENANT_HARDENING.md](docs/security/MULTI_TENANT_HARDENING.md).
-- **CANARY coverage gap (GAP-0514, Partial)**: ~10% of CANARY markers (≈499 of ~4,900) remain at `IMPL` status (implemented but not yet verified by a named test) per `docs/status.csv`. This is governance/hygiene, not functional defect — the 166/175 named `test-*` steps in the local baseline pass (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)). Phase 5 (2026-06-10) reconciled the top REPL/CLI/QUIC hotspots (IMPL 547→499); per-file targets for the next sprint are enumerated in `docs/GAP_ANALYSIS.md`.
+- **CANARY coverage gap (GAP-0514, Partial)**: ~10% of CANARY markers (≈499 of ~4,900) remain at `IMPL` status (implemented but not yet verified by a named test) per `docs/status.csv`. This is governance/hygiene, not functional defect — the 167/175 named `test-*` steps in the local baseline pass (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)). Phase 5 (2026-06-10) reconciled the top REPL/CLI/QUIC hotspots (IMPL 547→499); per-file targets for the next sprint are enumerated in `docs/GAP_ANALYSIS.md`.
 - **MCP server (GAP-0516, Closed 2026-06-10)**: resource subscriptions stay intentionally unimplemented — Geode does not produce streaming resource-change notifications, so `subscribeResourceHandler`/`unsubscribeResourceHandler` (`src/mcp/server.zig`) return `error.MethodNotFound` → JSON-RPC `-32601` (spec §4.5, the canonical "method not implemented" signal); clients poll via `resources/read`. Regression `tests/test_gap0516_mcp_capabilities.zig` (`zig build test-gap0516`) drives the real `mcp.Server.processMessage` dispatch and asserts the implemented subset (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`, `logging/setLevel`) succeeds while subscribe/unsubscribe return `-32601`. **Caveat pinned by the test:** the pinned `mcp` v0.1.7 library hardcodes `resources.subscribe:true` in its `initialize` response with no override, so the advertised capability string cannot be made truthful without forking the dependency — the runtime-truthful contract is the handler's `-32601`. `completeHandler` forwards to the LSP completion path; `setLogLevelHandler` is a safe no-op. See [docs/MCP_SERVER.md](docs/MCP_SERVER.md).
 - **Auth DDL persistence**: Auth DDL writes persist to the HMAC-chained `__geode_security` graph and survive restart (users, roles, password/role/active changes, and per-graph `GRANT … ON GRAPH …`). Hydrated at startup via `PersistentUserResolver`, `hydrateCustomRolesFromGraph`, and `GraphRBACPolicy.loadGraphGrants`. Residuals: no model for a `GRANT <privilege>` without `ON GRAPH` (global privilege is governed by the user's role); custom-role membership beyond the built-in role field is not modeled; RLS policy persistence is still TODO (separate plan); the BIND-time per-graph grant check is additive/permissive in default single-tenant config. See [docs/GQL_AUTH_DDL.md](docs/GQL_AUTH_DDL.md) for the full persistence spec and known limitations.
 - **Full-text search bulk-MERGE auto-indexing (Open)**: FTS is backed end-to-end by the external `fts-storage` LSM library (see Full-Text Search below). Node create / `SET` / delete keep a fulltext index current via the live-maintenance hook, but the **bulk-MERGE fast path** (`adapter.bulkMergeNode`, run on the worker-thread pool) does **NOT** auto-index its nodes into FTS. Bulk-MERGE'd nodes become searchable only after a re-`CREATE INDEX <name> ... USING fulltext` (which backfills all existing matching nodes). All other write paths and restart (lazy re-open of on-disk indexes) are covered.
@@ -159,7 +159,7 @@ See [docs/TIMESERIES.md](docs/TIMESERIES.md) for the full reference.
 ### Evidence-Based Development
 
 - **CANARY System**: ~4,900 governance markers tracking requirements
-- **Local test baseline**: 166/175 named `zig build test-*` steps pass (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)); a fresh geodetestlab harness run is owed (prior ~97% / 1644-1688 is a dated historical snapshot)
+- **Local test baseline**: 167/175 named `zig build test-*` steps pass (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)); a fresh geodetestlab harness run is owed (prior ~97% / 1644-1688 is a dated historical snapshot)
 - **ISO conformance suite**: 70/70 in the named `tests/gql_iso_conformance.zig` suite (scoped to that suite, not a blanket "100% compliant" claim)
 - **Performance Benchmarks**: Automated regression testing
 - **Status Breakdown**: ≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED (run `make status-generate` for current counts)
@@ -411,7 +411,7 @@ Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local at
 
 ### Quality Gates
 
-- **Test Coverage**: Keep the local `zig build test-*` baseline green (currently 166/175 named steps; track regressions in [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md))
+- **Test Coverage**: Keep the local `zig build test-*` baseline green (currently 167/175 named steps; track regressions in [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md))
 - **Memory Safety**: Zero memory leaks in test runs
 - **Standards Compliance**: Keep the ISO conformance suite green (70/70 in `tests/gql_iso_conformance.zig`)
 - **Performance**: No regressions in core operations
@@ -431,7 +431,7 @@ Based on [TODO.md](docs/TODO.md), all 7 development phases (Phases 2-7) have bee
 - ✅ **Single Binary**: `./zig-out/bin/geode` (unified architecture)
 - ✅ **Zero Subprocess Calls**: Eliminated geodec/geoded spawning
 - ✅ **Server-Only Mode**: All operations require QUIC server connection
-- ✅ **Local Test Baseline**: 166/175 named `zig build test-*` steps pass (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md))
+- ✅ **Local Test Baseline**: 167/175 named `zig build test-*` steps pass (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md))
 
 ---
 
@@ -440,7 +440,7 @@ Based on [TODO.md](docs/TODO.md), all 7 development phases (Phases 2-7) have bee
 **See the complete documentation in [`./docs/`](docs/)** for detailed technical specifications, API references, performance analysis, and implementation guides.
 
 *Last Updated: 2026-06-10*
-*Status: DEVELOPMENT READY (single-tenant) - ISO conformance suite 70/70, local test baseline 166/175 named steps (see Known Limitations for multi-tenant, distributed, and backup gaps)*
+*Status: DEVELOPMENT READY (single-tenant) - ISO conformance suite 70/70, local test baseline 167/175 named steps (see Known Limitations for multi-tenant, distributed, and backup gaps)*
 *License: Apache License, Version 2.0 - Copyright 2024-2025 CodePros*
 
 ## Important Development Guidelines

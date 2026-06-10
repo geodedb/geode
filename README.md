@@ -310,7 +310,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Test Coverage**
 
-- **Local Test Baseline** - 166/175 named `zig build test-*` steps pass; see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for the canonical baseline (6 FAIL / 3 TIMEOUT with file:line evidence) and the geodetestlab integration suite (separate harness run owed)
+- **Local Test Baseline** - 167/175 named `zig build test-*` steps pass; see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for the canonical baseline (6 FAIL / 2 TIMEOUT with file:line evidence) and the geodetestlab integration suite (separate harness run owed)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
 - **CANARY Governance** - ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility

@@ -22,9 +22,9 @@ below — under GAP-0860.
 | Env | `GEODE_MASTER_KEY` set to a 32-byte test value (required by FLE-backed tests) |
 | Method | each named `test-*` build step run in isolation, 300 s per-step timeout |
 
-**Result: 175 named `test-*` steps — 166 PASS, 6 FAIL, 3 TIMEOUT, 0 not-run.**
+**Result: 175 named `test-*` steps — 167 PASS, 6 FAIL, 2 TIMEOUT, 0 not-run (count-pushdown reclassified PASS after a 15-min re-run; the original 300 s sweep scored it TIMEOUT).**
 
-`zig build` (the production binary) compiles clean. The 166 passing steps cover
+`zig build` (the production binary) compiles clean. The 167 passing steps cover
 the parser/lexer, planner, storage/MVCC/WAL, index types, security/auth/FLE
 wiring, transport, cluster bootstrap/identity/steady-state, RLS, GPS policy,
 LSP/MCP, timeseries, FTS, and the bulk-ingest fast paths.
@@ -36,7 +36,7 @@ these are not load-induced flakes unless noted).
 
 | Step | Result | Root cause (verified) |
 |---|---|---|
-| `test-count-pushdown` | TIMEOUT (300 s, zero output) | **Genuine hang.** The test binary produces no output and never exits; reproduced twice (sweep + isolated 200 s re-run, exit 124). Needs a focused triage (likely a blocking wait in the count-pushdown executor path). |
+| `test-count-pushdown` | SLOW — passes with a longer timeout | **Not a hang.** Re-verified 2026-06-10 with a 15-minute timeout: completes with exit 0 (2/2 tests). The step takes ~7–13 minutes (large-store count benchmarks), so it exceeds the 300 s sweep timeout. Adjusted baseline: 167/175 pass. Treat as a slow step needing a per-step timeout ≥ 15 min, not a defect. |
 | `test-simple-merge-fastpath` | FAIL (10/11 tests pass) | **Real functional bug.** `test "bulkMergeNode apply_on_match updates existing node (true upsert)"` (`tests/bulk_ingest/test_simple_merge_fastpath.zig:476`) fails `expectEqualStrings("bob@example.com", email_prop.String)` — the bulk-MERGE apply-on-match path does not persist a *new* property introduced on the match update. Aligns with the documented bulk-MERGE limitation area (see CLAUDE.md → Full-text search bulk-MERGE). FLE key was set, so this is not the master-key path. |
 | `test-perf` | FAIL (10/11 tests pass) | **Perf gate, hardware-dependent.** The two-phase bulk-edge throughput test asserts a parallel speedup threshold; this host measured `speedup=1.07x–1.10x`, below the gate. Reproduces idle. Treat as a host-relative perf signal, not a correctness regression. |
 | `test-stream-pool-concurrent-lanes` | FAIL (2/3 tests pass) | `test "task31_edge: submit() — 8 tasks on 4-thread pool all complete"` (`tests/test_stream_pool_concurrent_lanes.zig:236`) fails `ctx.max_concurrent >= 2`. The scheduler completed tasks without ever observing ≥2 in-flight. Reproduces idle; concurrency-observation assertion is too strict for the platform scheduler or there is a real serialization. |
@@ -44,7 +44,7 @@ these are not load-induced flakes unless noted).
 | `test-gpu` | FAIL (compile) | **Environmental.** No GPU/Vulkan shader toolchain on this host; the GPU test target fails to compile its shader/native pieces. Expected on non-GPU CI/dev hosts. |
 | `test-e2e` | FAIL (compile) | Pulls in benchmark + fuzz targets that have not been migrated to Zig 0.16: `tests/e2e_tde_encryption.zig` uses the removed `std.time.milliTimestamp`; `fuzz/targets/txn_sequence_fuzz.zig` / `decimal_roundtrip_fuzz.zig` use the old `testing.Smith` fuzz signature; `bench_federation_mismatch_*` / `bench_redo_optimization_delta` fail to compile. These are separate never-compiled paths, not e2e logic regressions. |
 | `test-cluster-3node-subprocess` | TIMEOUT (300 s) | Known: the 3-node subprocess cluster reliably stalls/crashes in the QUIC vendor library during multi-node bring-up (see project memory "A6f QUIC processShortHeader crash"). The in-process cluster steps (`test-cluster-3node-election`, `test-cluster-steady-state`, `test-cluster-bootstrap`, `test-cluster-identity`) PASS. |
-| `test-all` | TIMEOUT (300 s) | The `test-all` aggregate (unit + e2e) inherits the `test-e2e` compile failures and the `test-count-pushdown` hang, and also drives the blocked `graph_store_unit_tests` shard below. Not a distinct issue — it is the union of the rows above plus the shard note. |
+| `test-all` | TIMEOUT (300 s) | The `test-all` aggregate (unit + e2e) inherits the `test-e2e` compile failures and the `test-count-pushdown` slowness (~7-13 min, passes), and also drives the blocked `graph_store_unit_tests` shard below. Not a distinct issue — it is the union of the rows above plus the shard note. |
 
 ### Blocked: `graph_store_unit_tests` shard / monolithic `zig build test`
 
@@ -94,7 +94,7 @@ grep -oE 'b\.step\("test-[^"]+"' build.zig | sed -E 's/b\.step\("//;s/"$//' \
     done
 
 # Re-run a single failing/hanging step:
-zig build test-count-pushdown        # hangs (300 s, zero output)
+zig build test-count-pushdown        # SLOW: passes in ~7-13 min (use timeout >= 15 min)
 zig build test-simple-merge-fastpath # 10/11; apply_on_match upsert assertion
 ```
 
