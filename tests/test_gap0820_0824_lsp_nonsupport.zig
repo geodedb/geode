@@ -207,3 +207,18 @@ test "GAP-0822: codeAction request -> -32601, codeActionProvider absent" {
 
     try expectMethodNotFound(alloc, &srv, "textDocument/codeAction", 40);
 }
+
+// ---------------------------------------------------------------------------
+// GAP-0823 — inlayHint: unadvertised with test
+// ---------------------------------------------------------------------------
+
+test "GAP-0823: inlayHint request -> -32601, inlayHintProvider absent" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newCapturingServer(alloc);
+    defer srv.deinit();
+
+    try assertCapabilityAbsent(alloc, "inlayHintProvider");
+
+    try expectMethodNotFound(alloc, &srv, "textDocument/inlayHint", 50);
+}
