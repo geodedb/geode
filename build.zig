@@ -5011,6 +5011,26 @@ pub fn build(b: *std.Build) void {
     const gap0832_step = b.step("test-gap0832", "GAP-0832: validated decode for malformed LSP JSON-RPC request envelopes");
     gap0832_step.dependOn(&run_gap0832_tests.step);
 
+    // GAP-0831: LSP capability-vs-handler truthfulness guard. Roots the
+    // regression file through a single module at server.zig (exposed as
+    // `lsp_server`) so the structural test reaches `Server.Methods`,
+    // `Server.buildCapabilitiesObject`, `handled_request_methods`, and
+    // `handled_notification_methods`. Same wiring rationale as gap0832 (avoid
+    // the Zig 0.16 module diamond by re-rooting transport via server.zig).
+    const gap0831_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0831_server_mod.addImport("geode", root_mod);
+    gap0831_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0831_server_mod.link_libc = true;
+    const gap0831_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0831_lsp_capability_guard.zig"), .target = target, .optimize = optimize });
+    gap0831_test_mod.addImport("lsp_server", gap0831_server_mod);
+    gap0831_test_mod.addImport("geode", root_mod);
+    gap0831_test_mod.link_libc = true;
+    const gap0831_tests = b.addTest(.{ .root_module = gap0831_test_mod });
+    const run_gap0831_tests = b.addRunArtifact(gap0831_tests);
+    shardDep(test_step, &run_gap0831_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0831_step = b.step("test-gap0831", "GAP-0831: LSP capability/handler truthfulness guard (bidirectional)");
+    gap0831_step.dependOn(&run_gap0831_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.

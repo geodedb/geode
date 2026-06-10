@@ -51,6 +51,163 @@ pub const ServerCapabilities = struct {
     semanticTokensProvider: bool = true,
 };
 
+/// GAP-0831: single source of truth for the request methods the dispatch in
+/// `handleRequest` routes to a handler. The dispatch switch references these
+/// constants directly (via `std.mem.eql(u8, method, M.<name>)`) so the list
+/// and the dispatch CANNOT drift — adding a handler without listing it here
+/// (or vice versa) is a visible inconsistency, and the structural truthfulness
+/// guard (`tests/test_gap0831_lsp_capability_guard.zig`) asserts every
+/// non-lifecycle entry here maps to an advertised capability and back.
+///
+/// Lifecycle / control methods (`initialize`, `shutdown`) are listed because
+/// the dispatch handles them, but they are exempt from the capability mapping
+/// in the guard — they are mandated by the LSP base protocol, not advertised
+/// via `ServerCapabilities`.
+///
+/// CANARY: REQ=REQ-LSP-CAP-001; FEATURE="CapabilityHandlerTruthfulness"; ASPECT=DispatchTable; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+pub const Methods = struct {
+    // Lifecycle / control requests (capability-exempt).
+    pub const initialize = "initialize";
+    pub const shutdown = "shutdown";
+    // Feature requests (each MUST map to an advertised capability).
+    pub const hover = "textDocument/hover";
+    pub const completion = "textDocument/completion";
+    pub const definition = "textDocument/definition";
+    pub const formatting = "textDocument/formatting";
+    pub const document_symbol = "textDocument/documentSymbol";
+    pub const signature_help = "textDocument/signatureHelp";
+    pub const references = "textDocument/references";
+    pub const semantic_tokens_full = "textDocument/semanticTokens/full";
+
+    // Notifications.
+    pub const initialized = "initialized";
+    pub const exit = "exit";
+    pub const did_open = "textDocument/didOpen";
+    pub const did_change = "textDocument/didChange";
+    pub const did_close = "textDocument/didClose";
+};
+
+/// GAP-0831: the exact set of request methods `handleRequest` dispatches.
+/// Iterated by the truthfulness guard; the dispatch chain references the same
+/// `Methods.*` constants so this list reflects reality.
+pub const handled_request_methods = [_][]const u8{
+    Methods.initialize,
+    Methods.shutdown,
+    Methods.hover,
+    Methods.completion,
+    Methods.definition,
+    Methods.formatting,
+    Methods.document_symbol,
+    Methods.signature_help,
+    Methods.references,
+    Methods.semantic_tokens_full,
+};
+
+/// GAP-0831: the exact set of notification methods `handleNotification`
+/// dispatches. Notifications are exempt from the capability mapping (they are
+/// driven by `textDocumentSync` for the did* trio and by the base protocol for
+/// initialized/exit), but the guard still asserts the did* notifications imply
+/// `textDocumentSync` is advertised.
+pub const handled_notification_methods = [_][]const u8{
+    Methods.initialized,
+    Methods.exit,
+    Methods.did_open,
+    Methods.did_change,
+    Methods.did_close,
+};
+
+/// GAP-0831: build the `capabilities` object EXACTLY as advertised in the
+/// `initialize` result. `handleInitialize` calls this so there is one and only
+/// one place that decides what Geode's LSP server claims to support; the
+/// truthfulness guard (`tests/test_gap0831_lsp_capability_guard.zig`) also
+/// calls it and walks the returned keys, making capability drift impossible.
+///
+/// Caller owns the returned map and MUST release it with
+/// `deinitCapabilitiesObject` (recursive — the value contains nested
+/// ObjectMaps and Arrays for completion/signatureHelp/semanticTokens).
+///
+/// CANARY: REQ=REQ-LSP-CAP-001; FEATURE="CapabilityHandlerTruthfulness"; ASPECT=AdvertisedCapabilities; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+pub fn buildCapabilitiesObject(allocator: Allocator) !std.json.ObjectMap {
+    const capabilities = ServerCapabilities{};
+    var caps = std.json.ObjectMap{};
+    errdefer deinitCapabilitiesObject(allocator, &caps);
+
+    try caps.put(allocator, "textDocumentSync", .{ .integer = capabilities.textDocumentSync });
+    try caps.put(allocator, "hoverProvider", .{ .bool = capabilities.hoverProvider });
+    try caps.put(allocator, "definitionProvider", .{ .bool = capabilities.definitionProvider });
+    try caps.put(allocator, "documentFormattingProvider", .{ .bool = capabilities.documentFormattingProvider });
+    try caps.put(allocator, "documentSymbolProvider", .{ .bool = capabilities.documentSymbolProvider });
+    try caps.put(allocator, "referencesProvider", .{ .bool = capabilities.referencesProvider });
+
+    var completion = std.json.ObjectMap{};
+    var triggers = std.json.Array.init(allocator);
+    try triggers.append(.{ .string = "." });
+    try triggers.append(.{ .string = ":" });
+    try triggers.append(.{ .string = "$" });
+    try completion.put(allocator, "triggerCharacters", .{ .array = triggers });
+    try caps.put(allocator, "completionProvider", .{ .object = completion });
+
+    // Signature help provider
+    var sig_help = std.json.ObjectMap{};
+    var sig_triggers = std.json.Array.init(allocator);
+    try sig_triggers.append(.{ .string = "(" });
+    try sig_triggers.append(.{ .string = "," });
+    try sig_help.put(allocator, "triggerCharacters", .{ .array = sig_triggers });
+    try caps.put(allocator, "signatureHelpProvider", .{ .object = sig_help });
+
+    // Semantic tokens provider
+    var sem_tokens = std.json.ObjectMap{};
+    try sem_tokens.put(allocator, "full", .{ .bool = true });
+
+    var legend = std.json.ObjectMap{};
+    var token_types = std.json.Array.init(allocator);
+    for (protocol.SemanticTokenTypes.types) |t| {
+        try token_types.append(.{ .string = t });
+    }
+    try legend.put(allocator, "tokenTypes", .{ .array = token_types });
+
+    var token_modifiers = std.json.Array.init(allocator);
+    for (protocol.SemanticTokenTypes.modifiers) |m| {
+        try token_modifiers.append(.{ .string = m });
+    }
+    try legend.put(allocator, "tokenModifiers", .{ .array = token_modifiers });
+
+    try sem_tokens.put(allocator, "legend", .{ .object = legend });
+    try caps.put(allocator, "semanticTokensProvider", .{ .object = sem_tokens });
+
+    return caps;
+}
+
+/// GAP-0831: recursively release a capabilities ObjectMap built by
+/// `buildCapabilitiesObject`. Walks nested objects/arrays so the test (and
+/// `handleInitialize`) leak nothing under the testing allocator.
+pub fn deinitCapabilitiesObject(allocator: Allocator, caps: *std.json.ObjectMap) void {
+    var it = caps.iterator();
+    while (it.next()) |entry| {
+        deinitJsonValue(allocator, entry.value_ptr);
+    }
+    caps.deinit(allocator);
+}
+
+fn deinitJsonValue(allocator: Allocator, value: *std.json.Value) void {
+    switch (value.*) {
+        .object => |*obj| {
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                deinitJsonValue(allocator, entry.value_ptr);
+            }
+            obj.deinit(allocator);
+        },
+        .array => |*arr| {
+            for (arr.items) |*item| {
+                deinitJsonValue(allocator, item);
+            }
+            arr.deinit();
+        },
+        else => {},
+    }
+}
+
 /// F-01: per-document debounce state for didChange diagnostics.
 const DebounceState = struct {
     last_change_at_ns: i128,
@@ -454,8 +611,8 @@ pub const Server = struct {
     /// and `exit` are handled in `handleNotification`; this list covers
     /// only the request side.
     fn isAuthExemptMethod(method: []const u8) bool {
-        return std.mem.eql(u8, method, "initialize") or
-            std.mem.eql(u8, method, "shutdown");
+        return std.mem.eql(u8, method, Methods.initialize) or
+            std.mem.eql(u8, method, Methods.shutdown);
     }
 
     /// Test helper: returns true when a request bearing `method` would
@@ -485,25 +642,28 @@ pub const Server = struct {
             }
         }
 
-        if (std.mem.eql(u8, method, "initialize")) {
+        // GAP-0831: dispatch references the `Methods.*` constants that are the
+        // single source of truth for `handled_request_methods`. The
+        // truthfulness guard iterates that list and this chain in lockstep.
+        if (std.mem.eql(u8, method, Methods.initialize)) {
             try self.handleInitialize(id, params);
-        } else if (std.mem.eql(u8, method, "shutdown")) {
+        } else if (std.mem.eql(u8, method, Methods.shutdown)) {
             try self.handleShutdown(id);
-        } else if (std.mem.eql(u8, method, "textDocument/hover")) {
+        } else if (std.mem.eql(u8, method, Methods.hover)) {
             try self.handleHover(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/completion")) {
+        } else if (std.mem.eql(u8, method, Methods.completion)) {
             try self.handleCompletion(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/definition")) {
+        } else if (std.mem.eql(u8, method, Methods.definition)) {
             try self.handleDefinition(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/formatting")) {
+        } else if (std.mem.eql(u8, method, Methods.formatting)) {
             try self.handleFormatting(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
+        } else if (std.mem.eql(u8, method, Methods.document_symbol)) {
             try self.handleDocumentSymbol(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/signatureHelp")) {
+        } else if (std.mem.eql(u8, method, Methods.signature_help)) {
             try self.handleSignatureHelp(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/references")) {
+        } else if (std.mem.eql(u8, method, Methods.references)) {
             try self.handleReferences(id, params);
-        } else if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+        } else if (std.mem.eql(u8, method, Methods.semantic_tokens_full)) {
             try self.handleSemanticTokensFull(id, params);
         } else {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.MethodNotFound), "Method not found");
@@ -511,16 +671,18 @@ pub const Server = struct {
     }
 
     fn handleNotification(self: *Server, method: []const u8, params: ?std.json.Value) !void {
-        if (std.mem.eql(u8, method, "initialized")) {
+        // GAP-0831: dispatch references the `Methods.*` constants that are the
+        // single source of truth for `handled_notification_methods`.
+        if (std.mem.eql(u8, method, Methods.initialized)) {
             self.initialized = true;
             self.transport.logMessage("INFO", "Client initialized");
-        } else if (std.mem.eql(u8, method, "exit")) {
+        } else if (std.mem.eql(u8, method, Methods.exit)) {
             self.shutdown_requested = true;
-        } else if (std.mem.eql(u8, method, "textDocument/didOpen")) {
+        } else if (std.mem.eql(u8, method, Methods.did_open)) {
             try self.handleDidOpen(params);
-        } else if (std.mem.eql(u8, method, "textDocument/didChange")) {
+        } else if (std.mem.eql(u8, method, Methods.did_change)) {
             try self.handleDidChange(params);
-        } else if (std.mem.eql(u8, method, "textDocument/didClose")) {
+        } else if (std.mem.eql(u8, method, Methods.did_close)) {
             try self.handleDidClose(params);
         }
     }
@@ -748,8 +910,6 @@ pub const Server = struct {
             };
         };
 
-        const capabilities = ServerCapabilities{};
-
         var response = std.json.ObjectMap{};
         defer response.deinit(self.allocator);
 
@@ -759,60 +919,11 @@ pub const Server = struct {
         var result = std.json.ObjectMap{};
         defer result.deinit(self.allocator);
 
-        var caps = std.json.ObjectMap{};
-        defer caps.deinit(self.allocator);
-
-        try caps.put(self.allocator, "textDocumentSync", .{ .integer = capabilities.textDocumentSync });
-        try caps.put(self.allocator, "hoverProvider", .{ .bool = capabilities.hoverProvider });
-        try caps.put(self.allocator, "definitionProvider", .{ .bool = capabilities.definitionProvider });
-        try caps.put(self.allocator, "documentFormattingProvider", .{ .bool = capabilities.documentFormattingProvider });
-        try caps.put(self.allocator, "documentSymbolProvider", .{ .bool = capabilities.documentSymbolProvider });
-        try caps.put(self.allocator, "referencesProvider", .{ .bool = capabilities.referencesProvider });
-
-        var completion = std.json.ObjectMap{};
-        defer completion.deinit(self.allocator);
-        var triggers = std.json.Array.init(self.allocator);
-        defer triggers.deinit();
-        try triggers.append(.{ .string = "." });
-        try triggers.append(.{ .string = ":" });
-        try triggers.append(.{ .string = "$" });
-        try completion.put(self.allocator, "triggerCharacters", .{ .array = triggers });
-        try caps.put(self.allocator, "completionProvider", .{ .object = completion });
-
-        // Signature help provider
-        var sig_help = std.json.ObjectMap{};
-        defer sig_help.deinit(self.allocator);
-        var sig_triggers = std.json.Array.init(self.allocator);
-        defer sig_triggers.deinit();
-        try sig_triggers.append(.{ .string = "(" });
-        try sig_triggers.append(.{ .string = "," });
-        try sig_help.put(self.allocator, "triggerCharacters", .{ .array = sig_triggers });
-        try caps.put(self.allocator, "signatureHelpProvider", .{ .object = sig_help });
-
-        // Semantic tokens provider
-        var sem_tokens = std.json.ObjectMap{};
-        defer sem_tokens.deinit(self.allocator);
-        try sem_tokens.put(self.allocator, "full", .{ .bool = true });
-
-        var legend = std.json.ObjectMap{};
-        defer legend.deinit(self.allocator);
-
-        var token_types = std.json.Array.init(self.allocator);
-        defer token_types.deinit();
-        for (protocol.SemanticTokenTypes.types) |t| {
-            try token_types.append(.{ .string = t });
-        }
-        try legend.put(self.allocator, "tokenTypes", .{ .array = token_types });
-
-        var token_modifiers = std.json.Array.init(self.allocator);
-        defer token_modifiers.deinit();
-        for (protocol.SemanticTokenTypes.modifiers) |m| {
-            try token_modifiers.append(.{ .string = m });
-        }
-        try legend.put(self.allocator, "tokenModifiers", .{ .array = token_modifiers });
-
-        try sem_tokens.put(self.allocator, "legend", .{ .object = legend });
-        try caps.put(self.allocator, "semanticTokensProvider", .{ .object = sem_tokens });
+        // GAP-0831: build the advertised capabilities through the single
+        // shared builder so the `initialize` result and the truthfulness
+        // guard observe identical key sets (no drift possible).
+        var caps = try buildCapabilitiesObject(self.allocator);
+        defer deinitCapabilitiesObject(self.allocator, &caps);
 
         try result.put(self.allocator, "capabilities", .{ .object = caps });
 

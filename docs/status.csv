@@ -3187,6 +3187,9 @@ REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,DefinitionContext,TESTED,,,lsp,202
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,DiagnosticsTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,HoverTenantGate,TESTED,,,lsp,2026-06-09,src/cli/lsp/features.zig
 REQ-LSP-CALLER-IDENTITY-001,LspCallerIdentity,LeakRegression,TESTED,,,lsp,2026-06-09,tests/test_gap0818_lsp_context.zig
+REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,AdvertisedCapabilities,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
+REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,BidirectionalGuard,TESTED,,,lsp,2026-06-09,tests/test_gap0831_lsp_capability_guard.zig
+REQ-LSP-CAP-001,CapabilityHandlerTruthfulness,DispatchTable,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
 REQ-LSP-EMBEDDED-E2E-001,LspPermissionAwareCompletion,EmbeddedTcpAuthGate,TESTED,,,lsp,2026-05-14,tests/test_lsp_embedded_e2e.zig
 REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/features.zig
 REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server.zig
