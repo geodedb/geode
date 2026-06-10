@@ -576,6 +576,24 @@ pub const Server = struct {
     transport: Transport,
     documents: DocumentStore,
     initialized: bool = false,
+    /// GAP-0827: tracks whether the `initialize` REQUEST has been received and
+    /// successfully processed. Distinct from `initialized` (which the
+    /// `initialized` NOTIFICATION sets) — the LSP 3.17 lifecycle (§Lifecycle
+    /// Messages) gates on the `initialize` request, not the post-handshake
+    /// notification. Used by `handleRequest` to (a) reject any non-`initialize`
+    /// request received before `initialize` with JSON-RPC -32002
+    /// (ServerNotInitialized) and (b) reject a SECOND `initialize` with -32600
+    /// (InvalidRequest). Set true at the END of a successful `handleInitialize`.
+    initialize_received: bool = false,
+    /// GAP-0827: set true once a `shutdown` REQUEST has been processed. Per LSP
+    /// 3.17 (§Lifecycle — Shutdown) the server enters a state where it rejects
+    /// every further REQUEST with -32600 InvalidRequest but still processes the
+    /// `exit` NOTIFICATION (which terminates the run loop). This is distinct
+    /// from `shutdown_requested`: the latter is the run-loop's termination flag
+    /// (set by `exit`), so setting it on `shutdown` would tear the loop down
+    /// before `exit` ever arrives. The gate in `handleRequest` checks THIS
+    /// flag.
+    shutdown_received: bool = false,
     shutdown_requested: bool = false,
     formatting_options: features.FormattingOptions = .{},
     /// GAP-0817: negotiated position encoding for this session. Resolved in
@@ -946,6 +964,24 @@ pub const Server = struct {
             return .{ .bad_request = idOrNull(root.get("id")) };
         }
 
+        // GAP-0827 (deferred item a): an `id` member that is present but a
+        // structurally-invalid type (object/array/bool) makes this a malformed
+        // REQUEST, not a notification. Per JSON-RPC 2.0 §4 an id must be a
+        // String, Number, or Null. The pre-fix code ran the id through
+        // `idOrNull` (which maps a structured id to null) and then — because
+        // a null id selects the notification path — silently dispatched it as
+        // a notification, never answering the client. We now detect the
+        // present-but-invalid case explicitly and surface a -32600 with a null
+        // response id (we MUST NOT echo the attacker-controlled structured
+        // value). A genuinely ABSENT id member still selects the notification
+        // path (envelope with id == null).
+        if (root.get("id")) |raw_id| {
+            if (idOrNull(raw_id) == null) {
+                // id member present but not a valid id type ⇒ Invalid Request.
+                return .{ .bad_request = null };
+            }
+        }
+
         return .{ .envelope = .{
             .method = method_v.string,
             .id = idOrNull(root.get("id")),
@@ -985,13 +1021,20 @@ pub const Server = struct {
         switch (decodeEnvelope(parsed.value)) {
             .drop => return,
             .bad_request => |maybe_id| {
-                if (maybe_id) |id| {
-                    try self.sendError(
-                        id,
-                        @intFromEnum(protocol.ErrorCode.InvalidRequest),
-                        "Invalid Request: malformed JSON-RPC envelope",
-                    );
-                }
+                // GAP-0827 (deferred item b): a -32600 Invalid Request with no
+                // valid id MUST still be answered with `"id": null` — the
+                // JSON-RPC 2.0 §5 worked example for a malformed/invalid
+                // request shows exactly `{"jsonrpc":"2.0","id":null,"error":…}`.
+                // The pre-fix code only answered when an id was present and
+                // silently dropped the no-id case, leaving a malformed request
+                // unanswered. We now always emit the error, defaulting the
+                // response id to JSON null when none could be recovered.
+                const id = maybe_id orelse std.json.Value{ .null = {} };
+                try self.sendError(
+                    id,
+                    @intFromEnum(protocol.ErrorCode.InvalidRequest),
+                    "Invalid Request: malformed JSON-RPC envelope",
+                );
                 return;
             },
             .envelope => |env| {
@@ -1054,6 +1097,55 @@ pub const Server = struct {
         self.answered_ids.record(id);
         self.cancel_registry.clear(id);
 
+        // GAP-0827: LSP 3.17 lifecycle gate. Enforced BEFORE the auth gate so
+        // the lifecycle (-32002 server-not-initialized / -32600 double-init /
+        // -32600 post-shutdown) takes precedence over the per-session auth
+        // gate. These are protocol-state rules, independent of credentials.
+        const is_initialize = std.mem.eql(u8, method, Methods.initialize);
+
+        // (1) Post-shutdown: per spec, after a `shutdown` request the server
+        //     rejects any further REQUEST with InvalidRequest (-32600). The
+        //     only valid follow-up is the `exit` NOTIFICATION (handled in
+        //     handleNotification, which has no gate). `shutdown` itself is
+        //     idempotent-ish but a second shutdown after shutdown is still a
+        //     post-shutdown request and is rejected.
+        if (self.shutdown_received) {
+            try self.sendError(
+                id,
+                @intFromEnum(protocol.ErrorCode.InvalidRequest),
+                "Invalid Request: server is shutting down",
+            );
+            return;
+        }
+
+        // (2) Double initialize: a second `initialize` request after one has
+        //     already been processed is an InvalidRequest (-32600) per LSP
+        //     3.17 (§Lifecycle — initialize may be sent exactly once).
+        if (is_initialize and self.initialize_received) {
+            try self.sendError(
+                id,
+                @intFromEnum(protocol.ErrorCode.InvalidRequest),
+                "Invalid Request: initialize may only be sent once",
+            );
+            return;
+        }
+
+        // (3) Pre-initialize: any request OTHER than `initialize` that arrives
+        //     before `initialize` has been processed is answered with -32002
+        //     ServerNotInitialized. This is the LIFECYCLE gate; it is distinct
+        //     from (and precedes) the auth gate below, which ALSO uses -32002
+        //     but with the "not authenticated" message. Note `shutdown` is
+        //     NOT lifecycle-exempt here: a `shutdown` before `initialize` is a
+        //     protocol error, even though it is auth-exempt.
+        if (!is_initialize and !self.initialize_received) {
+            try self.sendError(
+                id,
+                @intFromEnum(protocol.ErrorCode.ServerNotInitialized),
+                "server not initialized",
+            );
+            return;
+        }
+
         // Task 12 auth gate: every non-init/shutdown request must
         // come from a session whose AuthState.verify succeeded during
         // the `initialize` handshake. We respond with JSON-RPC -32002
@@ -1083,6 +1175,16 @@ pub const Server = struct {
     }
 
     fn handleNotification(self: *Server, method: []const u8, params: ?std.json.Value) !void {
+        // GAP-0827: LSP 3.17 lifecycle gate for notifications. Per spec, any
+        // notification received BEFORE the `initialize` request — EXCEPT `exit`
+        // — MUST be dropped. (The `initialized` notification is the client's
+        // post-`initialize` ack; `exit` must always be honored so a client can
+        // bail out of a half-open session.) A notification never produces a
+        // response, so a dropped pre-initialize notification is simply ignored.
+        if (!self.initialize_received and !std.mem.eql(u8, method, Methods.exit)) {
+            return;
+        }
+
         // GAP-0831: dispatch is an `inline for` over the comptime
         // `notification_dispatch` table, the same source `handled_notification_methods`
         // is derived from. A method not in the table is silently ignored, per
@@ -1468,6 +1570,14 @@ pub const Server = struct {
         try response.put(self.allocator, "result", .{ .object = result });
 
         try self.sendJsonValue(.{ .object = response });
+
+        // GAP-0827: mark the lifecycle as initialized only AFTER a successful
+        // initialize result has been emitted. A failed bind short-circuits via
+        // `respondInitializeError` above and never reaches here, so the
+        // pre-initialize gate stays closed (the client must re-handshake). A
+        // second `initialize` is rejected by the gate in `handleRequest` before
+        // ever reaching this function.
+        self.initialize_received = true;
     }
 
     fn handleShutdown(self: *Server, id: std.json.Value) !void {
@@ -1479,6 +1589,14 @@ pub const Server = struct {
         try response.put(self.allocator, "result", .null);
 
         try self.sendJsonValue(.{ .object = response });
+
+        // GAP-0827: enter the post-shutdown state. The next REQUEST (any
+        // method, including a second `shutdown`) is rejected by the lifecycle
+        // gate with -32600; only the `exit` NOTIFICATION is still honored. We
+        // do NOT set `shutdown_requested` here — that is the run-loop's
+        // termination flag and is reserved for `exit` so the loop stays alive
+        // to receive `exit`.
+        self.shutdown_received = true;
     }
 
     fn handleDidOpen(self: *Server, params: ?std.json.Value) !void {

@@ -20,7 +20,16 @@ const server = @import("server.zig");
 const json_helpers = @import("json_helpers.zig");
 
 fn newServer(allocator: std.mem.Allocator) !server.Server {
-    return try server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
+    // GAP-0827: these tests exercise the NOTIFICATION param-shape validation
+    // (didOpen/didChange/didClose). The LSP 3.17 lifecycle gate now drops every
+    // notification except `exit` BEFORE `initialize` is received, which would
+    // short-circuit the handler before its param validation runs. Mark the
+    // lifecycle as initialized so the notification reaches its handler and the
+    // InvalidParams contract under test is actually exercised. (The lifecycle
+    // gate itself is covered by tests/test_gap0827_lsp_conformance.zig.)
+    srv.initialize_received = true;
+    return srv;
 }
 
 test "LSP-SEC-004: didOpen missing textDocument returns InvalidParams" {

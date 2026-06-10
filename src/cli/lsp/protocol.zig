@@ -31,6 +31,16 @@ pub const ErrorCode = enum(i32) {
     ServerCancelled = -32802,
     ContentModified = -32801,
     RequestCancelled = -32800,
+    // GAP-0827: LSP-specific lifecycle code (Microsoft LSP 3.17 §5.1.3). A
+    // request received before the `initialize` request is answered with this
+    // code so the client knows to (re)handshake. Geode ALSO uses the same
+    // numeric code for the per-session AUTH gate ("not authenticated") — the
+    // two are deliberately distinguished by their `message` string
+    // ("server not initialized" vs "not authenticated") because the LSP base
+    // protocol defines only this one "session not usable yet" code and clients
+    // recover from both identically (drop the session and re-handshake). See
+    // handleRequest's lifecycle gate + auth gate.
+    ServerNotInitialized = -32002,
 };
 
 pub const ResponseError = struct {

@@ -5135,6 +5135,25 @@ pub fn build(b: *std.Build) void {
     const gap0826_step = b.step("test-gap0826", "GAP-0826: LSP performance/stress pack (large docs/schemas, cancellation churn)");
     gap0826_step.dependOn(&run_gap0826_tests.step);
 
+    // GAP-0827: LSP 3.17 protocol conformance pack. Roots the file through a
+    // single server.zig module (`lsp_server`) so it drives the REAL
+    // `Server.handleMessage` lifecycle (initialize / shutdown / exit gates,
+    // method-not-found, error-object shape) over the capturing Noop transport.
+    // Same module-diamond avoidance rationale as gap0816/gap0826/gap0831/gap0832.
+    const gap0827_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0827_server_mod.addImport("geode", root_mod);
+    gap0827_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0827_server_mod.link_libc = true;
+    const gap0827_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0827_lsp_conformance.zig"), .target = target, .optimize = optimize });
+    gap0827_test_mod.addImport("lsp_server", gap0827_server_mod);
+    gap0827_test_mod.addImport("geode", root_mod);
+    gap0827_test_mod.link_libc = true;
+    const gap0827_tests = b.addTest(.{ .root_module = gap0827_test_mod });
+    const run_gap0827_tests = b.addRunArtifact(gap0827_tests);
+    shardDep(test_step, &run_gap0827_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0827_step = b.step("test-gap0827", "GAP-0827: LSP 3.17 protocol conformance pack (lifecycle, JSON-RPC error shape)");
+    gap0827_step.dependOn(&run_gap0827_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
