@@ -1972,22 +1972,38 @@ pub fn main() !void {
         // timeseries.value() calls in the QUIC/gRPC execution path return
         // real data instead of NULL.  The store lives on the main thread's
         // stack and is published via eval.setGlobalTimeseriesStore().
-        // GAP-0292: Wire ChunkStorage persistence — pass data_dir so
-        // timeseries data survives server restarts.
+        // GAP-0865: FAIL-CLOSED by default — an engine open error (corrupt
+        // WAL/segments, wrong TDE key, unreadable dir) aborts server start
+        // instead of silently degrading to an empty in-memory store. The
+        // wrapper creates `{data_dir}/timeseries` itself, so a fresh data
+        // dir opens durably (the old code fell back to memory-only on every
+        // fresh dir because the engine refuses to mkdir). Opt back into the
+        // legacy soft behaviour with GEODE_TS_DURABILITY=best_effort (the
+        // wrapper then degrades internally with a warning). Retention is
+        // wired via GEODE_TS_RETENTION_DAYS and TDE via GEODE_TS_TDE=1 +
+        // GEODE_TDE_KEY.
         // CANARY: REQ=REQ-TIMESERIES-WIRE-003; FEATURE="TimeseriesServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/eval.zig; OWNER=server; UPDATED=2026-04-01
-        // CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-01
+        // CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=server; UPDATED=2026-06-10
         const ts_mod = geode.timeseries;
         var ts_store = ts_mod.Store.initWithConfig(gpa, .{
             .data_dir = data_dir,
-        }) catch blk: {
-            log.warn("timeseries.init_persist_fallback", &.{});
-            break :blk ts_mod.Store.init(gpa);
+            .durability = ts_mod.durabilityFromEnv(),
+            .retention_max_age_ms = ts_mod.retentionMsFromEnv(),
+            .encryption_key = ts_mod.encryptionKeyFromEnv() catch |err| {
+                log.err("timeseries.tde_key_invalid", &.{Attr.string("error", @errorName(err))});
+                return err;
+            },
+        }) catch |err| {
+            log.err("timeseries.open_failed_fail_closed", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("hint", "set GEODE_TS_DURABILITY=best_effort to degrade to in-memory"),
+            });
+            return err;
         };
         defer ts_store.deinit();
-        // Hydrate in-memory store from any previously persisted chunks.
-        ts_store.loadFromDisk() catch |err| {
-            log.warn("timeseries.load_from_disk_failed", &.{Attr.string("error", @errorName(err))});
-        };
+        // Engine init already replayed the WAL and verified segments;
+        // loadFromDisk is a no-op kept for API symmetry.
+        try ts_store.loadFromDisk();
         eval.setGlobalTimeseriesStore(&ts_store);
         defer eval.setGlobalTimeseriesStore(null);
 

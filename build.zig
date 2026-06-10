@@ -1809,6 +1809,24 @@ pub fn build(b: *std.Build) void {
     const ts_ingest_step = b.step("test-ts-ingest", "Run only the native geode.ts.* round-trip tests");
     ts_ingest_step.dependOn(&run_ts_ingest_tests.step);
 
+    // ----- TS DURABILITY (GAP-0865) -----
+    // Regression suite for the time-series durability contract: fail-closed
+    // open on corrupt artefacts (with explicit best_effort opt-out),
+    // hard-kill WAL crash recovery, retention pruning that actually deletes
+    // expired segments from disk, backup->wipe->restore round-trip of the
+    // timeseries tree, and TDE (encryption_key) wiring.
+    const ts_durability_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/ts_durability.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    ts_durability_tests.root_module.addImport("geode", root_mod);
+    ts_durability_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    const run_ts_durability_tests = b.addRunArtifact(ts_durability_tests);
+    const ts_durability_step = b.step("test-ts-durability", "Run GAP-0865 time-series durability regression (fail-closed open, WAL crash recovery, retention, backup, TDE)");
+    ts_durability_step.dependOn(&run_ts_durability_tests.step);
+
     // GAP-0811 Task 2.2: property-aggregate fast-path for
     // `MATCH (p:Label) RETURN sum|avg|min|max(p.key)` — iterates the label
     // posting list and calls `getNodeProperty(node_id, key)` per slot, so

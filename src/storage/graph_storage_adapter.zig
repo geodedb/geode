@@ -4074,52 +4074,50 @@ pub const StorageAdapter = struct {
         return al;
     }
 
-    /// Attempt to create a per-graph timeseries store. Returns null on failure
-    /// (soft failure — the graph remains usable without per-graph timeseries).
-    fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ?*ts_mod.Store {
-        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
-            log.warn("failed to build graph dir path for timeseries: {}", .{err});
-            return null;
+    /// Create the per-graph timeseries store.
+    ///
+    /// GAP-0865 (a): durability is FAIL-CLOSED by default — any error
+    /// (path/mkdir/alloc/engine open, including the engine's fail-closed
+    /// WAL-replay and segment-verification errors on corrupt data)
+    /// propagates and the graph open/create fails, so corruption is
+    /// surfaced to the operator instead of silently dropping persistence.
+    /// `GEODE_TS_DURABILITY=best_effort` opts back into the legacy soft
+    /// behaviour: engine errors degrade to an in-memory store (inside the
+    /// wrapper) and adapter-level errors degrade to `null`.
+    ///
+    /// Also wires retention (`GEODE_TS_RETENTION_DAYS`) and TDE
+    /// (`GEODE_TS_TDE=1` + `GEODE_TDE_KEY`) into the engine (GAP-0865 c/e).
+    fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*ts_mod.Store {
+        const durability = ts_mod.durabilityFromEnv();
+        return initTimeseriesForGraphInner(allocator, data_dir, graph_uuid, durability) catch |err| switch (durability) {
+            .fail_closed => err,
+            .best_effort => blk: {
+                log.warn("per-graph timeseries init failed ({}); GEODE_TS_DURABILITY=best_effort — graph continues without persistent timeseries", .{err});
+                break :blk null;
+            },
         };
+    }
+
+    fn initTimeseriesForGraphInner(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, durability: ts_mod.Durability) !?*ts_mod.Store {
+        const graph_dir = try graphDirPath(allocator, data_dir, graph_uuid);
         defer allocator.free(graph_dir);
 
-        // The new ts_storage engine refuses to mkdir its data_dir; we have to
-        // ensure both the graph_dir AND the /timeseries subdir exist before
-        // calling initWithConfig. Without this, every initTimeseriesForGraph
-        // call surfaces error.FileNotFound and tests in shard 3 fail with
-        // "per-graph timeseries store is created and accessible".
-        const tio = std.Io.Threaded.global_single_threaded.io();
-        std.Io.Dir.cwd().createDirPath(tio, graph_dir) catch |err| {
-            log.warn("failed to mkdir graph_dir for timeseries: {}", .{err});
-            return null;
-        };
-        const ts_subdir = std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir}) catch |err| {
-            log.warn("failed to format ts subdir path: {}", .{err});
-            return null;
-        };
-        defer allocator.free(ts_subdir);
-        std.Io.Dir.cwd().createDirPath(tio, ts_subdir) catch |err| {
-            log.warn("failed to mkdir ts subdir for timeseries: {}", .{err});
-            return null;
-        };
+        const store = try allocator.create(ts_mod.Store);
+        errdefer allocator.destroy(store);
 
-        const store = allocator.create(ts_mod.Store) catch |err| {
-            log.warn("failed to allocate per-graph timeseries store: {}", .{err});
-            return null;
-        };
-        store.* = ts_mod.Store.initWithConfig(allocator, .{
+        // The wrapper creates `{graph_dir}/timeseries` itself (the engine
+        // refuses to mkdir its own data_dir) and replays the engine WAL /
+        // verifies segments during init — `loadFromDisk` is a no-op kept
+        // for API compatibility.
+        store.* = try ts_mod.Store.initWithConfig(allocator, .{
             .data_dir = graph_dir,
-        }) catch |err| {
-            log.warn("failed to init per-graph timeseries store: {}", .{err});
-            allocator.destroy(store);
-            return null;
-        };
+            .durability = durability,
+            .retention_max_age_ms = ts_mod.retentionMsFromEnv(),
+            .encryption_key = try ts_mod.encryptionKeyFromEnv(),
+        });
+        errdefer store.deinit();
 
-        store.loadFromDisk() catch |err| {
-            log.warn("failed to load per-graph timeseries data from disk: {}", .{err});
-            // Store is still usable in-memory, continue with it.
-        };
-
+        try store.loadFromDisk();
         return store;
     }
 
@@ -4228,7 +4226,7 @@ pub const StorageAdapter = struct {
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
-            .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
         // Initialise per-graph FTS (fresh index for new graphs).
@@ -4313,7 +4311,7 @@ pub const StorageAdapter = struct {
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
-            .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
         // Load per-graph FTS from disk (existing graphs may have persisted data).

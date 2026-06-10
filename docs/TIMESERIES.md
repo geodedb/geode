@@ -42,7 +42,10 @@ behavior as `CALL geode.fts.search`).
 | Ingest over the wire | ✅ | `CALL geode.ts.insert` / `insert_many` (mutating) |
 | Range / last queries | ✅ | `CALL geode.ts.range` / `last` (read-only) |
 | Downsampling | ✅ | `CALL geode.ts.bucket_avg` / `sample_by` (read-only) |
-| Durability | ✅ | points survive restart |
+| Durability | ✅ | WAL-first writes; survives restart AND hard kill; fail-closed open on corruption (GAP-0865) |
+| Retention | ✅ | opt-in `GEODE_TS_RETENTION_DAYS`; expired segments deleted from disk (GAP-0865c) |
+| TDE at rest | ✅ | opt-in `GEODE_TS_TDE=1` + `GEODE_TDE_KEY`; AES-256-GCM over WAL/segments/manifest (GAP-0865e) |
+| Backup/restore | ✅ | timeseries trees included in backup artifacts; round-trip verified (GAP-0865d) |
 | Inclusive range | ✅ | `range` is inclusive `[start_ts, end_ts]` in both in-memory and durable paths |
 | Concurrent ingest | ✅ | Store is mutex-guarded for the QUIC worker pool (leaf-tier lock) |
 | Value type | ⚠️ | **integer (`i64`) only** this release — float/decimal values are rejected |
@@ -142,8 +145,48 @@ A float (`f64`) value lane is a deferred, explicit follow-up.
   the QUIC worker pool is safe. It is a **leaf-tier lock** — it touches no other
   geode lock and is never held while acquiring another lock. See the Mutex Lock
   Ordering table in [CLAUDE.md](../CLAUDE.md).
-- **Durability:** points persist via the `timeseries-storage` engine and survive
-  a server restart.
+- **Durability (GAP-0865):** points persist via the `timeseries-storage` LSM
+  engine (WAL-first writes, immutable segments, double-slot manifest) and
+  survive both a clean restart **and a hard kill** — `appendPoints` writes
+  the CRC32C-checksummed WAL record through to the file before the in-memory
+  insert, and WAL replay on open recovers un-flushed points. Regression:
+  `zig build test-ts-durability` (`tests/ts_durability.zig`).
+- **Fail-closed open (GAP-0865a):** a corrupt or unreadable timeseries
+  directory (bad WAL checksum, corrupt/missing segment, wrong TDE key) FAILS
+  the open — graph open / server start surfaces the error instead of silently
+  continuing with an empty store. Opt back into the legacy degrade-to-memory
+  behaviour with `GEODE_TS_DURABILITY=best_effort`.
+- **fsync cadence:** the engine runs in `batch` durability mode with a
+  background WAL syncer (started by geode's wrapper; fsync every ~100 ms).
+  Accepted writes survive a process crash immediately (write-through); the
+  power-loss window is bounded by the syncer interval.
+- **Retention (GAP-0865c):** opt-in via `GEODE_TS_RETENTION_DAYS=<N>` (whole
+  days, > 0). Expired data is ACTUALLY deleted: whole segments whose
+  `max_ts` falls outside the window are removed from the manifest and
+  unlinked from disk (engine `pruneExpired`). Passes run opportunistically on
+  the ingest path (throttled to once/minute) and explicitly via
+  `Store.runRetention()`. Granularity is whole segments — a segment that
+  straddles the cutoff is kept until it fully expires. Default: retention
+  disabled (nothing is ever deleted implicitly).
+- **TDE (GAP-0865e):** opt-in via `GEODE_TS_TDE=1` + `GEODE_TDE_KEY` (the
+  same 64-hex-char key the rest of geode's TDE uses). The engine encrypts
+  every on-disk artefact with AES-256-GCM: WAL records, segment blocks
+  (TSSEG003), and the manifest (TSMNF002), with per-context AAD domain
+  separation. Reopening with a wrong or missing key fails closed.
+  **Limitation:** there is no in-place migration — enabling TDE over an
+  existing plaintext timeseries directory fails closed
+  (`error.UnexpectedPlaintextSegment`); start from a fresh directory or
+  restore through backup. Setting `GEODE_TS_TDE=1` without a valid key is an
+  error (never silently plaintext).
+- **Backup/restore (GAP-0865d):** the backup engine archives every top-level
+  entry under the data dir recursively, which includes the server-wide
+  `{data_dir}/timeseries/` tree and every per-graph
+  `{graph_dir}/timeseries/` tree (WAL + segments + manifest + identity).
+  Restore round-trips time-series points (verified by
+  `tests/ts_durability.zig`). Residual: a backup taken during heavy live
+  ingest copies the WAL file without quiescing the engine, equivalent to a
+  crash snapshot at copy time — points accepted after the copy point are not
+  in that artifact.
 - **Inclusive range:** `range` returns points in `[start_ts, end_ts]` inclusive
   of **both** bounds, in both the in-memory and durable paths.
 
@@ -163,6 +206,7 @@ them — any GQL client that can read result rows works.
 Time-series is held to graph-storage parity:
 
 - **Unit tests:** `tests/ts_ingest_roundtrip.zig` (ingest / read / restart / exactness / multi-series / bounds / concurrency / float-rejection)
+- **Durability suite:** `tests/ts_durability.zig` (`zig build test-ts-durability`) — fail-closed open on corruption, best_effort opt-out, hard-kill WAL crash recovery, retention prune (disk + queries), backup→wipe→restore round-trip, TDE key round-trip + fail-closed wrong-key (GAP-0865)
 - **Benchmark:** a native VarianceEnvelope benchmark (added in a parallel commit)
 - **Latency gate:** a CI-aware latency gate (added in a parallel commit)
 - **Harness spec:** `geodetestlab-cli/specs/timeseries_basic.yml` (greenfield, forthcoming)
