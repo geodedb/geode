@@ -966,6 +966,43 @@ pub const ManagedGraph = struct {
         return list.items;
     }
 
+    /// One (label, index-name, properties) triple deep-copied out of the
+    /// `fts_label_index` registry by `snapshotFtsLabelIndex`. All strings are
+    /// owned by the caller's allocator (use an arena — nothing is freed
+    /// individually).
+    pub const FtsRegistryEntry = struct {
+        label: []const u8,
+        name: []const u8,
+        properties: []const []const u8,
+    };
+
+    /// Deep-copy every registry triple with `allocator` (intended: an arena).
+    /// Lets the raft snapshot-install FTS rebuild enumerate the catalogued
+    /// fulltext indexes WITHOUT holding `fts_label_index_mutex` across engine
+    /// I/O (the registry mutex is brief-hold only). Brief mutex hold.
+    pub fn snapshotFtsLabelIndex(self: *ManagedGraph, allocator: Allocator) ![]FtsRegistryEntry {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.fts_label_index_mutex.lockUncancelable(io);
+        defer self.fts_label_index_mutex.unlock(io);
+
+        var out: std.ArrayListUnmanaged(FtsRegistryEntry) = .empty;
+        errdefer out.deinit(allocator);
+
+        var it = self.fts_label_index.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |spec| {
+                const props = try allocator.alloc([]const u8, spec.properties.len);
+                for (spec.properties, 0..) |p, i| props[i] = try allocator.dupe(u8, p);
+                try out.append(allocator, .{
+                    .label = try allocator.dupe(u8, entry.key_ptr.*),
+                    .name = try allocator.dupe(u8, spec.name),
+                    .properties = props,
+                });
+            }
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
         // Teardown order matters: facade → adapter (flushes + closes each engine
         // and its child dir) → base_dir (the adapter never closes base_dir) →
@@ -1431,6 +1468,22 @@ pub const StorageAdapter = struct {
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
+    }
+
+    /// Copy the names of every currently-OPEN ManagedGraph. Brief mutex hold
+    /// (tier-0 lookup only — no data ops under the lock). Names are duped with
+    /// `allocator` (intended: an arena — nothing is freed individually). Used
+    /// by the raft snapshot-install FTS rebuild to enumerate graphs whose
+    /// fulltext indexes need re-backfilling.
+    pub fn listOpenGraphNames(self: *StorageAdapter, allocator: Allocator) ![][]const u8 {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const out = try allocator.alloc([]const u8, self.engines.count());
+        var it = self.engines.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |key| : (i += 1) out[i] = try allocator.dupe(u8, key.*);
+        return out;
     }
 
     /// Return the `ManagedGraph` for `name`, creating a new `GraphEngine` if

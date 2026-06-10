@@ -1609,6 +1609,14 @@ pub fn main() !void {
     rls_types_mod_hoist.setGlobalExprRLSEngine(@ptrCast(&expr_rls_engine));
     defer rls_types_mod_hoist.setGlobalExprRLSEngine(null);
 
+    // Cluster FTS symmetry (2026-06-10 audit slice 3): wire the raft apply +
+    // snapshot-install seams to the executor's fulltext live-maintenance so a
+    // follower applying committed entries (or installing a snapshot) keeps its
+    // FTS indexes identical to the leader's. Idempotent; harmless without a
+    // cluster (the seams simply never fire).
+    // CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=ServerInitFtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
+    geode.execution.fts_index_ops.registerFtsApplyHook();
+
     // GAP-0839: Initialize the production per-tenant quota manager and the
     // durable tenant lifecycle registry, then publish both as process globals.
     // Before this, getGlobalQuotaManager() always returned null in production (so

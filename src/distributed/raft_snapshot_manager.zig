@@ -35,6 +35,36 @@ pub const SnapshotError = error{
     InvalidType,
 };
 
+// ---------------------------------------------------------------------------
+// FTS snapshot-rebuild hook (2026-06-10 audit, slice 3)
+// ---------------------------------------------------------------------------
+//
+// `installSnapshotData` wipes the store (`clearNodes`) and recreates every
+// node/edge via the *NoSave paths — which never touch FTS. Without a rebuild,
+// every fulltext index keeps serving the PRE-snapshot corpus (including
+// permanent engine tombstones for nodes the snapshot just restored), so
+// follower `CALL geode.fts.search` diverges after an InstallSnapshot.
+//
+// Same callback seam as cluster_replication's FtsApplyHook (this file is also
+// compiled in module roots where the executor's deps aren't mapped, so we
+// cannot @import fts_index_ops here). Registered by
+// `fts_index_ops.registerFtsApplyHook()`; the wrapper drops + recreates every
+// catalogued fulltext index on the process-global store and re-backfills it
+// from the restored graph. Cost: O(total indexed nodes) per snapshot install —
+// correctness over speed (snapshot install is already a full-store rewrite).
+// CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=FtsSnapshotRebuild; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
+
+/// Rebuild hook fired after a snapshot is fully installed into `store`.
+/// Must not fail the install: returns void and logs internally.
+pub const FtsSnapshotRebuildHook = *const fn (store: *GraphStore) void;
+
+var g_fts_snapshot_rebuild_hook: ?FtsSnapshotRebuildHook = null;
+
+/// Install (or clear with null) the FTS snapshot-rebuild hook. Idempotent.
+pub fn setFtsSnapshotRebuildHook(hook: ?FtsSnapshotRebuildHook) void {
+    g_fts_snapshot_rebuild_hook = hook;
+}
+
 /// Install a snapshot into the graph store, replacing all existing data.
 /// Verifies the CRC32 checksum before applying.
 pub fn installSnapshotData(
@@ -60,6 +90,11 @@ pub fn installSnapshotData(
         if (line.len == 0) continue;
         try parseLine(store, line);
     }
+
+    // 4. Rebuild fulltext indexes from the restored store (see hook docs
+    //    above). No-op when unregistered (bare unit tests) or when `store`
+    //    is not the process-global store.
+    if (g_fts_snapshot_rebuild_hook) |hook| hook(store);
 }
 
 /// Parse a single JSON-lines entry and apply it to the store.

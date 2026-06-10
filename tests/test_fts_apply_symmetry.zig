@@ -15,12 +15,27 @@
 //!
 //! These tests pin the SYMMETRY contract: applying a replicated payload to a
 //! store must leave every covering fulltext index in the same state the
-//! executor path would have. They are EXPECTED RED at HEAD (the search
-//! assertions see 0 hits / stale hits); the apply-side FTS maintenance hook
-//! (Task 13) turns them green WITHOUT modification — the maintenance plumbing
-//! (`maintainFulltextOnWrite`) resolves the adapter/store through the same
-//! process-global registry the executor uses, so an in-process apply has
-//! everything it needs.
+//! executor path would have. The apply-side FTS maintenance hook (Task 13,
+//! `fts_index_ops.registerFtsApplyHook`) turns them green; the harness
+//! registers it in `init` exactly as the server does at startup. The
+//! maintenance plumbing (`maintainFulltextOnWrite`) resolves the
+//! adapter/store through the same process-global registry the executor uses,
+//! so an in-process apply has everything it needs.
+//!
+//! NOTE on the GUPD stale-term assertion (amended in Task 13): the original
+//! red test expected the OLD term to be GONE after a replicated SET, citing
+//! "the executor re-runs delete-then-index". That premise was factually
+//! wrong: the executor's SET chokepoint deliberately uses op `.create` (NOT
+//! delete-then-reindex) because fts-storage tombstones are PERMANENT per
+//! doc_id — `deleteNode` adds the id to the engine's `all_tombstones` set and
+//! a later `indexDocument` never clears it, so delete+reindex of the same
+//! node id hides the node from search entirely (the 2026-06-07 "zero
+//! results" bug; see src/execution/property_mutation.zig:326 and
+//! docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md).
+//! SYMMETRY therefore means the follower must match the executor's ACTUAL
+//! semantics — new term searchable AND the documented stale-posting residual
+//! present on BOTH sides — not semantics neither side can have with the
+//! pinned engine. The amended test pins exactly that.
 //!
 //! Harness mirrors tests/test_fts_e2e.zig (real store + real parser + real
 //! executor + real fts-storage engine — no mocks). Unique tokens ("zraven",
@@ -63,6 +78,11 @@ const Harness = struct {
 
         graph_store.setDataDirOverride(allocator, data_dir);
         _ = graph_store.getGlobalStore(allocator);
+
+        // Wire the raft apply + snapshot-install seams to the executor's FTS
+        // live-maintenance — the same one-time registration the server does
+        // at startup (src/server/main.zig). Idempotent across tests.
+        execution.fts_index_ops.registerFtsApplyHook();
 
         const catalog = try execution.ensureCatalogInstance(allocator);
         return .{
@@ -135,13 +155,12 @@ test "raft GNC2 create apply maintains the fulltext index like the executor path
     const body = store.getNodeProperty(nid, "body") orelse return error.AppliedNodeMissingBody;
     try testing.expectEqualStrings("replicated zraven doc", body.String);
 
-    // 4. SYMMETRY CONTRACT — RED AT HEAD: the applied node must be searchable
-    //    exactly as if the executor had created it (expected 1, HEAD yields 0
-    //    because applyMultiCreatePayload never fires FTS maintenance).
+    // 4. SYMMETRY CONTRACT (red before Task 13): the applied node must be
+    //    searchable exactly as if the executor had created it.
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
 }
 
-test "raft GUPD update apply maintains the fulltext index (stale term dropped, new term indexed)" {
+test "raft GUPD update apply maintains the fulltext index (new term indexed, executor-parity residual)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
     const a = testing.allocator;
@@ -169,9 +188,54 @@ test "raft GUPD update apply maintains the fulltext index (stale term dropped, n
     const body = store.getNodeProperty(nid, "body") orelse return error.UpdatedNodeMissingBody;
     try testing.expectEqualStrings("fresh zosprey token", body.String);
 
-    // SYMMETRY CONTRACT — RED AT HEAD: an executor SET re-runs delete-then-index
-    // (see tests/test_fts_maintenance.zig), so the NEW term must be searchable…
+    // SYMMETRY CONTRACT (red before Task 13): the NEW term must be searchable,
+    // exactly as it would be after an executor SET (which fires op `.create`).
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zosprey"));
-    // …and the OLD term must be GONE (HEAD serves a STALE posting: still 1 hit).
-    try testing.expectEqual(@as(usize, 0), try h.searchCount("doc_idx", "zraven"));
+    // EXECUTOR-PARITY RESIDUAL (amended — see file header): the OLD term stays
+    // searchable on BOTH the executor and apply paths. The executor SET
+    // chokepoint deliberately does NOT delete-then-reindex (fts-storage
+    // tombstones are permanent per doc_id — delete+reindex would hide the node
+    // entirely; docs/bugs/2026-06-07-fts-search-returns-zero-results-at-
+    // runtime.md), so a follower dropping the stale posting while the leader
+    // keeps it would itself be divergence. When the engine gains
+    // un-tombstone-on-reindex, flip this expectation to 0 TOGETHER with the
+    // executor path.
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
+}
+
+test "raft snapshot install rebuilds fulltext indexes from the restored store" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const a = testing.allocator;
+    const snap_mgr = geode.distributed.raft_snapshot_manager;
+
+    try h.run("CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext");
+
+    // Executor-created doc, live-indexed (sanity-proven).
+    try h.run("CREATE (:Doc {body: 'snapshot zsnaptok doc'})");
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zsnaptok"));
+
+    // Serialize a snapshot CONTAINING the doc.
+    const store = graph_store.getGlobalStore(a);
+    const snap = try snap_mgr.createSnapshotData(a, store);
+    defer a.free(snap.data);
+
+    // Executor-DELETE the doc: live maintenance fires `.delete`, which
+    // PERMANENTLY tombstones the node id in the fts engine.
+    try h.run("MATCH (d:Doc) DETACH DELETE d");
+    try testing.expectEqual(@as(usize, 0), try h.searchCount("doc_idx", "zsnaptok"));
+
+    // Install the snapshot: clearNodes + *NoSave recreate — which never touch
+    // FTS. The node comes back under its ORIGINAL id, so WITHOUT the rebuild
+    // hook the engine's tombstone keeps it invisible forever (red before
+    // Task 13). The rebuild drops + recreates the engine (fresh, tombstone-
+    // free) and re-backfills from the restored store.
+    try snap_mgr.installSnapshotData(a, store, snap.data, snap.checksum);
+
+    // Setup assertion (NOT the contract): the store row was restored.
+    const ids = store.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "Doc") orelse return error.RestoredNodeMissing;
+    try testing.expectEqual(@as(usize, 1), ids.len);
+
+    // SYMMETRY CONTRACT: the restored doc must be searchable again.
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zsnaptok"));
 }

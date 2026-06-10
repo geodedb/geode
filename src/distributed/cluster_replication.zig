@@ -33,6 +33,69 @@ const GraphStore = graph_store.GraphStore;
 /// (Legacy/MVP `_raft_data` payloads have no magic and take the fallback path.)
 pub const MAGIC = [4]u8{ 'G', 'N', 'C', '1' };
 
+// ---------------------------------------------------------------------------
+// FTS apply-maintenance hook (2026-06-10 audit, slice 3)
+// ---------------------------------------------------------------------------
+//
+// The EXECUTOR maintains every covering fulltext index on node create / SET /
+// delete (`fts_index_ops.maintainFulltextOnWrite`), but the apply functions in
+// THIS file mutate the store directly — so a follower applying committed
+// entries never updated its FTS index and follower `CALL geode.fts.search`
+// silently diverged from the leader.
+//
+// We can NOT @import the executor's fts_index_ops here: this file is compiled
+// in other unit-test module roots (e.g. via the graph_store.zig closure) where
+// the executor's module deps aren't mapped — the exact compile-break class hit
+// with cluster.zig inline tests (commit d7a9597a). Instead the executor
+// registers a callback at startup (`fts_index_ops.registerFtsApplyHook`), and
+// the apply functions fire it through this seam. Null in bare codec unit tests
+// (those don't exercise FTS).
+//
+// Op semantics MIRROR the executor's maintainFulltextOnWrite call sites:
+//   * `.upsert` ↔ executor `.create` (append-only index of current props) —
+//     fired AFTER the store mutation for GNC1/GNC2 create, GMRG on-match-set,
+//     and GUPD set/remove. The executor deliberately uses `.create` (NOT
+//     delete-then-reindex) for SET too — the fts-storage engine's tombstones
+//     are permanent for a doc_id, so delete+reindex would hide the node (see
+//     property_mutation.zig and docs/bugs/2026-06-07-fts-search-returns-zero-
+//     results-at-runtime.md). Mirroring keeps leader and follower IDENTICAL,
+//     including the documented stale-posting residual.
+//   * `.delete` ↔ executor `.delete` — fired BEFORE the store node delete
+//     (mirroring crud_operations.zig:4161) so labels are still resolvable.
+// Edges carry no FTS content (the executor maintains FTS only on node paths),
+// so edge creates/deletes never fire the hook.
+//
+// THREAD-SAFETY: the hook runs on the raft tick thread (apply is
+// single-threaded per RaftNode). geode disables the fts engine's
+// owning-thread assert (`single_writer_thread_check = false`,
+// src/storage/fts_storage_adapter.zig) and the engine's internal rw_lock
+// serializes this writer against the executor/connection threads.
+// CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=FtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
+
+/// FTS live-maintenance op fired by the raft apply path.
+pub const FtsApplyOp = enum { upsert, delete };
+
+/// Registered hook. `store` is the store the apply mutated (the wrapper
+/// no-ops unless it is the process-global store — only that store has FTS
+/// adapter state). `graph` is the payload's target graph. The wrapper
+/// resolves the node's labels from the store by `node_id`; for `.delete` the
+/// hook fires pre-delete so labels are still resolvable. Must not fail the
+/// apply: the hook returns void and logs internally.
+pub const FtsApplyHook = *const fn (store: *GraphStore, graph: []const u8, node_id: u64, op: FtsApplyOp) void;
+
+var g_fts_apply_hook: ?FtsApplyHook = null;
+
+/// Install (or clear with null) the FTS apply-maintenance hook. Idempotent —
+/// re-registering the same hook is fine. Called by
+/// `fts_index_ops.registerFtsApplyHook()` at server startup / test setup.
+pub fn setFtsApplyHook(hook: ?FtsApplyHook) void {
+    g_fts_apply_hook = hook;
+}
+
+inline fn fireFtsApplyHook(store: *GraphStore, graph: []const u8, node_id: u64, op: FtsApplyOp) void {
+    if (g_fts_apply_hook) |hook| hook(store, graph, node_id, op);
+}
+
 pub const Prop = struct { key: []const u8, value: PropertyValue };
 
 pub const CodecError = error{ UnsupportedPropertyType, CorruptPayload };
@@ -205,6 +268,12 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
         };
         try store.setNodeProperty(node_id, key, val);
     }
+
+    // FTS symmetry: maintain covering fulltext indexes exactly like the
+    // executor's CREATE path (crud_operations.zig:1228). Fired after the
+    // props land so the wrapper indexes the node's current property values.
+    fireFtsApplyHook(store, graph, node_id, .upsert);
+
     return node_id;
 }
 
@@ -459,6 +528,10 @@ pub fn applyMultiCreatePayload(
             const p = try readProp(&r);
             try store.setNodeProperty(node_id, p.key, p.value);
         }
+
+        // FTS symmetry: per created node, after its props land. Edges below
+        // carry no FTS content (executor maintains FTS only on node paths).
+        fireFtsApplyHook(store, graph, node_id, .upsert);
     }
 
     const edge_count = try r.readU16();
@@ -606,6 +679,10 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     while (ni < node_count) : (ni += 1) {
         const node_id = try r.readU64();
         if (store.getNodePtr(node_id) != null) {
+            // FTS symmetry: fired BEFORE the store delete (mirroring
+            // crud_operations.zig:4161) so the wrapper can still resolve the
+            // node's labels to find its covering indexes.
+            fireFtsApplyHook(store, graph, node_id, .delete);
             store.deleteNode(node_id);
             removed += 1;
         }
@@ -690,6 +767,12 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
         // in place otherwise.
         try store.setNodeProperty(node_id, p.key, p.value);
     }
+
+    // FTS symmetry: ON MATCH SET mutates node content — maintain covering
+    // indexes like the executor's SET chokepoint (property_mutation.zig).
+    // The wrapper no-ops if the node is absent.
+    fireFtsApplyHook(store, graph, node_id, .upsert);
+
     return node_id;
 }
 
@@ -839,6 +922,12 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
                 else => return err,
             };
         }
+
+        // FTS symmetry: the per-node record mutated content — maintain
+        // covering indexes like the executor's SET chokepoint
+        // (property_mutation.zig). Fired after label add/remove so the
+        // wrapper resolves the node's FINAL label set for this record.
+        fireFtsApplyHook(store, graph, node_id, .upsert);
     }
 
     return update_count;

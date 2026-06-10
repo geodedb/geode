@@ -55,7 +55,9 @@ const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
-const fts_index_ops = @import("execution/fts_index_ops.zig");
+// pub: server startup + apply-symmetry tests reach registerFtsApplyHook()
+// through geode.execution.fts_index_ops.
+pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");

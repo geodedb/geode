@@ -1935,7 +1935,7 @@ pub fn build(b: *std.Build) void {
     fts_apply_symmetry_tests.root_module.addImport("geode", root_mod);
     fts_apply_symmetry_tests.root_module.link_libc = true;
     const run_fts_apply_symmetry_tests = b.addRunArtifact(fts_apply_symmetry_tests);
-    const fts_apply_symmetry_step = b.step("test-fts-apply-symmetry", "Raft apply must maintain the fulltext index like the executor path (GNC2 create + GUPD update)");
+    const fts_apply_symmetry_step = b.step("test-fts-apply-symmetry", "Raft apply + snapshot install must maintain the fulltext index like the executor path (GNC2 create + GUPD update + snapshot rebuild)");
     fts_apply_symmetry_step.dependOn(&run_fts_apply_symmetry_tests.step);
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
@@ -2703,6 +2703,9 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0810_cross_subsystem_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811_aggregation_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_fts_latency_tests.step, 1, test_shard_loads, test_shard_index);
+    // Task 13 (cluster FTS symmetry): raft apply + snapshot install must
+    // maintain fulltext indexes like the executor path.
+    shardDep(test_step, &run_fts_apply_symmetry_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_latency_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_ingest_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811b_property_aggregate_tests.step, 1, test_shard_loads, test_shard_index);

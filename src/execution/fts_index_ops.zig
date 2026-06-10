@@ -22,6 +22,8 @@ const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const tokenizer = @import("../index/fts_tokenizer.zig");
 const adapter_mod = @import("../storage/fts_storage_adapter.zig");
+const cluster_replication = @import("../distributed/cluster_replication.zig");
+const raft_snapshot_manager = @import("../distributed/raft_snapshot_manager.zig");
 
 const log = std.log.scoped(.fts_index_ops);
 
@@ -325,4 +327,141 @@ fn indexNodeDocument(
     if (doc_terms.items.len == 0) return; // nothing indexable on this node
 
     try fa.indexNode(index_name, node_id, doc_terms.items);
+}
+
+// ===========================================================================
+// Raft apply / snapshot-install FTS maintenance (cluster FTS symmetry,
+// 2026-06-10 audit slice 3 — see tests/test_fts_apply_symmetry.zig)
+// ===========================================================================
+//
+// The raft apply path (src/distributed/cluster_replication.zig) and the
+// snapshot installer (src/distributed/raft_snapshot_manager.zig) mutate the
+// store directly, bypassing the executor's `maintainFulltextOnWrite` call
+// sites — so a follower's fulltext indexes silently diverged from the leader.
+// Those modules can NOT @import this file (they are compiled in module roots
+// where the executor's deps aren't mapped), so they expose callback seams and
+// THIS module registers the wrappers below at startup.
+//
+// THREAD-SAFETY: the apply hook runs on the raft tick thread — a second
+// writer beside the executor/connection threads. geode constructs every fts
+// engine with `single_writer_thread_check = false`
+// (src/storage/fts_storage_adapter.zig) and the engine's internal rw_lock
+// serializes all mutators, so cross-thread writes are safe; the
+// owning-thread note on `maintainFulltextOnWrite` above describes the
+// historical assert that this config disables.
+
+/// Register the FTS maintenance wrappers on the raft apply + snapshot-install
+/// seams. Idempotent (re-registering installs the same function pointers).
+/// Called once at server startup (src/server/main.zig) and from in-process
+/// apply tests that exercise FTS.
+pub fn registerFtsApplyHook() void {
+    cluster_replication.setFtsApplyHook(&ftsApplyMaintenanceHook);
+    raft_snapshot_manager.setFtsSnapshotRebuildHook(&ftsSnapshotRebuildHook);
+}
+
+/// Apply-path wrapper: resolve the node's labels from the store and run the
+/// SAME maintenance the executor runs (`.upsert` ↔ executor `.create`,
+/// `.delete` ↔ executor `.delete` — see the op-semantics note in
+/// cluster_replication.zig). Never fails the apply: errors are logged.
+fn ftsApplyMaintenanceHook(
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    node_id: u64,
+    op: cluster_replication.FtsApplyOp,
+) void {
+    // Only the process-global store has FTS adapter state; a foreign store
+    // (bare codec unit tests applying onto a local GraphStore) has nothing to
+    // maintain — and maintainFulltextOnWrite reads properties through the
+    // global store, so acting on a foreign store would index the wrong data.
+    const global = graph_store.getCurrentGlobalStore() orelse return;
+    if (store != global) return;
+
+    // Labels still resolvable for `.delete`: the hook fires pre-delete.
+    const node_ptr = store.getNodePtr(node_id) orelse return;
+
+    var arena = std.heap.ArenaAllocator.init(graph_store.global_allocator());
+    defer arena.deinit();
+
+    const write_op: FtsWriteOp = switch (op) {
+        .upsert => .create,
+        .delete => .delete,
+    };
+    maintainFulltextOnWrite(arena.allocator(), graph_name, node_id, node_ptr.labels, write_op) catch |err| {
+        log.warn("fts maintain (raft apply, {s}) failed for node {d}: {}", .{ @tagName(op), node_id, err });
+    };
+}
+
+/// Snapshot-install wrapper: drop + recreate + re-backfill every catalogued
+/// fulltext index from the restored store. Never fails the install.
+fn ftsSnapshotRebuildHook(store: *graph_store.GraphStore) void {
+    const global = graph_store.getCurrentGlobalStore() orelse return;
+    if (store != global) return;
+
+    var arena = std.heap.ArenaAllocator.init(graph_store.global_allocator());
+    defer arena.deinit();
+
+    rebuildAllFulltextIndexes(arena.allocator()) catch |err| {
+        log.warn("fts snapshot rebuild failed: {}", .{err});
+    };
+}
+
+/// Rebuild EVERY catalogued fulltext index on every open graph: drop the
+/// engine (on-disk tree included) + cached facade, recreate a fresh engine,
+/// and re-backfill from the CURRENT store contents. The label→index registry
+/// is left intact (it is the catalog being rebuilt from).
+///
+/// Why drop+recreate instead of incremental repair: a snapshot install wipes
+/// and rewrites the whole store, and fts-storage tombstones are permanent per
+/// doc_id (docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md)
+/// — a node deleted pre-snapshot and restored by the snapshot would stay
+/// invisible without a fresh engine. Cost: O(total indexed nodes) — accepted;
+/// snapshot install is already a full-store rewrite. Per-index failures are
+/// logged and skipped so one broken index cannot wedge the install.
+pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
+    const adapter = graph_store.getGlobalAdapter() orelse return;
+
+    const graph_names = try adapter.listOpenGraphNames(scratch);
+    for (graph_names) |gname| {
+        const mg = adapter.lookupManagedGraph(gname) catch continue;
+        const fa = mg.fts_adapter orelse continue; // no FTS on this graph
+
+        const entries = mg.snapshotFtsLabelIndex(scratch) catch |err| {
+            log.warn("fts snapshot rebuild: registry copy failed for graph '{s}': {}", .{ gname, err });
+            continue;
+        };
+
+        // De-dup by index name (the registry is keyed per label; CREATE INDEX
+        // registers one label per index, but stay defensive).
+        var seen: std.StringHashMapUnmanaged(void) = .empty;
+        defer seen.deinit(scratch);
+
+        for (entries) |entry| {
+            const gop = try seen.getOrPut(scratch, entry.name);
+            if (gop.found_existing) continue;
+
+            // Facade borrows the engine — drop it before the engine.
+            mg.dropFulltextFacade(adapter.allocator, entry.name);
+
+            fa.dropIndex(entry.name) catch |err| switch (err) {
+                adapter_mod.Error.IndexNotFound => {}, // never opened — fine
+                else => {
+                    log.warn("fts snapshot rebuild: drop '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
+                    continue;
+                },
+            };
+            fa.createIndex(entry.name) catch |err| {
+                log.warn("fts snapshot rebuild: recreate '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
+                continue;
+            };
+
+            backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa) catch |err| {
+                log.warn("fts snapshot rebuild: backfill '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
+                continue;
+            };
+
+            fa.flush(entry.name) catch |err| {
+                log.warn("fts snapshot rebuild: flush '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
+            };
+        }
+    }
 }
