@@ -1180,9 +1180,10 @@ pub fn topKOrderedFastPath(
         const prop_store: *graph_store.GraphStore = @constCast(read_store);
         for (slots) |node_id| {
             const node = read_store.nodes.get(node_id) orelse continue;
-            if (filter_tenant) |tid| {
-                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-            }
+            // GAP-0846 follow-up: hierarchy-aware tenant filter (was exact-match
+            // only, which under-fetched a parent's descendant rows). passesTenantFilter
+            // keeps the exact-match fast path and adds ancestor-or-self, fail-closed.
+            if (!passesTenantFilter(node, filter_tenant)) continue;
             const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
 
             // Build entry in native type. Skip non-numeric (parity with
@@ -1457,6 +1458,10 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 
                 for (label_node_ids.items) |node_id| {
                     const node = store.nodes.getPtr(node_id) orelse continue;
+                    // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
+                    // scan under an active hierarchy; the per-row hierarchy-aware check
+                    // is the fail-closed compensator so siblings/ancestors cannot leak.
+                    if (!passesTenantFilter(node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                     if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                     try matches.append(allocator, node_id);
@@ -1774,6 +1779,10 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             for (candidates.items) |node_id| {
                 const node = read_store.nodes.get(node_id) orelse continue;
 
+                // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
+                // scan under an active hierarchy; per-row hierarchy-aware check is the
+                // fail-closed compensator so siblings/ancestors cannot leak.
+                if (!passesTenantFilter(node, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, node)) continue;
 
@@ -2092,6 +2101,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             for (label_node_ids.items) |node_id| {
                 const node = store.nodes.getPtr(node_id) orelse continue;
+                // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
+                // scan under an active hierarchy; per-row hierarchy-aware check is the
+                // fail-closed compensator. WITHOUT this, `MATCH (a:P),(b:Q)` as a
+                // sibling tenant returned other siblings' rows (proven cross-tenant leak).
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
 
@@ -2780,6 +2794,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
             for (label_node_ids.items) |node_id| {
                 const left_node = store.nodes.getPtr(node_id) orelse continue;
+                // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
+                // the relaxed storageTenantFilter() label scan (anchor node).
+                if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
 
@@ -2837,6 +2854,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
             for (label_node_ids.items) |node_id| {
                 const right_node = store.nodes.getPtr(node_id) orelse continue;
+                // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
+                // the relaxed storageTenantFilter() label scan (anchor node).
+                if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
+                if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
 
                 // Zero-copy edge iteration: use getIncomingEdgeIds/getOutgoingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
@@ -2990,6 +3011,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
             for (label_node_ids.items) |node_id| {
                 const node = store.nodes.getPtr(node_id) orelse continue;
+                // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
+                // the relaxed storageTenantFilter() label scan; also restores the
+                // RLS denied-labels check missing on this index fast path.
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
+                if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
@@ -5613,6 +5639,11 @@ fn executeMultiHopGroupBy(
 
         for (label_node_ids.items) |node_id| {
             const node = store.nodes.getPtr(node_id) orelse continue;
+            // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for the
+            // relaxed storageTenantFilter() label scan; also restores the RLS
+            // denied-labels check missing on this multi-hop init fast path.
+            if (!passesTenantFilter(node.*, filter_tenant)) continue;
+            if (!passesRLSFilter(&rls_row_local, node.*)) continue;
             try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);
         }
     } else {
@@ -7455,6 +7486,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     for (label_node_ids.items) |node_id| {
                         const node = store.nodes.getPtr(node_id) orelse continue;
+                        // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator
+                        // for the relaxed storageTenantFilter() label scan; also restores
+                        // the RLS denied-labels check missing on this fast path.
+                        if (!passesTenantFilter(node.*, filter_tenant)) continue;
+                        if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                         try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
                     }
                 } else {

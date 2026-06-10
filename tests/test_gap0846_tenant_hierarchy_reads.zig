@@ -327,3 +327,176 @@ test "GAP-0846 (no-hierarchy): exact-match isolation preserved when hierarchy is
     try testing.expectEqual(@as(usize, 2), (try h.runMatch(allocator, "MATCH (n:Secret) RETURN n", "tenant_alpha")).row_count);
     try testing.expectEqual(@as(usize, 1), (try h.runMatch(allocator, "MATCH (n:Secret) RETURN n", "tenant_beta")).row_count);
 }
+
+// ---------------------------------------------------------------------------
+// 6. GAP-0846 FOLLOW-UP (cross-tenant leak): the relaxed `storageTenantFilter`
+//    label-index scan MUST be re-filtered per-row at EVERY label-indexed site,
+//    not just `executeMatchQueryImpl`. These tests drive the OTHER executors
+//    (multi-pattern, relationship, multi-chain, CALL/CREATE match) that previously
+//    fetched all tenants' rows and applied only `passesRLSFilter`.
+//
+//    Each was PROVEN red against the pre-follow-up code: a sibling tenant saw
+//    other siblings' rows. The multi-pattern test in particular returned 4 rows
+//    (cartesian P×Q over the leaked set) instead of 1 for `unit_a` under the
+//    org->{unit_a,unit_b} hierarchy.
+// ---------------------------------------------------------------------------
+
+test "GAP-0846 follow-up (multi-pattern leak): MATCH (a:P),(b:Q) is sibling-isolated" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    // org -> { unit_a, unit_b }
+    try h.addTenant("org", null);
+    try h.addTenant("unit_a", "org");
+    try h.addTenant("unit_b", "org");
+
+    const store = graph_store.getGlobalStore(allocator);
+    const p_labels = [_][]const u8{"P"};
+    const q_labels = [_][]const u8{"Q"};
+
+    // unit_a: 1 P + 1 Q ; unit_b (sibling): 1 P + 1 Q.
+    _ = try store.createNodeWithGraphAndTenant(&p_labels, "default", "unit_a");
+    _ = try store.createNodeWithGraphAndTenant(&q_labels, "default", "unit_a");
+    _ = try store.createNodeWithGraphAndTenant(&p_labels, "default", "unit_b");
+    _ = try store.createNodeWithGraphAndTenant(&q_labels, "default", "unit_b");
+
+    // unit_a: exactly its own P×Q = 1×1 = 1 row.
+    // PRE-FIX (executeMultiNodeMatch leaked): unit_a saw both P's and both Q's,
+    // so the cartesian product was 2×2 = 4 — the proven cross-tenant leak.
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a:P), (b:Q) RETURN a, b", "unit_a")).row_count,
+    );
+    // sibling unit_b: symmetric — only its own product = 1.
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a:P), (b:Q) RETURN a, b", "unit_b")).row_count,
+    );
+    // parent org: sees both children's P (2) × both children's Q (2) = 4.
+    try testing.expectEqual(
+        @as(usize, 4),
+        (try h.runMatch(allocator, "MATCH (a:P), (b:Q) RETURN a, b", "org")).row_count,
+    );
+}
+
+test "GAP-0846 follow-up (relationship leak): MATCH (a)-[r:T]->(b) is sibling-isolated" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try h.addTenant("org", null);
+    try h.addTenant("unit_a", "org");
+    try h.addTenant("unit_b", "org");
+
+    const store = graph_store.getGlobalStore(allocator);
+    const a_labels = [_][]const u8{"A"};
+    const b_labels = [_][]const u8{"B"};
+
+    // unit_a: A -[T]-> B (1 edge).
+    const a1 = try store.createNodeWithGraphAndTenant(&a_labels, "default", "unit_a");
+    const b1 = try store.createNodeWithGraphAndTenant(&b_labels, "default", "unit_a");
+    _ = try store.createEdgeWithGraphAndTenant(a1, b1, "T", "default", "unit_a");
+
+    // unit_b (sibling): A -[T]-> B (1 edge).
+    const a2 = try store.createNodeWithGraphAndTenant(&a_labels, "default", "unit_b");
+    const b2 = try store.createNodeWithGraphAndTenant(&b_labels, "default", "unit_b");
+    _ = try store.createEdgeWithGraphAndTenant(a2, b2, "T", "default", "unit_b");
+
+    // Left-label-anchored relationship scan (executeMultiChainRelationshipMatch
+    // left_labels site + passesTenantFilterEdge + right endpoint check).
+    // unit_a: exactly its own 1 edge; PRE-FIX the left anchor leaked unit_b's A.
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a:A)-[r:T]->(b:B) RETURN a, r, b", "unit_a")).row_count,
+    );
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a:A)-[r:T]->(b:B) RETURN a, r, b", "unit_b")).row_count,
+    );
+    // parent org: both edges reachable.
+    try testing.expectEqual(
+        @as(usize, 2),
+        (try h.runMatch(allocator, "MATCH (a:A)-[r:T]->(b:B) RETURN a, r, b", "org")).row_count,
+    );
+
+    // Right-label-only anchored scan (the right_labels site at ~2835 which
+    // PRE-FIX fetched the anchor with NO tenant filter at all): anchor on B.
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a)-[r:T]->(b:B) RETURN a, r, b", "unit_a")).row_count,
+    );
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a)-[r:T]->(b:B) RETURN a, r, b", "unit_b")).row_count,
+    );
+
+    // Edge-type-only scan (getEdgesByType site at ~2894 — already safe, regression guard).
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (a)-[r:T]->(b) RETURN a, r, b", "unit_a")).row_count,
+    );
+}
+
+test "GAP-0846 follow-up (multi-chain leak): two relationship chains are sibling-isolated" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try h.addTenant("org", null);
+    try h.addTenant("unit_a", "org");
+    try h.addTenant("unit_b", "org");
+
+    const store = graph_store.getGlobalStore(allocator);
+    const c_labels = [_][]const u8{"C"};
+    const d_labels = [_][]const u8{"D"};
+
+    // unit_a: C -[E]-> D.
+    const c1 = try store.createNodeWithGraphAndTenant(&c_labels, "default", "unit_a");
+    const d1 = try store.createNodeWithGraphAndTenant(&d_labels, "default", "unit_a");
+    _ = try store.createEdgeWithGraphAndTenant(c1, d1, "E", "default", "unit_a");
+
+    // unit_b (sibling): C -[E]-> D.
+    const c2 = try store.createNodeWithGraphAndTenant(&c_labels, "default", "unit_b");
+    const d2 = try store.createNodeWithGraphAndTenant(&d_labels, "default", "unit_b");
+    _ = try store.createEdgeWithGraphAndTenant(c2, d2, "E", "default", "unit_b");
+
+    // Two independent chains -> executeMultiChainRelationshipMatch first chain
+    // plus the multi-chain init label-index sites. unit_a: 1×1 = 1.
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (c1:C)-[:E]->(d1:D), (c2:C)-[:E]->(d2:D) RETURN c1, d2", "unit_a")).row_count,
+    );
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (c1:C)-[:E]->(d1:D), (c2:C)-[:E]->(d2:D) RETURN c1, d2", "unit_b")).row_count,
+    );
+}
+
+test "GAP-0846 follow-up (CREATE match leak): MATCH ... CREATE source is sibling-isolated" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try h.addTenant("org", null);
+    try h.addTenant("unit_a", "org");
+    try h.addTenant("unit_b", "org");
+
+    const store = graph_store.getGlobalStore(allocator);
+    const src_labels = [_][]const u8{"Src"};
+
+    // unit_a: 1 Src ; unit_b (sibling): 2 Src.
+    _ = try store.createNodeWithGraphAndTenant(&src_labels, "default", "unit_a");
+    _ = try store.createNodeWithGraphAndTenant(&src_labels, "default", "unit_b");
+    _ = try store.createNodeWithGraphAndTenant(&src_labels, "default", "unit_b");
+
+    // Direct exercise of executeMatchCreateQuery (site ~1455): the matched source
+    // set drives the per-match CREATE, so the number of RETURN'd created rows
+    // equals the number of matched sources. unit_a must match exactly its own 1
+    // Src; PRE-FIX the label-index match leaked unit_b's 2 siblings -> 3 CREATE
+    // rows. We assert exactly 1 row (1 source -> 1 created node returned).
+    try testing.expectEqual(
+        @as(usize, 1),
+        (try h.runMatch(allocator, "MATCH (s:Src) CREATE (t:SrcCopy) RETURN t", "unit_a")).row_count,
+    );
+}
