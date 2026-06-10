@@ -192,3 +192,18 @@ test "GAP-0821: rename + prepareRename requests -> -32601, renameProvider absent
     try expectMethodNotFound(alloc, &srv, "textDocument/rename", 30);
     try expectMethodNotFound(alloc, &srv, "textDocument/prepareRename", 31);
 }
+
+// ---------------------------------------------------------------------------
+// GAP-0822 — codeAction: explicit non-support
+// ---------------------------------------------------------------------------
+
+test "GAP-0822: codeAction request -> -32601, codeActionProvider absent" {
+    const alloc = testing.allocator;
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+    var srv = try newCapturingServer(alloc);
+    defer srv.deinit();
+
+    try assertCapabilityAbsent(alloc, "codeActionProvider");
+
+    try expectMethodNotFound(alloc, &srv, "textDocument/codeAction", 40);
+}
