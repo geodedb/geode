@@ -4768,6 +4768,36 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
   - Quality Sev1 cross-link in `docs/QUALITY_GAP_ANALYSIS.md` row 1 marked closed.
 - **Residual:** 2 sites at `src/cli/lsp/server.zig:220-221` outside the original audit scope — filed as new GAP-0832 (Low / P3 quality follow-up).
 
+### LSP-SEC-005: `publishDiagnostics` URI percent-encoding (Resolved 2026-06-10)
+
+- **Original Gap:** `Server.sendDiagnostics` spliced the client-supplied document URI raw into the manually-built JSON envelope — spaces, `#`, non-ASCII, and JSON-breaking bytes (`"`, `\`, control chars) went out unescaped — LSP-SEC-005 (Risk 8).
+- **CWE:** CWE-116 (Improper Encoding or Escaping of Output)
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `2b03d9ad` — `fix: close LSP-SEC-002/005/008`.
+  - New exported helper `lsp_server.percentEncodeUri` (RFC 3986: unreserved + URI delims pass through, `%` passes to avoid double-encoding existing escapes, everything else `%XX` uppercase); every outgoing `publishDiagnostics` URI routes through it, and the output is JSON-string-safe by construction.
+  - Regression: `tests/test_gap0885_lsp_hardening.zig` (`zig build test-gap0885-lsp`) — space/`#`/non-ASCII encoding, already-encoded round-trip, JSON-breaking bytes.
+  - GitLab issue [#794](https://gitlab.com/devnw/codepros/geode/geode/-/issues/794) (confidential) ready to close.
+
+### LSP-SEC-008: Loopback hard-assert when MCP/LSP auth mode is `.none` (Resolved 2026-06-10)
+
+- **Original Gap:** Nothing prevented constructing an unauthenticated MCP/LSP network listener on a non-loopback interface — LSP-SEC-008 follow-up (Low).
+- **CWE:** CWE-306 (Missing Authentication for Critical Function)
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `2b03d9ad` — `fix: close LSP-SEC-002/005/008`.
+  - MCP: `GeodeMcpServer.init` returns `error.InsecureNoAuthBind` for `auth_mode = .none` + non-loopback `http_bind` (new `isLoopbackBind`: 127/8, `::1`, `[::1]`, `localhost`); authenticated `.bearer` non-loopback binds stay legal.
+  - LSP: new `lsp_server.validateBindPolicy` is the single bind-policy source of truth, wired into both bind sites — `runLspListener` (embedded `geode serve`) refuses a non-loopback bind without a verifier; standalone `geode lsp --listen` refuses non-loopback hosts (sessions there run verifier-null fail-closed, so a public bind only exposed the pre-auth parse surface).
+  - Regression: `tests/test_gap0885_lsp_hardening.zig` (`zig build test-gap0885-lsp`).
+
+### SEC-LSP-BIND-01: Regression guard for `--lsp-bind-all` (Resolved 2026-06-10)
+
+- **Original Gap:** No regression guard ensured a future MR could not flip `--lsp-bind-all` to unauthenticated behavior — SEC-LSP-BIND-01 (Risk 12).
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `2b03d9ad` — the LSP-SEC-008 bind-policy work IS the requested guard: `lsp_server.validateBindPolicy` refuses non-loopback binds that are unauthenticated (`allow_unauth` or no verifier) at runtime, and `tests/test_gap0885_lsp_hardening.zig` pins both directions — the unauthenticated bind-all combinations error, and the legitimate authenticated `--lsp-bind-all` path (verifier present, `allow_unauth = false`) stays legal.
+  - GitLab issue [#823](https://gitlab.com/devnw/codepros/geode/geode/-/issues/823) (confidential) ready to close.
+
 ### F-04: Buffered stdin reader for LSP transport (Resolved 2026-05-06)
 
 - **Original Gap:** LSP transport read loop made one syscall per byte; F-04 (PerfScore 100, P0).
