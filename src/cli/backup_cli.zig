@@ -61,6 +61,8 @@ const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const stdio_util = @import("../utils/stdio.zig");
+// SEC-CLI-01: production-posture gate for --insecure-tls-skip-verify.
+const insecure_tls_gate = @import("insecure_tls_gate.zig");
 const zig_quic_bridge = geode.zig_quic_bridge;
 const zig_client = zig_quic_bridge.zig_client;
 
@@ -321,9 +323,11 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -823,9 +827,11 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             skip_confirmation = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -1275,9 +1281,11 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             allow_unsigned = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});

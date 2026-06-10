@@ -5296,6 +5296,33 @@ pub fn build(b: *std.Build) void {
     const sec_sess_log_step = b.step("test-sec-sess-log", "SEC-SESS-LOG-01: session rotate must not print the token to stderr");
     sec_sess_log_step.dependOn(&run_sec_sess_log_tests.step);
 
+    // GAP-0885d: SEC-S3-SIGV2-01 + SEC-CLI-01. AWS SigV4 known-answer tests
+    // against the published AWS documentation vectors (replacing the legacy
+    // SigV2 HMAC-SHA1 signing in src/storage/s3_backup.zig), plus the
+    // --insecure-tls-skip-verify production-posture gate (GAP-0850 pattern).
+    // s3_backup.zig is rooted as its own module (same rationale as
+    // storage_backup_mod above) so the previously-orphaned manager compiles
+    // again and the SigV4 request path stays semantically analyzed.
+    const s3_sigv4_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_sigv4.zig"), .target = target, .optimize = optimize });
+    const s3_backup_sig_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_backup.zig"), .target = target, .optimize = optimize });
+    s3_backup_sig_mod.addImport("logging", logging_mod);
+    s3_backup_sig_mod.addImport("geode", root_mod);
+    s3_backup_sig_mod.addImport("storage/backup", storage_backup_mod);
+    s3_backup_sig_mod.addImport("s3_sigv4", s3_sigv4_mod);
+    s3_backup_sig_mod.link_libc = true;
+    const insecure_tls_gate_mod = b.createModule(.{ .root_source_file = b.path("src/cli/insecure_tls_gate.zig"), .target = target, .optimize = optimize });
+    insecure_tls_gate_mod.link_libc = true;
+    const s3_sigv4_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_s3_sigv4.zig"), .target = target, .optimize = optimize });
+    s3_sigv4_test_mod.addImport("s3_sigv4", s3_sigv4_mod);
+    s3_sigv4_test_mod.addImport("s3_backup", s3_backup_sig_mod);
+    s3_sigv4_test_mod.addImport("insecure_tls_gate", insecure_tls_gate_mod);
+    s3_sigv4_test_mod.link_libc = true;
+    const s3_sigv4_tests = b.addTest(.{ .root_module = s3_sigv4_test_mod });
+    const run_s3_sigv4_tests = b.addRunArtifact(s3_sigv4_tests);
+    shardDep(test_step, &run_s3_sigv4_tests.step, 1, test_shard_loads, test_shard_index);
+    const s3_sigv4_step = b.step("test-s3-sigv4", "SEC-S3-SIGV2-01 + SEC-CLI-01: S3 SigV4 KATs + insecure-TLS flag gate");
+    s3_sigv4_step.dependOn(&run_s3_sigv4_tests.step);
+
     // GAP-0830: MCP/LSP bridge governance test. Exercises the four bridge
     // entry points (lsp.validateQuery / getCompletions / getHover /
     // getDiagnostics) that MCP tools/call dispatch routes to, proving the

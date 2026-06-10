@@ -2747,7 +2747,7 @@ REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotCreation,TESTED,,,distri
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotInstallation,TESTED,,,distributed,2026-04-09,src/distributed/raft_snapshot_manager.zig
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,src/eval/logic_helpers.zig
 REQ-GQL-REL-AGG-NO-GROUPBY-001,RelationshipAggregationNoGroupBy,EdgeCollection,TESTED,,,execution,2025-12-28,src/execution/match_operations.zig
-REQ-GQL-S3-001,S3 Cloud Backups,Storage,TESTED,,,storage,2026-01-17,src/storage/s3_backup.zig
+REQ-GQL-S3-001,S3 Cloud Backups,Storage,TESTED,,,storage,2026-06-10,src/storage/s3_backup.zig
 REQ-GQL-S3-001,S3CloudBackups,Storage,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GQL-SEC-KEYROT-001,KeyRotation,SECURITY,TESTED,,,security,2026-01-15,src/security/key_rotation.zig
 REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md
@@ -4323,6 +4323,8 @@ REQ-SEC-AUDIT-LOG-001,Security,AuditLog,TESTED,,,security,2026-01-16,tests/test_
 REQ-SEC-AUDIT-TRAIL-001,Security,AuditTrail,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-AUTH-TOKEN-001,Security,AuthToken,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-AUTH-VALIDATION-001,Security,AuthValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
+REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,,,security,2026-06-10,src/cli/insecure_tls_gate.zig
+REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,,,security,2026-06-10,tests/test_s3_sigv4.zig
 REQ-SEC-CONN-001,Security,ConnectionSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-SEC-CRYPTO-001,Security,Cryptography,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-CRYPTO-TRUTH-001,HmacSha3RealConstruction,Security,TESTED,,,security,2026-06-10,tests/test_gap0881_crypto_truth.zig
@@ -4376,6 +4378,9 @@ REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,UsernameRowAccess,IMPL,,,security,202
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,MatchLabelDeny,IMPL,,,security,2026-04-06,src/execution/match_operations.zig
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,ServerInitExprEngine,IMPL,,,security,2026-06-09,src/server/main.zig
 REQ-SEC-RLS-WIRE-015,RLS Expression Wiring,MatchExprEval,IMPL,,,security,2026-04-09,src/execution/match_operations.zig
+REQ-SEC-S3-SIGV4-001,S3 SigV4 Signing,Crypto,TESTED,,,security,2026-06-10,src/storage/s3_sigv4.zig
+REQ-SEC-S3-SIGV4-001,S3 SigV4 Signing,Integration,TESTED,,,security,2026-06-10,src/storage/s3_backup.zig
+REQ-SEC-S3-SIGV4-001,S3 SigV4 Signing,KAT,TESTED,,,security,2026-06-10,tests/test_s3_sigv4.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-TIMEOUT-001,Security,SessionTimeout,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-TDE-001,Security,TDE,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig

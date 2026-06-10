@@ -109,6 +109,8 @@ const stdio_util = @import("../utils/stdio.zig");
 // UAF regression tests can link against the real `QueryDeadlineState` +
 // `startDeadlineWatchdogTask` without the full CLI module graph.
 const query_deadline = @import("query_deadline.zig");
+// SEC-CLI-01: production-posture gate for --insecure-tls-skip-verify.
+const insecure_tls_gate = @import("insecure_tls_gate.zig");
 const QueryDeadlineState = query_deadline.QueryDeadlineState;
 const startDeadlineWatchdogTask = query_deadline.startDeadlineWatchdogTask;
 
@@ -1085,9 +1087,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, arg, "--insecure-tls-skip-verify")) {
             insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
             std.debug.print("Warning: --insecure is deprecated, use --insecure-tls-skip-verify\n", .{});
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, arg, "--batch")) {
             // PERF-P1-002: Read semicolon-delimited queries from stdin over single connection
             batch_mode = true;
@@ -3142,9 +3146,11 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             history_enabled = false;
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             // GAP-0113: CA certificate path for server verification
             if (i + 1 >= argv.len) {
@@ -3601,6 +3607,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
             save_session = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure") or std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         }
     }
 
