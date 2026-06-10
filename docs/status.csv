@@ -598,6 +598,7 @@ REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,TESTED,,,cli,2026-06-10,s
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SESSION-001,CLISession,Management,TESTED,,,cli,2026-02-04,src/cli/session_cli.zig
+REQ-CLI-SESSION-001,CLISession,Security,TESTED,,,cli,2026-06-10,src/cli/session_cli.zig
 REQ-CLI-SHARED-QUERY-001,ShellQuerySharedPath,ParityTesting,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
 REQ-CLI-SHARED-QUERY-002,ShellQuerySharedPath,GraphScopingParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
 REQ-CLI-SHARED-QUERY-003,ShellQuerySharedPath,LargeOrderedStreamingParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig

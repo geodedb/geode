@@ -5235,6 +5235,22 @@ pub fn build(b: *std.Build) void {
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
 
+    // SEC-SESS-LOG-01: `session rotate` must never write the session token to
+    // stderr/stdout. All user-facing rotate output flows through
+    // session_cli.writeRotateResult, pinned token-free by tests/test_sec_sess_log.zig.
+    const sec_sess_log_cli_mod = b.createModule(.{ .root_source_file = b.path("src/cli/session_cli.zig"), .target = target, .optimize = optimize });
+    sec_sess_log_cli_mod.addImport("geode", root_mod);
+    sec_sess_log_cli_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sec_sess_log_cli_mod.link_libc = true;
+    const sec_sess_log_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec_sess_log.zig"), .target = target, .optimize = optimize });
+    sec_sess_log_test_mod.addImport("session_cli", sec_sess_log_cli_mod);
+    sec_sess_log_test_mod.link_libc = true;
+    const sec_sess_log_tests = b.addTest(.{ .root_module = sec_sess_log_test_mod });
+    const run_sec_sess_log_tests = b.addRunArtifact(sec_sess_log_tests);
+    shardDep(test_step, &run_sec_sess_log_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_sess_log_step = b.step("test-sec-sess-log", "SEC-SESS-LOG-01: session rotate must not print the token to stderr");
+    sec_sess_log_step.dependOn(&run_sec_sess_log_tests.step);
+
     // GAP-0830: MCP/LSP bridge governance test. Exercises the four bridge
     // entry points (lsp.validateQuery / getCompletions / getHover /
     // getDiagnostics) that MCP tools/call dispatch routes to, proving the
