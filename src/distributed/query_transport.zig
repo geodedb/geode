@@ -40,6 +40,8 @@ fn compat_microTimestamp() i64 {
 const protocol = @import("../protocol.zig");
 const quic = @import("../transport/quic.zig");
 const federation = @import("federation.zig");
+// GAP-0856: distributed EXPLAIN/PROFILE are node-local only.
+const distributed_explain = @import("distributed_explain.zig");
 const network_transport = @import("network_transport.zig");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
@@ -457,7 +459,9 @@ const Connection = struct {
                                 };
                             },
                             .@"error" => return error.RemoteExecutionFailed,
-                            .explain, .profile => return error.Unsupported,
+                            // GAP-0856: node-local only — see distributed_explain.zig.
+                            .explain => return distributed_explain.rejectDistributedPlanPayload(.explain),
+                            .profile => return distributed_explain.rejectDistributedPlanPayload(.profile),
                             .metrics, .heartbeat => {},
                         };
                         break :blk .{};
@@ -546,7 +550,9 @@ const Connection = struct {
                                 };
                             },
                             .@"error" => return error.RemoteExecutionFailed,
-                            .explain, .profile => return error.Unsupported,
+                            // GAP-0856: node-local only — see distributed_explain.zig.
+                            .explain => return distributed_explain.rejectDistributedPlanPayload(.explain),
+                            .profile => return distributed_explain.rejectDistributedPlanPayload(.profile),
                             .metrics, .heartbeat => {},
                         };
                         break :blk .{};

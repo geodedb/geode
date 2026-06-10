@@ -44,6 +44,10 @@ const logging = @import("logging");
 const log = logging.scoped("federation");
 const Attr = logging.Attr;
 
+// GAP-0856: distributed EXPLAIN/PROFILE are node-local only; reject remote
+// plan payloads with a structured, documented error instead of error.Unsupported.
+pub const distributed_explain = @import("distributed_explain.zig");
+
 pub const federation_merge = @import("federation_merge.zig");
 const freeBindingRow = federation_merge.freeBindingRow;
 const cloneBindingRow = federation_merge.cloneBindingRow;
@@ -421,7 +425,9 @@ pub const Connection = struct {
                                 };
                             },
                             .@"error" => return error.RemoteExecutionFailed,
-                            .explain, .profile => return error.Unsupported,
+                            // GAP-0856: node-local only — see distributed_explain.zig.
+                            .explain => return distributed_explain.rejectDistributedPlanPayload(.explain),
+                            .profile => return distributed_explain.rejectDistributedPlanPayload(.profile),
                             .metrics, .heartbeat => {},
                         };
                         break :blk .{};

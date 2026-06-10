@@ -2799,6 +2799,25 @@ pub fn build(b: *std.Build) void {
     const run_query_transport_registry_tests = b.addRunArtifact(query_transport_registry_tests);
     shardDep(test_step, &run_query_transport_registry_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // GAP-0856: distributed EXPLAIN/PROFILE node-local-scope contract (stdlib-only, no QUIC).
+    const gap0856_dist_explain_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0856_distributed_explain.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0856_dist_explain_tests.root_module.addImport(
+        "distributed_explain",
+        b.createModule(.{
+            .root_source_file = b.path("src/distributed/distributed_explain.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    );
+    const run_gap0856_dist_explain_tests = b.addRunArtifact(gap0856_dist_explain_tests);
+    const gap0856_dist_explain_step = b.step("test-gap0856", "Run GAP-0856 distributed EXPLAIN/PROFILE node-local-scope test");
+    gap0856_dist_explain_step.dependOn(&run_gap0856_dist_explain_tests.step);
+    shardDep(test_step, &run_gap0856_dist_explain_tests.step, 1, test_shard_loads, test_shard_index);
+
     // GAP-0513: sharding.zig unit tests (enhanced ShardManager init/add/merge/callback/key-lookup)
     const sharding_test_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed/sharding.zig"),

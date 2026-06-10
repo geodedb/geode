@@ -4,6 +4,29 @@
 
 The Distributed Query Coordination System enables Geode to execute queries across multiple shards and nodes in a federated database cluster. This system provides transparent query distribution, parallel execution, result merging, and comprehensive optimization for high-performance distributed graph database operations.
 
+### Scope limitation: `EXPLAIN` / `PROFILE` are node-local only (GAP-0856)
+
+`EXPLAIN` and `PROFILE` are **not** distributed. On the wire these statements
+return dedicated, richly structured plan payloads (`ExplainPayload` /
+`ProfilePayload` — operator trees, per-operator totals, calibration, memory
+curves, planner estimates), which are **not** row-shaped. The federated/remote
+transport carries `QueryResults` (strictly `rows + schema`) and has no field able
+to represent a plan payload. Moreover, there is no coherent merge semantics for
+combining N independent remote plan trees (each remote optimizes against its own
+local statistics) into a single authoritative plan.
+
+Accordingly, when a remote/federated execution returns an `.explain` / `.profile`
+payload, the distributed result consumers
+(`src/distributed/federation.zig`, `src/distributed/query_transport.zig`) reject it
+with the structured, self-documenting error
+`DistributedExplainError.DistributedExplainUnsupported` (defined in
+`src/distributed/distributed_explain.zig`) instead of the opaque `error.Unsupported`.
+
+**To obtain a plan**, issue `EXPLAIN` / `PROFILE` directly against the node that
+owns the data (node-local execution), where the full structured payload is
+produced. Regression cover: `tests/test_gap0856_distributed_explain.zig`
+(`zig build test-gap0856`).
+
 ## Architecture
 
 ### Core Components
