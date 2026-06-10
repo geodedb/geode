@@ -22,7 +22,38 @@ below — under GAP-0860.
 | Env | `GEODE_MASTER_KEY` set to a 32-byte test value (required by FLE-backed tests) |
 | Method | each named `test-*` build step run in isolation, 300 s per-step timeout |
 
-**Result: 175 named `test-*` steps — 167 PASS, 6 FAIL, 2 TIMEOUT, 0 not-run (count-pushdown reclassified PASS after a 15-min re-run; the original 300 s sweep scored it TIMEOUT). Adjusted 2026-06-10: `test-perf-c-introspection-index` re-passed after the GAP-0863b leak fix (8/8, 0 leaks) → 168 PASS / 5 FAIL pending the round's full re-sweep.**
+**Result (historical, at `faac1f3e`): 175 named `test-*` steps — 167 PASS, 6 FAIL, 2 TIMEOUT, 0 not-run (count-pushdown reclassified PASS after a 15-min re-run; the original 300 s sweep scored it TIMEOUT).** For the current expected baseline after the GAP-0863 fixes, see the refresh block below.
+
+### GAP-0863 refresh (2026-06-10, commit `0eefbb9a`) — expected baseline 174/179
+
+The GAP-0863 test-gate fixes landed on `gap-closure-2026-06-10`
+(`487a2424` test-e2e compile, `5083a30e` perf-c FLE teardown, `4f689520`
+stream-pool observation; plus `8bdb9737` FLE-catalog isolation). Each
+formerly-failing step was re-run in isolation on the idle 32-core baseline
+host at commit `0eefbb9a` (same env as the sweep):
+
+| Step | 2026-06-10 re-run result |
+|---|---|
+| `test-perf-c-introspection-index` | **PASS** — 8/8, 0 leaks (was: 3 FLE leaks) |
+| `test-stream-pool-concurrent-lanes` | **PASS** — 3/3 (was: `max_concurrent >= 2` assertion) |
+| `test-e2e` | **still FAIL, but now compiles and runs end-to-end**: 84/86 steps succeeded, 68/71 tests pass; exactly the 3 known `gql_conformance` subtests fail (T11/T12/T14 — `count(*)` pushdown + unseeded G1/G2 fixture; see row below) |
+| `test-perf` | **PASS — reclassified** (see row below): exits 0 on two consecutive idle-host runs, 44/48 tests + 4 opt-in slow-bench skips |
+| `test-gpu` | **still FAIL (compile)** — Zig 0.16 API drift in `src/gpu` (see row below); GAP-0878 will make it gate/self-skip |
+| `test-cluster-3node-subprocess` | not re-run (known reliable hang; entry kept below) |
+
+Four named steps were also **added** since the `faac1f3e` sweep, so the
+denominator is now **179**: `test-raft-apply` (27/27 PASS),
+`test-raft-hardstate-durability` (2/2 PASS), `test-txn-coordinator-2pc`
+(0/4 — all 4 protobuf-union-gated self-skips; step PASSES), and
+`test-cluster-replicable-mutations` (TIMEOUT at 300 s — an *intentionally
+red* TDD reproduction of the 2026-06-09 cluster write-replication gaps; 3-node
+subprocess family, see row below).
+
+**New expected baseline: 179 named `test-*` steps — 174 PASS, 2 FAIL
+(`test-e2e`, `test-gpu`), 3 TIMEOUT (`test-all`,
+`test-cluster-3node-subprocess`, `test-cluster-replicable-mutations`).**
+The per-step re-runs above are the evidence for the delta from 167/175; a
+full 179-step re-sweep is owed at the next rebaseline.
 
 > **Update 2026-06-10:** the sharded pre-push gate
 > (`zig build test -Dtest-shard-total=4 -Dtest-shard-index=0..3` under
@@ -36,7 +67,7 @@ below — under GAP-0860.
 > below). The per-step sweep table above predates those fixes and is otherwise
 > still representative for the standalone `test-*` steps.
 
-`zig build` (the production binary) compiles clean. The 167 passing steps cover
+`zig build` (the production binary) compiles clean. The 174 passing steps cover
 the parser/lexer, planner, storage/MVCC/WAL, index types, security/auth/FLE
 wiring, transport, cluster bootstrap/identity/steady-state, RLS, GPS policy,
 LSP/MCP, timeseries, FTS, and the bulk-ingest fast paths.
@@ -50,13 +81,14 @@ these are not load-induced flakes unless noted).
 |---|---|---|
 | `test-count-pushdown` | SLOW — passes with a longer timeout | **Not a hang.** Re-verified 2026-06-10 with a 15-minute timeout: completes with exit 0 (2/2 tests). The step takes ~7–13 minutes (large-store count benchmarks), so it exceeds the 300 s sweep timeout. Adjusted baseline: 167/175 pass. Treat as a slow step needing a per-step timeout ≥ 15 min, not a defect. |
 | `test-simple-merge-fastpath` | **RESOLVED 2026-06-10** (11/11 pass) | **Was a test-isolation defect, not a bulk-MERGE bug.** `test "bulkMergeNode apply_on_match updates existing node (true upsert)"` (`tests/bulk_ingest/test_simple_merge_fastpath.zig:476`) failed `expectEqualStrings("bob@example.com", email_prop.String)` because `email_prop.String` was FLE *ciphertext* (envelope alg-id `0x01`), not plaintext. The bulk-MERGE apply-on-match path was correct all along: it wrote the new `email` prop and FLE-encrypted it because the process-global FLE catalog had `('User','email')` configured — leaked in via the shared `{GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat` file that `tests/test_gap0854_fle_chain.zig` persisted (it ran `CALL geode.fle.configureField('User','email')` without isolating GEODE_DATA_DIR). The earlier "FLE key was set" note was from a one-off isolated run; under the pre-push shards (which set neither GEODE_MASTER_KEY nor GEODE_DATA_DIR) the *same* test fails first on the master-key requirement, then on the ciphertext mismatch. **Fix:** both FLE-touching tests now (a) install a deterministic test `GEODE_MASTER_KEY` via a libc `setenv` shim and (b) isolate the persisted FLE catalog to their own per-test tmp dir via `GEODE_DATA_DIR` + `fle_catalog.resetGlobalCatalog`, so neither depends on ambient env nor contaminates a sibling test. Production fail-closed `GEODE_MASTER_KEY` requirement is unchanged. |
-| `test-perf` | FAIL (10/11 tests pass) | **Perf gate, hardware-dependent.** The two-phase bulk-edge throughput test asserts a parallel speedup threshold; this host measured `speedup=1.07x–1.10x`, below the gate. Reproduces idle. Treat as a host-relative perf signal, not a correctness regression. |
-| `test-stream-pool-concurrent-lanes` | FAIL (2/3 tests pass) | `test "task31_edge: submit() — 8 tasks on 4-thread pool all complete"` (`tests/test_stream_pool_concurrent_lanes.zig:236`) fails `ctx.max_concurrent >= 2`. The scheduler completed tasks without ever observing ≥2 in-flight. Reproduces idle; concurrency-observation assertion is too strict for the platform scheduler or there is a real serialization. |
+| `test-perf` | **RECLASSIFIED PASS 2026-06-10** (host-relative) | Re-verified at `0eefbb9a`: exits 0 on two consecutive idle-host runs — `Build Summary: 59/59 steps succeeded; 44/48 tests passed (4 skipped)`. The 4 skips are the opt-in slow bench smoke tests (`GEODE_RUN_SLOW_TESTS=1` to enable). The two-phase bulk-edge throughput test measured `speedup=1.07x` and PASSES its invariant — the gate was relaxed in `e1219da4` (2026-05-24) to "parallel is not >1.5× WORSE than baseline", enforced off-CI only; the earlier baseline FAIL is no longer reproducible (the contaminated-FLE-environment fixes `8bdb9737`/`5083a30e` are the likely cause of the prior 10/11). Treat as host-relative: heavy host contention can still breach the not-worse invariant (the test self-skips the check when its contention deadlines trip). |
+| `test-stream-pool-concurrent-lanes` | **RESOLVED 2026-06-10** (GAP-0863c, commit `4f689520`; 3/3 pass) | Was: `test "task31_edge: submit() — 8 tasks on 4-thread pool all complete"` (`tests/test_stream_pool_concurrent_lanes.zig:236`) failed `ctx.max_concurrent >= 2` — the test raced the scheduler against a ~5 ms task body, so run-to-completion was a legal schedule. The production pool was correct (`submit()` routes to the all-worker default lane post Task #31). Fix: tasks are held at the existing barrier, the test waits bounded (2 s) for ≥2 in-flight lanes, then releases and drains all 8 — observation is deterministic and the assertion stays real (a serializing pool pins its lone lane and fails). Re-verified at `0eefbb9a`: 3/3 (and 10/10 green in a loop at fix time). |
 | `test-perf-c-introspection-index` | **RESOLVED 2026-06-10** (GAP-0863b; 8/8 pass, 0 leaks) | **Was a test-teardown gap exposed by ambient FLE-catalog contamination, not a production leak.** The original 3-leak failure ("7/7 tests pass, 3 leaks" traced to `src/fle_integration.zig:469` `encryptFieldIfNeeded` → `key_manager.getFEK`) required the same contaminated environment as the `test-simple-merge-fastpath` row above: an ambient `GEODE_MASTER_KEY` plus a stale shared `/tmp/geode_fle_catalog.dat` with `('User','email')` configured. Under contamination this suite's `setNodeProperty(..., "email", ...)` writes took the real FLE encrypt path, which lazily instantiates the **process-global** FLE KeyManager on the store's allocator (`std.testing.allocator`); production keeps that singleton for the process lifetime by design (`getFEK` returns the FEK by value — `[32]u8` — so there is nothing for the call site to free; the 3 "leaked" allocations are the KeyManager instance + FEK cache key + cache map storage, all owned by the singleton). **Fix:** the property-writing tests in `tests/test_perf_c_lsp_introspection_index.zig` now `defer fle_integration.resetGlobalKeyStateForTesting()` (no-op when FLE is unconfigured), and a new deterministic regression test reproduces the original failure end-to-end — it configures `('User','email')` via the real `CALL geode.fle.configureField` dispatch inside an isolated `GEODE_DATA_DIR`, asserts the stored value is a true FLE envelope and that the introspection index still reports the property key, and verifies the teardown leaves the leak checker clean. Removing the teardown defer reproduces the exact 3-leak trace. |
-| `test-gpu` | FAIL (compile) | **Environmental.** No GPU/Vulkan shader toolchain on this host; the GPU test target fails to compile its shader/native pieces. Expected on non-GPU CI/dev hosts. |
-| `test-e2e` | **COMPILE FIXED 2026-06-10** (GAP-0863a) — step now runs end-to-end; 1 step still red: `gql_conformance` 17/20 (3 runtime failures) | Zig 0.16 migration debt across 22 files closed: removed-API uses (`std.time.milliTimestamp`/`nanoTimestamp`/`Timer`, `std.Thread.sleep`, `std.fs.cwd`/`File`, `std.process.Child.init`/`getEnvVarOwned`/`getEnvMap`, `std.heap.GeneralPurposeAllocator`, `std.crypto.random`, `std.mem.trimLeft`, `std.Io.fixedBufferStream`, ArrayList `.writer`) migrated to the repo's established compat patterns; all byte-driven fuzz targets ported to the Zig 0.16 `*std.testing.Smith` signature (drawing bytes via `smith.slice`); `tests/e2e_graph_algos_new.zig` (imported a never-exported `graph_algos_stub`) rewritten against the real `geode.graph.community_louvain` / `community_label_propagation` API and now actually runs (was compile-only; 5/5 pass). Verified 2026-06-10: 84/86 steps green, 68/71 tests pass. **Residual (newly revealed, pre-existing):** `gql_conformance` T11/T12/T14 fail — bare `count(*)` after `SESSION SET PROPERTY GRAPH` returns 0 via the count-pushdown fast path (`match_operations.countNodesFastPath` → `countNodesForGraph` counts the in-memory store before the lazy on-disk graph load) while row-iterating queries over the same graphs (T15–T18) return correct data. The fixture also assumes pre-seeded `G1`/`G2` datasets that nothing in-repo seeds (a clean checkout would also fail T15–T18). Needs a dedicated follow-up: seed fixtures in-test + fix the count fast-path lazy-load interaction. |
+| `test-gpu` | FAIL (compile) — re-confirmed 2026-06-10 | **Environmental + Zig 0.16 migration debt in `src/gpu`.** Re-run at `0eefbb9a`: still fails to COMPILE. Current errors are removed-API uses, not just the missing GPU/Vulkan toolchain: `src/gpu/phase0.zig:17` uses `std.once` (removed in Zig 0.16) and `src/gpu/telemetry.zig:238` uses the removed ArrayList `.writer`. Expected on non-GPU CI/dev hosts; GAP-0878 (this round) will fix the compile debt and make the hardware-dependent pieces gate/self-skip cleanly. |
+| `test-e2e` | **COMPILE FIXED 2026-06-10** (GAP-0863a) — step now runs end-to-end; 1 step still red: `gql_conformance` 17/20 (3 runtime failures) | Zig 0.16 migration debt across 22 files closed: removed-API uses (`std.time.milliTimestamp`/`nanoTimestamp`/`Timer`, `std.Thread.sleep`, `std.fs.cwd`/`File`, `std.process.Child.init`/`getEnvVarOwned`/`getEnvMap`, `std.heap.GeneralPurposeAllocator`, `std.crypto.random`, `std.mem.trimLeft`, `std.Io.fixedBufferStream`, ArrayList `.writer`) migrated to the repo's established compat patterns; all byte-driven fuzz targets ported to the Zig 0.16 `*std.testing.Smith` signature (drawing bytes via `smith.slice`); `tests/e2e_graph_algos_new.zig` (imported a never-exported `graph_algos_stub`) rewritten against the real `geode.graph.community_louvain` / `community_label_propagation` API and now actually runs (was compile-only; 5/5 pass). Verified 2026-06-10 and re-verified at `0eefbb9a` (GAP-0863d): 84/86 steps green, 68/71 tests pass; the only failures are exactly `gql_conformance` T11/T12/T14. **Residual (newly revealed, pre-existing):** `gql_conformance` T11/T12/T14 fail — bare `count(*)` after `SESSION SET PROPERTY GRAPH` returns 0 via the count-pushdown fast path (`match_operations.countNodesFastPath` → `countNodesForGraph` counts the in-memory store before the lazy on-disk graph load) while row-iterating queries over the same graphs (T15–T18) return correct data. The fixture also assumes pre-seeded `G1`/`G2` datasets that nothing in-repo seeds (a clean checkout would also fail T15–T18). Needs a dedicated follow-up: seed fixtures in-test + fix the count fast-path lazy-load interaction. |
 | `test-cluster-3node-subprocess` | TIMEOUT (300 s) | Known: the 3-node subprocess cluster reliably stalls/crashes in the QUIC vendor library during multi-node bring-up (see project memory "A6f QUIC processShortHeader crash"). The in-process cluster steps (`test-cluster-3node-election`, `test-cluster-steady-state`, `test-cluster-bootstrap`, `test-cluster-identity`) PASS. |
-| `test-all` | TIMEOUT (300 s) | The `test-all` aggregate (unit + e2e) inherits the `test-e2e` compile failures and the `test-count-pushdown` slowness (~7-13 min, passes), and also drives the blocked `graph_store_unit_tests` shard below. Not a distinct issue — it is the union of the rows above plus the shard note. |
+| `test-cluster-replicable-mutations` | TIMEOUT (300 s) — **intentionally red** (TDD reproduction) | Added 2026-06-09 (commit `7b168f62`) as a deliberately FAILING reproduction of the cluster write-replication gaps (edge CREATE, DELETE/DETACH DELETE, MERGE, ungated MATCH…SET do not replicate; only pure single-node CREATE does). Spawns three real `geode serve` subprocesses — same 3-node subprocess family as the `test-cluster-3node-subprocess` hang below. Stays red/timeout by design until the replication gaps are fixed; do not count it against the gate as a regression. |
+| `test-all` | TIMEOUT (300 s) | The `test-all` aggregate (unit + e2e) inherits the `test-e2e` runtime failures (T11/T12/T14 — the compile failures are fixed as of `487a2424`) and the `test-count-pushdown` slowness (~7-13 min, passes). Not a distinct issue — it is the union of the rows above. |
 
 ### RESOLVED (2026-06-10): `graph_store_unit_tests` shard / sharded `zig build test`
 
@@ -120,7 +152,8 @@ grep -oE 'b\.step\("test-[^"]+"' build.zig | sed -E 's/b\.step\("//;s/"$//' \
 
 # Re-run a single failing/hanging step:
 zig build test-count-pushdown        # SLOW: passes in ~7-13 min (use timeout >= 15 min)
-zig build test-simple-merge-fastpath # 10/11; apply_on_match upsert assertion
+zig build test-e2e                   # FAIL: exactly gql_conformance T11/T12/T14 (84/86 steps, 68/71 tests)
+zig build test-gpu                   # FAIL (compile): src/gpu Zig 0.16 API drift (GAP-0878)
 ```
 
 ## geodetestlab Integration Suite — historical snapshot (requires a harness run)
@@ -174,4 +207,4 @@ acting:
 3. For integration coverage, run the harness in `../geode-test-harness` and
    record the dated numbers in the historical section.
 
-*Last rebaselined: 2026-06-10 (GAP-0860) from commit `faac1f3e`.*
+*Last rebaselined: 2026-06-10 (GAP-0860) from commit `faac1f3e`. Refreshed 2026-06-10 (GAP-0863d) from per-step re-runs at commit `0eefbb9a` — expected baseline 174/179 (2 FAIL / 3 TIMEOUT); full re-sweep owed at next rebaseline.*
