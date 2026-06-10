@@ -8,17 +8,35 @@ const testing = std.testing;
 const thread_pool = @import("transport/thread_pool");
 const stream_scheduler = @import("transport/stream_scheduler");
 
+// Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
+fn compat_sleep(ns: u64) void {
+    var req: std.posix.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
+    var rem: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+    } else {
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        std.c.arc4random_buf(buf.ptr, buf.len);
+    }
+}
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     // Initialize random generator
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        std.posix.getrandom(std.mem.asBytes(&seed)) catch {
-            seed = @intCast(std.time.milliTimestamp());
-        };
+        compat_fillRandom(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();
@@ -120,7 +138,7 @@ fn fuzzThreadPool(allocator: std.mem.Allocator, random: std.Random, iterations: 
             const c: *Context = @ptrCast(@alignCast(context));
             // Simulate variable work time
             if (c.random_delay) {
-                std.Thread.sleep(1 * std.time.ns_per_us);
+                compat_sleep(1 * std.time.ns_per_us);
             }
             _ = c.completed.fetchAdd(1, .release);
         }
@@ -131,7 +149,7 @@ fn fuzzThreadPool(allocator: std.mem.Allocator, random: std.Random, iterations: 
     while (i < iterations) : (i += 1) {
         // Randomly pause submissions
         if (random.intRangeAtMost(u32, 0, 100) == 0) {
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            compat_sleep(1 * std.time.ns_per_ms);
         }
 
         if (pool.submit(.{
@@ -147,7 +165,7 @@ fn fuzzThreadPool(allocator: std.mem.Allocator, random: std.Random, iterations: 
     // Wait for completion with timeout
     var timeout: u32 = 0;
     while (completed.load(.acquire) < submitted and timeout < 10000) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        compat_sleep(1 * std.time.ns_per_ms);
         timeout += 1;
     }
 

@@ -2,7 +2,16 @@ const std = @import("std");
 const d128 = @import("decimal128");
 const Context = struct {};
 
-fn fuzz_decimal(context: Context, data: []const u8) anyerror!void {
+// Zig 0.16: std.testing.fuzz hands the test a *Smith generator instead of a
+// raw byte slice.  Draw a fuzzer-controlled byte slice from the Smith and
+// feed it to the original byte-driven harness.
+fn fuzz_decimal(context: Context, smith: *std.testing.Smith) anyerror!void {
+    var buf: [256]u8 = undefined;
+    const len = smith.slice(&buf);
+    try fuzz_decimal_bytes(context, buf[0..len]);
+}
+
+fn fuzz_decimal_bytes(context: Context, data: []const u8) anyerror!void {
     _ = context;
     const s = data[0..@min(data.len, 256)];
     const parsed = d128.Decimal128.fromStr(s) catch return;

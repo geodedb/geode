@@ -2980,6 +2980,7 @@ REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-006,Graph Performance Integration,Er
 REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-007,Graph Performance Integration,MemoryManagementIntegration,TESTED,,,graph,2025-10-05,tests/test_graph_algorithm_performance_enhancements_integration.zig
 REQ-GRAPH-LEIDEN-AGG-001,Leiden Network Aggregation,Aggregation,TESTED,,,graph,2026-01-08,src/graph/leiden.zig
 REQ-GRAPH-LEIDEN-SPLIT-001,Leiden Split Community,Graph,TESTED,,,graph,2025-10-16,src/graph/leiden.zig
+REQ-GRAPH-LOUVAIN-001,LouvainCommunityDetection,E2ECommunityDetection,TESTED,,,graph,2026-06-10,tests/e2e_graph_algos_new.zig
 REQ-GRAPH-LOUVAIN-001,LouvainCommunityDetection,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/community_louvain.zig
 REQ-GRAPH-LOUVAIN-002,ModularityScore,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/community_louvain.zig
 REQ-GRAPH-LOUVAIN-003,LouvainIntegration,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/algorithms.zig

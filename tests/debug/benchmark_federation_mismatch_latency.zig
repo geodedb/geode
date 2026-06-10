@@ -2,6 +2,45 @@ const std = @import("std");
 const builtin = @import("builtin");
 const fed_flag = @import("federation_flag");
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned removed and this target does
+// not link libc, so read /proc/self/environ (linux) to test an env flag.
+// Returns true when `name` is set to a value beginning with '1'.
+fn envFlagSet(name: []const u8) bool {
+    if (comptime builtin.os.tag != .linux) return false;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var f = std.Io.Dir.openFileAbsolute(io, "/proc/self/environ", .{ .mode = .read_only }) catch return false;
+    defer f.close(io);
+    var buf: [64 * 1024]u8 = undefined;
+    const n = f.readPositionalAll(io, &buf, 0) catch return false;
+    const data = buf[0..n];
+    var start: usize = 0;
+    for (data, 0..) |c, i| {
+        if (c != 0) continue;
+        if (i > start) {
+            const entry = data[start..i];
+            if (std.mem.indexOfScalar(u8, entry, '=')) |eq| {
+                if (std.mem.eql(u8, entry[0..eq], name)) {
+                    const value = entry[eq + 1 ..];
+                    return value.len > 0 and value[0] == '1';
+                }
+            }
+        }
+        start = i + 1;
+    }
+    return false;
+}
+
 // Federation mismatch latency variance envelope benchmark (skeleton, unpromoted).
 // Measures stability of repeated consistent federation metadata checks plus a single deliberate
 // mismatch. Captures per-iteration latency (ns) and derives mean, stddev, coefficient of variation
@@ -57,20 +96,20 @@ fn sampleOnce(allocator: std.mem.Allocator, iterations: usize) ![]u64 {
     const dirs: [2]bool = .{ true, false };
     var it: usize = 0;
     while (it < iterations) : (it += 1) {
-        const start = std.time.nanoTimestamp();
+        const start = nowNs();
         const mismatch = simulateConsistencyCheck(&keys, &dirs, &keys, &dirs);
         if (mismatch) {
-            fed_flag.g_last_federation_mismatch = true;
+            fed_flag.g_last_federation_mismatch.store(true, .release);
         }
         if (fed_flag.mismatchFlag()) _ = fed_flag.consumeMismatchFlag();
-        const end = std.time.nanoTimestamp();
-        samples[it] = @intCast(end - start);
+        const end = nowNs();
+        samples[it] = end - start;
     }
     // Functional deliberate mismatch (not part of distribution)
     const dirs_mismatch: [2]bool = .{ true, true };
     const mismatch_now = simulateConsistencyCheck(&keys, &dirs, &keys, &dirs_mismatch);
     if (!mismatch_now) return error.ExpectedMismatchNotDetected;
-    if (mismatch_now) fed_flag.g_last_federation_mismatch = true;
+    if (mismatch_now) fed_flag.g_last_federation_mismatch.store(true, .release);
     if (!fed_flag.mismatchFlag() or !fed_flag.consumeMismatchFlag()) return error.MismatchFlagNotConsumed;
     return samples;
 }
@@ -154,18 +193,7 @@ pub fn runFederationMismatchLatencyVariance() !void {
     const iterations: usize = 64;
     var metrics: Metrics = undefined;
     var pass: usize = 0;
-    const stabilize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_STABILIZE")) |v| {
-            defer allocator.free(v);
-            if (v.len > 0 and v[0] == '1') {
-                break :blk true;
-            } else {
-                break :blk false;
-            }
-        } else |_| {
-            break :blk false;
-        }
-    };
+    const stabilize = envFlagSet("FED_LATENCY_STABILIZE");
     while (true) {
         pass += 1;
         const samples = try sampleOnce(allocator, iterations);
@@ -177,9 +205,9 @@ pub fn runFederationMismatchLatencyVariance() !void {
     }
 
     // Serialize result JSON (buffer enlarged for new fields)
+    // Zig 0.16: fixedBufferStream removed; use std.Io.Writer.fixed.
     var buf: [768]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w = std.Io.Writer.fixed(&buf);
     try w.writeAll("{\"bench\":\"BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope\",");
     try w.print("\"class\":\"General\",", .{});
     try w.print("\"iterations\":{},", .{metrics.iterations});
@@ -196,23 +224,18 @@ pub fn runFederationMismatchLatencyVariance() !void {
     try w.print("\"outlier_count\":{},", .{metrics.outlier_count});
     try w.print("\"outlier_ratio\":{d:.6}", .{metrics.outlier_ratio});
     try w.writeAll("}\n");
-    const line = fbs.getWritten();
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    try stdout.writeAll(line);
+    const line = w.buffered();
+    // Zig 0.16: std.fs.File removed; std.Io.File.stdout() is platform-aware.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    try std.Io.File.stdout().writeStreamingAll(io, line);
 
     if (metrics.cv > 0.22 or metrics.p95_mean_ratio > 2.55) {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_ENFORCE") catch null) |v| {
-            defer allocator.free(v);
-            if (v.len > 0 and v[0] == '1') {
-                std.debug.print(
-                    "Federation mismatch latency variance envelope breached: cv={d:.4} p95/mean={d:.4} trim_cv={d:.4} passes={}\n",
-                    .{ metrics.cv, metrics.p95_mean_ratio, metrics.trim_cv, metrics.passes },
-                );
-                return error.VarianceEnvelopeBreached;
-            }
+        if (envFlagSet("FED_LATENCY_ENFORCE")) {
+            std.debug.print(
+                "Federation mismatch latency variance envelope breached: cv={d:.4} p95/mean={d:.4} trim_cv={d:.4} passes={}\n",
+                .{ metrics.cv, metrics.p95_mean_ratio, metrics.trim_cv, metrics.passes },
+            );
+            return error.VarianceEnvelopeBreached;
         }
     }
 }

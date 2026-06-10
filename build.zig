@@ -3200,6 +3200,9 @@ pub fn build(b: *std.Build) void {
         test_e2e_step.dependOn(&run_planner_prune_fuzz.step);
 
         const hnsw_snapshot_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_snapshot_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        // tde_file_encryption.zig reaches std.c.getenv on the Zig 0.16 compat
+        // path, so this fuzz target must link libc like the other tde consumers.
+        hnsw_snapshot_fuzz_tests.root_module.link_libc = true;
         const hnsw_persist_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw_persist.zig"), .target = target, .optimize = optimize });
         // TDE module for file-level encryption (REQ-TDE-FILELEVEL-001)
         const tde_fuzz_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
@@ -4259,7 +4262,10 @@ pub fn build(b: *std.Build) void {
     test_e2e_step.dependOn(&e2e_cbo_v0_test.step);
     const e2e_graph_algos_new_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_graph_algos_new.zig"), .target = target, .optimize = optimize }) });
     e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
-    test_e2e_step.dependOn(&e2e_graph_algos_new_test.step);
+    // GAP-0863a: actually RUN these tests (pure in-memory community-detection
+    // assertions, no server) instead of compile-only like the stub-era wiring.
+    const run_e2e_graph_algos_new_test = b.addRunArtifact(e2e_graph_algos_new_test);
+    test_e2e_step.dependOn(&run_e2e_graph_algos_new_test.step);
 
     // October 2025 feature integration tests
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });

@@ -51,9 +51,10 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
         }
     }
 
-    var buf = std.ArrayList(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    // Zig 0.16: ArrayList.writer removed; use std.Io.Writer.Allocating.
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const writer = &aw.writer;
     try writer.print("c{d}|", .{q.match.chains.len});
     for (q.match.chains, 0..) |chain, ci| {
         if (ci != 0) try writer.writeAll("||");
@@ -96,7 +97,7 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
             try writer.writeByte(degreeBucketClass(rdeg));
         }
     }
-    return buf.toOwnedSlice(allocator);
+    return aw.toOwnedSlice();
 }
 
 /// P2-3: Now accepts allocator parameter for temporary arena

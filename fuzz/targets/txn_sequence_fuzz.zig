@@ -2,7 +2,16 @@ const std = @import("std");
 const txn = @import("txn");
 const FuzzCtx = struct {};
 
-fn fuzz_txn(context: FuzzCtx, data: []const u8) anyerror!void {
+// Zig 0.16: std.testing.fuzz hands the test a *Smith generator instead of a
+// raw byte slice.  Draw a fuzzer-controlled byte slice from the Smith and
+// feed it to the original byte-driven harness.
+fn fuzz_txn(context: FuzzCtx, smith: *std.testing.Smith) anyerror!void {
+    var buf: [1024]u8 = undefined;
+    const len = smith.slice(&buf);
+    try fuzz_txn_bytes(context, buf[0..len]);
+}
+
+fn fuzz_txn_bytes(context: FuzzCtx, data: []const u8) anyerror!void {
     _ = context;
     var mgr: txn.Manager = undefined;
     mgr.init(std.testing.allocator);

@@ -1,5 +1,16 @@
 const std = @import("std");
 const geode = @import("geode");
+
+// Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
 const varcfg = @import("geode").benchmarks.variance_config;
 const structural_key = @import("geode").planner_structural_key; // assume exported alias; fallback below if not present
 const planner_root = @import("geode"); // planner AST assumed exposed via geode root
@@ -32,7 +43,7 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
         var inner_sum: f128 = 0;
         const q = makeQuery(v);
         while (r < repetitions_per_variant) : (r += 1) {
-            const t0 = std.time.nanoTimestamp();
+            const t0 = nowNs();
             const key = structural_key.deriveStructuralKey(allocator, q) catch break; // ignore failures (OOM would throw)
             var acc_db: usize = 0;
             var idx2: usize = 0;
@@ -41,7 +52,7 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
             }
             if (acc_db == 0xFFFF) std.mem.doNotOptimizeAway(&acc_db);
             allocator.free(key);
-            const t1 = std.time.nanoTimestamp();
+            const t1 = nowNs();
             inner_sum += @as(f128, @floatFromInt(t1 - t0));
         }
         per_variant_means[v] = inner_sum / @as(f128, @floatFromInt(repetitions_per_variant));
@@ -63,10 +74,10 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
             var inner_sum2: f128 = 0;
             const q2 = makeQuery(v2);
             while (r2 < adaptive_inner) : (r2 += 1) {
-                const t0b = std.time.nanoTimestamp();
+                const t0b = nowNs();
                 const key2 = structural_key.deriveStructuralKey(allocator, q2) catch continue;
                 allocator.free(key2);
-                const t1b = std.time.nanoTimestamp();
+                const t1b = nowNs();
                 inner_sum2 += @as(f128, @floatFromInt(t1b - t0b));
             }
             per_variant_means[v2] = inner_sum2 / @as(f128, @floatFromInt(adaptive_inner));

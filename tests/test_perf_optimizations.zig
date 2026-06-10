@@ -4,6 +4,28 @@ const geode = @import("geode");
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
 
+// Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
+fn compat_sleep(ns: u64) void {
+    var req: std.posix.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
+    var rem: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+    } else {
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
+// Zig 0.16 compat: std.time.Timer/nanoTimestamp removed; clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 const ServerFixture = struct {
     server: util.ServerHandle,
     client: util.QuicProtoClient,
@@ -19,7 +41,7 @@ fn startServer(allocator: std.mem.Allocator, addr: []const u8) !ServerFixture {
     while (attempts < max_attempts) : (attempts += 1) {
         var client = util.QuicProtoClient.connect(allocator, addr) catch |err| {
             if (err == error.HandshakeError or err == error.ConnectionFailed) {
-                std.Thread.sleep(100 * std.time.ns_per_ms);
+                compat_sleep(100 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -58,7 +80,7 @@ test "GAP-0203 Fix #2: USE GRAPH detected case-insensitively" {
     };
 
     for (cases) |case| {
-        const trimmed = std.mem.trimLeft(u8, case.input, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, case.input, " \t\n\r");
         const is_use_graph = std.ascii.startsWithIgnoreCase(trimmed, "USE GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "USE PROPERTY GRAPH ");
         try testing.expectEqual(case.expect, is_use_graph);
@@ -75,7 +97,7 @@ test "GAP-0203 Fix #2: CREATE GRAPH detected case-insensitively" {
     };
 
     for (cases) |case| {
-        const trimmed = std.mem.trimLeft(u8, case.input, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, case.input, " \t\n\r");
         const is_create_graph = std.ascii.startsWithIgnoreCase(trimmed, "CREATE GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "CREATE PROPERTY GRAPH ");
         try testing.expectEqual(case.expect, is_create_graph);
@@ -91,7 +113,7 @@ test "GAP-0203 Fix #2: DROP GRAPH detected case-insensitively" {
     };
 
     for (cases) |case| {
-        const trimmed = std.mem.trimLeft(u8, case.input, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, case.input, " \t\n\r");
         const is_drop_graph = std.ascii.startsWithIgnoreCase(trimmed, "DROP GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "DROP PROPERTY GRAPH ");
         try testing.expectEqual(case.expect, is_drop_graph);
@@ -111,7 +133,7 @@ test "GAP-0203 Fix #2: Normal queries skip graph detection" {
     };
 
     for (normal_queries) |query| {
-        const trimmed = std.mem.trimLeft(u8, query, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, query, " \t\n\r");
         const is_graph_mgmt = std.ascii.startsWithIgnoreCase(trimmed, "USE GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "USE PROPERTY GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "CREATE GRAPH ") or
@@ -298,14 +320,14 @@ test "GAP-0203 Benchmark: Query execution throughput baseline" {
     warm.deinit(allocator);
 
     const iterations: usize = 50;
-    var timer = try std.time.Timer.start();
+    const t_start = nowNs();
 
     for (0..iterations) |_| {
         var result = try execSimple(&fixture.client, allocator, "RETURN 1 AS x");
         result.deinit(allocator);
     }
 
-    const elapsed_ns = timer.read();
+    const elapsed_ns = nowNs() - t_start;
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
     const qps = @as(f64, @floatFromInt(iterations)) / (elapsed_ms / 1000.0);
 
@@ -324,21 +346,21 @@ test "GAP-0203 Benchmark: Query execution with connection reuse" {
 
     const iterations: usize = 30;
 
-    var timer_new = try std.time.Timer.start();
+    const t_new = nowNs();
     for (0..iterations) |_| {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
         var result = try execSimple(&client, allocator, "RETURN 1 AS x");
         result.deinit(allocator);
     }
-    const elapsed_new = timer_new.read();
+    const elapsed_new = nowNs() - t_new;
 
-    var timer_reuse = try std.time.Timer.start();
+    const t_reuse = nowNs();
     for (0..iterations) |_| {
         var result = try execSimple(&fixture.client, allocator, "RETURN 1 AS x");
         result.deinit(allocator);
     }
-    const elapsed_reuse = timer_reuse.read();
+    const elapsed_reuse = nowNs() - t_reuse;
 
     const new_ms = @as(f64, @floatFromInt(elapsed_new)) / 1_000_000.0;
     const reuse_ms = @as(f64, @floatFromInt(elapsed_reuse)) / 1_000_000.0;
@@ -359,11 +381,11 @@ test "GAP-0203 Benchmark: Graph management query detection cost" {
     };
 
     const iterations: usize = 10_000;
-    var timer = try std.time.Timer.start();
+    const t_start = nowNs();
 
     for (0..iterations) |i| {
         const query = queries[i % queries.len];
-        const trimmed = std.mem.trimLeft(u8, query, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, query, " \t\n\r");
         const is_graph_mgmt = std.ascii.startsWithIgnoreCase(trimmed, "USE GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "USE PROPERTY GRAPH ") or
             std.ascii.startsWithIgnoreCase(trimmed, "CREATE GRAPH ") or
@@ -373,7 +395,7 @@ test "GAP-0203 Benchmark: Graph management query detection cost" {
         if (is_graph_mgmt) std.debug.print("unexpected graph mgmt query\n", .{});
     }
 
-    const elapsed_ns = timer.read();
+    const elapsed_ns = nowNs() - t_start;
     const per_check_ns = elapsed_ns / iterations;
 
     std.debug.print(

@@ -40,7 +40,8 @@ pub fn main() !void {
         const mismatch = simulateConsistencyCheck(&keys, &dirs, &keys, &dirs);
         if (mismatch) {
             // Would set flag in real merge, simulate by writing.
-            fed_flag.g_last_federation_mismatch = true;
+            // (g_last_federation_mismatch is an std.atomic.Value(bool).)
+            fed_flag.g_last_federation_mismatch.store(true, .release);
         }
         if (fed_flag.mismatchFlag()) {
             // Consume and record if unexpected.
@@ -53,7 +54,7 @@ pub fn main() !void {
     const mismatch_now = simulateConsistencyCheck(&keys, &dirs, &keys, &dirs_mismatch);
     if (!mismatch_now) return error.ExpectedMismatchNotDetected;
     if (mismatch_now) {
-        fed_flag.g_last_federation_mismatch = true;
+        fed_flag.g_last_federation_mismatch.store(true, .release);
     }
     var mismatch_count: usize = 0;
     if (fed_flag.mismatchFlag()) {
@@ -64,18 +65,16 @@ pub fn main() !void {
     if (mismatch_count != 1) return error.MismatchNotEmitted;
 
     // Output JSON line for aggregation / governance.
+    // Zig 0.16: fixedBufferStream removed; use std.Io.Writer.fixed.
     var buf: [256]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w = std.Io.Writer.fixed(&buf);
     try w.writeAll("{\"bench\":\"BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard\",");
     try w.print("\"iterations\":{},", .{iterations});
     try w.print("\"false_positive_count\":{},", .{false_positive_count});
     try w.print("\"mismatch_count\":{}", .{mismatch_count});
     try w.writeAll("}\n");
-    const line = fbs.getWritten();
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    try stdout.writeAll(line);
+    const line = w.buffered();
+    // Zig 0.16: std.fs.File removed; std.Io.File.stdout() is platform-aware.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    try std.Io.File.stdout().writeStreamingAll(io, line);
 }

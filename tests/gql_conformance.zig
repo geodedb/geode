@@ -3,6 +3,17 @@ const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
 
+// Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
+fn compat_sleep(ns: u64) void {
+    var req: std.posix.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
+    var rem: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+    } else {
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
 const ExpectedValue = union(enum) {
     Null,
     Bool: bool,
@@ -30,7 +41,7 @@ fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
     while (attempts < max_attempts) : (attempts += 1) {
         client = util.QuicProtoClient.connect(allocator, addr) catch |err| {
             if (err == error.HandshakeError or err == error.ConnectionFailed) {
-                std.Thread.sleep(100 * std.time.ns_per_ms);
+                compat_sleep(100 * std.time.ns_per_ms);
                 continue;
             }
             return err;
