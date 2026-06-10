@@ -1016,7 +1016,8 @@ preceding `MATCH`).
 Secondary anomaly: the result reports `nodes_created: 1` for a pure edge create
 between two already-matched nodes (should be `0` nodes / `1` edge) — the
 result-counter for the MATCH-bound CREATE-edge path is also wrong, independent of
-the replication hole.
+the replication hole. *(Fixed 2026-06-10, commits `1aa12b7e`/`758ecc7c` — see the
+closure note below; regression in `tests/test_match_create_counters.zig`.)*
 
 **Fix direction:** route the `MATCH…CREATE` path through the same
 `clusterWriteRole()` gate as the other handlers. On the leader, the CREATE clause's
@@ -1035,3 +1036,67 @@ on the leader, assert the edge reads back on all three) and a follower
 fail-closed case (same query on a follower → `ClusterNotLeader`). The netns churn
 harness should add an M8 phase asserting a match-created edge stays EXACTLY 1 on
 all three across an in-place restart.
+
+---
+
+## ✅ CLOSED (2026-06-10) — `MATCH … CREATE` silent divergence fixed; counter fix; fail-closed sweep + FTS apply symmetry as related hardening
+
+The `MATCH … CREATE (a)-[:R]->(b)` hole above is **fixed on `main`**:
+
+- **Dispatch gate + leader replication slice** (commits `96b73499`, `763d1f15`,
+  `c0786dc7`): the MATCH…CREATE path is now routed through the cluster
+  write-gate in `query_execution.zig`, and on the leader
+  `clusterReplicateMatchCreate` (`crud_operations.zig`) proposes a zero-node
+  **GNC2** entry carrying the MATCH-resolved **absolute node ids** as edge
+  endpoints — followers apply by id and NEVER re-run the MATCH (same posture as
+  the `GDEL`/`GUPD` slices). The GNC2 absolute-id apply path is pinned
+  in-process by `tests/test_raft_apply.zig` (commits `17a8f933`, `493a6bbd`).
+- **Replicable slice scope** (anything outside it fails closed with
+  `ClusterWriteNotReplicable`; a follower always gets `ClusterNotLeader`;
+  zero-match is a no-op): head-only named MATCH chains where each variable
+  resolves to EXACTLY one node; CREATE endpoints are pure variable references;
+  no RETURN/WITH/FILTER/SET/REMOVE/DELETE in the statement; scalar edge
+  properties only; ≤32 edges per statement. Documented residuals that fail
+  closed by design: Cartesian shapes (a MATCH variable matching >1 node) and a
+  new node minted inside the CREATE pattern (`CREATE (a)-[:R]->(new:X)`) in
+  cluster mode.
+- **Regression tests**: `tests/test_cluster_replicable_mutations.zig` Tests 5+6
+  (red at `97e2ddba` → green) — leader MATCH…CREATE reads back on all three
+  nodes; follower MATCH…CREATE is refused with `ClusterNotLeader`. The netns
+  churn harness gained an **M8 phase**
+  (`tests/cluster/netns_cluster_membership_churn_test.sh`) per the request
+  above: seeded endpoints, leader MATCH…CREATE → edge EXACTLY 1 on all three,
+  follower-directed MATCH…CREATE → `ClusterNotLeader` with no leaked edge, and
+  the edge stays EXACTLY 1 everywhere across an in-place restart.
+- **Secondary anomaly (counter) fixed** (commits `1aa12b7e`, `758ecc7c`): the
+  MATCH…CREATE summary now reports `nodes_created` and `relationships_created`
+  correctly (pure edge create → 0 nodes / 1 relationship), and the latent
+  silent no-op `MATCH (a) CREATE (a)-[:R]->(new:X {k:1})` (standalone mode) now
+  actually creates the new node WITH its properties. Regression:
+  `tests/test_match_create_counters.zig`.
+
+### Related hardening landed the same day (2026-06-10)
+
+- **Fail-closed doctrine for every sliceless write surface**
+  (`cluster.gateUnreplicatedWrite()`; commits `6d553fdc`, `ecb2bc68`,
+  `36fc76fd`, `6b1227d2`, `d7a9597a`): in cluster mode, writes with no
+  replication slice are refused — follower → `ClusterNotLeader`, leader →
+  `ClusterWriteNotReplicable` — instead of silently applying node-locally.
+  Covers `geode.ts.insert`/`insert_many`, auth DDL + mutating `geode.auth.*`,
+  policy DDL, tenant create/drop/set_quota, CREATE/DROP INDEX, CREATE/DROP
+  GRAPH, constraints, and mutating TDE/CDC/FLE procedures. Standalone mode is
+  unaffected. e2e: `tests/test_cluster_replicable_mutations.zig`
+  ("cluster: unreplicated write surfaces fail closed", red `5444c87e` → green,
+  7/7 suite).
+- **FTS apply-path symmetry** (commits `e280c526`, `3cd4e1a3`, `05c7944e`):
+  raft apply (GNC1/GNC2/GMRG/GUPD/GDEL) now fires FTS live-maintenance on
+  followers via a callback seam, and snapshot install rebuilds FTS indexes
+  (seam-level; `installSnapshotData` has no production caller yet —
+  `reportSnapshot` wiring pending). Also fixed a latent fts-storage
+  segment-flush doc-id delta overflow on descending ids surfaced by GNC2's id
+  band. Test: `tests/test_fts_apply_symmetry.zig` (3 tests).
+
+Verification at closure: cluster suite 7/7 green; 4-shard `zig build test`
+sweep green; named steps `test-raft-apply` (28/28),
+`test-match-create-counters`, `test-fts-apply-symmetry` (3/3),
+`test-cluster-coord-config` (6/6) green.

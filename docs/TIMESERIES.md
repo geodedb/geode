@@ -149,6 +149,23 @@ A float (`f64`) value lane is a deferred, explicit follow-up.
 
 ---
 
+## Cluster Mode (2026-06-10)
+
+Time-series ingest **fails closed in cluster mode** (`GEODE_CLUSTER_TOKEN` set):
+there is no Raft replication slice for time-series points yet, so
+`CALL geode.ts.insert` / `geode.ts.insert_many` are refused via
+`cluster.gateUnreplicatedWrite()` — a follower returns `ClusterNotLeader`, the
+leader returns `ClusterWriteNotReplicable` — rather than silently writing
+node-local, never-replicated data. Standalone mode is unaffected.
+
+The read procedures (`range`, `last`, `bucket_avg`, `sample_by`) are **not
+gated**, but they serve **node-local** data only. Since cluster-mode ingest is
+refused, in practice a cluster node can only return points that were ingested
+before cluster mode was enabled (or placed in its data-dir via restore). A
+replication slice for time-series ingest is follow-up work.
+
+---
+
 ## Wire Protocol
 
 Time-series ingest and queries are reachable over the QUIC wire protocol via the

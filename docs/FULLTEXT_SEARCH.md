@@ -142,6 +142,21 @@ via the bulk-MERGE path become searchable only after re-running
 `CREATE INDEX <name> … USING fulltext`, which backfills all existing matching
 nodes. All other write paths are covered by live maintenance.
 
+### Cluster Mode (2026-06-10)
+
+- **Raft apply + snapshot install now maintain FTS.** The raft apply path
+  (GNC1/GNC2/GMRG/GUPD/GDEL) fires the same FTS live-maintenance hook on
+  followers via a callback seam, and snapshot install rebuilds FTS indexes from
+  the installed graph data (seam-level — production `reportSnapshot` wiring is
+  pending). Test: `tests/test_fts_apply_symmetry.zig`.
+- **Stale-posting residual on `SET` is symmetric:** a re-indexed node can leave
+  a stale posting for the old term (engine tombstone permanence in
+  `fts-storage`), but leader and follower behave identically — no divergence.
+- **`CREATE INDEX` / `DROP INDEX` are refused in cluster mode** (fail-closed
+  DDL — no Raft replication slice for index DDL yet): follower →
+  `ClusterNotLeader`, leader → `ClusterWriteNotReplicable`. Standalone mode is
+  unaffected.
+
 ---
 
 ## Durability
@@ -174,7 +189,7 @@ needed to consume them — any GQL client that can read result rows works.
 
 FTS is held to graph-storage parity:
 
-- **Unit tests:** `tests/test_fts_storage_adapter.zig`, `tests/test_fts_tokenizer.zig`, `tests/test_fts_e2e.zig`, `tests/test_fts_coverage.zig`, `tests/test_fts_maintenance.zig`
+- **Unit tests:** `tests/test_fts_storage_adapter.zig`, `tests/test_fts_tokenizer.zig`, `tests/test_fts_e2e.zig`, `tests/test_fts_apply_symmetry.zig` (raft-apply/snapshot maintenance). NOTE (2026-06-10): `tests/test_fts_coverage.zig` and `tests/test_fts_maintenance.zig` are DEAD code (they call a nonexistent `initGlobalStoreWithDataDir` and are never analyzed by the compiler) — do not cite them as live coverage.
 - **Benchmark:** `benchmarks/benchmark_fts_storage.zig` (native VarianceEnvelope benchmark, in the `bench` / `benchmark` aggregates)
 - **Latency gate:** `tests/test_fts_latency.zig` (CI-aware)
 - **Harness specs:** `geodetestlab-cli/specs/fts_storage_basic.yml`, `geodetestlab-cli/specs/fulltext_search_basic.yml`

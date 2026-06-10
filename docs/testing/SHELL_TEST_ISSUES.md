@@ -1734,6 +1734,7 @@ Lines 1105-1121: MATCH Location → RETURNS 5 ROWS ✓
 The `USE GRAPH` implementation may be getting a new/fresh graph storage reference instead of the existing one. When switching back to `enterprise_hr`, the server gets a different (empty) storage instance rather than the one containing the nodes.
 
 **Additional Evidence**: Relationship creations at lines 183-204 show `nodes_created=1` which is unusual for `MATCH (a), (b) CREATE (a)-[r]->(b)` patterns. This suggests the MATCH may be failing silently and CREATE is generating new anonymous nodes.
+> **Fixed 2026-06-10** (commits `1aa12b7e`/`758ecc7c`): the MATCH…CREATE summary now reports `relationships_created` (not `nodes_created`) for pure edge creates, and `MATCH (a) CREATE (a)-[:R]->(new:X {k:1})` now actually creates the new node with its properties (was a silent no-op). Regression: `tests/test_match_create_counters.zig`.
 
 **Priority**: P0 - This breaks all multi-graph workflows
 

@@ -32,6 +32,11 @@
 #                            re-apply (count stays 0 everywhere).
 #   M7 merge/SET restart  -> a MERGE'd row stays EXACTLY 1 (no double-apply) and a
 #                            replicated MATCH...SET property survives the re-apply.
+#   M8 MATCH...CREATE edge -> an edge created between two MATCH-bound nodes on the
+#                            leader replicates to all 3 (GNC2 slice, 2026-06-10),
+#                            a follower-directed MATCH...CREATE fails closed with
+#                            ClusterNotLeader, and the edge stays EXACTLY 1 on all
+#                            3 across an in-place restart (no re-apply duplicate).
 #
 # Same faithful topology as netns_cluster_replication_test.sh: 3 nodes, each in
 # its own netns with a distinct routable IP on a bridge, WILDCARD cluster bind
@@ -54,7 +59,7 @@ SUBNET="${NETNS_TEST_SUBNET:-10.90.0}"
 BR=gchurnbr0
 NS_NODES="1 2 3"
 NS_ALL="1 2 3 53"
-PHASES="${PHASES:-M1 M2 M3 M4 M5 M6 M7}"
+PHASES="${PHASES:-M1 M2 M3 M4 M5 M6 M7 M8}"
 # Node IPs start at $SUBNET.1<id> (.11/.12/.13); a reschedule moves a node to
 # $SUBNET.2<id> (.21/.22/.23). DNS is $SUBNET.153, bridge gw is $SUBNET.1.
 ns_ip() { echo "$SUBNET.1$1"; }      # original pod IP for node $1
@@ -645,6 +650,75 @@ if run_phase M7; then
     fi
   fi
   echo "  M7 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
+fi
+
+# =============================================================================
+# M8: a MATCH...CREATE edge between two already-replicated nodes must replicate
+#   to all 3, fail closed on a follower, and stay EXACTLY 1 across an in-place
+#   restart. Closes the 2026-06-10 silent-divergence hole in
+#   docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md:
+#   `MATCH (a),(b) CREATE (a)-[:R]->(b)` previously bypassed the cluster
+#   write-gate on EVERY node (leader-only or follower-only edge, status 00000).
+#   The fix routes it through the GNC2 slice with MATCH-resolved absolute node
+#   ids (followers never re-run the MATCH); a follower must reject with
+#   ClusterNotLeader. In-process analog: tests/test_cluster_replicable_mutations.zig
+#   Tests 5+6. The restart leg re-applies the committed GNC2 entry on top of the
+#   persisted store — the edge (and both endpoints) must stay EXACTLY 1.
+# =============================================================================
+if run_phase M8; then
+  echo "== M8: MATCH...CREATE edge replicates, fails closed on follower, survives restart =="
+  for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] || start_node $id; done
+  LID=$(wait_leader 40) || fail "M8 no leader for 3-node cluster in 40s"
+  if [ -n "${LID:-}" ]; then
+    # Seed the two endpoint nodes and converge BOTH on all 3 BEFORE the edge
+    # write (the bug-doc repro pre-seeded its :MT endpoints the same way).
+    q "$LID" 'CREATE (:M8A {id:1})' 20 >/dev/null
+    q "$LID" 'CREATE (:M8B {id:2})' 20 >/dev/null
+    M8_OK=1
+    for id in $NS_NODES; do
+      wait_cnt1 $id M8A 40 || { fail "M8 seed CREATE (:M8A) did not replicate to node$id (count=$(cnt $id M8A))"; M8_OK=0; }
+      wait_cnt1 $id M8B 40 || { fail "M8 seed CREATE (:M8B) did not replicate to node$id (count=$(cnt $id M8B))"; M8_OK=0; }
+    done
+    M8_EDGEQ='MATCH (:M8A)-[r:M8L]->(:M8B) RETURN count(r) AS c'
+    if [ "$M8_OK" = "1" ]; then
+      # The exact divergence shape from the bug doc, on the LEADER: must now
+      # propose through raft (GNC2, absolute endpoint ids) and read back 1
+      # everywhere — NOT leader-only.
+      q "$LID" 'MATCH (a:M8A {id:1}), (b:M8B {id:2}) CREATE (a)-[:M8L]->(b)' 20 >/dev/null
+      for id in $NS_NODES; do
+        wait_cntq $id "$M8_EDGEQ" 1 40 || { fail "M8 MATCH...CREATE edge :M8L did not replicate to node$id (count=$(cntq $id "$M8_EDGEQ")) — leader-local silent divergence"; M8_OK=0; }
+      done
+    fi
+    # Follower fail-closed: the SAME shape sent to a follower must be refused
+    # with ClusterNotLeader (it previously applied follower-locally with 00000),
+    # and the cluster-wide edge count must stay EXACTLY 1 (no follower-only edge).
+    FOLL=""; for id in $NS_NODES; do [ "$id" != "$LID" ] && { FOLL=$id; break; }; done
+    out=$(q "$FOLL" 'MATCH (a:M8A {id:1}), (b:M8B {id:2}) CREATE (a)-[:M8LF]->(b)' 20)
+    if echo "$out" | grep -q "ClusterNotLeader"; then
+      echo "  PASS M8 fail-closed: follower node$FOLL rejected MATCH...CREATE with ClusterNotLeader"
+    else
+      fail "M8 follower node$FOLL did NOT reject MATCH...CREATE with ClusterNotLeader: $(echo "$out" | tail -1 | cut -c1-160)"
+    fi
+    sleep 3
+    for id in $NS_NODES; do
+      c=$(cntq $id 'MATCH (:M8A)-[r:M8LF]->(:M8B) RETURN count(r) AS c')
+      [ "$c" = "0" ] || fail "M8 node$id has M8LF=$c (want 0) — follower-directed MATCH...CREATE leaked an edge"
+    done
+    if [ "$M8_OK" = "1" ]; then
+      # Restart a follower IN PLACE (PVC preserved): it re-applies the committed
+      # GNC2 edge entry on top of its persisted store. Edge + endpoints must
+      # each stay EXACTLY 1 on all 3 (no re-apply duplicate).
+      RID=""; for id in $NS_NODES; do [ "$id" != "$LID" ] && { RID=$id; break; }; done
+      echo "  leader=node$LID; restarting follower node$RID in place (PVC preserved)"
+      restart_in_place "$RID"
+      wait_state "$RID" follower 45 || fail "M8 restarted node$RID never rejoined (state=$(roleof $RID))"
+      sleep 5
+      assert_no_duplicate M8A
+      assert_no_duplicate M8B
+      assert_count_steady M8edge "$M8_EDGEQ" 1 "M8L edge count"
+    fi
+  fi
+  echo "  M8 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
 fi
 
 echo
