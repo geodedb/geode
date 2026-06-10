@@ -2669,11 +2669,26 @@ const FirstStreamOwnerContext = struct {
     // exit). `cleanupFirstStreamOwner` sets `cooperative_done`, clears the lib
     // notifier, then spins until `notifier_inflight == 0` so no ENTERED callback
     // is mid-deref before it drops the notifier ref. The notifier ref itself
-    // keeps the allocation alive across the whole window, so even the narrow
-    // lib capture→entry gap dereferences live memory (the ref is not the LAST
-    // ref until the lifecycle teardown releases too, which happens strictly
-    // after the quiesce + `destroyConnection`, by which point the lib has been
-    // told to stop and the entered callbacks have drained).
+    // keeps the allocation alive across that whole quiesce window.
+    //
+    // KNOWN RESIDUAL (capture window): the vendored lib's `notifyRxReady`
+    // (quic-0.1.21 conn.zig:1967-1971) loads the fn pointer and ctx pointer
+    // NON-ATOMICALLY, after `Connection.mu` is released, and `destroyConnection`
+    // does NOT quiesce the poll thread — the inner conn goes to pending_destroy
+    // precisely because poll may still touch it (GAP-0203 comment,
+    // src/transport/quic.zig:1005-1009). So a poll thread that has captured
+    // fn+ctx but not yet invoked the callback survives BOTH
+    // `clearReadReadyNotifier` AND `waitNotifierDrained` (it hasn't entered the
+    // gate, so the counter is still 0) and can enter `firstStreamReadyCallback`
+    // on a ctx the teardown has since freed. The exposure is ~3 instructions
+    // (capture → invoke) racing a µs-ms teardown — versus the previous
+    // whole-read-loop window, so the observed 9x/hour crash is closed; what
+    // remains is a rare structural residual, not a fixed bug. Real fixes, in
+    // preference order: (a) lib-level lock/quiesce around the capture+invoke in
+    // `notifyRxReady`, (b) defer the ctx free into the same pending_destroy
+    // drain epoch as the inner conn, (c) a type-stable freelist for
+    // `FirstStreamOwnerContext` so a stale entry derefs poisoned-but-mapped
+    // memory of the right type.
     notifier_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// True once `submit` installed the lib notifier and took the notifier ref.
     /// Guards `cleanupFirstStreamOwner` so it releases that ref exactly once
@@ -2789,22 +2804,41 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
         g_first_stream_detach_gate.release();
         ctx.detached_first_stream_acquired = false;
     }
-    if (ctx.cooperative_scheduler != null) {
+    if (ctx.cooperative_scheduler) |scheduler| {
         // Quiesce the poll-thread RX-ready notifier before releasing its ref
         // (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME). Order matters:
         //   1. publish `cooperative_done` (TOCTOU flag a live callback reads),
         //   2. clear the lib notifier so NO NEW callback is dispatched,
         //   3. drain any callback already in-flight (`notifier_inflight -> 0`),
-        //   4. drop the notifier ref taken in `submit`.
-        // The notifier ref (still held through 1-3) keeps the allocation alive
+        //   4. re-purge the scheduler's ready_queue (stale re-enqueue, below),
+        //   5. drop the notifier ref taken in `submit`.
+        // The notifier ref (still held through 1-4) keeps the allocation alive
         // for the whole window, so an in-flight callback never derefs freed
-        // memory. After step 4 only the lifecycle ref remains (held by THIS
+        // memory. After step 5 only the lifecycle ref remains (held by THIS
         // thread, which proceeds to the gated teardown), so no other thread can
         // free the ctx concurrently.
+        //
+        // NOTE: `ctx.cooperative_scheduler` is deliberately NOT nulled here.
+        // The poll-thread callback reads the field concurrently (:3620); a
+        // plain non-atomic write from this thread racing that read is formal
+        // UB even if the value is never "used". The done flag + notifier clear
+        // + drain already gate every post-teardown use, and the scheduler is
+        // server-global (set once at startup, outlives every ctx — the test
+        // harness likewise destroys ctx before scheduler), so a stale read of
+        // the pointer is always a read of a live scheduler.
         ctx.cooperative_done.store(true, .release);
         ctx.stream.clearReadReadyNotifier();
-        ctx.cooperative_scheduler = null;
         ctx.waitNotifierDrained();
+        // Stale re-enqueue purge: a notifier callback that already passed the
+        // `cooperative_done == false` check (:3536) in a stale-read window
+        // after `finishCooperativeContext`'s `removeContext` purge can have
+        // re-enqueued this ctx into the ready_queue before exiting the gate.
+        // The drain above only guarantees the callback has EXITED — not that
+        // its enqueue was undone. Re-running the (idempotent) purge after the
+        // drain, while the notifier ref still pins the allocation, guarantees
+        // no dangling ctx pointer remains in the queue for a worker to pop
+        // once the gated teardown frees it.
+        scheduler.removeContext(ctx);
         if (ctx.notifier_armed) {
             ctx.notifier_armed = false;
             // Not the last ref: the lifecycle ref is still held here. Asserted
