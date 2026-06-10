@@ -3689,6 +3689,10 @@ fn clusterReplicateMatchCreate(
     if (q.with_clause != null or q.filter_clause != null) return error.ClusterWriteNotReplicable;
     if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) return error.ClusterWriteNotReplicable;
     if (q.delete_items.len > 0) return error.ClusterWriteNotReplicable;
+    // A MATCH…CREATE without a CREATE pattern is malformed for this slice —
+    // fail closed up front (NOT after MATCH resolution, where a zero-match
+    // chain would silently no-op instead).
+    const create_pattern = q.create_pattern orelse return error.ClusterWriteNotReplicable;
 
     const read_store = graph_store.getWritableGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
@@ -3738,6 +3742,10 @@ fn clusterReplicateMatchCreate(
                 .flags = std.ArrayList([]const u8).empty,
             };
         };
+        // Duplicate MATCH variable names would make the Env lookup (first
+        // binding wins) disagree with endpoint resolution (last put wins) —
+        // out of this slice, fail closed.
+        if (var_ids.contains(match_var)) return error.ClusterWriteNotReplicable;
         try var_names.append(allocator, match_var);
         try var_nodes.append(allocator, Value{ .Node = read_store.nodes.getPtr(rid).? });
         try var_ids.put(match_var, rid);
@@ -3779,7 +3787,6 @@ fn clusterReplicateMatchCreate(
         edge_specs.deinit(allocator);
     }
 
-    const create_pattern = q.create_pattern orelse return error.ClusterWriteNotReplicable;
     for (create_pattern.chains) |cchain| {
         // A bare node CREATE after MATCH is out of this slice — fail closed.
         if (cchain.hops.len == 0) return error.ClusterWriteNotReplicable;
@@ -3805,6 +3812,14 @@ fn clusterReplicateMatchCreate(
             const from_id = if (hop.rel.dir == .left) right_id else left_id;
             const to_id = if (hop.rel.dir == .left) left_id else right_id;
 
+            // Bounds: refuse to propose a payload larger than the GNC2 cap.
+            // Checked BEFORE constructing/appending the spec so every exit
+            // path leaves exactly one owner of the props slice (a post-append
+            // check would double-free: the function-level defer frees the
+            // appended es.props while the loop-body errdefer was still live).
+            if (edge_specs.items.len == cluster_replication.MAX_MULTI_EDGES)
+                return error.ClusterWriteNotReplicable;
+
             // Scalar edge props, evaluated on the leader (matched vars bound).
             var eprops: []cluster_replication.Prop = &.{};
             if (hop.rel.props) |plist| {
@@ -3827,9 +3842,6 @@ fn clusterReplicateMatchCreate(
                 .edge_type = rel_type,
                 .props = eprops,
             });
-            // Bounds: refuse to propose a payload larger than the GNC2 cap.
-            if (edge_specs.items.len > cluster_replication.MAX_MULTI_EDGES)
-                return error.ClusterWriteNotReplicable;
         }
     }
     if (edge_specs.items.len == 0) return error.ClusterWriteNotReplicable;
