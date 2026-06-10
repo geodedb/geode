@@ -5103,6 +5103,19 @@ pub fn build(b: *std.Build) void {
     const gap0825_step = b.step("test-gap0825", "GAP-0825: LSP Content-Length framing conformance tests");
     gap0825_step.dependOn(&run_gap0825_tests.step);
 
+    // GAP-0828: DocumentStore reopen/deinit leak regression. Drives the REAL
+    // DocumentStore (`src/cli/lsp/document.zig`) under the leak-detecting
+    // testing allocator. Standalone, dependency-free module wired as
+    // `lsp_document`.
+    const gap0828_document_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/document.zig"), .target = target, .optimize = optimize });
+    const gap0828_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0828_documentstore_reopen.zig"), .target = target, .optimize = optimize });
+    gap0828_test_mod.addImport("lsp_document", gap0828_document_mod);
+    const gap0828_tests = b.addTest(.{ .root_module = gap0828_test_mod });
+    const run_gap0828_tests = b.addRunArtifact(gap0828_tests);
+    shardDep(test_step, &run_gap0828_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0828_step = b.step("test-gap0828", "GAP-0828: DocumentStore reopen/deinit leak regression");
+    gap0828_step.dependOn(&run_gap0828_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
