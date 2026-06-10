@@ -124,6 +124,17 @@ const Harness = struct {
         defer r.deinit(aa);
         return r.rows.len;
     }
+
+    /// BM25 score (column 1, Double) of the TOP `CALL geode.fts.search` hit
+    /// for `term` in `index`. Errors if there are no hits.
+    pub fn searchTopScore(self: *Harness, index: []const u8, term: []const u8) !f64 {
+        const aa = self.arena.allocator();
+        const gql = try std.fmt.allocPrint(aa, "CALL geode.fts.search('{s}', '{s}')", .{ index, term });
+        var r = try self.runQuery(gql);
+        defer r.deinit(aa);
+        if (r.rows.len == 0) return error.NoSearchHits;
+        return r.rows[0][1].Double;
+    }
 };
 
 test "raft GNC2 create apply maintains the fulltext index like the executor path" {
@@ -158,6 +169,20 @@ test "raft GNC2 create apply maintains the fulltext index like the executor path
     // 4. SYMMETRY CONTRACT (red before Task 13): the applied node must be
     //    searchable exactly as if the executor had created it.
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
+
+    // 5. RESTART-REPLAY DEDUP PIN: re-apply the SAME payload at the SAME raft
+    //    index — exactly what a restarted follower does when replaying its
+    //    committed log on top of the persisted store. The create is tolerated
+    //    as NodeAlreadyExists and the FTS hook must NOT re-fire: the engine is
+    //    append-only with no doc dedup, so a second upsert duplicates the
+    //    node's postings. Search DEDUPS rows per doc_id (count stays 1), but
+    //    the duplicated term frequency inflates the restarted follower's BM25
+    //    score vs non-restarted peers — so the pin asserts BOTH the row count
+    //    AND that the score is bit-identical to the pre-replay score.
+    const score_before_replay = try h.searchTopScore("doc_idx", "zraven");
+    _ = try cr.applyMultiCreatePayload(a, store, payload, 9001);
+    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
+    try testing.expectEqual(score_before_replay, try h.searchTopScore("doc_idx", "zraven"));
 }
 
 test "raft GUPD update apply maintains the fulltext index (new term indexed, executor-parity residual)" {
@@ -203,6 +228,12 @@ test "raft GUPD update apply maintains the fulltext index (new term indexed, exe
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
 }
 
+// NOTE (concurrency precondition): the rebuild path exercised here
+// (rebuildAllFulltextIndexes) requires NO concurrent searches —
+// installSnapshotData has NO production caller yet (reportSnapshot wiring
+// pending); before wiring InstallSnapshot into raft_consensus, the
+// facade/engine drop-recreate must be made safe against concurrent
+// QUIC-worker searches (unlocked fts_facades map + engine deinit race).
 test "raft snapshot install rebuilds fulltext indexes from the restored store" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();

@@ -204,6 +204,17 @@ pub const FtsStorageAdapter = struct {
         });
         errdefer engine.deinit();
 
+        // Segment-order guard priming (WAL-replay reopen hole): Engine.init
+        // replays the WAL into a fresh memtable, which may already contain
+        // high (time-band, ~2^57) doc_ids — but IndexEngine starts with
+        // max_doc_id_since_flush = 0, so a subsequent SMALLER (GNC2-band,
+        // ~2^40) id would pass guardPostingOrder and hit the segment-flush
+        // delta-encoding overflow. Force one flush right after `.open`: an
+        // empty replayed memtable makes this a no-op (engine.zig:1024), and a
+        // non-empty one gets sealed into a segment — either way tracker=0 is
+        // then truthful.
+        if (intent == .open) try engine.flush();
+
         const name_copy = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(name_copy);
 
@@ -305,14 +316,19 @@ pub const FtsStorageAdapter = struct {
         defer ie.write_mu.unlock(self.io);
         // Segment-order guard: flush ahead of the batch if ANY id in it would
         // land below the memtable's running max, then track the batch max.
-        // Ids WITHIN one batch may still be unsorted relative to each other —
-        // callers (bulk-MERGE reindex) pass store-ordered ascending ids today;
-        // a fully general per-batch sort is deliberately avoided on this hot
-        // path. The single-doc `indexNode` path (executor + raft apply) is
-        // fully guarded.
+        // CALLER CONTRACT: ids WITHIN one batch MUST be ascending — callers
+        // (bulk-MERGE reindex) pass store-ordered ascending ids; a fully
+        // general per-batch sort is deliberately avoided on this hot path
+        // (the debug assert below pins the contract). The single-doc
+        // `indexNode` path (executor + raft apply) is fully guarded.
         var batch_min: u64 = std.math.maxInt(u64);
         var batch_max: u64 = 0;
-        for (docs) |d| {
+        var prev_id: u64 = 0;
+        for (docs, 0..) |d, di| {
+            // Within-batch ascending contract (see comment above): a
+            // descending pair would delta-overflow the segment writer.
+            if (di > 0) std.debug.assert(d.doc_id >= prev_id);
+            prev_id = d.doc_id;
             if (d.doc_id < batch_min) batch_min = d.doc_id;
             if (d.doc_id > batch_max) batch_max = d.doc_id;
         }

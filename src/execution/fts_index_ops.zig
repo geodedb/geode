@@ -106,7 +106,17 @@ fn backfillExistingNodes(
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
     // Borrowed posting list of node ids for this (graph, label); null = no nodes.
-    const node_ids = store.getNodesByLabel(graph_name, label) orelse return;
+    const raw_node_ids = store.getNodesByLabel(graph_name, label) orelse return;
+
+    // Sort ids ASCENDING before indexing (on an owned copy — the store slice is
+    // borrowed). The adapter's segment-order guard force-flushes the memtable
+    // whenever an id lands below the running max, so a mixed-band id sequence
+    // (GNC2 raft-derived ~2^40 interleaved with time-based ~2^57) would
+    // otherwise trigger a flush-per-inversion storm of tiny segments. Sorted
+    // input means at most the one initial flush.
+    const node_ids = try allocator.dupe(u64, raw_node_ids);
+    defer allocator.free(node_ids);
+    std.mem.sort(u64, node_ids, {}, std.sort.asc(u64));
 
     for (node_ids) |node_id| {
         // Build ONE document per node from the field-tagged postings of every
@@ -393,6 +403,8 @@ fn ftsApplyMaintenanceHook(
 
 /// Snapshot-install wrapper: drop + recreate + re-backfill every catalogued
 /// fulltext index from the restored store. Never fails the install.
+///
+/// PRECONDITION: no concurrent searches — see `rebuildAllFulltextIndexes`.
 fn ftsSnapshotRebuildHook(store: *graph_store.GraphStore) void {
     const global = graph_store.getCurrentGlobalStore() orelse return;
     if (store != global) return;
@@ -417,6 +429,12 @@ fn ftsSnapshotRebuildHook(store: *graph_store.GraphStore) void {
 /// invisible without a fresh engine. Cost: O(total indexed nodes) — accepted;
 /// snapshot install is already a full-store rewrite. Per-index failures are
 /// logged and skipped so one broken index cannot wedge the install.
+///
+/// PRECONDITION: no concurrent searches — installSnapshotData currently has
+/// NO production caller (reportSnapshot wiring pending); before wiring
+/// InstallSnapshot into raft_consensus, the facade/engine drop-recreate here
+/// must be made safe against concurrent QUIC-worker searches (unlocked
+/// fts_facades map + engine deinit race).
 pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
     const adapter = graph_store.getGlobalAdapter() orelse return;
 

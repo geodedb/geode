@@ -247,9 +247,10 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     var li: usize = 0;
     while (li < nlabels) : (li += 1) try labels.append(allocator, try r.str16());
 
+    var newly_created = true;
     store.createNodeWithId(node_id, labels.items, graph) catch |err| switch (err) {
         // Already created by a prior apply of THIS committed entry — idempotent.
-        error.NodeAlreadyExists => {},
+        error.NodeAlreadyExists => newly_created = false,
         else => return err,
     };
 
@@ -272,7 +273,11 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     // FTS symmetry: maintain covering fulltext indexes exactly like the
     // executor's CREATE path (crud_operations.zig:1228). Fired after the
     // props land so the wrapper indexes the node's current property values.
-    fireFtsApplyHook(store, graph, node_id, .upsert);
+    // Only for NEWLY created nodes: a restart re-apply (NodeAlreadyExists
+    // tolerated above) must NOT re-fire — the engine is append-only with no
+    // doc dedup, so a second upsert would duplicate postings and inflate the
+    // restarted follower's search counts vs non-restarted nodes.
+    if (newly_created) fireFtsApplyHook(store, graph, node_id, .upsert);
 
     return node_id;
 }
@@ -517,8 +522,9 @@ pub fn applyMultiCreatePayload(
         var li: usize = 0;
         while (li < nlabels) : (li += 1) try labels.append(allocator, try r.str16());
 
+        var newly_created = true;
         store.createNodeWithId(node_id, labels.items, graph) catch |err| switch (err) {
-            error.NodeAlreadyExists => {}, // idempotent re-apply
+            error.NodeAlreadyExists => newly_created = false, // idempotent re-apply
             else => return err,
         };
 
@@ -531,7 +537,10 @@ pub fn applyMultiCreatePayload(
 
         // FTS symmetry: per created node, after its props land. Edges below
         // carry no FTS content (executor maintains FTS only on node paths).
-        fireFtsApplyHook(store, graph, node_id, .upsert);
+        // Only for NEWLY created nodes: restart re-apply (NodeAlreadyExists
+        // tolerated above) must not re-fire — the engine is append-only with
+        // no doc dedup, so duplicate postings would inflate search counts.
+        if (newly_created) fireFtsApplyHook(store, graph, node_id, .upsert);
     }
 
     const edge_count = try r.readU16();
@@ -771,6 +780,8 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     // FTS symmetry: ON MATCH SET mutates node content — maintain covering
     // indexes like the executor's SET chokepoint (property_mutation.zig).
     // The wrapper no-ops if the node is absent.
+    // Intentionally unconditional on re-apply: set-overwrite re-firing matches
+    // the executor's repeated-SET semantics — symmetric with the leader.
     fireFtsApplyHook(store, graph, node_id, .upsert);
 
     return node_id;
@@ -927,6 +938,8 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         // covering indexes like the executor's SET chokepoint
         // (property_mutation.zig). Fired after label add/remove so the
         // wrapper resolves the node's FINAL label set for this record.
+        // Intentionally unconditional on re-apply: set-overwrite re-firing
+        // matches the executor's repeated-SET semantics — symmetric.
         fireFtsApplyHook(store, graph, node_id, .upsert);
     }
 
