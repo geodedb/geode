@@ -82,7 +82,7 @@ const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const Value = geode.value_types.Value;
-// CANARY: REQ=REQ-CLI-REFACTOR-001; FEATURE="CLI Library Migration"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-04-01
+// CANARY: REQ=REQ-CLI-REFACTOR-001; FEATURE="CLI Library Migration"; ASPECT=FlagParsing; STATUS=TESTED; TEST=geodetestlab/specs/cli_flags_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
 // Partial migration to devnw/zig/cli:
 // - shell completion generation now uses the external command tree
 // - flag parsing, help text, and dispatch remain manual and should migrate incrementally
@@ -971,7 +971,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var use_saved_session = true; // Auto-load saved session by default
     // Issue #417: DSN connection string
     var dsn: ?[]const u8 = null;
-    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
     // Issue #393: Add --graph flag to specify which graph to query against
     var graph: ?[]const u8 = null;
     // When graph comes from DSN, server handles it via HELLO — don't prepend USE GRAPH
@@ -980,7 +980,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
     var client_key_path: ?[]const u8 = null;
-    // CANARY: REQ=REQ-CLI-FILE-FLAG-001; FEATURE="QueryFileFlag"; ASPECT=FileInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
+    // CANARY: REQ=REQ-CLI-FILE-FLAG-001; FEATURE="QueryFileFlag"; ASPECT=FileInput; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
     // Issue GAP-384: Add --file flag to execute GQL from a file (same as /source in shell)
     var source_file: ?[]const u8 = null;
     // GAP-0271: FLE role for field-level access control
@@ -1012,7 +1012,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (std.mem.eql(u8, arg, "--no-saved-session")) {
             use_saved_session = false;
         } else if (std.mem.eql(u8, arg, "--graph") or std.mem.eql(u8, arg, "-g")) {
-            // CANARY: REQ=REQ-CLI-GRAPH-FLAG-002; FEATURE="GraphFlag"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+            // CANARY: REQ=REQ-CLI-GRAPH-FLAG-002; FEATURE="GraphFlag"; ASPECT=FlagParsing; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --graph requires a graph name\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
@@ -1038,7 +1038,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             graph_for_prepend = graph_arg; // --graph flag: prepend USE GRAPH
             i += 1;
         } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
-            // CANARY: REQ=REQ-CLI-FILE-FLAG-002; FEATURE="QueryFileFlag"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
+            // CANARY: REQ=REQ-CLI-FILE-FLAG-002; FEATURE="QueryFileFlag"; ASPECT=FlagParsing; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
             // Issue GAP-384: Execute GQL from a file (same as /source in shell)
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --file requires a file path\n", .{});
@@ -1227,12 +1227,12 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // CANARY: REQ=REQ-CLI-FILE-FLAG-003; FEATURE="QueryFileFlag"; ASPECT=FileReading; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
+    // CANARY: REQ=REQ-CLI-FILE-FLAG-003; FEATURE="QueryFileFlag"; ASPECT=FileReading; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
     // Handle --file input with tilde expansion (same as /source in shell)
     var file_allocated: ?[]u8 = null;
     defer if (file_allocated) |allocated| allocator.free(allocated);
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-001; FEATURE="ChunkedExecution"; ASPECT=LargeFileSupport; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-001; FEATURE="ChunkedExecution"; ASPECT=LargeFileSupport; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
     // For large files, we'll collect individual statements to enable chunked execution
     var file_statements: ?std.ArrayList([]const u8) = null;
     defer {
@@ -1288,7 +1288,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         defer allocator.free(contents);
 
         // Strip comments and collect individual statements
-        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
         var statements = std.ArrayList([]const u8).empty;
         var current_stmt = std.ArrayList(u8).empty;
         defer current_stmt.deinit(allocator);
@@ -1331,7 +1331,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
 
         // Calculate total size to determine if chunking is needed
-        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
         const max_single_query_size: usize = 16 * 1024; // 16KB threshold for chunking
         var total_size: usize = 0;
         for (statements.items) |stmt| {
@@ -1369,7 +1369,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
     // Allow null query_text when using chunked execution (file_statements is set)
     if (query_text == null and file_statements == null) {
         std.debug.print("Error: query text required\n", .{});
@@ -1508,7 +1508,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         insecure = true;
     }
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
     // Handle chunked execution for large files
     if (file_statements) |statements| {
         if (params.items.len > 0) {
@@ -1649,7 +1649,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         });
     } else {
         // GAP-0113: Execute query via QUIC connection with optional certificate verification
-        // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
         executeQuicQuery(allocator, .{
             .server_addr = server_addr,
             .query_text = query_text.?,
@@ -1777,7 +1777,7 @@ fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: 
 
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
 // CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-12
-// CANARY: REQ=REQ-CLI-GRAPH-FLAG-004; FEATURE="GraphFlag"; ASPECT=ExecuteQuicQuery; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+// CANARY: REQ=REQ-CLI-GRAPH-FLAG-004; FEATURE="GraphFlag"; ASPECT=ExecuteQuicQuery; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
 // Quality fix #405: Refactored 13-parameter function to use options struct
 const QuicQueryOptions = struct {
     server_addr: []const u8,
@@ -2110,7 +2110,7 @@ fn executeBatchQueries(
     std.debug.print("\n", .{});
 }
 
-// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
 const ChunkedQueryOptions = struct {
     server_addr: []const u8,
     statements: []const []const u8,
@@ -2129,7 +2129,7 @@ const ChunkedQueryOptions = struct {
     role: ?[]const u8 = null, // GAP-0271: FLE role
 };
 
-// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_edge_cases.yml; OWNER=cli; UPDATED=2026-06-10
 /// Execute statements in chunks, batching multiple statements per request while staying under the size limit.
 /// Transaction-aware: never splits chunks within BEGIN/COMMIT boundaries.
 /// Context-aware: carries USE GRAPH forward to subsequent chunks on new connections.
@@ -2553,7 +2553,7 @@ fn resolveQueryGraphBinding(
     };
 }
 
-// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
 fn executeQueryOnConnection(
     allocator: std.mem.Allocator,
     raw_client: *zig_client.GeodeClient,
@@ -2628,7 +2628,7 @@ fn executeQueryOnConnection(
     }
     defer if (session_id_owned) |sid| allocator.free(sid);
 
-    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
     // If a graph is specified via --graph flag, prepend "USE GRAPH graphname;" to the query
     // When graph came from DSN, caller passes null (server handles via HELLO)
     var final_query: []const u8 = binding.query_text;
@@ -2768,7 +2768,7 @@ fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels
 }
 
 /// Output DOT format from pre-collected row data
-/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=TESTED; TEST=geodetestlab/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-06-10
 fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.Io.File) !void {
     // Start DOT graph
     stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "digraph G {\n") catch {};
