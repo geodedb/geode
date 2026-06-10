@@ -816,3 +816,151 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
         return error.FollowerAppliedWriteLocally;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test 7: every durable write surface WITHOUT a Raft replication slice must
+// fail closed in cluster mode (no silent divergence).
+// ---------------------------------------------------------------------------
+// At HEAD each of these surfaces is completely ungated: a leader applies the
+// write to its LOCAL store only (00000 success, never proposed through Raft)
+// and a follower does the same — both halves are silent divergence. The
+// fail-closed doctrine (gateUnreplicatedWrite, src/distributed/cluster.zig):
+//   leader   → error.ClusterWriteNotReplicable (no replication slice exists)
+//   follower → error.ClusterNotLeader          (standard Raft redirect)
+//   standalone → unchanged.
+// This test accumulates ALL accepting surfaces before failing, so the red run
+// shows the full hole inventory in one pass.
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=E2EFailClosed; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var cluster = startCluster(gpa, aa, io) catch |err| {
+        if (err == error.SkipZigTest) return error.SkipZigTest;
+        return err;
+    };
+    defer cluster.deinit();
+
+    // Every ungated durable write surface the wire harness can express with
+    // the admin connection runQuery already uses (-U geode -P <admin pw>):
+    //   * timeseries ingest    (src/execution/ts_dispatch.zig handleInsert)
+    //   * auth DDL             (src/execution/admin_ddl.zig executeCreateUser;
+    //                           syntax per docs/GQL_AUTH_DDL.md: SET PASSWORD)
+    //   * graph DDL            (src/execution.zig CreateGraph)
+    //   * fulltext index DDL   (src/execution.zig CreateIndex USING fulltext)
+    //   * tenant ops           (src/execution/tenant_dispatch.zig
+    //                           geode.tenant.create — admin role passes the
+    //                           admin_tenant GPS gate)
+    //   * policy DDL           (src/execution.zig CreatePolicy; syntax per
+    //                           tests/test_gps_policy_ddl_parser.zig)
+    const Surface = struct { name: []const u8, query: []const u8 };
+    const surfaces = [_]Surface{
+        .{ .name = "timeseries-insert", .query = "CALL geode.ts.insert(1, 'temp', 100, 42)" },
+        .{ .name = "auth-ddl-create-user", .query = "CREATE USER fcuser SET PASSWORD 'Str0ng!Pass1'" },
+        .{ .name = "graph-ddl-create-graph", .query = "CREATE GRAPH fcgraph" },
+        .{ .name = "index-ddl-fulltext", .query = "CREATE INDEX fcidx FOR (n:FcDoc) ON (n.body) USING fulltext" },
+        .{ .name = "tenant-create", .query = "CALL geode.tenant.create('fctenant')" },
+        .{ .name = "policy-ddl-create-policy", .query = "CREATE POLICY fcpol ON GRAPH * FOR READ" },
+    };
+
+    var failures: std.ArrayList([]const u8) = .empty;
+    defer failures.deinit(aa);
+
+    for (surfaces) |s| {
+        // ── LEADER half: must refuse with error.ClusterWriteNotReplicable. ──
+        // Retry on a leadership move (ClusterNotLeader from the node we
+        // believed was the leader) exactly like assertMutationReplicates.
+        var attempt: usize = 0;
+        var leader_checked = false;
+        while (attempt < 12) : (attempt += 1) {
+            const leader_ip = cluster.leaderIp() orelse {
+                sleepMs(500);
+                continue;
+            };
+            const out = runQuery(gpa, io, aa, leader_ip, s.query) catch {
+                sleepMs(500);
+                continue;
+            };
+            defer gpa.free(out);
+            if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
+                // Leadership moved between log-scan and query; retry.
+                sleepMs(700);
+                continue;
+            }
+            leader_checked = true;
+            if (std.mem.indexOf(u8, out, "ClusterWriteNotReplicable") == null) {
+                // RED: the leader ACCEPTED (or failed for an unrelated reason
+                // instead of the gate) — either way the fail-closed gate is
+                // missing. Print the actual output for diagnosis.
+                std.debug.print(
+                    "\n[failclosed] LEADER did not refuse '{s}' with ClusterWriteNotReplicable\n" ++
+                        "  query : {s}\n  output: {s}\n",
+                    .{ s.name, s.query, out },
+                );
+                try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (leader accepted)", .{s.name}));
+            }
+            break;
+        }
+        if (!leader_checked) {
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (no stable leader to probe)", .{s.name}));
+            continue;
+        }
+
+        // ── FOLLOWER half: must refuse with error.ClusterNotLeader. ─────────
+        drainAll(&cluster.captures, &cluster.children, gpa, io);
+        const cur_leader = currentLeaderIdx(&cluster.captures) orelse {
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (leader lost before follower probe)", .{s.name}));
+            continue;
+        };
+        var follower_idx: ?usize = null;
+        for (0..3) |i| {
+            if (i != cur_leader and isNodeHealthy(&cluster.captures, i)) {
+                follower_idx = i;
+                break;
+            }
+        }
+        const fidx = follower_idx orelse {
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (no healthy follower to probe)", .{s.name}));
+            continue;
+        };
+        const f_out = runQuery(gpa, io, aa, NODE_IPS[fidx], s.query) catch |err| {
+            std.debug.print("[failclosed] follower probe for '{s}' failed: {s}\n", .{ s.name, @errorName(err) });
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (follower probe failed)", .{s.name}));
+            continue;
+        };
+        defer gpa.free(f_out);
+        if (std.mem.indexOf(u8, f_out, "ClusterNotLeader") == null) {
+            // RED: the follower accepted the write into its LOCAL store (or
+            // failed for an unrelated reason instead of the redirect) — a
+            // follower-only write is divergence by definition.
+            std.debug.print(
+                "\n[failclosed] FOLLOWER did not refuse '{s}' with ClusterNotLeader\n" ++
+                    "  query : {s}\n  output: {s}\n",
+                .{ s.name, s.query, f_out },
+            );
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (follower accepted)", .{s.name}));
+        }
+    }
+
+    if (failures.items.len != 0) {
+        std.debug.print(
+            "\n[failclosed] {d} unreplicated write surface(s) did NOT fail closed in cluster mode:\n",
+            .{failures.items.len},
+        );
+        for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
+        std.debug.print(
+            "  Each acceptance above is a single-node write that the rest of the\n" ++
+                "  cluster never sees -> SILENT DIVERGENCE. Expected: leader refuses\n" ++
+                "  with ClusterWriteNotReplicable, follower with ClusterNotLeader\n" ++
+                "  (gateUnreplicatedWrite, src/distributed/cluster.zig).\n",
+            .{},
+        );
+        return error.UnreplicatedSurfaceAcceptedWrite;
+    }
+}
