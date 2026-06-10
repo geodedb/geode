@@ -945,3 +945,93 @@ retry (above) bridges this. `assert_raft_state_persisted` (M1) verifies
 - Hung-SIGTERM-shutdown bug (separate issue — thread-pool `deinit` timeout on
   graceful stop; tracked in liveness-kill doc; the flock retry makes it safe but
   it should be fixed independently).
+
+---
+
+## ✅ VERIFIED on real Kubernetes (2026-06-10, `dev` = `v0.6.26-16-gd8c1adb`) — restart-survival + edge/merge/delete/SET replication all hold; ❌ ONE new silent-divergence hole found
+
+Clean-slate roll of the latest `dev` onto the real arda 3-pod StatefulSet
+(geode-2 leader, geode-0/geode-1 followers, `term=2`, stable). **All of the
+2026-06-09 fixes above now hold on real k8s** — this is the first build where the
+cluster both replicates AND survives restarts on a real cluster:
+
+- **`FileStorage` durable raft state on disk** — `/data/raft` (`hard_state` +
+  `entries.wal`) present on every pod.
+- **Edge CREATE replicates (create-pattern shape).** A leader
+  `CREATE (a:M5A {k:1})-[:M5L]->(b:M5B {k:2})` reads back `M5L=1` on **all three**
+  nodes. Restarting a follower (`kubectl delete pod geode-1`, PVC preserved) leaves
+  `M5L` **EXACTLY 1 on all three** — root-cause-#6 restart-no-dup holds for edges on
+  real k8s.
+- **Single-node CREATE / MERGE / MATCH…SET / DELETE** all replicate to all three
+  and survive an in-place restart with no duplication (re-confirmed this roll).
+- **Fail-closed gate works for the gated shapes.** A follower
+  `CREATE (x)-[:R]->(y)` correctly returns `58000 ClusterNotLeader`; MERGE/SET/
+  DELETE on a follower likewise reject.
+
+### ❌ NEW (uncovered write path) — `MATCH … CREATE (a)-[:R]->(b)` bypasses the cluster write-gate on EVERY node → silent divergence
+
+The fail-closed write-routing gate (`af5188cd`, "route every graph write through
+Raft on the leader; fail closed") is keyed on the **statement handler**: the gate
+(`clusterWriteRole()` → `clusterReplicate*`) is installed on the standalone
+`CREATE` handler (`crud_operations.zig:1201`, `:2101`), MERGE (`:2789`),
+`MATCH…SET` (`:3653`), and DELETE (`:3667`). The **`MATCH … CREATE`** path — a
+`CREATE` clause that adds a **relationship between variables already bound by a
+preceding `MATCH`** — is dispatched to a *different* executor path that reaches
+`store.createEdgeWithGraph` (`crud_operations.zig:764` / `:928`) **with no
+`clusterWriteRole()` guard at all.**
+
+Consequence (worst form of divergence — confirmed on the live 3-pod cluster, two
+`MT` nodes pre-seeded and replicated to all three first):
+
+```
+# on the LEADER (geode-2):
+MATCH (a:MT {id:1}),(b:MT {id:2}) CREATE (a)-[:MTL]->(b)
+  -> {"status_class":"00000", ... "nodes_created":1}        # SUCCESS, not ClusterWriteNotReplicable
+  read back:  geode-2(leader) MTL=1   geode-0 MTL=0   geode-1 MTL=0   # leader-only
+
+# on a FOLLOWER (geode-0) — the gate should reject, but:
+MATCH (a:MT {id:1}),(b:MT {id:2}) CREATE (a)-[:MTLF]->(b)
+  -> {"status_class":"00000", ... "nodes_created":1}        # SUCCESS on a FOLLOWER
+  read back:  geode-0 MTLF=1   geode-1 MTLF=0   geode-2(leader) MTLF=0  # follower-only
+# (contrast: a standalone `CREATE (x)-[:R]->(y)` on that same follower DOES return 58000 ClusterNotLeader)
+```
+
+So this single query shape:
+
+1. **Is not replicated** — the edge is written to one node's local store only, never
+   proposed to the Raft log; the other two never see it.
+2. **Does not fail closed** — it returns `00000` success on *both* a leader and a
+   follower, defeating the `ClusterNotLeader` / `ClusterWriteNotReplicable`
+   guarantee that every other write path enforces.
+3. **Diverges on whichever node received it** — leader-only OR follower-only,
+   permanently, with no error surfaced to the client.
+
+This is the same severity class as the original MATCH…SET silent-divergence finding
+(the highest-severity item of the write-routing audit) — just on a different
+uncovered clause. The `Edge CREATE (GNC2)` slice from the 2026-06-09 work covers the
+**standalone create-pattern** edge (`CREATE (a)-[:R]->(b)` minting both endpoints,
+verified above), but **not** the match-then-create-edge shape (endpoints bound by a
+preceding `MATCH`).
+
+Secondary anomaly: the result reports `nodes_created: 1` for a pure edge create
+between two already-matched nodes (should be `0` nodes / `1` edge) — the
+result-counter for the MATCH-bound CREATE-edge path is also wrong, independent of
+the replication hole.
+
+**Fix direction:** route the `MATCH…CREATE` path through the same
+`clusterWriteRole()` gate as the other handlers. On the leader, the CREATE clause's
+edges (and any nodes it creates) must propose through Raft against the
+MATCH-resolved **stable node ids** (resolve the binding on the leader, ship explicit
+endpoint ids exactly as the `GDEL`/`GUPD` slices already do — followers must NEVER
+re-run the MATCH); on a follower it must return `ClusterNotLeader`; any shape
+outside the replicable slice must return `ClusterWriteNotReplicable`. Until then, a
+3-node cluster silently diverges on any `MATCH … CREATE (a)-[:rel]->(b)` write —
+the single most common way an application attaches a relationship between two
+existing nodes.
+
+**Regression test:** extend `tests/test_cluster_replicable_mutations.zig` with a
+match-then-create-edge case (seed two nodes, `MATCH … CREATE` an edge between them
+on the leader, assert the edge reads back on all three) and a follower
+fail-closed case (same query on a follower → `ClusterNotLeader`). The netns churn
+harness should add an M8 phase asserting a match-created edge stays EXACTLY 1 on
+all three across an in-place restart.
