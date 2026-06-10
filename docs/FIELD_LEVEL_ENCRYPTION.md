@@ -185,7 +185,7 @@ matches the established admin surface for other subsystems
 #### Authorization (who may call)
 
 Every `CALL geode.fle.*` invocation passes through the mandatory GPS dispatch
-gate (`procedure_registry.executeProcedure`, `REQ-GPS-PROC-001`) **before** the
+gate (`procedure_registry.executeCallProcedure`, `REQ-GPS-PROC-001`) **before** the
 procedure body runs. The gate classifies each procedure as read-only or mutating
 ([`src/execution/procedure_access.zig`](../src/execution/procedure_access.zig)
 `classifyProcedureName`) and remaps that to a GPS action; a principal is denied

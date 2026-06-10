@@ -117,14 +117,14 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 
 ### Key Hierarchy Architecture
 
-- **Master Key**: Loaded from `GEODE_TDE_KEY` (or KMS-wrapped equivalent),
+- **Master Key**: Loaded from `GEODE_TDE_KEY` (env-var only; no KMS unwrap path into page encryption),
   stored securely in the KMS provider (Vault, HSM, etc.).
 - **Derived keys**: The master key derives **domain-separated** data and backup
   keys via `SHA-256(master || domain)`
   ([`src/security/tde_hierarchy.zig`](../src/security/tde_hierarchy.zig)). These
   domains separate **data pages vs. backups**, **not** database from database or
   tenant from tenant. Every per-graph storage engine is wired with the **same**
-  master-derived key (`GraphConfig.encryption_key` in
+  raw master key (`GraphConfig.encryption_key` in
   [`src/graph_store.zig`](../src/graph_store.zig)).
 - **Key scope**: At-rest TDE (pages, WAL, backups) is **instance-wide** under
   one master key — there is **no** per-database or per-tenant at-rest key. A

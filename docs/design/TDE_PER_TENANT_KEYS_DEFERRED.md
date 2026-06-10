@@ -18,11 +18,11 @@ cover field-level encryption (FLE), which has a different (per-tenant) key model
 
 At-rest TDE encrypts storage with **one master key** for the whole instance:
 
-- The master key is loaded from `GEODE_TDE_KEY` (or a KMS-wrapped equivalent)
+- The master key is loaded from `GEODE_TDE_KEY` (env-var only; KMS unwrap into the page path is not implemented)
   by `tde.loadKey` and wired into **every** per-graph storage engine through a
   single `GraphConfig.encryption_key` in
   [`src/graph_store.zig`](../../src/graph_store.zig) (`initGlobalAdapter`). Every
-  graph's pages and WAL are encrypted under that same key — there is no
+  graph's pages are encrypted under that same key (the WAL honors `GEODE_WAL_KEY` as an instance-wide override before falling back to `GEODE_TDE_KEY`) — there is no
   per-graph or per-tenant key at the page boundary.
 - The key hierarchy
   ([`src/security/tde_hierarchy.zig`](../../src/security/tde_hierarchy.zig))
