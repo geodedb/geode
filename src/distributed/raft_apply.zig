@@ -193,9 +193,24 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
         },
 
         .delete => {
-            // Slice A: delete replication is a follow-up slice. Skip explicitly,
-            // distinguishing an unknown payload version from a not-yet-wired op.
-            log.warn("raft apply: graph_mutation delete not wired in this slice (unknown/unsupported payload) — skipping", &.{
+            // Slice B: DELETE / DETACH DELETE replication. The leader resolves the
+            // MATCH set to explicit STABLE node/edge ids and proposes a GDEL
+            // payload; every node (leader + followers) replays it here, deleting
+            // edges first then nodes. Apply is idempotent — a missing id is a clean
+            // no-op, so re-applying a committed entry after restart is safe.
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-DELETE; FEATURE="DistributedCluster"; ASPECT=ApplyDelete; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+            if (cluster_replication.isDeletePayload(gm.data)) {
+                const removed = try cluster_replication.applyDeletePayload(allocator, store, gm.data);
+                log.info("raft apply: replicated delete", &.{
+                    Attr.uint("removed", removed),
+                    Attr.string("graph", graph_name),
+                });
+                return allocator.alloc(u8, 0);
+            }
+
+            // Unknown delete payload version: log-and-skip (mixed-version posture,
+            // consistent with the create branch — an unknown magic is not transient).
+            log.warn("raft apply: unknown delete payload version — skipping", &.{
                 Attr.string("graph", graph_name),
                 Attr.uint("data_len", gm.data.len),
             });

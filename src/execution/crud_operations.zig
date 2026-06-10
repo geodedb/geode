@@ -2980,14 +2980,282 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     };
 }
 
+/// Replicate an eligible `MATCH ... DELETE`/`DETACH DELETE` through Raft and
+/// return its result. Called ONLY when this node is the cluster leader. THE
+/// LEADER resolves the MATCH set to explicit STABLE node ids (+ incident edge
+/// ids for DETACH, + explicit edge ids for relationship-targeted DELETE) under
+/// the store read it already holds — followers NEVER re-run the MATCH. The
+/// resolved id set is serialized into a GDEL payload, proposed to the Raft log
+/// (never deleted locally — the apply callback deletes on every node, leader
+/// included), and `waitForApplied` blocks until quorum-commit lands locally.
+///
+/// GQL plain-DELETE semantics are validated BEFORE proposing: a non-DETACH
+/// delete of a node that still has incident edges returns `error.NodeHasEdges`
+/// (mirroring the local path) and nothing is proposed.
+///
+/// Returns `error.ClusterWriteNotReplicable` for any shape outside the slice (no
+/// MATCH clause / item-only delete relying on cross-statement bindings, or a
+/// resolved id set larger than the GDEL cap), so the write fails closed instead
+/// of being applied leader-local.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-DELETE; FEATURE="DistributedCluster"; ASPECT=LeaderProposeDelete; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+fn clusterReplicateDelete(
+    allocator: std.mem.Allocator,
+    d: ast.DeleteStatement,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+) !ExecutionResult {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+
+    // Only a MATCH-clause delete is replicable in this slice. An item-only delete
+    // (`DELETE n` resolved from a preceding statement's bindings) cannot be
+    // resolved deterministically across nodes here — fail closed.
+    const match_pattern = d.match_clause orelse return error.ClusterWriteNotReplicable;
+
+    const read_store = graph_store.getWritableGlobalStore(allocator);
+    const filter_graph = current_graph orelse "default";
+    const filter_tenant = try tenantFilterFromContext(context);
+
+    // Classify delete items as node-vars vs edge-vars (mirror the local path).
+    var delete_node_vars = std.StringHashMap(void).init(allocator);
+    defer delete_node_vars.deinit();
+    var delete_edge_vars = std.StringHashMap(void).init(allocator);
+    defer delete_edge_vars.deinit();
+
+    if (d.items.len > 0 and match_pattern.chains.len > 0) {
+        var node_var_set = std.StringHashMap(void).init(allocator);
+        defer node_var_set.deinit();
+        var edge_var_set = std.StringHashMap(void).init(allocator);
+        defer edge_var_set.deinit();
+
+        for (match_pattern.chains) |chain| {
+            if (chain.head) |head| {
+                if (head.name) |name| try node_var_set.put(name, {});
+            }
+            for (chain.hops) |hop| {
+                if (hop.left.name) |name| try node_var_set.put(name, {});
+                if (hop.right.name) |name| try node_var_set.put(name, {});
+                if (hop.rel.name) |name| try edge_var_set.put(name, {});
+            }
+        }
+
+        for (d.items) |item| {
+            const var_name = switch (item) {
+                .Variable => |n| n,
+                .Node => |n| n,
+                .Relationship => |n| n,
+            };
+            if (edge_var_set.contains(var_name)) {
+                try delete_edge_vars.put(var_name, {});
+            } else {
+                try delete_node_vars.put(var_name, {});
+            }
+        }
+    }
+
+    const should_delete_nodes = d.items.len == 0 or delete_node_vars.count() > 0;
+
+    // Resolved, deduplicated id sets to encode into the GDEL payload.
+    var node_ids = std.ArrayList(u64).empty;
+    defer node_ids.deinit(allocator);
+    var edge_ids = std.ArrayList(u64).empty;
+    defer edge_ids.deinit(allocator);
+
+    const appendUniqueEdge = struct {
+        fn run(a: std.mem.Allocator, list: *std.ArrayList(u64), eid: u64) !void {
+            for (list.items) |existing| if (existing == eid) return;
+            try list.append(a, eid);
+        }
+    }.run;
+
+    // --- Node deletion resolution (mirror the local node path) ---
+    if (should_delete_nodes) {
+        var match_labels: [][]const u8 = &.{};
+        var match_props: ?[]ast.Property = null;
+
+        if (match_pattern.chains.len > 0) {
+            if (match_pattern.chains[0].head) |node_pattern| {
+                match_labels = node_pattern.labels;
+                match_props = node_pattern.props;
+            }
+            if (match_pattern.chains[0].hops.len > 0) {
+                for (match_pattern.chains[0].hops) |hop| {
+                    if (hop.left.name) |name| {
+                        if (delete_node_vars.contains(name)) {
+                            match_labels = hop.left.labels;
+                            match_props = hop.left.props;
+                            break;
+                        }
+                    }
+                    if (hop.right.name) |name| {
+                        if (delete_node_vars.contains(name)) {
+                            match_labels = hop.right.labels;
+                            match_props = hop.right.props;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        const evaluated_match_props = evaluatePatternProps(allocator, match_props, context) catch
+            return error.ClusterWriteNotReplicable;
+        defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
+
+        const candidate_ids = try collectCandidateNodeIds(
+            allocator,
+            read_store,
+            filter_graph,
+            filter_tenant,
+            match_labels,
+            evaluated_match_props,
+        );
+        defer allocator.free(candidate_ids);
+
+        for (candidate_ids) |node_id| {
+            const node = read_store.nodes.getPtr(node_id) orelse continue;
+            if (!nodeMatchesPattern(node, filter_graph, filter_tenant, match_labels, evaluated_match_props)) continue;
+
+            if (d.where_clause) |where_expr| {
+                var var_name: []const u8 = "n";
+                if (match_pattern.chains.len > 0) {
+                    if (match_pattern.chains[0].head) |node_pattern| {
+                        if (node_pattern.name) |name| var_name = name;
+                    }
+                }
+                const names = try allocator.alloc([]const u8, 1);
+                defer allocator.free(names);
+                names[0] = var_name;
+                const values = try allocator.alloc(Value, 1);
+                defer allocator.free(values);
+                values[0] = Value{ .Node = node };
+                const env = Env{ .allocator = allocator, .names = names, .values = values };
+                const result = eval.evalExpr(allocator, where_expr, env) catch continue;
+                const keep = switch (result) {
+                    .Bool => |b| b,
+                    else => false,
+                };
+                if (!keep) continue;
+            }
+
+            try node_ids.append(allocator, node_id);
+        }
+
+        // GQL plain-DELETE validation: a node that still has incident edges
+        // errors (mirror the local path) BEFORE proposing anything. DETACH
+        // collects the incident edges instead.
+        for (node_ids.items) |node_id| {
+            if (d.detach) {
+                if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
+                    for (out_ids) |eid| try appendUniqueEdge(allocator, &edge_ids, eid);
+                }
+                if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
+                    for (in_ids) |eid| try appendUniqueEdge(allocator, &edge_ids, eid);
+                }
+            } else {
+                const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                if (has_outgoing or has_incoming) return error.NodeHasEdges;
+            }
+        }
+    }
+
+    // --- Edge deletion resolution (relationship-targeted DELETE, mirror local) ---
+    if (delete_edge_vars.count() > 0) {
+        for (match_pattern.chains) |chain| {
+            for (chain.hops) |hop| {
+                const rel_name = hop.rel.name orelse continue;
+                if (!delete_edge_vars.contains(rel_name)) continue;
+
+                const evaluated_left_props = evaluatePatternProps(allocator, hop.left.props, context) catch
+                    return error.ClusterWriteNotReplicable;
+                defer freeEvaluatedPatternProps(allocator, evaluated_left_props);
+                const evaluated_right_props = evaluatePatternProps(allocator, hop.right.props, context) catch
+                    return error.ClusterWriteNotReplicable;
+                defer freeEvaluatedPatternProps(allocator, evaluated_right_props);
+
+                const matched_edges = try collectMatchingEdgeIds(
+                    allocator,
+                    read_store,
+                    filter_graph,
+                    filter_tenant,
+                    hop.left.labels,
+                    evaluated_left_props,
+                    hop.rel.types,
+                    hop.right.labels,
+                    evaluated_right_props,
+                );
+                defer allocator.free(matched_edges);
+                for (matched_edges) |eid| try appendUniqueEdge(allocator, &edge_ids, eid);
+            }
+        }
+    }
+
+    // Bounds: refuse to propose a payload larger than the GDEL cap (fail-closed).
+    if (node_ids.items.len > cluster_replication.MAX_DELETE_IDS or
+        edge_ids.items.len > cluster_replication.MAX_DELETE_IDS)
+        return error.ClusterWriteNotReplicable;
+
+    const deleted_count = node_ids.items.len + edge_ids.items.len;
+
+    const payload = cluster_replication.serializeDelete(
+        allocator,
+        filter_graph,
+        edge_ids.items,
+        node_ids.items,
+    ) catch |err| switch (err) {
+        cluster_replication.CodecError.UnsupportedPropertyType,
+        cluster_replication.CodecError.CorruptPayload,
+        => return error.ClusterWriteNotReplicable,
+        else => return err,
+    };
+    defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+    const cmd = raft_consensus.Command{ .graph_mutation = .{
+        .graph = filter_graph,
+        .mutation_type = .delete,
+        .data = payload,
+        .txn_id = null,
+    } };
+    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+        error.NotLeader => return error.ClusterNotLeader,
+        else => return err,
+    };
+    // Block until the entry is applied locally (apply happens on quorum commit).
+    try coord.waitForApplied(idx, 5000);
+
+    // RETURN clause: mirror the local path's "deleted_count" projection.
+    if (d.return_clause) |_| {
+        var columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "deleted_count");
+        var rows = try allocator.alloc([]Value, 1);
+        var row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Int = @intCast(deleted_count) };
+        rows[0] = row;
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    // Cluster write routing: DELETE is not in the Raft-replicable slice yet, so
-    // in cluster mode it must fail closed rather than be applied to a single
-    // node's local store. See tests/cluster/netns_cluster_replication_test.sh.
+    // Cluster write routing: in cluster mode the DELETE is ordered through Raft on
+    // the leader and never applied to a single node's local store. A follower
+    // fails closed (error.ClusterNotLeader — clients retry the leader); the leader
+    // resolves the MATCH set to explicit stable ids and replicates them via a GDEL
+    // payload, or fails closed for non-replicable shapes.
+    // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-DELETE; FEATURE="DistributedCluster"; ASPECT=ExecutorProposeDelete; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
     switch (try clusterWriteRole()) {
         .standalone => {},
-        .leader => return error.ClusterWriteNotReplicable,
+        .leader => return clusterReplicateDelete(allocator, d, current_graph, context),
     }
 
     const store = graph_store.getWritableGlobalStore(allocator);

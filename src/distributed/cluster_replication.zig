@@ -499,6 +499,121 @@ fn resolveEndpoint(ep: Endpoint, raft_index: u64, node_count: u16) ?u64 {
     };
 }
 
+// ===========================================================================
+// GDEL — deterministic DELETE / DETACH DELETE replication (leader-resolved ids)
+// ===========================================================================
+//
+// Slice B of the cluster-replication fix. Unlike CREATE (whose ids are minted
+// from the committed raft index), DELETE references PRE-EXISTING nodes/edges by
+// their STABLE store ids. THE LEADER resolves the MATCH set under its execution
+// lock and encodes the explicit id arrays here; followers NEVER re-run the MATCH
+// (their scan order/state could differ → divergence). For DETACH the leader
+// includes every incident edge id it resolves at propose time.
+//
+// Apply is idempotent on every node, including across restart re-apply:
+// `store.deleteEdge` / `store.deleteNode` no-op when the id is already absent
+// (the persisted store is the dedup oracle). Edges are deleted BEFORE nodes so a
+// node-delete that precedes its incident-edge deletes in the same payload is a
+// non-issue — the edges are always removed first.
+//
+// Caps: ≤ MAX_DELETE_IDS node ids and ≤ MAX_DELETE_IDS edge ids per entry. The
+// leader fails closed (error.ClusterWriteNotReplicable) when a MATCH resolves
+// more than the cap, rather than silently truncating.
+//
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-DELETE; FEATURE="DistributedCluster"; ASPECT=DeleteCodec; STATUS=TESTED; TEST=tests/test_raft_apply.zig; OWNER=distributed; UPDATED=2026-06-09
+
+/// 4-byte magic prefix identifying a GDEL delete payload.
+pub const MAGIC_DEL = [4]u8{ 'G', 'D', 'E', 'L' };
+
+/// Max node ids (or edge ids) a single GDEL entry may carry. Bounds-checked at
+/// both serialize and apply time so a corrupt/oversized payload cannot OOM.
+pub const MAX_DELETE_IDS: usize = 4096;
+
+fn appendU64(list: *std.ArrayList(u8), a: std.mem.Allocator, v: u64) !void {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b, v, .little);
+    try list.appendSlice(a, &b);
+}
+
+pub fn isDeletePayload(data: []const u8) bool {
+    return data.len >= MAGIC_DEL.len and std.mem.eql(u8, data[0..MAGIC_DEL.len], &MAGIC_DEL);
+}
+
+/// Serialize an explicit DELETE id set (edge ids + node ids) resolved by the
+/// leader into a self-describing GDEL payload. Edge ids are encoded first so the
+/// apply path deletes them before the nodes. Rejects (fail-closed) more than
+/// `MAX_DELETE_IDS` of either, so the caller never proposes an un-applyable
+/// payload.
+pub fn serializeDelete(
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    edge_ids: []const u64,
+    node_ids: []const u64,
+) ![]u8 {
+    if (edge_ids.len > MAX_DELETE_IDS or node_ids.len > MAX_DELETE_IDS)
+        return CodecError.UnsupportedPropertyType;
+
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+
+    try list.appendSlice(allocator, &MAGIC_DEL);
+    try appendStr16(&list, allocator, graph);
+
+    try appendU16(&list, allocator, edge_ids.len);
+    for (edge_ids) |eid| try appendU64(&list, allocator, eid);
+
+    try appendU16(&list, allocator, node_ids.len);
+    for (node_ids) |nid| try appendU64(&list, allocator, nid);
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Deterministically apply a GDEL delete payload to `store`. Deletes the edges
+/// first (so an incident-edge delete never lands after its node), then the
+/// nodes. Idempotent: a missing id is a clean no-op (the store delete primitives
+/// no-op on an absent id), so re-applying a committed entry after restart leaves
+/// the graph unchanged. Returns the number of distinct edge+node ids that were
+/// present (and thus actually removed) by this apply.
+pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !usize {
+    _ = allocator;
+    if (!isDeletePayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
+
+    const graph = try r.str16();
+    store.createGraph(graph) catch |err| switch (err) {
+        error.GraphAlreadyExists => {},
+        else => return err,
+    };
+
+    var removed: usize = 0;
+
+    // Edges FIRST — a node-delete that precedes its incident-edge deletes in the
+    // payload must not orphan those edges; deleting edges up front avoids it.
+    const edge_count = try r.readU16();
+    if (edge_count > MAX_DELETE_IDS) return CodecError.CorruptPayload;
+    var ei: usize = 0;
+    while (ei < edge_count) : (ei += 1) {
+        const edge_id = try r.readU64();
+        if (store.getEdgePtr(edge_id) != null) {
+            store.deleteEdge(edge_id);
+            removed += 1;
+        }
+    }
+
+    const node_count = try r.readU16();
+    if (node_count > MAX_DELETE_IDS) return CodecError.CorruptPayload;
+    var ni: usize = 0;
+    while (ni < node_count) : (ni += 1) {
+        const node_id = try r.readU64();
+        if (store.getNodePtr(node_id) != null) {
+            store.deleteNode(node_id);
+            removed += 1;
+        }
+    }
+
+    return removed;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -786,4 +901,64 @@ test "GNC2 id-band sweep: no GNC1/GNC2 collision, no lane overlap, below time fl
     // smallest GNC2 id is MULTI_ID_BASE (= 1<<40), far above any realistic index.
     try std.testing.expect(deriveMultiNodeId(0, 0) == MULTI_ID_BASE);
     try std.testing.expect(MULTI_ID_BASE > max_index);
+}
+
+// ---------------------------------------------------------------------------
+// GDEL delete tests
+// ---------------------------------------------------------------------------
+
+test "GDEL delete round-trips: detach delete removes node + incident edge" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(10, &.{"D"}, "default");
+    try store.createNodeWithId(11, &.{"D"}, "default");
+    try store.createEdgeWithId(20, 10, 11, "LINKS", "default");
+
+    const edge_ids = [_]u64{20};
+    const node_ids = [_]u64{10};
+    const payload = try serializeDelete(a, "default", &edge_ids, &node_ids);
+    defer a.free(payload);
+    try std.testing.expect(isDeletePayload(payload));
+
+    const removed = try applyDeletePayload(a, &store, payload);
+    try std.testing.expectEqual(@as(usize, 2), removed); // 1 edge + 1 node
+    try std.testing.expect(store.getEdgePtr(20) == null);
+    try std.testing.expect(store.getNodePtr(10) == null);
+    try std.testing.expect(store.getNodePtr(11) != null); // untouched
+}
+
+test "GDEL apply is idempotent across restart re-apply" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+
+    try store.createNodeWithId(10, &.{"D"}, "default");
+    const node_ids = [_]u64{10};
+    const payload = try serializeDelete(a, "default", &.{}, &node_ids);
+    defer a.free(payload);
+
+    _ = try applyDeletePayload(a, &store, payload);
+    _ = try applyDeletePayload(a, &store, payload); // restart replay — clean no-op
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+}
+
+test "GDEL over-cap id set is rejected at serialize time" {
+    const a = std.testing.allocator;
+    const big = try a.alloc(u64, MAX_DELETE_IDS + 1);
+    defer a.free(big);
+    for (big, 0..) |*v, i| v.* = @intCast(i);
+    try std.testing.expectError(CodecError.UnsupportedPropertyType, serializeDelete(a, "default", big, &.{}));
+}
+
+test "GDEL truncated payload is rejected, not crashed" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const edge_ids = [_]u64{20};
+    const node_ids = [_]u64{10};
+    const full = try serializeDelete(a, "default", &edge_ids, &node_ids);
+    defer a.free(full);
+    try std.testing.expectError(CodecError.CorruptPayload, applyDeletePayload(a, &store, full[0 .. full.len - 3]));
 }

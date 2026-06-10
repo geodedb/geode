@@ -258,3 +258,170 @@ test "GNC2 unknown-magic apply via applyCommand creates nothing" {
     try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
     try std.testing.expectEqual(@as(usize, 0), store.edges.count());
 }
+
+// ---------------------------------------------------------------------------
+// Slice B: GDEL DELETE / DETACH DELETE replication (leader-resolved id sets).
+// These exercise the public codec + the apply-callback `.delete` branch.
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-DELETE; FEATURE="DistributedCluster"; ASPECT=DeleteRoundTrip; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-06-09
+test "GDEL delete payload round-trips: create-then-delete converges to empty" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    // Seed a node with an incident edge (simulating a prior replicated create).
+    try store.createNodeWithId(100, &.{"DelRepl"}, "default");
+    try store.createNodeWithId(101, &.{"DelRepl"}, "default");
+    try store.createEdgeWithId(200, 100, 101, "LINKS", "default");
+    try std.testing.expectEqual(@as(usize, 2), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 1), store.edges.count());
+
+    // DETACH delete of node 100: leader resolves the incident edge id (200).
+    const edge_ids = [_]u64{200};
+    const node_ids = [_]u64{100};
+    const payload = try cr.serializeDelete(allocator, "default", &edge_ids, &node_ids);
+    defer allocator.free(payload);
+    try std.testing.expect(cr.isDeletePayload(payload));
+
+    const result = try raft_apply.applyCommand(allocator, &store, .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .delete,
+        .data = payload,
+        .txn_id = null,
+    } }, 7);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+
+    // Edge 200 and node 100 are gone; node 101 (not targeted) remains.
+    try std.testing.expect(store.getEdgePtr(200) == null);
+    try std.testing.expect(store.getNodePtr(100) == null);
+    try std.testing.expect(store.getNodePtr(101) != null);
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 0), store.edges.count());
+}
+
+test "GDEL apply is idempotent: re-applying same delete payload is a clean no-op" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(100, &.{"D"}, "default");
+    try store.createEdgeWithId(200, 100, 100, "SELF", "default"); // self-loop incident edge
+
+    const edge_ids = [_]u64{200};
+    const node_ids = [_]u64{100};
+    const payload = try cr.serializeDelete(allocator, "default", &edge_ids, &node_ids);
+    defer allocator.free(payload);
+
+    // First apply removes both; restart re-apply must NOT error and must leave 0.
+    const removed1 = try cr.applyDeletePayload(allocator, &store, payload);
+    try std.testing.expectEqual(@as(usize, 2), removed1);
+    const removed2 = try cr.applyDeletePayload(allocator, &store, payload);
+    try std.testing.expectEqual(@as(usize, 0), removed2); // already gone — no-op
+
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 0), store.edges.count());
+}
+
+test "GDEL node-delete preceding its incident-edge delete still removes both (edge-first order)" {
+    // Even when a node id is encoded, edges are removed FIRST so a node whose
+    // incident edges are in the same payload never orphans them. (The codec
+    // always writes edges before nodes.)
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(1, &.{"N"}, "default");
+    try store.createNodeWithId(2, &.{"N"}, "default");
+    try store.createEdgeWithId(9, 1, 2, "R", "default");
+
+    // Both nodes + the connecting edge targeted in one entry.
+    const edge_ids = [_]u64{9};
+    const node_ids = [_]u64{ 1, 2 };
+    const payload = try cr.serializeDelete(allocator, "default", &edge_ids, &node_ids);
+    defer allocator.free(payload);
+
+    const removed = try cr.applyDeletePayload(allocator, &store, payload);
+    try std.testing.expectEqual(@as(usize, 3), removed);
+    try std.testing.expectEqual(@as(usize, 0), store.nodes.count());
+    try std.testing.expectEqual(@as(usize, 0), store.edges.count());
+}
+
+test "GDEL unknown-magic delete via applyCommand deletes nothing" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(100, &.{"Keep"}, "default");
+
+    // A delete command whose data carries NO known magic must be skipped — it
+    // must NOT touch the store.
+    const result = try raft_apply.applyCommand(allocator, &store, .{ .graph_mutation = .{
+        .graph = "default",
+        .mutation_type = .delete,
+        .data = "not-a-gdel-payload",
+        .txn_id = null,
+    } }, 11);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expect(store.getNodePtr(100) != null);
+    try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
+}
+
+test "GDEL two stores apply identical create-then-delete sequence -> identical empty state" {
+    const allocator = std.testing.allocator;
+    var s1 = try GraphStore.init(allocator);
+    defer s1.deinit();
+    var s2 = try GraphStore.init(allocator);
+    defer s2.deinit();
+
+    // Both stores get the SAME create-then-delete entry sequence (mirroring two
+    // raft nodes replaying the identical committed log) and must converge alike.
+    const la = [_][]const u8{"Conv"};
+    const nodes = [_]cr.NodeSpec{ .{ .labels = &la, .props = &.{} }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]cr.EdgeSpec{
+        .{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "E", .props = &.{} },
+    };
+    const create_payload = try cr.serializeMultiCreate(allocator, "default", &nodes, &edges);
+    defer allocator.free(create_payload);
+
+    _ = try cr.applyMultiCreatePayload(allocator, &s1, create_payload, 50);
+    _ = try cr.applyMultiCreatePayload(allocator, &s2, create_payload, 50);
+
+    // Derive the ids both stores minted, then delete them via GDEL on both.
+    const n0 = cr.deriveMultiNodeId(50, 0);
+    const n1 = cr.deriveMultiNodeId(50, 1);
+    const e0 = cr.deriveMultiEdgeId(50, 0);
+    const edge_ids = [_]u64{e0};
+    const node_ids = [_]u64{ n0, n1 };
+    const del_payload = try cr.serializeDelete(allocator, "default", &edge_ids, &node_ids);
+    defer allocator.free(del_payload);
+
+    _ = try cr.applyDeletePayload(allocator, &s1, del_payload);
+    _ = try cr.applyDeletePayload(allocator, &s2, del_payload);
+
+    try std.testing.expectEqual(@as(usize, 0), s1.nodes.count());
+    try std.testing.expectEqual(@as(usize, 0), s1.edges.count());
+    try std.testing.expectEqual(@as(usize, 0), s2.nodes.count());
+    try std.testing.expectEqual(@as(usize, 0), s2.edges.count());
+}
+
+test "GDEL rejects an over-cap id set at serialize time" {
+    const allocator = std.testing.allocator;
+    const big = try allocator.alloc(u64, cr.MAX_DELETE_IDS + 1);
+    defer allocator.free(big);
+    for (big, 0..) |*v, i| v.* = @intCast(i);
+    try std.testing.expectError(cr.CodecError.UnsupportedPropertyType, cr.serializeDelete(allocator, "default", &.{}, big));
+}
+
+test "GDEL truncated payload is rejected, not crashed" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+    const edge_ids = [_]u64{200};
+    const node_ids = [_]u64{100};
+    const full = try cr.serializeDelete(allocator, "default", &edge_ids, &node_ids);
+    defer allocator.free(full);
+    try std.testing.expectError(cr.CodecError.CorruptPayload, cr.applyDeletePayload(allocator, &store, full[0 .. full.len - 3]));
+}
