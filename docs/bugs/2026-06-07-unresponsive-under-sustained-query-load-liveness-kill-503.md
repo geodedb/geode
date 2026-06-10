@@ -21,6 +21,15 @@ by a different trigger (sustained query concurrency, not a connection burst) and
 with a different terminal symptom (the **liveness probe that was added to detect
 wedges now kills a busy-but-progressing pod**, amplifying load into an outage).
 
+> **Update 2026-06-10 — STILL OPEN on latest `:dev`.** Re-confirmed on
+> `geodedb/geode:dev` `sha256:24c1702a` = `v0.6.26-16-gd8c1adb` (16 commits past
+> v0.6.26, byte-identical to the current registry `:dev`). Two QA databases hit
+> **39** and **70** SIGKILL(137) restarts; fresh `proto_reader` stalls up to
+> `idle_ms=16337061` (~4.5 h idle) and `quic_first_stream_packet_process_max_ns=1.42 s`
+> under e2e load; plus a new write-path symptom (`driver: bad connection`
+> mid-`batch exec`). Full latest-dev evidence:
+> [2026-06-10-dev-v0.6.26-still-wedges-plus-batch-ingest-bad-connection.md](2026-06-10-dev-v0.6.26-still-wedges-plus-batch-ingest-bad-connection.md).
+
 ---
 
 ## 1. Symptom
