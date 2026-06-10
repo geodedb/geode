@@ -676,7 +676,7 @@ test "GUPD update command: two stores apply same multi-node payload -> identical
 // contract the leader slice for `MATCH (a),(b) CREATE (a)-[:R]->(b)` depends on.
 // ---------------------------------------------------------------------------
 
-// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyAbsoluteIdEdge; STATUS=TESTED; TEST=tests/test_raft_apply.zig; OWNER=distributed; UPDATED=2026-06-10
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyAbsoluteIdEdge; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-06-10
 test "GNC2: zero-node payload with absolute_id endpoints creates edge between pre-existing nodes, idempotently" {
     const allocator = std.testing.allocator;
     var store = try GraphStore.init(allocator);
@@ -699,7 +699,7 @@ test "GNC2: zero-node payload with absolute_id endpoints creates edge between pr
     defer allocator.free(payload);
 
     const n1 = try cr.applyMultiCreatePayload(allocator, &store, payload, 4242);
-    try std.testing.expect(n1 >= 1);
+    try std.testing.expectEqual(@as(usize, 1), n1);
 
     // Exactly one MCL edge exists, from src_id to dst_id, at the derived id.
     const edge_id = cr.deriveMultiEdgeId(4242, 0);
