@@ -95,7 +95,7 @@ var env_tde = try tde_kms.createEnvTDE(allocator);
 - **Key Generation**: Cryptographically secure 32-byte key generation
 - **Vault Storage**: Direct integration with `vault kv put/get` operations
 - **Envelope Encryption**: Complete metadata serialization for audit trails
-- **Key Rotation**: Automated rotation with Vault versioning support
+- **Key Rotation**: Operator-invoked rotation (Vault re-versioning via `vault kv put`); geode does not run an in-server rotation timer
 - **Cross-Platform**: Works with any Vault-compatible KMS
 
 ### Production Usage
@@ -136,7 +136,7 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 
 ### Enterprise Security
 
-- **Key Rotation**: Automated rotation with configurable policies
+- **Key Rotation**: Policy-ENFORCED, operator-invoked rotation (GAP-0890). `KeyRegistry.rotateNow()` refuses with `error.RotationPolicyRefused` while the active key is younger than `RotationPolicy.min_interval_secs`; `max_age_secs` forces rotation past the deadline; `rotateIfDue()` is the scheduler tick an external scheduler (cron / operator script) calls with an injected clock. There is **no in-server rotation timer**, and re-encryption of existing pages is **lazy** (`reencryptPage` on access / `reencryptBatch` on demand) — no eager full-scan re-encrypt exists. Verified by `zig build test-gap0890` (`tests/test_gap0890_rotation_policy.zig`); real rotation/re-wrap latency measured by `zig build bench-tde-key-rotate`
 - **Audit Logging**: All KMS operations logged for compliance
 - **Zero Plaintext**: Master keys never stored in plaintext on disk
 - **Multiple Providers**: Easy migration between KMS systems
@@ -156,7 +156,7 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 - **Deterministic Behavior**: Reproducible encryption for testing
 - **Error Handling**: Comprehensive error scenario coverage
 - **Performance Testing**: Large-scale encryption operations (1KB-64KB)
-- **Key Rotation**: Automated rotation testing with different providers
+- **Key Rotation**: Policy-refusal, max-age force, scheduler-tick, and real AES-256-GCM lazy re-wrap regression tests (`zig build test-gap0890`)
 - **Vault Integration**: Real Vault server testing with live authentication
 
 ## Production Deployment

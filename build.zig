@@ -4781,6 +4781,30 @@ pub fn build(b: *std.Build) void {
     const gap0881_step = b.step("test-gap0881", "GAP-0881 regression (real HMAC-SHA3 construction + TDE status key-material truth)");
     gap0881_step.dependOn(&run_gap0881_tests.step);
 
+    // GAP-0890: rotation policy enforced + scheduler tick. rotateNow refuses
+    // (error.RotationPolicyRefused) while the active key is younger than
+    // min_interval_secs; max_age_secs forces rotation; rotateIfDue is the
+    // operator-invoked scheduler tick with an injected clock; the lazy
+    // re-wrap path (reencryptPage) is proven a real AES-256-GCM round-trip.
+    const gap0890_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0890_rotation_policy.zig"), .target = target, .optimize = optimize });
+    gap0890_test_mod.addImport("geode", root_mod);
+    const gap0890_tests = b.addTest(.{ .root_module = gap0890_test_mod });
+    const run_gap0890_tests = b.addRunArtifact(gap0890_tests);
+    shardDep(test_step, &run_gap0890_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0890_step = b.step("test-gap0890", "GAP-0890 regression (rotation policy enforced: min-interval refusal, max-age force, scheduler tick, real lazy re-wrap)");
+    gap0890_step.dependOn(&run_gap0890_tests.step);
+
+    // GAP-0890: real key-rotation micro-benchmark (ReleaseSafe, standalone
+    // step — not part of the test gate). Replaces the old stub simulation in
+    // tests/benchmark_tde_key_rotate.zig with measured getrandom keygen and
+    // AES-256-GCM 4KiB lazy re-wrap latency.
+    const tde_keyrot_bench_mod = b.createModule(.{ .root_source_file = b.path("tests/benchmark_tde_key_rotate.zig"), .target = target, .optimize = .ReleaseSafe });
+    tde_keyrot_bench_mod.addImport("geode", root_mod);
+    const tde_keyrot_bench = b.addTest(.{ .root_module = tde_keyrot_bench_mod });
+    const run_tde_keyrot_bench = b.addRunArtifact(tde_keyrot_bench);
+    const tde_keyrot_bench_step = b.step("bench-tde-key-rotate", "GAP-0890 real TDE key-rotation micro-benchmark (rotation latency + 4KiB lazy re-wrap)");
+    tde_keyrot_bench_step.dependOn(&run_tde_keyrot_bench.step);
+
     // GAP-0842: prominent --insecure-allow-all startup banner contract.
     const gap0842_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0842_insecure_allow_all_banner.zig"), .target = target, .optimize = optimize });
     gap0842_test_mod.addImport("geode", root_mod);

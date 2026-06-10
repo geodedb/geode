@@ -477,6 +477,9 @@ pub const tenant_registry = @import("security/tenant_registry.zig");
 // Security modules for enhanced RLS and compliance features
 pub const security = struct {
     pub const rls_enhanced = @import("security/rls_enhanced.zig");
+    // GAP-0890: policy-enforced key-rotation registry (rotateNow refuses
+    // under min_interval; rotateIfDue is the operator-invoked scheduler tick).
+    pub const key_rotation = @import("security/key_rotation.zig");
     pub const auth = @import("geode_auth");
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");

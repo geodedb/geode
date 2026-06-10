@@ -6,7 +6,7 @@ const keyrot = @import("geode").security.key_rotation; // adjust if module path 
 test "key rotation schedule triggers after min interval" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    const alloc = &gpa.allocator;
+    const alloc = gpa.allocator();
     var reg = keyrot.KeyRegistry.init(alloc);
     defer reg.deinit();
     const policy: keyrot.RotationPolicy = .{ .min_interval_secs = 10, .max_age_secs = 100, .lazy_reencrypt = true };
