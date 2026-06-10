@@ -1117,6 +1117,20 @@ pub fn build(b: *std.Build) void {
     const gap0855_webhook_step = b.step("test-gap0855-webhook", "Run GAP-0855a webhook CDC sink real-delivery regression");
     gap0855_webhook_step.dependOn(&run_gap0855_webhook_tests.step);
 
+    // GAP-0855b: Kafka CDC sink produce-only delivery over the real Kafka wire
+    // protocol. Drives the REAL KafkaSink + kafka_wire encoder against an
+    // in-test fake broker (genuine TCP listener speaking ApiVersions/Metadata/
+    // Produce) and a reconnect-on-drop retry path.
+    const gap0855_kafka_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0855_kafka_sink.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0855_kafka_tests.root_module.addImport("geode", root_mod);
+    const run_gap0855_kafka_tests = b.addRunArtifact(gap0855_kafka_tests);
+    const gap0855_kafka_step = b.step("test-gap0855-kafka", "Run GAP-0855b Kafka CDC sink produce-only delivery regression");
+    gap0855_kafka_step.dependOn(&run_gap0855_kafka_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)

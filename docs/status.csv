@@ -4630,8 +4630,8 @@ REQ-STREAMING-002,StreamingDataGenerator,RateControl,TESTED,,,streaming,2026-01-
 REQ-STREAMING-003,StreamingDataGenerator,BatchGeneration,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-STREAMING-004,StreamingDataGenerator,SchemaVariation,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-STREAMING-005,StreamingDataGenerator,EventSimulation,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig
-REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,TESTED,,,streaming,2025-12-30,src/streaming/sinks/kafka_sink.zig
-REQ-STREAMING-KAFKA-002,Kafka Sink Real Implementation,Test,TESTED,,,streaming,2026-01-12,src/streaming/sinks/kafka_sink.zig
+REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,TESTED,,,streaming,2026-06-10,src/streaming/sinks/kafka_sink.zig
+REQ-STREAMING-KAFKA-002,Kafka Sink Real Implementation,Test,TESTED,,,streaming,2026-06-10,src/streaming/sinks/kafka_sink.zig
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,TESTED,,,security,2026-01-15,src/security/key_rotation.zig
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,TESTED,,,streaming,2025-12-30,src/streaming/sinks/webhook_sink.zig
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPTransport,TESTED,,,streaming,2026-06-10,src/streaming/sinks/webhook_sink.zig

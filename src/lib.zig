@@ -239,6 +239,7 @@ pub const streaming = struct {
     pub const sinks = struct {
         pub const webhook_sink = @import("streaming/sinks/webhook_sink.zig");
         pub const kafka_sink = @import("streaming/sinks/kafka_sink.zig");
+        pub const kafka_wire = @import("streaming/sinks/kafka_wire.zig");
     };
 };
 // Re-export server graph executor for tests needing internal MATCH primitives
