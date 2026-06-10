@@ -2973,6 +2973,29 @@ pub fn build(b: *std.Build) void {
     const raft_apply_idem_step = b.step("test-raft-apply-restart-idempotent", "Regression: restart re-apply must not duplicate replicated creates (root cause #6)");
     raft_apply_idem_step.dependOn(&run_raft_apply_idem_tests.step);
 
+    // 2PC coordinator tests — MOVED out of src/distributed/txn_coordinator.zig's
+    // inline `test` blocks (2026-06-10) so they no longer ride into the
+    // graph_store_unit_tests test root (which transitively imports
+    // txn_coordinator) and break the sharded `zig build test` to compile. The
+    // union-encoding bodies are comptime-gated behind a protobuf-union blocker
+    // flag in the file, so this step compiles + self-skips until the protobuf
+    // dependency supports a union as a repeated submessage. See
+    // docs/KNOWN_TEST_ISSUES.md.
+    const txn2pc_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_txn_coordinator_2pc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    txn2pc_test_mod.addImport("geode", root_mod);
+    txn2pc_test_mod.addImport("protobuf", protobuf_mod);
+    txn2pc_test_mod.addImport("schema", schema_mod);
+    txn2pc_test_mod.addImport("distributed_schema", distributed_schema_mod);
+    const txn2pc_tests = b.addTest(.{ .root_module = txn2pc_test_mod });
+    const run_txn2pc_tests = b.addRunArtifact(txn2pc_tests);
+    shardDep(test_step, &run_txn2pc_tests.step, 1, test_shard_loads, test_shard_index);
+    const txn2pc_step = b.step("test-txn-coordinator-2pc", "Run distributed 2PC coordinator tests (guarded by protobuf-union blocker; see KNOWN_TEST_ISSUES.md)");
+    txn2pc_step.dependOn(&run_txn2pc_tests.step);
+
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");

@@ -72,9 +72,23 @@ const SECURITY_GRAPH_NAME = "__geode_security";
 // libc setenv shim: the FLE key manager reads GEODE_MASTER_KEY via std.c.getenv
 // and refuses to operate without it. The test module links libc.
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // 32-byte secret (hex) for the FLE master key — test-only, never a real secret.
 const TEST_MASTER_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+// Resolve a std.testing.TmpDir's absolute path. The FLE catalog persistence
+// reads GEODE_DATA_DIR as an absolute path; TmpDir.sub_path is relative to
+// `.zig-cache/tmp`, so reconstruct the absolute path from cwd. (std.Io.Dir has
+// no `realpath` in Zig 0.16, so resolve via getcwd like the bulk-ingest suite.)
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
 
 // Local mirror of graph_store.isLikelyFleEnvelope (private). Used only to
 // assert — positively — that a value stored in a NORMAL graph really did get
@@ -114,6 +128,33 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
     // (step 5) can produce a real envelope. (The security-graph guard is
     // independent of whether a master key is present.)
     _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
+
+    // Isolate the PERSISTED FLE catalog to a per-test temp dir. Without this,
+    // `configureField('User','email')` persists to `{GEODE_DATA_DIR or
+    // /tmp}/geode_fle_catalog.dat` (fle_catalog.saveCatalog) — a process- and
+    // run-shared file. A later, otherwise-unrelated test (e.g.
+    // tests/bulk_ingest/test_simple_merge_fastpath.zig) that lazily loads the
+    // global catalog would then inherit this `User.email` encryption config and
+    // FLE-encrypt its `email` property, breaking its plaintext assertion. Point
+    // GEODE_DATA_DIR at an isolated dir, reset the in-memory global catalog so
+    // it reloads from there (empty), and tear it all down on exit so nothing
+    // leaks into /tmp or into a sibling test in the same binary.
+    var catalog_tmp = std.testing.tmpDir(.{});
+    defer catalog_tmp.cleanup();
+    const data_dir = try tmpDirRealpathAlloc(allocator, &catalog_tmp.sub_path);
+    defer allocator.free(data_dir);
+    const data_dir_z = try allocator.dupeZ(u8, data_dir);
+    defer allocator.free(data_dir_z);
+    _ = setenv("GEODE_DATA_DIR", data_dir_z.ptr, 1);
+    fle_integration.catalog_mod.resetGlobalCatalog(allocator);
+    fle_integration.setHasEncryptedFields(false);
+    defer {
+        // Restore a clean global FLE state for any sibling test in this binary
+        // and drop the GEODE_DATA_DIR override so we never touch /tmp.
+        fle_integration.catalog_mod.resetGlobalCatalog(allocator);
+        fle_integration.setHasEncryptedFields(false);
+        _ = unsetenv("GEODE_DATA_DIR");
+    }
 
     // Isolated FLE state: ensure no leftover global encryption flag/catalog
     // from another test in the same binary. Restore afterwards.

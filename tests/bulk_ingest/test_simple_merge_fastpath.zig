@@ -24,6 +24,22 @@ const geode = @import("geode");
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const adapter_mod = geode.graph_storage_adapter;
+const fle_integration = geode.fle_integration;
+
+// libc env shims: the FLE key manager reads GEODE_MASTER_KEY (and the FLE
+// catalog persistence reads GEODE_DATA_DIR) via std.c.getenv. The test module
+// links libc.
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+// 32-byte secret (hex) for the FLE master key — test-only, never a real secret.
+// This bulk-MERGE suite does NOT configure any FLE field, but the storage
+// adapter's defense-in-depth FLE hook reads the key manager (which refuses to
+// operate without a master key) the moment ANY encrypted field is configured
+// in the process-global catalog. The pre-push test shards run WITHOUT
+// GEODE_MASTER_KEY in the environment, so we install a deterministic one here
+// to make this suite self-sufficient and order-independent.
+const TEST_MASTER_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -42,6 +58,16 @@ const Harness = struct {
     ctx: execution.ExecutionContext,
 
     pub fn init(allocator: std.mem.Allocator) !Harness {
+        // Make this suite self-sufficient w.r.t. FLE: install a deterministic
+        // master key (the pre-push shards run without GEODE_MASTER_KEY set) and
+        // isolate the persisted FLE catalog so a SIBLING test that configured an
+        // encrypted field (e.g. test_gap0854_fle_chain's ('User','email'))
+        // cannot leak its config into this process via the shared
+        // {GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat file. Point
+        // GEODE_DATA_DIR at this harness's own tmp dir and reset the in-memory
+        // global catalog so it reloads from there (empty).
+        _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
+
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
 
@@ -50,6 +76,15 @@ const Harness = struct {
 
         const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
+
+        // Isolate the FLE catalog persistence to this data dir (it reads the
+        // GEODE_DATA_DIR env at load/save time) and clear any catalog the
+        // process already loaded from a prior /tmp path.
+        const data_dir_z = try allocator.dupeZ(u8, data_dir);
+        defer allocator.free(data_dir_z);
+        _ = setenv("GEODE_DATA_DIR", data_dir_z.ptr, 1);
+        fle_integration.catalog_mod.resetGlobalCatalog(allocator);
+        fle_integration.setHasEncryptedFields(false);
 
         graph_store.setDataDirOverride(allocator, data_dir);
         _ = graph_store.getGlobalStore(allocator);
@@ -69,6 +104,11 @@ const Harness = struct {
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
         graph_store.setDataDirOverride(self.allocator, null);
+        // Drop the FLE catalog isolation so we leave no global state (or env
+        // override pointing at a now-deleted tmp dir) behind for sibling tests.
+        fle_integration.catalog_mod.resetGlobalCatalog(self.allocator);
+        fle_integration.setHasEncryptedFields(false);
+        _ = unsetenv("GEODE_DATA_DIR");
         self.allocator.free(self.data_dir);
         self.tmp.cleanup();
     }

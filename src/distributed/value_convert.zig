@@ -162,7 +162,13 @@ fn protoValueToJsonValue(allocator: Allocator, value: schema.Value, depth: usize
             break :blk std.json.Value{ .object = obj };
         },
         .ext_val => |ev| blk: {
-            const txt = if (ev.data == .text) ev.data.text else ev.type_name;
+            // `ev.data` is an OPTIONAL oneof (`?ExtendedValueUnion`); unwrap it
+            // before comparing the active tag. When the payload is the `text`
+            // variant use it, otherwise fall back to the declared type name.
+            const txt = if (ev.data) |d|
+                (if (d == .text) d.text else ev.type_name)
+            else
+                ev.type_name;
             break :blk std.json.Value{ .string = try allocator.dupe(u8, txt) };
         },
         .node_val, .edge_val, .path_val => std.json.Value{ .string = try allocator.dupe(u8, "complex") },
