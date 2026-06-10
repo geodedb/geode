@@ -42,6 +42,32 @@ fn compat_microTimestamp() i64 {
 }
 const cdc_sinks = @import("../cdc_sinks.zig");
 
+/// Sleep for the given number of milliseconds (raw nanosleep on Linux, libc
+/// elsewhere). Used to bound retry backoff; tests pass single-ms values.
+fn sleepMs(ms: i64) void {
+    if (ms <= 0) return;
+    const ns = ms * std.time.ns_per_ms;
+    if (comptime @import("builtin").os.tag == .linux) {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    } else {
+        const req = std.c.timespec{
+            .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+        };
+        var rem: std.c.timespec = undefined;
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
+const logging = @import("logging");
+const log = logging.scoped("streaming.webhook");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WebhookSink; STATUS=TESTED; TEST=cdc_tests; OWNER=streaming; UPDATED=2025-11-12
 
 /// Import types
@@ -53,7 +79,11 @@ pub const WebhookConfig = struct {
     url: []const u8,
     method: enum { POST, PUT } = .POST,
     timeout_ms: u32 = 5000,
+    /// Total number of delivery attempts (1 = no retry).
     retry_count: u32 = 3,
+    /// Base backoff between retries; doubles each attempt (exponential).
+    /// Kept configurable so tests can bound it to a single millisecond.
+    base_backoff_ms: u32 = 100,
     headers: std.StringHashMap([]const u8),
 };
 
@@ -123,19 +153,22 @@ pub const WebhookSink = struct {
         var attempts: u32 = 0;
         while (attempts < config.retry_count) : (attempts += 1) {
             if (self.sendHttpPost(config.url, payload_bytes, config.timeout_ms, &config.headers)) {
-                std.debug.print("WEBHOOK_SINK events_sent={d} url={s}\n", .{ events.len, config.url });
+                log.debug("webhook delivered", &.{
+                    Attr.int("events", @intCast(events.len)),
+                    Attr.string("url", config.url),
+                });
                 return;
             } else |err| {
-                std.debug.print("WEBHOOK_SINK: Attempt {d} failed: {}\n", .{ attempts + 1, err });
+                log.warn("webhook delivery attempt failed", &.{
+                    Attr.int("attempt", @intCast(attempts + 1)),
+                    Attr.string("error", @errorName(err)),
+                });
                 if (attempts + 1 < config.retry_count) {
-                    // Exponential backoff — Zig 0.16 uses raw nanosleep.
-                    const ns = @as(i64, 100_000_000) * (@as(i64, 1) << @intCast(attempts));
-                    const req = std.os.linux.timespec{
-                        .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
-                        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
-                    };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
+                    // Exponential backoff: base_backoff_ms * 2^attempt.
+                    // Bounded by config so tests can use single-ms backoff.
+                    const shift: u6 = @intCast(@min(attempts, 16));
+                    const backoff_ms: i64 = @as(i64, config.base_backoff_ms) * (@as(i64, 1) << shift);
+                    sleepMs(backoff_ms);
                 }
             }
         }
@@ -143,8 +176,18 @@ pub const WebhookSink = struct {
         return error.WebhookSendFailed;
     }
 
-    /// Send HTTP POST request to webhook endpoint.
-    /// Zig 0.16 compat: temporarily stubbed pending std.Io.net rewrite.
+    // CANARY: REQ=REQ-STREAMING-WEBHOOK-001; FEATURE="Webhook Sink Implementation"; ASPECT=HTTPTransport; STATUS=TESTED; TEST=tests/test_gap0855_webhook_sink.zig; OWNER=streaming; UPDATED=2026-06-10
+    /// Send an HTTP request to the webhook endpoint using std.http.Client.
+    ///
+    /// Real delivery over http/https (TLS handled by std.http.Client for https
+    /// URLs in production). Configured headers from `headers` ride as extra
+    /// headers (Authorization, custom values); the Content-Type defaults to
+    /// application/json but is overridable via a "Content-Type" entry.
+    ///
+    /// A non-2xx response status surfaces as error.HttpStatusError so the
+    /// caller's retry loop can re-attempt; a transport/connect failure surfaces
+    /// the underlying error. SSRF guard rejects private/reserved hosts unless
+    /// the test-only escape hatch is set.
     fn sendHttpPost(
         self: *WebhookSink,
         url: []const u8,
@@ -152,12 +195,56 @@ pub const WebhookSink = struct {
         timeout_ms: u32,
         headers: *const std.StringHashMap([]const u8),
     ) !void {
-        _ = self;
-        _ = url;
-        _ = body;
-        _ = timeout_ms;
-        _ = headers;
-        return error.WebhookTransportNotImplemented;
+        _ = timeout_ms; // std.http.Client has no per-request timeout knob in 0.16; retry loop bounds total time
+
+        const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+
+        // SSRF prevention: reject private/reserved hosts (honoring the
+        // GEODE_WEBHOOK_ALLOW_PRIVATE test escape hatch read inside isPrivateHost).
+        var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+        const host_name = uri.getHost(&host_buf) catch return error.InvalidUrl;
+        if (isPrivateHost(host_name.bytes)) return error.PrivateHostBlocked;
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var client = std.http.Client{ .allocator = self.allocator, .io = io };
+        defer client.deinit();
+
+        // Build extra headers from config. Pull Content-Type out so it goes via
+        // the typed `headers.content_type` slot; everything else rides as extra.
+        var content_type: []const u8 = "application/json";
+        var extra = std.ArrayList(std.http.Header).initCapacity(self.allocator, headers.count()) catch return error.OutOfMemory;
+        defer extra.deinit(self.allocator);
+
+        var it = headers.iterator();
+        while (it.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+            if (std.ascii.eqlIgnoreCase(name, "content-type")) {
+                content_type = value;
+                continue;
+            }
+            extra.append(self.allocator, .{ .name = name, .value = value }) catch return error.OutOfMemory;
+        }
+
+        const method: std.http.Method = switch (self.config.?.method) {
+            .POST => .POST,
+            .PUT => .PUT,
+        };
+
+        const result = client.fetch(.{
+            .location = .{ .uri = uri },
+            .method = method,
+            .payload = body,
+            .headers = .{ .content_type = .{ .override = content_type } },
+            .extra_headers = extra.items,
+            .keep_alive = false,
+        }) catch |err| {
+            return err;
+        };
+
+        // 2xx is success; anything else is a delivery failure worth retrying.
+        const code = @intFromEnum(result.status);
+        if (code < 200 or code >= 300) return error.HttpStatusError;
     }
 
     pub fn interface(self: *WebhookSink) SinkInterface {
@@ -288,8 +375,8 @@ test "WebhookSink - send events" {
         },
     };
 
-    // Should not error even though it's a placeholder implementation
-    try sink.send(&events);
+    // With no config set, send is a hard error (no silent drop).
+    try testing.expectError(error.ConfigNotSet, sink.send(&events));
 }
 
 test "WebhookSink - interface implementation" {
@@ -315,7 +402,8 @@ test "WebhookSink - interface implementation" {
         },
     };
 
-    try iface.send(&events);
+    // With no config set, send via the interface is a hard error (no silent drop).
+    try testing.expectError(error.ConfigNotSet, iface.send(&events));
     iface.deinit();
 }
 

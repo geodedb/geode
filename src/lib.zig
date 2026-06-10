@@ -230,6 +230,17 @@ pub const ml = struct {
 pub const analytics = struct {
     pub const real_time = @import("analytics/real_time.zig");
 };
+
+// CDC / streaming sinks (webhook, Kafka, file, memory). Exposed for the
+// GAP-0855 sink regressions and any embedder wiring a custom sink.
+pub const streaming = struct {
+    pub const cdc_sinks = @import("streaming/cdc_sinks.zig");
+    pub const cdc_enhanced = @import("streaming/cdc_enhanced.zig");
+    pub const sinks = struct {
+        pub const webhook_sink = @import("streaming/sinks/webhook_sink.zig");
+        pub const kafka_sink = @import("streaming/sinks/kafka_sink.zig");
+    };
+};
 // Re-export server graph executor for tests needing internal MATCH primitives
 pub const graph_exec = @import("server/graph/exec.zig");
 // Re-export server state for unified binary

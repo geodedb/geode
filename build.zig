@@ -1103,6 +1103,20 @@ pub fn build(b: *std.Build) void {
     const gap0862_backup_step = b.step("test-gap0862", "Run GAP-0862 backup/restore data-integrity regression");
     gap0862_backup_step.dependOn(&run_gap0862_backup_tests.step);
 
+    // GAP-0855a: webhook CDC sink real HTTP delivery + retries + auth header.
+    // Drives the REAL WebhookSink (std.http.Client) against an in-test loopback
+    // HTTP/1.1 listener that scripts status codes and captures the request.
+    const gap0855_webhook_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0855_webhook_sink.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0855_webhook_tests.root_module.addImport("geode", root_mod);
+    gap0855_webhook_tests.root_module.link_libc = true; // std.c.setenv/unsetenv for the SSRF escape hatch
+    const run_gap0855_webhook_tests = b.addRunArtifact(gap0855_webhook_tests);
+    const gap0855_webhook_step = b.step("test-gap0855-webhook", "Run GAP-0855a webhook CDC sink real-delivery regression");
+    gap0855_webhook_step.dependOn(&run_gap0855_webhook_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)
