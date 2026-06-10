@@ -99,17 +99,79 @@ fn getSessionTenantFilter() tenancy.TenancyError!?[]const u8 {
     return tenancy.resolveTenantFilter(maybe_tid);
 }
 
-// GAP-0279: Check if a node passes the tenant filter.
-// Returns true if node should be included in results.
-inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
-    const tid = filter_tenant orelse return true;
-    return std.mem.eql(u8, node.tenant_id, tid);
+// GAP-0846: resolve the global tenant HierarchyManager IFF it is configured AND
+// the session's filter tenant participates in it. Returns null in the common
+// (single-tenant / no-hierarchy) case so the exact-match fast path below stays
+// allocation-free and branch-cheap.
+//
+// `filter_tenant` is the session's concrete tenant scope (never null here — the
+// callers only reach this when a concrete scope exists). The result, when
+// non-null, is a manager whose `canAccessTenantSafe(filter_tenant, row_tenant)`
+// decides ancestor-or-self access (parent → descendant grant; sibling deny).
+//
+// Thread-safety: the HierarchyManager is provisioned at server start
+// (rehydrateTenantDerivedState) and via `CALL geode.tenant.create`. It is read
+// here under the same no-additional-lock posture as the existing population
+// seam (GAP-0838/0839); this is a leaf read of a StringHashMap and acquires no
+// geode lock, so it never violates the CLAUDE.md lock-ordering table.
+inline fn hierarchyForFilter(filter_tenant: []const u8) ?*rls.HierarchyManager {
+    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return null;
+    const engine: *rls.RLSEngine = @ptrCast(@alignCast(engine_ptr));
+    const hm = &engine.hierarchy_manager;
+    // Fast path: no hierarchy provisioned -> exact match only (zero overhead).
+    if (hm.count() == 0) return null;
+    // The session tenant must itself be a registered node for ancestor access
+    // to mean anything; an unregistered concrete tenant falls back to exact
+    // match (it can only ever see its own rows).
+    if (!hm.contains(filter_tenant)) return null;
+    return hm;
 }
 
-// GAP-0279: Check if an edge passes the tenant filter.
+// GAP-0279 / GAP-0846: Check if a node passes the tenant filter.
+// Returns true if node should be included in results.
+//
+//   * No filter (null) -> admin/all-tenants, always true (unchanged).
+//   * Exact tenant match -> true (GAP-0509 isolation fast path, unchanged).
+//   * Otherwise, when a tenant hierarchy is configured for the session tenant,
+//     consult `canAccessTenantSafe`: a parent (ancestor-or-self) tenant may read
+//     its descendants' rows; siblings/ancestors are still denied (fail-closed).
+inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
+    const tid = filter_tenant orelse return true;
+    if (std.mem.eql(u8, node.tenant_id, tid)) return true;
+    const hm = hierarchyForFilter(tid) orelse return false;
+    return hm.canAccessTenantSafe(tid, node.tenant_id);
+}
+
+// GAP-0279 / GAP-0846: Check if an edge passes the tenant filter (hierarchy-aware).
 inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]const u8) bool {
     const tid = filter_tenant orelse return true;
-    return std.mem.eql(u8, edge.tenant_id, tid);
+    if (std.mem.eql(u8, edge.tenant_id, tid)) return true;
+    const hm = hierarchyForFilter(tid) orelse return false;
+    return hm.canAccessTenantSafe(tid, edge.tenant_id);
+}
+
+// GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
+// (`store.getNodesByLabels(..., tenant)` and `store.getEdgesByType(..., tenant, ...)`).
+//
+// Those storage primitives filter by EXACT tenant_id inside the index walk, so
+// if we passed the session's tenant straight through, any hierarchy-GRANTED
+// descendant row would be dropped at the storage layer and never reach the
+// per-row `passesTenantFilter` check — a silent under-fetch (the opposite of a
+// leak, but still wrong: a parent would not see its children).
+//
+// Decision: when a hierarchy is active for the session tenant, pass `null` to
+// the storage primitive so it returns ALL candidate ids for the label(s); the
+// per-row `passesTenantFilter` (now hierarchy-aware) then does the ancestor-or-
+// self filtering. When no hierarchy is active we keep the exact-match storage
+// filter unchanged (GAP-0509 isolation + zero overhead for the common case).
+//
+// This trades a wider candidate scan for hierarchy correctness ONLY when a
+// hierarchy is provisioned and the session tenant participates in it; ordinary
+// single-tenant and flat multi-tenant deployments are completely unaffected.
+inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
+    const tid = filter_tenant orelse return null;
+    if (hierarchyForFilter(tid) != null) return null;
+    return tid;
 }
 
 // GAP-0510 Task 4a: Check if a node passes the RLS denied-labels filter AND
@@ -493,6 +555,14 @@ pub fn countNodesFastPath(
 ) !?ExecutionResult {
     const plan = analyzeCountFastPath(q) orelse return null;
     if (!countFastPathRlsAllowed()) return null;
+    // GAP-0846: the store counters filter by EXACT tenant_id. When a hierarchy
+    // is active for the session tenant, a parent's true count includes its
+    // descendants' rows, which the exact-match counter would miss. Bail to the
+    // regular row-by-row executor (which uses the hierarchy-aware
+    // `passesTenantFilter`) so the count is correct.
+    if (filter_tenant) |tid| {
+        if (hierarchyForFilter(tid) != null) return null;
+    }
 
     // All preconditions met — delegate to the store counter.
     //
@@ -840,9 +910,8 @@ pub fn propertyAggregateFastPath(
         for (slots) |node_id| {
             const node = read_store.nodes.get(node_id) orelse continue;
             // Tenant filter (posting list is not partitioned by tenant).
-            if (filter_tenant) |tid| {
-                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-            }
+            // GAP-0846: hierarchy-aware — a parent tenant sees descendant rows.
+            if (!passesTenantFilter(node, filter_tenant)) continue;
             // Optional WHERE filter — single property read.
             if (where_pred) |p| {
                 const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
@@ -1383,7 +1452,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
             };
 
             if (node_pattern.labels.len > 0) {
-                var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, filter_tenant);
+                var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, storageTenantFilter(filter_tenant));
                 defer label_node_ids.deinit(allocator);
 
                 for (label_node_ids.items) |node_id| {
@@ -1699,7 +1768,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         if (labels.len > 0) {
             // Fast path: use label index to narrow candidates instead of full node scan
             // Also checks ALL labels (original code only checked labels[0])
-            var candidates = try read_store.getNodesByLabels(allocator, filter_graph, labels, filter_tenant);
+            var candidates = try read_store.getNodesByLabels(allocator, filter_graph, labels, storageTenantFilter(filter_tenant));
             defer candidates.deinit(allocator);
 
             for (candidates.items) |node_id| {
@@ -2018,7 +2087,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
         if (node_pattern.labels.len > 0) {
             // Use label_index for O(1) lookup instead of full scan
-            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, filter_tenant);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, storageTenantFilter(filter_tenant));
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
@@ -2706,7 +2775,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
         // Find all matching relationships using label_index when labels are present
         if (left_labels.len > 0) {
-            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, filter_tenant);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, storageTenantFilter(filter_tenant));
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
@@ -2763,7 +2832,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         } else if (right_labels.len > 0) {
             // #558: No left labels but right labels present — use right label index, traverse edges backwards
-            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, right_labels, filter_tenant);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, right_labels, storageTenantFilter(filter_tenant));
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
@@ -2822,7 +2891,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             // to reject cross-graph edges; that works but is wasteful
             // and any future caller that forgets the post-filter would
             // leak. The storage layer now enforces isolation directly.
-            const typed_edge_ids = store.getEdgesByType(allocator, rt, filter_tenant, filter_graph);
+            const typed_edge_ids = store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
             defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
             for (typed_edge_ids) |edge_id| {
@@ -2916,7 +2985,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     } else if (first_chain.head) |node_pattern| {
         // First chain is just a node pattern - use label_index when labels are present
         if (node_pattern.labels.len > 0) {
-            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, filter_tenant);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, storageTenantFilter(filter_tenant));
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
@@ -5539,7 +5608,7 @@ fn executeMultiHopGroupBy(
     };
 
     if (first_hop.left.labels.len > 0) {
-        var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, filter_tenant);
+        var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, storageTenantFilter(filter_tenant));
         defer label_node_ids.deinit(allocator);
 
         for (label_node_ids.items) |node_id| {
@@ -7381,7 +7450,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 const mh_scan_cap: ?usize = if (mh_scan_limit) |lim| lim + (mh_scan_offset orelse 0) else null;
 
                 if (first_hop.left.labels.len > 0) {
-                    var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, filter_tenant);
+                    var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, storageTenantFilter(filter_tenant));
                     defer label_node_ids.deinit(allocator);
 
                     for (label_node_ids.items) |node_id| {
@@ -7972,7 +8041,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
                 use_label_candidates = true;
             } else if (match_labels.len > 0) {
-                var label_ids = try store.getNodesByLabels(allocator, filter_graph, match_labels, filter_tenant);
+                var label_ids = try store.getNodesByLabels(allocator, filter_graph, match_labels, storageTenantFilter(filter_tenant));
                 defer label_ids.deinit(allocator);
                 try simple_node_candidates.ensureTotalCapacity(allocator, label_ids.items.len);
                 for (label_ids.items) |nid| {

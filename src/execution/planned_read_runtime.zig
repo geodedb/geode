@@ -9,6 +9,13 @@ const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
 const pattern_helpers = @import("pattern_helpers.zig");
+// GAP-0846: shared tenant-filter decision. The planned (storage-native) read
+// runtime has NO per-tenant filtering of its own; tenant isolation + hierarchy
+// access live in `match_operations` (the legacy executor). When the session has
+// a concrete tenant scope, this fast path is bypassed so tenant-scoped reads go
+// through the tenant-aware path. The common single-tenant case (null/"default"
+// scope) keeps the fast path with zero overhead.
+const tenancy = @import("tenancy.zig");
 
 // Task 1.5 / GAP-0806: interior-dupe scratch allocator resolver. Mirrors
 // `match_operations.scratchAllocatorOr` — when a per-query arena is installed
@@ -157,6 +164,33 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
     const graph_name = try allocator.dupe(u8, resolveGraphName(context));
     errdefer allocator.free(graph_name);
     const execution_mode: ExecutionMode = if (isStorageNativeQuery(q)) .storage_native else .legacy;
+
+    // GAP-0846 / GAP-0509: the storage-native runtime collects start slots and
+    // emits rows WITHOUT consulting `tenant_id`, so it can neither enforce
+    // exact-match tenant isolation nor hierarchy (ancestor-or-self) access. When
+    // the session resolves to a CONCRETE tenant scope, demote a data-touching
+    // (MATCH-chain) plan to the legacy executor (`match_operations`), which
+    // applies `passesTenantFilter` (now hierarchy-aware) at every read site.
+    // The common single-tenant case (null/empty/"default" scope) keeps the fast
+    // path with zero added work. `resolveTenantFilter` may reject in strict
+    // mode; we ignore that error here and let the legacy path re-resolve and
+    // surface it (so this guard never changes error behaviour).
+    if (execution_mode == .storage_native and q.match.chains.len > 0) {
+        const concrete = blk: {
+            const resolved = tenancy.resolveTenantFilter(context.tenant_id) catch break :blk true;
+            break :blk resolved != null;
+        };
+        if (concrete) {
+            // Bail to the legacy (tenant-aware) executor. Free the only two
+            // allocations made so far (`graph_name` dupe + any binding names);
+            // the rest are `defer`-freed. A `null` return is NOT an error, so
+            // the errdefers above do not run.
+            for (binding_names.items) |name| allocator.free(name);
+            binding_names.deinit(allocator);
+            allocator.free(graph_name);
+            return null;
+        }
+    }
 
     var root_index: ?usize = null;
     if (execution_mode == .storage_native) {

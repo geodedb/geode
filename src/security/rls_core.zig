@@ -2093,11 +2093,13 @@ pub const QueryRewriter = struct {
 // production code — not just tests — can populate the org → business-unit →
 // engagement tree CaaST needs.
 //
-// NOTE (scope): this manager is a populate-able, queryable registry. Wiring the
-// live query/RLS evaluation path to consult `canAccessTenant` for every read is
-// a separate, larger authz-semantics change and is intentionally NOT done here
-// (see GAP-0838 follow-up). `addTenant` is the public provisioning seam; a
-// server-init / tenant-provisioning path should call it to register tenants.
+// GAP-0846 (closed): the live query read path NOW consults this manager.
+// `match_operations.passesTenantFilter` / `passesTenantFilterEdge` call
+// `canAccessTenantSafe(session_tenant, row_tenant)` whenever a hierarchy has
+// been provisioned (`count() > 0`) and the session's tenant is concrete and
+// registered. When no hierarchy exists the read path keeps the exact-match
+// `std.mem.eql` fast path (zero overhead). `addTenant` is the production
+// provisioning seam (server-init replay + `CALL geode.tenant.create`).
 pub const HierarchyManager = struct {
     allocator: Allocator,
     tenant_hierarchy: std.StringHashMap(TenantNode),
@@ -2233,6 +2235,29 @@ pub const HierarchyManager = struct {
     pub fn getTenantPath(self: *HierarchyManager, tenant_id: []const u8) ![]const []const u8 {
         const node = self.tenant_hierarchy.get(tenant_id) orelse return error.TenantNotFound;
         return node.path;
+    }
+
+    // GAP-0846: number of registered tenants. Read-path hot loops use this to
+    // keep the exact-match fast path (zero hierarchy overhead) when no hierarchy
+    // has been provisioned — `count() == 0` means "no hierarchy configured".
+    pub fn count(self: *HierarchyManager) usize {
+        return self.tenant_hierarchy.count();
+    }
+
+    // GAP-0846: true iff `tenant_id` is registered in the hierarchy.
+    pub fn contains(self: *HierarchyManager, tenant_id: []const u8) bool {
+        return self.tenant_hierarchy.contains(tenant_id);
+    }
+
+    // GAP-0846: fail-CLOSED variant of `canAccessTenant` for the live read path.
+    // `canAccessTenant` returns `error.TenantNotFound` when either tenant is not
+    // registered; in a read-filter hot loop we must turn that into a deny (false)
+    // rather than propagate an error that would abort the whole query. A target
+    // tenant that is not part of the hierarchy is, by definition, not a descendant
+    // of the accessor, so denying it is the correct (and safe) answer. Self-access
+    // and the exact-match case are handled by the caller before reaching here.
+    pub fn canAccessTenantSafe(self: *HierarchyManager, accessor_tenant: []const u8, target_tenant: []const u8) bool {
+        return self.canAccessTenant(accessor_tenant, target_tenant) catch false;
     }
 
     // Access semantics PRESERVED from the original u64 implementation: an

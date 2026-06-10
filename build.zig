@@ -4586,6 +4586,23 @@ pub fn build(b: *std.Build) void {
     const gap0840_step = b.step("test-gap0840-strict-tenancy", "GAP-0840 regression (opt-in strict-tenancy mode)");
     gap0840_step.dependOn(&run_gap0840_tests.step);
 
+    // GAP-0846 regression: tenant hierarchy is now consulted in the live query
+    // read path. `match_operations.passesTenantFilter` / `passesTenantFilterEdge`
+    // consult `HierarchyManager.canAccessTenantSafe` when a hierarchy is
+    // provisioned (parent reads descendant rows; sibling stays isolated), and
+    // the label-indexed storage filters relax to a scan-then-filter under an
+    // active hierarchy. Needs the `geode`, `rls` (rls_core), and `rls_types`
+    // modules to publish + populate a live expr-RLS engine.
+    const gap0846_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0846_tenant_hierarchy_reads.zig"), .target = target, .optimize = optimize });
+    gap0846_test_mod.addImport("geode", root_mod);
+    gap0846_test_mod.addImport("rls", rls_mod);
+    gap0846_test_mod.addImport("rls_types", rls_types_mod);
+    const gap0846_tests = b.addTest(.{ .root_module = gap0846_test_mod });
+    const run_gap0846_tests = b.addRunArtifact(gap0846_tests);
+    shardDep(test_step, &run_gap0846_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0846_step = b.step("test-gap0846", "GAP-0846 regression (tenant hierarchy enforced in query read paths)");
+    gap0846_step.dependOn(&run_gap0846_tests.step);
+
     // GAP-0843 regression: per-tenant TDE key isolation + real page-encrypt.
     // Proves (a) data encrypted under tenant A's HKDF-derived key cannot be
     // decrypted under tenant B's key (AEAD tag mismatch) and round-trips under
