@@ -2861,7 +2861,15 @@ test "encodeRaftFrame includes auth_token and decodeRaftFrame exposes it" {
     // SEC-D001: Verify auth_token round-trips through Raft frame encoding.
     // In test env, GEODE_CLUSTER_TOKEN is not set, so auth_token will be "".
     const allocator = std.testing.allocator;
-    const msg = Message{ .noop = {} };
+    // Minimal valid Message variant for the frame round-trip (the legacy
+    // `.noop` placeholder variant was removed from the Message union).
+    const msg = Message{ .request_vote = .{
+        .term = 1,
+        .candidate_id = 42,
+        .last_log_index = 0,
+        .last_log_term = 0,
+        .pre_vote = false,
+    } };
     const encoded = try encodeRaftFrame(allocator, 42, 1, msg);
     defer allocator.free(encoded);
 
@@ -2911,11 +2919,12 @@ test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
     try std.testing.expectEqual(@as(?u64, null), voted_null);
 
     // Verify .tmp file does not persist (atomic rename should have cleaned up)
-    var dir = try std.Io.Dir.cwd().openDir(dir_path, .{});
-    defer dir.close(std.Io.Threaded.global_single_threaded.io());
-    const tmp_exists = dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term.tmp", .{});
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
+    defer dir.close(io);
+    const tmp_exists = dir.openFile(io, "current_term.tmp", .{});
     if (tmp_exists) |f| {
-        f.close();
+        f.close(io);
         return error.TmpFileNotCleaned;
     } else |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
@@ -2966,10 +2975,17 @@ test "raft_consensus: Transport.send uses TLS-aware connection" {
 
     // In test mode the QUIC stubs are no-ops; writeRaftFrame uses the stub stream.
     // This validates the TLS code path compiles and executes without error.
-    transport.send(peer, 42, 1, .noop) catch |err| {
+    // (Legacy `.noop` Message placeholder removed; use a minimal valid variant.)
+    const probe_msg = Message{ .request_vote = .{
+        .term = 1,
+        .candidate_id = 42,
+        .last_log_index = 0,
+        .last_log_term = 0,
+        .pre_vote = false,
+    } };
+    transport.send(peer, 42, 1, probe_msg) catch {
         // Expected: test stubs may return errors for stream operations
         // since getStream returns undefined. That's fine -- we're testing
         // that the TLS connection logic itself compiles and runs.
-        _ = err;
     };
 }

@@ -91,7 +91,7 @@ pub const TxnCoordinator = struct {
         while (it.next()) |entry| {
             self.allocator.free(entry.value_ptr.write_set);
             self.allocator.free(entry.value_ptr.metadata);
-            entry.value_ptr.locks.deinit();
+            entry.value_ptr.locks.deinit(self.allocator);
         }
         self.prepared_txns.deinit();
 
@@ -169,7 +169,7 @@ pub const TxnCoordinator = struct {
             for (prepared.locks.items) |lock| {
                 _ = self.lock_table.remove(lock.resource_id);
             }
-            prepared.locks.deinit();
+            prepared.locks.deinit(self.allocator);
 
             // Clean up prepared state
             self.allocator.free(prepared.write_set);
@@ -195,7 +195,7 @@ pub const TxnCoordinator = struct {
     pub fn checkTimeouts(self: *TxnCoordinator) !void {
         const now = compat_milliTimestamp();
         var to_abort = try std.ArrayList(u64).initCapacity(self.allocator, 0);
-        defer to_abort.deinit();
+        defer to_abort.deinit(self.allocator);
 
         var it = self.prepared_txns.iterator();
         while (it.next()) |entry| {
@@ -346,7 +346,7 @@ test "TestCANARY_2PC_Coordinator basic prepare and commit" {
     var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    var props = std.ArrayList(schema.MapEntry).init(allocator);
+    var props = std.ArrayList(schema.MapEntry).empty;
     try props.append(allocator, .{
         .key = try allocator.dupe(u8, "name"),
         .value = try makeStringValue(allocator, "Alice"),
@@ -362,7 +362,7 @@ test "TestCANARY_2PC_Coordinator basic prepare and commit" {
         },
     };
 
-    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).empty;
     try ops.append(allocator, op);
 
     var msg = dist_schema.TwoPhaseMessage{
@@ -405,14 +405,14 @@ test "TestCANARY_2PC_Idempotent repeated prepare" {
     var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).empty;
     try ops.append(allocator, .{
         .node_op = .{
             .op_type = .CREATE,
             .node_id = 42,
             .label = try allocator.dupe(u8, "LockNode"),
             .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
-            .properties = std.ArrayList(schema.MapEntry).init(allocator),
+            .properties = std.ArrayList(schema.MapEntry).empty,
         },
     });
 
@@ -453,18 +453,18 @@ test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
     var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    var props1 = std.ArrayList(schema.MapEntry).init(allocator);
+    var props1 = std.ArrayList(schema.MapEntry).empty;
     try props1.append(allocator, .{
         .key = try allocator.dupe(u8, "name"),
         .value = try makeStringValue(allocator, "Alice Smith"),
     });
-    var props2 = std.ArrayList(schema.MapEntry).init(allocator);
+    var props2 = std.ArrayList(schema.MapEntry).empty;
     try props2.append(allocator, .{
         .key = try allocator.dupe(u8, "name"),
         .value = try makeStringValue(allocator, "Bob Jones"),
     });
 
-    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).empty;
     try ops.append(allocator, .{
         .node_op = .{
             .op_type = .CREATE,
@@ -522,9 +522,9 @@ test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
     var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    const props = std.ArrayList(schema.MapEntry).init(allocator);
+    const props = std.ArrayList(schema.MapEntry).empty;
 
-    var ops1 = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    var ops1 = std.ArrayList(dist_schema.TwoPhaseOperation).empty;
     try ops1.append(allocator, .{
         .node_op = .{
             .op_type = .CREATE,
@@ -550,14 +550,14 @@ test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
     try coordinator.handleDecide(.{ .xid = 200, .commit = true });
     try std.testing.expect(store.getNodePtr(55) != null);
 
-    var ops2 = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    var ops2 = std.ArrayList(dist_schema.TwoPhaseOperation).empty;
     try ops2.append(allocator, .{
         .node_op = .{
             .op_type = .DELETE,
             .node_id = 55,
             .label = try allocator.dupe(u8, "Temp"),
             .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
-            .properties = std.ArrayList(schema.MapEntry).init(allocator),
+            .properties = std.ArrayList(schema.MapEntry).empty,
         },
     });
 

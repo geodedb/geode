@@ -3827,6 +3827,22 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("mfa", mfa_mod);
     root_mod.addImport("feature_flags", runtime_flags_mod);
     root_mod.addImport("mfa_policy", mfa_policy_mod);
+    // GAP-0860: the `graph_store_unit_tests` artifact (declared earlier, rooted
+    // directly at src/graph_store.zig) pulls in execution.zig → raft_consensus.zig
+    // (`@import("raft")`) and user_management.zig (`@import("geode_auth")`). Those
+    // named modules (`raft_ext_mod`, `auth_mod`) only become available here, so
+    // wire them onto that test root now or `zig build test` fails to compile the
+    // graph_store_unit_tests shard ("no module named 'raft'/'geode_auth'").
+    graph_store_unit_tests.root_module.addImport("raft", raft_ext_mod);
+    graph_store_unit_tests.root_module.addImport("geode_auth", auth_mod);
+    // GAP-0860 (cont.): raft_consensus.zig also @imports "raft_schema",
+    // "distributed_schema" and "protobuf"; txn_coordinator.zig (reached via
+    // execution.zig) @imports "parallel/thread_pool_parallel". Wire all four
+    // onto the graph_store test root so the shard actually compiles.
+    graph_store_unit_tests.root_module.addImport("raft_schema", raft_schema_mod);
+    graph_store_unit_tests.root_module.addImport("distributed_schema", distributed_schema_mod);
+    graph_store_unit_tests.root_module.addImport("protobuf", protobuf_mod);
+    graph_store_unit_tests.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);

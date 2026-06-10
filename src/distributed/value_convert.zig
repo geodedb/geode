@@ -150,14 +150,14 @@ fn protoValueToJsonValue(allocator: Allocator, value: schema.Value, depth: usize
             break :blk std.json.Value{ .array = arr };
         },
         .map_val => |mv| blk: {
-            var obj = std.json.ObjectMap.init(allocator);
+            var obj = @as(std.json.ObjectMap, .empty);
             for (mv.entries.items) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
                 const val = if (entry.value) |v|
                     try protoValueToJsonValue(allocator, v, depth + 1)
                 else
                     std.json.Value{ .null = {} };
-                try obj.put(key, val);
+                try obj.put(allocator, key, val);
             }
             break :blk std.json.Value{ .object = obj };
         },

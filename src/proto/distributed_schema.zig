@@ -26,7 +26,7 @@ pub const ClusterMessage = struct {
     payload: []const u8 = "",
 
     pub const _desc_table = .{
-        .msg_type = fd(1, .{ .scalar = .@"enum" }),
+        .msg_type = fd(1, .{ .@"enum" = {} }),
         .source_node = fd(2, .{ .scalar = .uint32 }),
         .dest_node = fd(3, .{ .scalar = .uint32 }),
         .term = fd(4, .{ .scalar = .uint64 }),
@@ -73,7 +73,7 @@ pub const NodeOperation = struct {
     properties: std.ArrayList(schema.MapEntry),
 
     pub const _desc_table = .{
-        .op_type = fd(1, .{ .scalar = .@"enum" }),
+        .op_type = fd(1, .{ .@"enum" = {} }),
         .node_id = fd(2, .{ .scalar = .uint64 }),
         .label = fd(3, .{ .scalar = .string }),
         .graph_name = fd(4, .{ .scalar = .string }),
@@ -95,7 +95,7 @@ pub const EdgeOperation = struct {
     properties: std.ArrayList(schema.MapEntry),
 
     pub const _desc_table = .{
-        .op_type = fd(1, .{ .scalar = .@"enum" }),
+        .op_type = fd(1, .{ .@"enum" = {} }),
         .edge_id = fd(2, .{ .scalar = .uint64 }),
         .source_id = fd(3, .{ .scalar = .uint64 }),
         .target_id = fd(4, .{ .scalar = .uint64 }),
@@ -136,7 +136,7 @@ pub const TwoPhaseMessage = struct {
     nonce: u64 = 0,
 
     pub const _desc_table = .{
-        .msg_type = fd(1, .{ .scalar = .@"enum" }),
+        .msg_type = fd(1, .{ .@"enum" = {} }),
         .transaction_id = fd(2, .{ .scalar = .string }),
         .coordinator_id = fd(3, .{ .scalar = .string }),
         .timestamp = fd(4, .{ .scalar = .int64 }),
@@ -158,10 +158,10 @@ pub const TwoPhaseResponse = struct {
     timestamp: i64 = 0,
 
     pub const _desc_table = .{
-        .msg_type = fd(1, .{ .scalar = .@"enum" }),
+        .msg_type = fd(1, .{ .@"enum" = {} }),
         .transaction_id = fd(2, .{ .scalar = .string }),
         .participant_id = fd(3, .{ .scalar = .string }),
-        .vote = fd(4, .{ .scalar = .@"enum" }),
+        .vote = fd(4, .{ .@"enum" = {} }),
         .timestamp = fd(5, .{ .scalar = .int64 }),
     };
 
@@ -221,9 +221,9 @@ pub const QueryMetadata = struct {
         .estimated_rows = fd(1, .{ .scalar = .uint64 }),
         .memory_limit_mb = fd(2, .{ .scalar = .uint64 }),
         .timeout_ms = fd(3, .{ .scalar = .uint64 }),
-        .priority = fd(4, .{ .scalar = .@"enum" }),
+        .priority = fd(4, .{ .@"enum" = {} }),
         .requires_transaction = fd(5, .{ .scalar = .bool }),
-        .isolation_level = fd(6, .{ .scalar = .@"enum" }),
+        .isolation_level = fd(6, .{ .@"enum" = {} }),
     };
 
     pub fn deinit(self: *QueryMetadata, allocator: std.mem.Allocator) void {
@@ -267,7 +267,7 @@ pub const QueryResult = struct {
         .query_id = fd(1, .{ .scalar = .uint64 }),
         .fragment_id = fd(2, .{ .scalar = .uint64 }),
         .shard_id = fd(3, .{ .scalar = .uint64 }),
-        .status = fd(4, .{ .scalar = .@"enum" }),
+        .status = fd(4, .{ .@"enum" = {} }),
         .page = fd(5, .{ .submessage = {} }),
         .error_message = fd(6, .{ .scalar = .string }),
         .execution_time_ms = fd(7, .{ .scalar = .uint64 }),
@@ -291,7 +291,7 @@ pub const QueryMessage = struct {
     cancel_reason: ?[]const u8 = null,
 
     pub const _desc_table = .{
-        .msg_type = fd(1, .{ .scalar = .@"enum" }),
+        .msg_type = fd(1, .{ .@"enum" = {} }),
         .query_id = fd(2, .{ .scalar = .uint64 }),
         .fragment_id = fd(3, .{ .scalar = .uint64 }),
         .shard_id = fd(4, .{ .scalar = .uint64 }),
