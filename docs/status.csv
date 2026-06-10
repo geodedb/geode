@@ -3204,6 +3204,8 @@ REQ-LSP-METADATA-004,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src
 REQ-LSP-PERM-GRAPH-VISIBILITY-001,LspPermissionAwareCompletion,CoarseGraphVisibilityGate,IMPL,,,security,2026-05-14,src/security/auth_graph_manager.zig
 REQ-LSP-PERM-GRAPH-VISIBILITY-001,LspPermissionAwareCompletion,CoarseGraphVisibilityGate,TESTED,,,security,2026-05-14,src/security/auth_graph_manager.zig
 REQ-LSP-PERM-GRAPH-VISIBILITY-002,LspPermissionAwareCompletion,AdminShortcut,TESTED,,,security,2026-05-14,src/security/auth_graph_manager.zig
+REQ-LSP-POSENC-001,PositionEncodingNegotiation,MultiByteRange,TESTED,,,lsp,2026-06-09,tests/test_gap0817_lsp_position_encoding.zig
+REQ-LSP-POSENC-001,PositionEncodingNegotiation,Negotiate,TESTED,,,lsp,2026-06-09,src/cli/lsp/server.zig
 REQ-LSP-REFS-001,References,FindAllRefs,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
 REQ-LSP-SCHEMA-COMPLETION-001,LspPermissionAwareCompletion,PrefixFilter,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
 REQ-LSP-SCHEMA-COMPLETION-001,LspPermissionAwareCompletion,SchemaBranches,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig

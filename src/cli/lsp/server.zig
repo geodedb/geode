@@ -35,6 +35,14 @@ const DocumentStore = document.DocumentStore;
 /// file in a second module and trip Zig 0.16's module-diamond check).
 pub const transport_mod = transport;
 
+/// GAP-0817: re-export the document module so out-of-tree tests
+/// (tests/test_gap0817_lsp_position_encoding.zig) rooting the LSP server
+/// through `lsp_server` can reach `document.PositionEncoding` /
+/// `document.codeUnitsToByteColumn` without a relative `@import("document.zig")`
+/// (which would register the file in a second module and trip Zig 0.16's
+/// module-diamond check).
+pub const document_mod = document;
+
 pub const ServerCapabilities = struct {
     textDocumentSync: i32 = 1, // Full sync
     hoverProvider: bool = true,
@@ -183,10 +191,16 @@ pub const handled_notification_methods = blk: {
 /// ObjectMaps and Arrays for completion/signatureHelp/semanticTokens).
 ///
 /// CANARY: REQ=REQ-LSP-CAP-001; FEATURE="CapabilityHandlerTruthfulness"; ASPECT=AdvertisedCapabilities; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
-pub fn buildCapabilitiesObject(allocator: Allocator) !std.json.ObjectMap {
+pub fn buildCapabilitiesObject(allocator: Allocator, position_encoding: document.PositionEncoding) !std.json.ObjectMap {
     const capabilities = ServerCapabilities{};
     var caps = std.json.ObjectMap{};
     errdefer deinitCapabilitiesObject(allocator, &caps);
+
+    // GAP-0817: advertise the negotiated position encoding so the client knows
+    // how Geode interprets `Position.character` for this session. This is a
+    // data capability (a string), NOT a request-handler capability — there is
+    // no method behind it, so the truthfulness guard treats it as exempt.
+    try caps.put(allocator, "positionEncoding", .{ .string = position_encoding.toWire() });
 
     try caps.put(allocator, "textDocumentSync", .{ .integer = capabilities.textDocumentSync });
     try caps.put(allocator, "hoverProvider", .{ .bool = capabilities.hoverProvider });
@@ -460,6 +474,14 @@ pub const Server = struct {
     initialized: bool = false,
     shutdown_requested: bool = false,
     formatting_options: features.FormattingOptions = .{},
+    /// GAP-0817: negotiated position encoding for this session. Resolved in
+    /// `handleInitialize` from the client's
+    /// `capabilities.general.positionEncodings` (LSP 3.17). Geode advertises
+    /// the chosen one in the `initialize` result and uses it to translate every
+    /// incoming `Position.character` (in the negotiated encoding's code units)
+    /// to a UTF-8 byte column before indexing the document. Defaults to the
+    /// LSP protocol default (UTF-16) until `initialize` resolves it.
+    position_encoding: document.PositionEncoding = .utf16,
     /// F-01: per-document debounce state. Keyed by URI; values track
     /// the timestamp of the last didChange and whether a diagnostic
     /// flush is still pending.
@@ -698,16 +720,35 @@ pub const Server = struct {
     /// `{textDocument: {uri}, position: {line, character}}` request shape
     /// used by hover/completion/definition/references/signatureHelp.
     fn extractTextDocumentPosition(self: *Server, params_value: std.json.Value) json_helpers.JsonError!TextDocumentPosition {
-        _ = self;
         const text_document = try json_helpers.getObject(params_value, "textDocument");
         const uri = try json_helpers.getString(text_document, "uri");
         const position = try json_helpers.getObject(params_value, "position");
         const line_i64 = try json_helpers.getInteger(position, "line");
         const char_i64 = try json_helpers.getInteger(position, "character");
+        const line = try json_helpers.castU32(line_i64);
+        const wire_character = try json_helpers.castU32(char_i64);
+
+        // GAP-0817: the incoming `character` is in the negotiated encoding's
+        // CODE UNITS. Geode's document internals are UTF-8 byte slices, so
+        // translate it to a UTF-8 byte column within the target line before it
+        // reaches the byte-based `getOffset` in the feature providers. For a
+        // utf-8 session (or an ASCII-only line) the column is unchanged; for a
+        // utf-16/utf-32 session on a multi-byte line this is the fix that lands
+        // the cursor on the right token instead of drifting past it. When the
+        // document is not open yet we cannot translate (no line text), so we
+        // pass the value through — the handlers answer null/empty for an
+        // unknown document anyway.
+        const character = blk: {
+            if (self.position_encoding == .utf8) break :blk wire_character;
+            const doc = self.documents.get(uri) orelse break :blk wire_character;
+            const line_text = doc.getLineContent(line) orelse break :blk wire_character;
+            break :blk document.codeUnitsToByteColumn(line_text, wire_character, self.position_encoding);
+        };
+
         return TextDocumentPosition{
             .uri = uri,
-            .line = try json_helpers.castU32(line_i64),
-            .character = try json_helpers.castU32(char_i64),
+            .line = line,
+            .character = character,
         };
     }
 
@@ -1137,6 +1178,40 @@ pub const Server = struct {
         try self.sendError(id, -32002, msg);
     }
 
+    /// GAP-0817: choose the session position encoding from the client's
+    /// `initialize` params. The client lists the encodings it supports, in
+    /// preference order, under `capabilities.general.positionEncodings` (LSP
+    /// 3.17). Geode PREFERS `utf-8` whenever the client offers it — it is the
+    /// cheapest for our UTF-8 byte-slice internals (no code-unit translation on
+    /// the hot path). Otherwise it falls back to the protocol DEFAULT, `utf-16`
+    /// (also chosen when the client offers nothing, an empty list, or only
+    /// encodings we don't implement). `utf-32` is honored only if it is the
+    /// sole offered encoding we recognize and utf-8 is absent. This is a pure
+    /// function of the params so it is unit-testable without a transport.
+    ///
+    /// CANARY: REQ=REQ-LSP-POSENC-001; FEATURE="PositionEncodingNegotiation"; ASPECT=Negotiate; STATUS=TESTED; OWNER=lsp; UPDATED=2026-06-09
+    pub fn negotiatePositionEncoding(params: ?std.json.Value) document.PositionEncoding {
+        const p = params orelse return .utf16;
+        if (p != .object) return .utf16;
+        const caps = p.object.get("capabilities") orelse return .utf16;
+        if (caps != .object) return .utf16;
+        const general = caps.object.get("general") orelse return .utf16;
+        if (general != .object) return .utf16;
+        const encodings = general.object.get("positionEncodings") orelse return .utf16;
+        if (encodings != .array) return .utf16;
+
+        // Prefer utf-8 if offered anywhere; else take the FIRST recognized
+        // encoding in the client's stated preference order; else default.
+        var first_recognized: ?document.PositionEncoding = null;
+        for (encodings.array.items) |item| {
+            if (item != .string) continue;
+            const enc = document.PositionEncoding.fromWire(item.string) orelse continue;
+            if (enc == .utf8) return .utf8;
+            if (first_recognized == null) first_recognized = enc;
+        }
+        return first_recognized orelse .utf16;
+    }
+
     fn handleInitialize(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
         // Task 12/13: bind the session before doing anything else with
         // the request. A failed bind short-circuits with -32002 and
@@ -1154,6 +1229,11 @@ pub const Server = struct {
         bind_result catch |e| {
             return self.respondInitializeError(id, e);
         };
+
+        // GAP-0817: negotiate the position encoding from the client's
+        // `capabilities.general.positionEncodings` BEFORE building the
+        // advertised capabilities (which echoes the chosen one back).
+        self.position_encoding = negotiatePositionEncoding(params);
 
         // Parse initialization options for formatting settings.
         // LSP-SEC-004: silently ignore malformed entries rather than
@@ -1202,7 +1282,7 @@ pub const Server = struct {
         // GAP-0831: build the advertised capabilities through the single
         // shared builder so the `initialize` result and the truthfulness
         // guard observe identical key sets (no drift possible).
-        var caps = try buildCapabilitiesObject(self.allocator);
+        var caps = try buildCapabilitiesObject(self.allocator, self.position_encoding);
         defer deinitCapabilitiesObject(self.allocator, &caps);
 
         try result.put(self.allocator, "capabilities", .{ .object = caps });

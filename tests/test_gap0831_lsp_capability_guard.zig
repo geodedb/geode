@@ -59,6 +59,15 @@ const cap_method_table = [_]CapMethodMapping{
     .{ .capability = "semanticTokensProvider", .methods = &[_][]const u8{"textDocument/semanticTokens/full"} },
 };
 
+// GAP-0817: `positionEncoding` is a DATA capability (a string echoing the
+// negotiated encoding), not a request-handler capability — there is no method
+// behind it. It is advertised but maps to no dispatch, so the "every advertised
+// capability has a wired handler" direction must treat it as exempt (same shape
+// as textDocumentSync, but with no backing notification either).
+const non_method_capability_keys = [_][]const u8{
+    "positionEncoding",
+};
+
 // `textDocumentSync` is a sync capability, not a request-handler capability:
 // it governs the textDocument/did{Open,Change,Close} NOTIFICATIONS, not a
 // request/response method. It maps to notifications, handled separately below.
@@ -112,7 +121,10 @@ fn isExemptRequestMethod(method: []const u8) bool {
 /// Collect the keys of the capabilities object EXACTLY as advertised by the
 /// production `handleInitialize` path. Caller owns the returned list.
 fn advertisedCapabilityKeys(allocator: std.mem.Allocator) ![][]const u8 {
-    var caps = try server.buildCapabilitiesObject(allocator);
+    // GAP-0817: the encoding argument only changes the VALUE of the
+    // `positionEncoding` key, never the key set, so any encoding works for the
+    // structural key-walk; pass the protocol default.
+    var caps = try server.buildCapabilitiesObject(allocator, .utf16);
     defer server.deinitCapabilitiesObject(allocator, &caps);
 
     var keys: std.ArrayList([]const u8) = .empty;
@@ -144,6 +156,10 @@ test "GAP-0831: every advertised feature capability has a wired handler" {
     defer freeKeys(alloc, keys);
 
     for (keys) |cap| {
+        // GAP-0817: positionEncoding (and any other data-only capability) has
+        // no method behind it — skip the handler mapping.
+        if (sliceContains(&non_method_capability_keys, cap)) continue;
+
         // textDocumentSync maps to notifications, checked separately.
         if (std.mem.eql(u8, cap, text_document_sync_key)) {
             for (text_document_sync_notifications) |n| {

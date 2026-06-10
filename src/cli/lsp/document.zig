@@ -4,6 +4,84 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// GAP-0817: LSP position encoding (LSP 3.17 `PositionEncodingKind`). An LSP
+/// `Position.character` is an offset into a line measured in CODE UNITS of the
+/// negotiated encoding. The protocol DEFAULT (when the client offers nothing)
+/// is UTF-16 — so a line containing multi-byte characters (e.g. `é`, an emoji)
+/// places later tokens at a `character` value that differs from the byte
+/// offset. Geode's document internals are UTF-8 byte slices, so every incoming
+/// `character` must be translated from the negotiated encoding's code units to
+/// a UTF-8 byte column before it can index the text. Failing to do this is the
+/// exact UTF-8/UTF-16 drift this gap closes.
+pub const PositionEncoding = enum {
+    utf8,
+    utf16,
+    utf32,
+
+    /// The LSP wire string for this encoding (the value advertised in the
+    /// `initialize` result's `capabilities.positionEncoding`).
+    pub fn toWire(self: PositionEncoding) []const u8 {
+        return switch (self) {
+            .utf8 => "utf-8",
+            .utf16 => "utf-16",
+            .utf32 => "utf-32",
+        };
+    }
+
+    /// Parse an LSP `PositionEncodingKind` wire string. Returns null for an
+    /// unknown value so the negotiator can skip it.
+    pub fn fromWire(s: []const u8) ?PositionEncoding {
+        if (std.mem.eql(u8, s, "utf-8")) return .utf8;
+        if (std.mem.eql(u8, s, "utf-16")) return .utf16;
+        if (std.mem.eql(u8, s, "utf-32")) return .utf32;
+        return null;
+    }
+};
+
+/// GAP-0817: number of code units a single Unicode code point occupies in
+/// `encoding`. `byte_len` is the code point's UTF-8 byte length (1–4).
+///   - utf-8:  the byte length itself.
+///   - utf-16: 1 for code points in the BMP (UTF-8 length 1–3), 2 for
+///             supplementary code points (UTF-8 length 4 — a surrogate pair).
+///   - utf-32: always 1 (one code unit == one code point).
+fn codeUnitsForCodePoint(byte_len: u3, encoding: PositionEncoding) u32 {
+    return switch (encoding) {
+        .utf8 => byte_len,
+        .utf16 => if (byte_len == 4) 2 else 1,
+        .utf32 => 1,
+    };
+}
+
+/// GAP-0817: translate a `character` offset expressed in `encoding`'s code
+/// units into a UTF-8 BYTE column within `line_text`. Fail-safe on malformed
+/// UTF-8: an invalid lead byte is treated as a single-byte code unit so the
+/// walk always terminates and never panics (a degraded-but-bounded result is
+/// preferable to a crash on hostile input). If `character` lands past the end
+/// of the line, the line's full byte length is returned (clamped), matching
+/// the lenient `getOffset` boundary behavior. The returned value is a byte
+/// column suitable for the byte-based `getOffset`.
+pub fn codeUnitsToByteColumn(line_text: []const u8, character: u32, encoding: PositionEncoding) u32 {
+    if (character == 0) return 0;
+    // UTF-8 fast path: code units ARE bytes, but we still clamp to the line
+    // length and validate continuation so a multi-byte char isn't split.
+    var byte_i: usize = 0;
+    var units: u32 = 0;
+    while (byte_i < line_text.len) {
+        if (units >= character) break;
+        const lead = line_text[byte_i];
+        const seq_len: u3 = std.unicode.utf8ByteSequenceLength(lead) catch 1;
+        // Guard against a truncated/invalid sequence at the tail.
+        const safe_len: usize = blk: {
+            if (seq_len == 1) break :blk 1;
+            if (byte_i + seq_len > line_text.len) break :blk 1;
+            break :blk seq_len;
+        };
+        units += codeUnitsForCodePoint(@intCast(safe_len), encoding);
+        byte_i += safe_len;
+    }
+    return @intCast(byte_i);
+}
+
 pub const Document = struct {
     uri: []const u8,
     text: []const u8,

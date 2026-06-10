@@ -5050,6 +5050,24 @@ pub fn build(b: *std.Build) void {
     const gap0816_step = b.step("test-gap0816", "GAP-0816: LSP $/cancelRequest handling with -32800 responses");
     gap0816_step.dependOn(&run_gap0816_tests.step);
 
+    // GAP-0817: LSP positionEncoding negotiation. Roots the regression file
+    // through a single server.zig module (`lsp_server`) so it reaches
+    // `Server.negotiatePositionEncoding`, `document_mod.codeUnitsToByteColumn`,
+    // and the capturing transport. Same module-diamond avoidance as gap0816.
+    const gap0817_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0817_server_mod.addImport("geode", root_mod);
+    gap0817_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0817_server_mod.link_libc = true;
+    const gap0817_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0817_lsp_position_encoding.zig"), .target = target, .optimize = optimize });
+    gap0817_test_mod.addImport("lsp_server", gap0817_server_mod);
+    gap0817_test_mod.addImport("geode", root_mod);
+    gap0817_test_mod.link_libc = true;
+    const gap0817_tests = b.addTest(.{ .root_module = gap0817_test_mod });
+    const run_gap0817_tests = b.addRunArtifact(gap0817_tests);
+    shardDep(test_step, &run_gap0817_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0817_step = b.step("test-gap0817", "GAP-0817: LSP positionEncoding negotiation with multi-byte coverage");
+    gap0817_step.dependOn(&run_gap0817_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
