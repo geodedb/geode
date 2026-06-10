@@ -28,6 +28,101 @@ const graph_store = geode.graph_store;
 const Transport = transport.Transport;
 const DocumentStore = document.DocumentStore;
 
+// ---------------------------------------------------------------------------
+// GAP-0885b hardening helpers (LSP-SEC-005 / LSP-SEC-008)
+// ---------------------------------------------------------------------------
+
+/// LSP-SEC-005: RFC-3986 percent-encode a document URI before it is embedded
+/// in an outgoing `textDocument/publishDiagnostics` envelope.
+///
+/// Policy: unreserved bytes (ALPHA / DIGIT / `-._~`) and the gen-delim /
+/// sub-delim bytes that legitimately appear in a document URI
+/// (`:/?[]@!$&'()*+,;=`) pass through unchanged. `%` passes through so an
+/// already-encoded URI round-trips byte-identical (we never double-encode a
+/// client-supplied `%20`). Everything else — space, `#`, `"`, `\`,
+/// control bytes, and non-ASCII (>= 0x80) — is emitted as `%XX` (uppercase
+/// hex, per RFC 3986 §2.1). Because every pass-through byte is printable
+/// ASCII excluding `"` and `\`, the result is also always safe to splice
+/// into the manually-built JSON string literal in `sendDiagnostics`.
+pub fn percentEncodeUri(allocator: Allocator, uri: []const u8) error{OutOfMemory}![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, uri.len);
+    errdefer out.deinit(allocator);
+    for (uri) |b| {
+        if (isUriSafeByte(b)) {
+            try out.append(allocator, b);
+        } else {
+            const hex = "0123456789ABCDEF";
+            try out.appendSlice(allocator, &[3]u8{ '%', hex[b >> 4], hex[b & 0x0F] });
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn isUriSafeByte(b: u8) bool {
+    return switch (b) {
+        'A'...'Z', 'a'...'z', '0'...'9' => true,
+        // RFC 3986 unreserved marks.
+        '-', '.', '_', '~' => true,
+        // gen-delims legal in a document URI. `#` is deliberately NOT here:
+        // document URIs carry no fragment, and a raw `#` in a file path must
+        // be escaped (LSP-SEC-005).
+        ':', '/', '?', '[', ']', '@' => true,
+        // sub-delims.
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+        // Pass-through so already-encoded URIs are not double-encoded.
+        '%' => true,
+        else => false,
+    };
+}
+
+/// LSP-SEC-008: error returned when a TCP bind configuration would expose an
+/// unauthenticated LSP listener beyond the loopback interface.
+pub const BindPolicyError = error{InsecureNonLoopbackBind};
+
+/// LSP-SEC-008: single source of truth for the LSP TCP bind policy, called
+/// by both bind sites (src/server/main.zig:runLspListener for the embedded
+/// `geode serve` listener, src/cli/main.zig for standalone `geode lsp
+/// --listen`).
+///
+///   - A loopback bind is always allowed (stdio has no bind at all).
+///   - A non-loopback bind requires authenticated sessions: `allow_unauth`
+///     (the `.none`-auth mode) is refused, and a missing verifier is refused
+///     too — a fail-closed listener that can never authenticate anyone has
+///     no business on a public interface (it would still expose the
+///     pre-auth JSON-RPC parse surface).
+///   - The legitimate authenticated `--lsp-bind-all` path (verifier present,
+///     allow_unauth = false) stays legal — SEC-LSP-BIND-01's regression
+///     concern is exactly that this combination must keep working while the
+///     unauthenticated ones must never start working.
+pub fn validateBindPolicy(policy: struct {
+    loopback_only: bool,
+    allow_unauth: bool,
+    has_verifier: bool,
+}) BindPolicyError!void {
+    if (policy.loopback_only) return;
+    if (policy.allow_unauth) return BindPolicyError.InsecureNonLoopbackBind;
+    if (!policy.has_verifier) return BindPolicyError.InsecureNonLoopbackBind;
+}
+
+/// LSP-SEC-008: classify a bind host string as loopback. Accepts the
+/// IPv4 loopback block (127.0.0.0/8), IPv6 `::1` (bracketed or bare), and
+/// the literal `localhost`. Anything else — including the wildcard binds
+/// `0.0.0.0` / `::` — is non-loopback.
+pub fn isLoopbackHost(host: []const u8) bool {
+    if (std.mem.eql(u8, host, "localhost")) return true;
+    const h = std.mem.trim(u8, host, "[]");
+    if (std.mem.eql(u8, h, "::1")) return true;
+    if (std.mem.startsWith(u8, h, "127.")) {
+        // Require the remainder to look like an IPv4 tail (digits/dots only)
+        // so e.g. "127.evil.example" does not classify as loopback.
+        for (h["127.".len..]) |c| {
+            if (!(std.ascii.isDigit(c) or c == '.')) return false;
+        }
+        return h.len > "127.".len;
+    }
+    return false;
+}
+
 /// GAP-0832: re-export the transport module so out-of-tree test files
 /// (tests/test_gap0832_lsp_decode.zig) that root the LSP server through the
 /// `lsp_server` named build module can construct a `Transport.initNoop(..)`
@@ -2218,7 +2313,12 @@ pub const Server = struct {
         defer buffer.deinit(self.allocator);
 
         try buffer.appendSlice(self.allocator, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"");
-        try buffer.appendSlice(self.allocator, uri);
+        // LSP-SEC-005: never splice the client-supplied URI into the JSON
+        // envelope raw — spaces, `#`, non-ASCII, and JSON-breaking bytes
+        // (`"`, `\`, control chars) are RFC-3986 percent-encoded.
+        const encoded_uri = try percentEncodeUri(self.allocator, uri);
+        defer self.allocator.free(encoded_uri);
+        try buffer.appendSlice(self.allocator, encoded_uri);
         try buffer.appendSlice(self.allocator, "\",\"diagnostics\":[");
 
         const alloc = self.allocator;

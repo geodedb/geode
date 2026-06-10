@@ -751,6 +751,21 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
 
+        // LSP-SEC-008: the standalone listener runs every session with
+        // verifier=null (fail-closed — no client can ever authenticate), so
+        // a non-loopback bind would only expose the pre-auth JSON-RPC parse
+        // surface to the network for zero benefit. Hard-assert loopback via
+        // the shared bind policy (the embedded `geode serve --lsp-bind-all`
+        // path stays legal because it carries a real verifier).
+        lsp.validateBindPolicy(.{
+            .loopback_only = lsp.isLoopbackHost(host),
+            .allow_unauth = allow_unauth,
+            .has_verifier = false,
+        }) catch {
+            std.debug.print("Error: --listen on non-loopback host '{s}' requires an authenticated listener; use `geode serve --lsp-bind-all` or bind 127.0.0.1/::1 (LSP-SEC-008)\n", .{host});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+
         // Dedicated Threaded backend so the accept loop and the per-
         // session reads share one Io vtable for the lifetime of this
         // CLI invocation. Matches metrics_server.zig's pattern.

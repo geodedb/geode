@@ -520,6 +520,25 @@ const LspListenerArgs = struct {
 fn runLspListener(args: LspListenerArgs) void {
     const host: []const u8 = if (args.loopback_only) "127.0.0.1" else "0.0.0.0";
 
+    // LSP-SEC-008 / SEC-LSP-BIND-01: hard-assert the bind policy at the
+    // layer that knows both the bind scope and the auth wiring. Embedded
+    // sessions always run with allow_unauth=false; a non-loopback bind
+    // (`--lsp-bind-all`) additionally requires a real verifier — refusing
+    // here means no future caller can wire an unauthenticated bind-all
+    // listener without tripping this guard (and its regression test,
+    // tests/test_gap0885_lsp_hardening.zig).
+    lsp_server.validateBindPolicy(.{
+        .loopback_only = args.loopback_only,
+        .allow_unauth = false,
+        .has_verifier = args.verifier != null,
+    }) catch {
+        log.err("LSP listener: refusing non-loopback bind without an authentication verifier (LSP-SEC-008)", &.{
+            Attr.string("host", host),
+            Attr.int("port", @as(i64, args.port)),
+        });
+        return;
+    };
+
     // Each accept loop and every per-session reader needs to share one
     // `std.Io` vtable for the lifetime of the listener. A dedicated
     // `std.Io.Threaded` instance, owned by this thread, satisfies that

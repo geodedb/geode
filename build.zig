@@ -5235,6 +5235,37 @@ pub fn build(b: *std.Build) void {
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
 
+    // GAP-0885b: LSP/MCP hardening batch (LSP-SEC-002/005/008). Roots the
+    // regression file through src/cli/lsp/server.zig (exposed as
+    // `lsp_server`, same wiring rationale as gap0831/gap0832) for the URI
+    // percent-encoding + bind-policy helpers, and through src/mcp/server.zig
+    // (exposed as `mcp_server`, mirroring the gap0516 import set) for the
+    // .none-auth loopback hard-assert and the loopback-default pin that
+    // bounds the vendored timing-unsafe bearer compare.
+    const gap0885_lsp_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0885_lsp_mod.addImport("geode", root_mod);
+    gap0885_lsp_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0885_lsp_mod.link_libc = true;
+    const gap0885_mcp_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/server.zig"), .target = target, .optimize = optimize });
+    gap0885_mcp_mod.addImport("mcp", mcp_mod);
+    gap0885_mcp_mod.addImport("geode", root_mod);
+    gap0885_mcp_mod.addImport("json", json_mod);
+    gap0885_mcp_mod.addImport("schema", schema_mod);
+    gap0885_mcp_mod.addImport("protobuf", protobuf_mod);
+    gap0885_mcp_mod.addImport("transport/quic", transport_quic_mod);
+    gap0885_mcp_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    gap0885_mcp_mod.addImport("build_options", build_options_mod);
+    gap0885_mcp_mod.link_libc = true;
+    const gap0885_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0885_lsp_hardening.zig"), .target = target, .optimize = optimize });
+    gap0885_test_mod.addImport("lsp_server", gap0885_lsp_mod);
+    gap0885_test_mod.addImport("mcp_server", gap0885_mcp_mod);
+    gap0885_test_mod.link_libc = true;
+    const gap0885_tests = b.addTest(.{ .root_module = gap0885_test_mod });
+    const run_gap0885_tests = b.addRunArtifact(gap0885_tests);
+    shardDep(test_step, &run_gap0885_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0885_step = b.step("test-gap0885-lsp", "GAP-0885b: LSP/MCP hardening (URI percent-encoding, bind policy, .none-auth loopback assert)");
+    gap0885_step.dependOn(&run_gap0885_tests.step);
+
     // SEC-SESS-LOG-01: `session rotate` must never write the session token to
     // stderr/stdout. All user-facing rotate output flows through
     // session_cli.writeRotateResult, pinned token-free by tests/test_sec_sess_log.zig.

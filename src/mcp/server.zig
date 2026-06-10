@@ -46,6 +46,11 @@ pub const GeodeMcpServer = struct {
         /// Set auth_mode to .bearer and provide a bearer_token, or explicitly
         /// set auth_mode to .none if running in a trusted environment.
         MissingBearerToken,
+        /// LSP-SEC-008: auth_mode .none hard-asserts a loopback http_bind.
+        /// An unauthenticated MCP HTTP listener must never be reachable
+        /// beyond the local host. Use .bearer (with a token) for any
+        /// non-loopback bind.
+        InsecureNoAuthBind,
     };
 
     /// Derive the MCP Principal for a given username.  Called once at init.
@@ -65,6 +70,18 @@ pub const GeodeMcpServer = struct {
     }
 
     pub fn init(allocator: std.mem.Allocator, options: Options) !*GeodeMcpServer {
+        // LSP-SEC-008: hard-assert loopback when auth_mode is .none. The
+        // stdio transport never binds, but http_bind still flows into the
+        // vendored mcp.Server at init time — refusing the insecure
+        // combination here (construction time) means neither transport can
+        // later expose an unauthenticated HTTP listener on a public
+        // interface. Authenticated modes may bind non-loopback.
+        if (options.auth_mode == .none and !isLoopbackBind(options.http_bind)) {
+            std.debug.print("ERROR: MCP auth_mode 'none' requires a loopback http_bind (got '{s}'). " ++
+                "Bind 127.0.0.1/::1/localhost, or configure bearer auth for non-loopback binds.\n", .{options.http_bind});
+            return McpAuthError.InsecureNoAuthBind;
+        }
+
         // SEC-08: Refuse to start MCP server without bearer token when auth is required
         if (options.auth_mode == .bearer and options.bearer_token == null) {
             std.debug.print("ERROR: MCP server requires a bearer token when auth_mode is 'bearer' (the default). " ++
@@ -159,12 +176,44 @@ pub const GeodeMcpServer = struct {
         http_port: u16 = 0,
         // SEC-08: Default to bearer token auth; refuse to start without a token configured
         auth_mode: mcp.AuthMode = .bearer,
+        // LSP-SEC-002 (documented residual): the pinned `mcp` library
+        // compares this token against the HTTP `Authorization: Bearer ...`
+        // header with `std.mem.eql` (mcp.zig checkAuth) — NOT constant-time
+        // — and exposes no auth callback to override it. Geode cannot patch
+        // the vendored package in-tree; the upstream fix is a fork-pin /
+        // version bump (issue #785). Boundary posture until then:
+        //   - http_bind defaults to loopback below and the geode CLI never
+        //     exposes it, so the timing oracle is reachable only by local
+        //     processes (pinned by tests/test_gap0885_lsp_hardening.zig);
+        //   - the stdio transport never reaches checkAuth at all;
+        //   - geode-owned token comparisons on the LSP/auth path are already
+        //     constant-time (auth_lib api_keys: SHA-256 digest +
+        //     std.crypto.timing_safe.eql; src/security/authn.zig:526
+        //     session-token compare).
         bearer_token: ?[]const u8 = null,
         // GPS Phase 5: the username mapped from the bearer token.  Default "mcp".
         // Multi-user MCP (per-token user lookup) is deferred to Phase 6+.
         mcp_username: []const u8 = "mcp",
     };
 };
+
+/// LSP-SEC-008: classify an MCP `http_bind` host as loopback. Accepts the
+/// IPv4 loopback block (127.0.0.0/8), IPv6 `::1` (bracketed or bare), and
+/// the literal `localhost`. Wildcards (`0.0.0.0`, `::`) and any routable
+/// address are non-loopback.
+pub fn isLoopbackBind(host: []const u8) bool {
+    if (std.mem.eql(u8, host, "localhost")) return true;
+    const h = std.mem.trim(u8, host, "[]");
+    if (std.mem.eql(u8, h, "::1")) return true;
+    if (std.mem.startsWith(u8, h, "127.")) {
+        // Require an IPv4-looking tail so "127.evil.example" is rejected.
+        for (h["127.".len..]) |c| {
+            if (!(std.ascii.isDigit(c) or c == '.')) return false;
+        }
+        return h.len > "127.".len;
+    }
+    return false;
+}
 
 // =============================================================================
 // MCP Handler Implementations
