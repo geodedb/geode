@@ -1,4 +1,5 @@
-<!-- CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="MultiTenantHardeningDoc"; ASPECT=DOCUMENTATION; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08 -->
+<!-- CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="MultiTenantHardeningDoc"; ASPECT=DOCUMENTATION; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-10 -->
+<!-- CANARY: REQ=REQ-TENANT-DROP-CASCADE-001; FEATURE="TenantDropCascade"; ASPECT=DOCUMENTATION; STATUS=TESTED; TEST=tests/test_gap0847_tenant_drop_cascade.zig; OWNER=security; UPDATED=2026-06-10 -->
 
 # Multi-Tenant Hardening — Production-Safe Configuration
 
@@ -233,22 +234,104 @@ root-to-self path is a prefix of the target's path — i.e. the accessor is an
 ancestor is denied; siblings are denied; self-access is allowed; an unknown
 tenant yields `error.TenantNotFound`.
 
-**Populating it in production:** `addTenant` is the public seam. The live RLS
-engine's `hierarchy_manager` is created at server init
-([`src/server/main.zig`](../../src/server/main.zig) `RLSEngine.init`). Geode does
-**not** yet ship a tenant registry or `CREATE TENANT` DDL to drive a hierarchy
-automatically (that lifecycle surface is the separate GAP-0839); until it lands,
-a deployment/embedder calls `addTenant` from its own provisioning code to
-register the tree.
+**Populating it in production:** the supported production seam is the
+`CALL geode.tenant.*` administrative procedure family (GAP-0839 — shipped), which
+writes the **durable tenant registry** and populates the live RLS engine's
+`hierarchy_manager` in one step. `CALL geode.tenant.create('acme-bu1', 'acme')`
+both registers the durable record and calls `addTenant` for you, so an operator
+never has to drive the hierarchy from embedder code. See the
+[Tenant lifecycle administration](#tenant-lifecycle-administration-call-geodetenant--gap-0839--gap-0847)
+section below for the full surface, durable registry, CLI, and **CALL-only DDL
+scope** statement.
 
 **Scope note:** GAP-0838 delivered the string-keyed, populate-able, tested
-registry + `canAccessTenant`/`addTenant`. Wiring the live query/RLS evaluation
-path to consult `canAccessTenant` on every read (so a parent tenant
-automatically reads a descendant's rows) is a deliberately deferred
-authz-semantics change — the current per-row tenant filter remains exact-match
-on `tenant_id`. Regression suite:
+registry + `canAccessTenant`/`addTenant`. GAP-0846 then wired the live query read
+path to consult `canAccessTenant` (via the fail-closed `canAccessTenantSafe`), so
+a parent tenant automatically reads a descendant's rows while siblings and
+descendant→ancestor reads stay denied. The fast exact-match path is preserved
+when no hierarchy is provisioned (`hierarchy_manager.count() == 0`). Regression
+suites:
 [`tests/test_gap0838_tenant_hierarchy.zig`](../../tests/test_gap0838_tenant_hierarchy.zig)
-(`zig build test-gap0838-tenant-hierarchy`).
+(`zig build test-gap0838-tenant-hierarchy`) and
+[`tests/test_gap0846_tenant_hierarchy_reads.zig`](../../tests/test_gap0846_tenant_hierarchy_reads.zig)
+(`zig build test-gap0846`).
+
+## Tenant lifecycle administration (`CALL geode.tenant.*`) — GAP-0839 / GAP-0847
+
+Geode ships a first-class tenant lifecycle surface as a native **`CALL`
+procedure family**, backed by a **durable, file-backed tenant registry** and a
+`geode tenant` **CLI** subcommand. This is the supported way to create, inspect,
+quota, and drop tenants in production.
+
+**CALL-only administrative scope (no `CREATE/DROP TENANT` GQL DDL).** Tenant
+administration is intentionally exposed **only** through the `CALL geode.tenant.*`
+procedures (the ISO/IEC 39075:2024 `CALL <proc>(args) [YIELD …]` form) and the
+`geode tenant` CLI — there is **no** `CREATE TENANT` / `DROP TENANT` GQL DDL
+statement, and none is planned. Tenancy is a deployment-administration concern,
+not a data-definition concern: keeping it on the `CALL` surface (a) avoids
+grammar churn, (b) routes every operation through the single `admin_tenant`
+GPS authorization gate (read **and** write — see below), and (c) matches the
+other Geode administrative procedure families (`geode.fts.*`, `geode.ts.*`).
+Treat `CALL geode.tenant.*` as the standard, supported tenant DDL surface.
+
+**Surface** (each procedure is admin-only; see authz below):
+
+| Procedure | Effect |
+|---|---|
+| `CALL geode.tenant.create(id[, parent])` | Register a tenant (durable) and add it to the hierarchy under `parent`. |
+| `CALL geode.tenant.list()` | One row per registered tenant (id, parent, active, effective quota). |
+| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. |
+| `CALL geode.tenant.set_quota(id, max_connections, max_concurrent_queries, max_graphs, max_nodes_per_graph)` | Set a per-tenant quota override (durable + live quota manager). |
+| `CALL geode.tenant.drop(id[, cascade])` | Drop a tenant — see safe drop semantics below. |
+
+**Authorization (fail-closed).** Every procedure in the family — **including the
+read-only `list`/`show`** — is gated on the `admin_tenant` GPS action via
+`gps.decide()` before any registry read or mutation. A non-admin caller is
+rejected with `error.Unauthorized`; an unauthenticated caller with
+`error.Unauthenticated`. (When authentication is disabled — local dev / CLI /
+tests — the gate short-circuits to allow, identical to every other admin op.)
+
+**Durability.** The registry persists to `{data_dir}/tenants/registry.jsonl`
+(atomic temp-file + rename per mutation) and is hydrated at startup, so the
+tenant set, parents, and quota overrides survive restart. A null `data_dir`
+(in-memory server / CLI) runs non-durable and logs that it is non-durable.
+
+### Safe drop semantics (GAP-0847)
+
+`CALL geode.tenant.drop` is **safe by default**. The pre-GAP-0847 drop removed
+only the registry record and **orphaned** the tenant's data (nodes/edges stayed
+tagged with a tenant id that no longer existed) and left the hierarchy node
+dangling. The corrected semantics:
+
+- **`cascade` (2nd arg) defaults to `false`.**
+- A **non-cascade** drop is **REFUSED** when the tenant still owns data —
+  `error.TenantHasData` if any node/edge is tagged with its id — or has child
+  tenants — `error.TenantHasChildren`. The registry record and all data survive
+  the refusal, so an operator never silently orphans data or descendants.
+- A **`cascade = true`** drop deletes the tenant's **edges first, then its nodes**
+  (referential consistency), recursively drops child tenants **bottom-up**
+  (grandchildren before children), removes the hierarchy node, and finally removes
+  the durable registry record. Deletion goes through the same `deleteEdge` /
+  `deleteNode` store path as any other delete, so it is **WAL-logged and durable**
+  when a storage adapter is wired, and it emits a summary `tenant_admin.drop`
+  audit line with the deleted node/edge counts. The per-tenant scan filters
+  strictly on `tenant_id`, so **other tenants' data is never touched**.
+
+`drop` returns a row with `tenant_id`, `dropped`, `nodes_deleted`,
+`edges_deleted`. Examples:
+
+```text
+CALL geode.tenant.drop('acme')          -- refused if acme has data/children
+CALL geode.tenant.drop('acme', true)    -- cascade: delete acme's data + subtree
+```
+
+Regression suite:
+[`tests/test_gap0847_tenant_drop_cascade.zig`](../../tests/test_gap0847_tenant_drop_cascade.zig)
+(`zig build test-gap0847`); lifecycle/registry/CLI cover:
+[`tests/test_gap0839_tenant_lifecycle.zig`](../../tests/test_gap0839_tenant_lifecycle.zig)
+(`zig build test-gap0839-tenant-lifecycle`) and
+[`tests/test_gap0839_tenant_cli.zig`](../../tests/test_gap0839_tenant_cli.zig)
+(`zig build test-gap0839-tenant-cli`).
 
 ## At-rest TDE is master-keyed, not per-tenant (GAP-0843 / GAP-0290)
 
@@ -326,3 +409,8 @@ key across tenants.
       tenant's at-rest pages/backups collectively. For cryptographic at-rest
       separation between tenants today, isolate per tenant at the instance /
       data-directory level.
+- [ ] Tenant administration goes through `CALL geode.tenant.*` / the `geode
+      tenant` CLI (the CALL-only DDL scope — GAP-0839); tenant `drop` is run with
+      `cascade=true` only when intentionally deleting a tenant's data + subtree,
+      and a non-cascade drop that returns `TenantHasData` / `TenantHasChildren` is
+      understood as a refusal that protected live data (GAP-0847).
