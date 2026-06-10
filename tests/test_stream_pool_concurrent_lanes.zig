@@ -200,6 +200,17 @@ test "task31_edge: submit() — single task on 4-thread pool drains" {
 // Boundary case 2: 8 tasks on a 4-thread pool — extra tasks must still
 // all complete, even if only 4 run concurrently at peak.  Exercises the
 // queue-drain path.
+//
+// GAP-0863c: the concurrency observation here previously ran tasks
+// run-to-completion (`release = true`), so observing overlap required
+// the scheduler to dispatch a second task within a task's ~5 ms body —
+// a wall-clock race that flaked under load even though the pool is
+// correctly parallel.  Now tasks hold at the barrier (same mechanism as
+// the load-bearing regression test above), so in-flight tasks stay
+// observable and the >=2 concurrency check is deterministic: a pool
+// that genuinely serializes lanes still fails, because the held task
+// pins its lone lane, max_concurrent never reaches 2, the observation
+// wait times out, and the assertion fires.
 // ──────────────────────────────────────────────────────────────────────
 test "task31_edge: submit() — 8 tasks on 4-thread pool all complete" {
     const pool = try ThreadPool.init(testing.allocator, .{
@@ -212,7 +223,7 @@ test "task31_edge: submit() — 8 tasks on 4-thread pool all complete" {
     var ctx = BarrierCtx{
         .started_count = std.atomic.Value(u32).init(0),
         .finished_count = std.atomic.Value(u32).init(0),
-        .release = std.atomic.Value(bool).init(true), // drain without barrier
+        .release = std.atomic.Value(bool).init(false), // hold at barrier
         .max_concurrent = std.atomic.Value(u32).init(0),
         .current_concurrent = std.atomic.Value(u32).init(0),
     };
@@ -225,13 +236,34 @@ test "task31_edge: submit() — 8 tasks on 4-thread pool all complete" {
         }));
     }
 
-    const deadline = monoNanos() + 5 * std.time.ns_per_s;
-    while (ctx.finished_count.load(.acquire) < n) {
-        if (monoNanos() > deadline) break;
+    // Observation window: wait (bounded) until the pool demonstrates at
+    // least 2 concurrently in-flight lanes.  Held-at-barrier tasks count
+    // as in-flight, so this does not depend on task-body timing — only
+    // on the pool actually dispatching a second task while the first is
+    // running, which is the property under test.
+    const observe_deadline = monoNanos() + 2 * std.time.ns_per_s;
+    while (ctx.max_concurrent.load(.acquire) < 2) {
+        if (monoNanos() > observe_deadline) break;
         sleepNs(1 * std.time.ns_per_ms);
     }
+    const peak_concurrent = ctx.max_concurrent.load(.acquire);
+
+    // Release the barrier and drain: all 8 tasks (including the 4 that
+    // queued behind the 4 workers) must complete.
+    ctx.release.store(true, .release);
+    const drain_deadline = monoNanos() + 5 * std.time.ns_per_s;
+    while (ctx.finished_count.load(.acquire) < n) {
+        if (monoNanos() > drain_deadline) break;
+        sleepNs(1 * std.time.ns_per_ms);
+    }
+
+    std.debug.print(
+        "\ntask31_edge: peak_concurrent={} finished={} (expected >=2 and {})\n",
+        .{ peak_concurrent, ctx.finished_count.load(.acquire), n },
+    );
+
     try testing.expectEqual(n, ctx.finished_count.load(.acquire));
-    // Post-fix we expect peak concurrency to be >= 2 (running through
-    // the queue) — we don't assert == 4 here since scheduling can vary.
-    try testing.expect(ctx.max_concurrent.load(.acquire) >= 2);
+    // Real assertion preserved: the pool must demonstrate >1 concurrent
+    // lane.  We don't assert == 4 since worker spin-up can vary.
+    try testing.expect(peak_concurrent >= 2);
 }
