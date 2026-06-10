@@ -161,19 +161,33 @@ The following features are skipped because they are not yet implemented:
 
 ### 2. Recursive CTEs (WITH RECURSIVE)
 
-Recursive Common Table Expressions are **not currently supported**. The syntax is recognized by the parser but execution is not implemented.
+Recursive Common Table Expressions **are supported** (GAP-0268 wired the
+fixpoint executor; GAP-0859 added real end-to-end coverage and fixed a dropped
+`WHERE` in the recursive term). The fixpoint evaluator runs the anchor, then
+re-runs the recursive term against the accumulated working set to a fixpoint.
+See [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) → "Common Table Expressions" for the
+verified forms and `tests/e2e_recursive_queries.zig` (`zig build
+test-recursive-cte`) for the regression suite.
 
-**Workarounds:**
+**Supported (verified):**
 
-- Use variable-length path patterns: `MATCH (a)-[*1..10]->(b) RETURN a, b`
-- Use SHORTEST path mode: `MATCH SHORTEST (a)-[:KNOWS*]->(b) RETURN a, b`
-- For hierarchical data, use multiple MATCH patterns with explicit depth limits
+- Simple `WITH name AS (...)` CTEs (body bound as a named list value).
+- Recursive `WITH RECURSIVE name AS (anchor UNION [ALL] recursive_term)` where
+  the recursive term self-references the working set via `UNWIND <name> AS x`.
+- `WHERE` in the recursive term bounds/terminates the recursion (transitive
+  closure, bounded depth).
+- `UNION ALL` (keep all) vs `UNION` (dedup, terminates revisiting cycles).
+- Cycle safety via a hard **100-iteration cap** (cyclic `UNION ALL` recursion
+  terminates with a finite capped result, never hangs).
 
-**Affected operations:**
+**Residual limits:**
 
-- Transitive closure queries
-- Hierarchical queries with arbitrary depth
-- Path finding with complex conditions
+- The recursive term operates on the working-set list (via `UNWIND`), not
+  directly on live `MATCH`-ed graph edges; model graph reachability by encoding
+  the successor relation in the recursive term. SQL-style `SEARCH`/`CYCLE`
+  clauses are not implemented.
+- For arbitrary-depth graph traversal, variable-length path patterns
+  (`MATCH (a)-[*1..10]->(b)`) or `MATCH SHORTEST` remain the idiomatic path.
 
 ### 3. Remaining Test Failures (67 tests)
 

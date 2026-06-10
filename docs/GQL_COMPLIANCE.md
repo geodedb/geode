@@ -242,6 +242,66 @@ RETURN company.name, COUNT(person) AS employees
 ORDER BY employees DESC
 ```
 
+### Common Table Expressions (`WITH [RECURSIVE]`)
+
+Geode executes both simple and recursive Common Table Expressions
+(ISO/IEC 39075:2024 §7.18). A CTE's result is bound under its name as a list
+value (one map per produced row) and is reachable from the main query and, for
+recursive CTEs, from the recursive term via `UNWIND <cte> AS x`.
+
+```gql
+-- Simple (non-recursive) CTE: body runs once, bound as a named list value.
+WITH evens AS (RETURN 2 AS n)
+RETURN evens
+
+-- Recursive CTE: anchor seeds the working set; the recursive term self-
+-- references it with UNWIND and is re-run to a fixpoint. A WHERE in the
+-- recursive term bounds the recursion (terminates by predicate). This yields
+-- n = 1..5:
+WITH RECURSIVE nums AS (
+  RETURN 1 AS n
+  UNION ALL
+  UNWIND nums AS prev WHERE prev.n < 5 RETURN prev.n + 1 AS n
+)
+RETURN nums
+
+-- Reachability / transitive closure: encode the successor relation in the
+-- recursive term. Over a 1->2->3->4 chain, reachability from node 1 (anchor =
+-- first hop, node 2) yields {2, 3, 4}:
+WITH RECURSIVE reach AS (
+  RETURN 2 AS node
+  UNION
+  UNWIND reach AS r WHERE r.node < 4 RETURN r.node + 1 AS node
+)
+RETURN reach
+```
+
+Verified semantics (regression-covered by `tests/e2e_recursive_queries.zig`,
+the `test-recursive-cte` build step):
+
+- **Fixpoint evaluation** — execute the anchor, then re-run the recursive term
+  with the accumulated working set until no new rows are produced.
+- **`WHERE` in the recursive term IS applied** — it bounds/terminates the
+  recursion by predicate (transitive closure, bounded depth).
+- **`UNION ALL` vs `UNION`** — `UNION ALL` keeps every produced row; `UNION`
+  deduplicates against the accumulated set, which also terminates a cycle whose
+  step only revisits already-seen rows.
+- **Cycle safety via an iteration cap** — a cyclic `UNION ALL` recursion with no
+  predicate is bounded by a hard cap of **100 iterations** (it terminates with a
+  finite, capped result rather than hanging).
+
+Residual limits (not yet supported / not covered):
+
+- The recursive term operates on the working-set **list value** (consumed with
+  `UNWIND`), not directly on live graph nodes. Graph reachability is modeled by
+  encoding the successor relation (arithmetic / `CASE`) in the recursive term.
+  Driving a recursive CTE off live `MATCH`-ed graph edges, and SQL-style
+  `SEARCH` / `CYCLE` clauses, are not implemented.
+- Property access on the bound CTE value (`RETURN cte.col`) returns the list,
+  not per-row columns; use `UNWIND <cte> AS x` to project rows.
+- For arbitrary-depth graph traversal prefer variable-length path patterns
+  (`MATCH (a)-[:REL*1..10]->(b)`) or `MATCH SHORTEST`.
+
 ### Session & Transaction Management
 
 ```gql

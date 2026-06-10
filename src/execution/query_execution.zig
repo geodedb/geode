@@ -1398,7 +1398,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 /// Simple CTEs execute their body query once. Recursive CTEs use iterative
 /// fixpoint evaluation: execute the anchor, then repeatedly execute the recursive
 /// term with the working set until no new rows are produced or depth limit is hit.
-/// CANARY: REQ=REQ-GQL-CTE-005; FEATURE="CTEExecution"; ASPECT=Evaluator; STATUS=IMPL; OWNER=execution; UPDATED=2026-03-28
+/// CANARY: REQ=REQ-GQL-CTE-005; FEATURE="CTEExecution"; ASPECT=Evaluator; STATUS=TESTED; TEST=tests/e2e_recursive_queries.zig; OWNER=execution; UPDATED=2026-06-10
 fn executeCTE(
     allocator: std.mem.Allocator,
     cte: ast.CommonTableExpression,
@@ -1577,7 +1577,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         try param_values.append(allocator, value);
     }
 
-    // CANARY: REQ=REQ-GQL-CTE-004; FEATURE="CTEExecution"; ASPECT=QueryWiring; STATUS=IMPL; OWNER=execution; UPDATED=2026-03-28
+    // CANARY: REQ=REQ-GQL-CTE-004; FEATURE="CTEExecution"; ASPECT=QueryWiring; STATUS=TESTED; TEST=tests/e2e_recursive_queries.zig; OWNER=execution; UPDATED=2026-06-10
     // Evaluate CTEs (WITH [RECURSIVE] name AS (...)) and bind results as parameters
     if (q.cte_list) |cte_list| {
         for (cte_list.ctes) |cte| {
@@ -2086,6 +2086,25 @@ pub fn executeLegacyQueryWithResolvedParams(
                 .allocator = allocator,
                 .exec_context = exec_ctx,
             };
+
+            // GAP-0859: apply the per-row WHERE filter BEFORE projecting RETURN
+            // items. Previously the UNWIND path ignored `q.where_clause`
+            // entirely, so a filtered UNWIND (e.g. the WHERE-bounded recursive
+            // term of a `WITH RECURSIVE` CTE) emitted every element and never
+            // terminated by predicate — it could only stop at the recursion
+            // iteration cap. The predicate is evaluated in the same environment
+            // the RETURN items see (the unwound variable bound), matching the
+            // bare-RETURN WHERE semantics at the q.where_clause site above.
+            if (q.where_clause) |where_expr| {
+                const where_result = try eval.evalExpr(allocator, where_expr, unwind_env);
+                const passes_filter = switch (where_result) {
+                    .Bool => |b| b,
+                    .Null => false,
+                    .Int => |iv| iv != 0,
+                    else => false,
+                };
+                if (!passes_filter) continue;
+            }
 
             // Evaluate RETURN items for this row
             var return_row = try allocator.alloc(Value, q.ret.items.len);

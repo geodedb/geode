@@ -129,7 +129,9 @@ const _e2e_graph_algos_new = @import("e2e_graph_algos_new.zig");
 
 // New advanced feature tests - commented out due to module import issues
 const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
-// const _e2e_recursive_queries = @import("e2e_recursive_queries.zig");
+// e2e_recursive_queries.zig (GAP-0859) is wired as its own sharded step
+// `test-recursive-cte` in build.zig and pulled into `zig build test`; it is NOT
+// imported here to avoid running its tests twice in the aggregate.
 // const _e2e_materialized_views = @import("e2e_materialized_views.zig");
 // const _e2e_rls_enhanced = @import("e2e_rls_enhanced.zig");
 

@@ -4653,6 +4653,20 @@ pub fn build(b: *std.Build) void {
     // crud_operations.tenantFilterFromContext and
     // match_operations.getSessionTenantFilter) must reject unscoped/"default"
     // tenant access when strict mode is enabled, and stay unchanged otherwise.
+    // GAP-0859 regression: real end-to-end recursive `WITH RECURSIVE` CTE
+    // coverage. Drives actual GQL text through the parser + executor and asserts
+    // produced rows for reachability, WHERE-bounded recursion (the dropped-WHERE
+    // defect), cyclic termination at the iteration cap, and UNION vs UNION ALL
+    // distinct semantics. Replaces the old mock-based test that drove the
+    // never-wired RecursiveQueryProcessor and asserted error.NotImplemented.
+    const recursive_cte_test_mod = b.createModule(.{ .root_source_file = b.path("tests/e2e_recursive_queries.zig"), .target = target, .optimize = optimize });
+    recursive_cte_test_mod.addImport("geode", root_mod);
+    const recursive_cte_tests = b.addTest(.{ .root_module = recursive_cte_test_mod });
+    const run_recursive_cte_tests = b.addRunArtifact(recursive_cte_tests);
+    shardDep(test_step, &run_recursive_cte_tests.step, 1, test_shard_loads, test_shard_index);
+    const recursive_cte_step = b.step("test-recursive-cte", "GAP-0859 regression (recursive WITH RECURSIVE CTE E2E)");
+    recursive_cte_step.dependOn(&run_recursive_cte_tests.step);
+
     const gap0840_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0840_strict_tenancy.zig"), .target = target, .optimize = optimize });
     gap0840_test_mod.addImport("geode", root_mod);
     const gap0840_tests = b.addTest(.{ .root_module = gap0840_test_mod });
