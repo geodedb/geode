@@ -767,7 +767,7 @@ REQ-DIST-CLUSTER-TERM,ClusterCoordinator Public Propose,CurrentTerm,TESTED,,,dis
 REQ-DIST-CLUSTER-TLS-NOLOOPBACK,DistributedCluster,PeerTlsHandshakeDistinctIp,TESTED,,,distributed,2026-06-02,tests/test_gap0838_cluster_tls_noloopback.zig
 REQ-DIST-CLUSTER-WAIT-APPLIED,ClusterCoordinator Public Propose,WaitForApplied,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig
-REQ-DIST-CONN-001,Distributed Query Connection,ConnectionInit,IMPL,,,distributed,2026-04-05,src/distributed/query_transport.zig
+REQ-DIST-CONN-001,Distributed Query Connection,ConnectionInit,EXEMPT,,,distributed,2026-06-11,src/distributed/query_transport.zig
 REQ-DIST-FEDERATION-MERGE-001,Distributed Federation Merge,CloneOrderKeys,TESTED,,,dist,2026-04-10,src/distributed/federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-001,Distributed Federation Merge,CloneOrderKeys,TESTED,,,dist,2026-04-06,tests/test_federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-002,Distributed Federation Merge,CloneOrderDirs,TESTED,,,dist,2026-04-10,src/distributed/federation_merge.zig
@@ -813,8 +813,8 @@ REQ-DIST-QUERY-COORD-INT-001,Distributed Query Coordination Integration Tests,In
 REQ-DIST-QUERY-COORD-TEST-001,DistQueryCoord,CoordinationTests,TESTED,,,dist,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-DIST-QUERY-COORD-TEST-001,Distributed Query Coordination Tests,UnitTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination.zig
 REQ-DIST-QUERY-MSG-DISPATCH,Enhanced Query Transport,MessageDispatch,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig
-REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
-REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
+REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,EXEMPT,,,dist,2026-06-11,src/distributed/query_transport.zig
+REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,EXEMPT,,,dist,2026-06-11,src/distributed/query_transport.zig
 REQ-DIST-RAFT-A1-NO-EVICT-BACKPRESSURE,Raft transport backpressure,SendErrorClassify,TESTED,,,distributed,2026-06-08,src/distributed/raft_consensus.zig
 REQ-DIST-RAFT-A2-PER-PEER-DRAIN,Raft per-peer non-blocking outbox drain,PeerIsolation,TESTED,,,distributed,2026-06-08,tests/test_raft_per_peer_drain.zig
 REQ-DIST-RAFT-A6E-OUTBOX-DISPATCH,Raft Outbox Async Dispatch,Send,TESTED,,,distributed,2026-05-26,src/distributed/raft_consensus.zig
@@ -849,7 +849,7 @@ REQ-DIST-STATS-001,DistributedStatsIntegration,QueryPlanning,TESTED,,,distribute
 REQ-DIST-STATS-002,ShardRowEstimate,QueryPlanning,TESTED,,,distributed,2026-04-05,src/distributed/query_coordinator.zig
 REQ-DIST-STATS-003,TableNameExtraction,QueryParsing,TESTED,,,distributed,2026-04-05,src/distributed/query_coordinator.zig
 REQ-DIST-STATS-004,ShardRowEstimation,Statistics,TESTED,,,distributed,2026-04-05,src/distributed/query_coordinator.zig
-REQ-DIST-TLS-001,Distributed TLS,Security,IMPL,,,distributed,2026-04-05,src/distributed/query_transport.zig
+REQ-DIST-TLS-001,Distributed TLS,Security,EXEMPT,,,distributed,2026-06-11,src/distributed/query_transport.zig
 REQ-DIST-TOPK-001,Heap-based Top-K Selection,Performance,IMPL,,,distributed,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-TOPK-002,Max-Heap Top-K,Performance,IMPL,,,distributed,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-TRACKER-001,Query Tracker Storage,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig
@@ -1554,12 +1554,12 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
-REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig
 REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig
-REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig
-REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
-REQ-GPS-WIRE-002,GPS Distributed Wire,NodeQuery,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,NodeQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptions,IMPL,,,security,2026-05-21,src/distributed/merge_strategies.zig
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
@@ -3761,7 +3761,7 @@ REQ-OTEL-METRICS-010,OTel Instrumentation,SecurityRLSAuditTDE,TESTED,,,monitorin
 REQ-OTEL-METRICS-011,OTel Instrumentation,DistributedCluster,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-012,OTel Instrumentation,CdcAnalytics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-013,OTel Instrumentation,Backup,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
-REQ-OTEL-METRICS-014,OTel Instrumentation,DbClientMetrics,IMPL,,,monitoring,2026-04-28,src/distributed/query_transport.zig
+REQ-OTEL-METRICS-014,OTel Instrumentation,DbClientMetrics,EXEMPT,,,monitoring,2026-06-11,src/distributed/query_transport.zig
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-06-11,src/server/main.zig
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics+DbClient,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig
