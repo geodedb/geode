@@ -217,7 +217,7 @@ pub const PropertyValue = union(enum) {
     Decimal: struct { coeff: i128, scale: u8 },
 };
 
-// CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=TESTED; TEST=test-iso-conformance; OWNER=engine; UPDATED=2026-06-11
+// CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
 pub const PathOptions = struct {
     min_length: ?u32 = null,
     max_length: ?u32 = null,

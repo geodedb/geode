@@ -178,13 +178,13 @@ inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
 // expression-based property policies for the current session.
 // Returns true (allow) when no RLS engine is active, no user is authenticated,
 // or the node passes both label-deny and expression checks.
-// CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=MatchLabelDeny; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+// CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=MatchLabelDeny; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
 fn passesRLSFilter(
     reusable_row: *std.StringHashMap(rls.Value),
     node: graph_store.Node,
 ) bool {
     const ctx = execution.getActiveContext() orelse return true;
-    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=MatchRLSPrincipalUsername; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=MatchRLSPrincipalUsername; STATUS=TESTED; TEST=geodetestlab/specs/rls_injection_resistance.yml; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-6: row-level security must be evaluated under the
     // GPS-resolved Principal, not the raw connection user. When an ExecuteRequest
     // carries a principal_envelope (distributed coordinator → shard worker, or a
@@ -216,7 +216,7 @@ fn passesRLSFilter(
 // GAP-0510 D2: Evaluate expression-based RLS policies against a node's properties.
 // Returns true (allow) when no expression engine is configured, or when the
 // expression engine grants access. Fails closed on evaluation errors (GAP-0524).
-// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=IMPL; OWNER=security; UPDATED=2026-04-09
+// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
 fn passesRLSExprFilter(
     reusable_row: *std.StringHashMap(rls.Value),
     node: graph_store.Node,
@@ -335,7 +335,7 @@ fn extractVarProperty(expr: ast.Expr) ?struct { variable: []const u8, property: 
     return null;
 }
 
-// CANARY: REQ=REQ-AUTO-INDEX-PUSHDOWN-001; FEATURE="AutoIdIndex"; ASPECT=WherePredicatePushdown; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+// CANARY: REQ=REQ-AUTO-INDEX-PUSHDOWN-001; FEATURE="AutoIdIndex"; ASPECT=WherePredicatePushdown; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 /// Check simple equality predicates from WHERE clause against a node's properties.
 /// Only pushes down predicates of the form `var.prop = literal` or `literal = var.prop`
 /// connected by AND. This is an early filter - WHERE is still fully evaluated later.
@@ -1272,7 +1272,7 @@ pub fn topKOrderedFastPath(
     };
 }
 
-// CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+// CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
 /// CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
@@ -1375,7 +1375,7 @@ fn nodeMatchesProps(
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-// CANARY: REQ=REQ-GAP-0336-UMH-BINDING; FEATURE="MatchCreateBindingFix"; ASPECT=PatternVarResolution; STATUS=IMPL; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-05-22
+// CANARY: REQ=REQ-GAP-0336-UMH-BINDING; FEATURE="MatchCreateBindingFix"; ASPECT=PatternVarResolution; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
 // GAP-0336 fix: MATCH ... CREATE ... previously extracted variable→node
 // bindings from `match_result.columns` (i.e. RETURN projections).  When the
 // RETURN list does not include the matched node variables — e.g.
@@ -2065,7 +2065,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
 
-    // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-13
+    // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=TESTED; TEST=geodetestlab/specs/limit_pushdown.yml; OWNER=engine; UPDATED=2026-06-11
     // Determine if we can push LIMIT down into the scan phase.
     // Safe when: no ORDER BY, no DISTINCT, no GROUP BY, no aggregation, and no OFFSET
     // (ORDER BY needs all rows to sort; GROUP BY/aggregation need full set to compute)
@@ -2100,7 +2100,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     var chain_vars = try std.ArrayList(?[]const u8).initCapacity(allocator, q.match.chains.len);
     defer chain_vars.deinit(allocator);
 
-    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-001; FEATURE="AutoIdIndex"; ASPECT=LabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-001; FEATURE="AutoIdIndex"; ASPECT=LabelIndexScan; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
     // For each chain, find all matching nodes using label_index when labels are present
     for (q.match.chains) |chain| {
         const node_pattern = chain.head.?;
@@ -2799,7 +2799,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // Get relationship direction for proper edge traversal
         const rel_dir = hop.rel.dir;
 
-        // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+        // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
         // Find all matching relationships using label_index when labels are present
         if (left_labels.len > 0) {
             var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, storageTenantFilter(filter_tenant));
@@ -5625,7 +5625,7 @@ fn executeMultiHopGroupBy(
         current_bindings_mh.deinit(arena);
     }
 
-    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
     const first_hop = chain.hops[0];
 
     // Build the shared name schema for hop depth 0 (just the left node variable).
@@ -5900,7 +5900,7 @@ fn executeMultiHopGroupBy(
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
-// CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+// CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
@@ -7463,7 +7463,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     current_bindings.deinit(allocator);
                 }
 
-                // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+                // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
                 // Initialize with first hop's left nodes - use label_index when labels present
                 const first_hop = chain.hops[0];
 
