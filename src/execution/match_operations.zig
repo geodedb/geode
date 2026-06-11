@@ -150,6 +150,28 @@ inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]const
     return hm.canAccessTenantSafe(tid, edge.tenant_id);
 }
 
+// GAP-0891 (defense-in-depth): hierarchy-aware, endpoint-derived edge
+// visibility. The edge is visible when its own tag passes the (hierarchy-aware)
+// tenant filter OR when BOTH endpoints pass it. This bridges legacy edges
+// mis-tagged "default" (the pre-fix worker bug) whose endpoint nodes carry the
+// correct tenant, matching the store-level `GraphStore.edgeVisibleForTenant`.
+//
+// Isolation is preserved: a genuine "default"-tagged edge between
+// "default"-tagged nodes stays hidden from a non-default reader because both
+// endpoints fail `passesTenantFilter` (fail-closed). Endpoint lookups reuse the
+// already-held store/rwlock read pattern from the surrounding match loop
+// (`store.nodes.get`) — no new lock is acquired.
+inline fn edgeVisibleForTenantHierarchy(
+    store: *graph_store.GraphStore,
+    edge: graph_store.Edge,
+    filter_tenant: ?[]const u8,
+) bool {
+    if (passesTenantFilterEdge(edge, filter_tenant)) return true;
+    const from = store.nodes.get(edge.from_id) orelse return false;
+    const to = store.nodes.get(edge.to_id) orelse return false;
+    return passesTenantFilter(from, filter_tenant) and passesTenantFilter(to, filter_tenant);
+}
+
 // GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
 // (`store.getNodesByLabels(..., tenant)` and `store.getEdgesByType(..., tenant, ...)`).
 //
@@ -2837,7 +2859,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
+                    if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -2858,7 +2881,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
+                    if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
