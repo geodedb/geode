@@ -10,7 +10,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const geode = @import("geode");
 const server_flags = geode.server_flags;
-// CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+// CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=server; UPDATED=2026-06-11
 const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
 const query_ast_cache = @import("query_ast_cache");
@@ -18,7 +18,7 @@ const query_plan_cache = geode.query_plan_cache;
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
-// CANARY: REQ=REQ-AUTH-GRAPH-WIRE-004; FEATURE="AuthGraphManager Integration"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+// CANARY: REQ=REQ-AUTH-GRAPH-WIRE-004; FEATURE="AuthGraphManager Integration"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 const auth_graph_manager = @import("auth_graph_manager");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-014; FEATURE="Structured Logging"; ASPECT=ServerInit; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
@@ -94,7 +94,7 @@ pub const InitContext = struct {
     // Issue #460: Shared cross-connection query optimizer for plan reuse
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
     shared_optimizer_storage: ?query_plan_cache.SharedQueryOptimizer = null,
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-005; FEATURE="AuthGraphManager Integration"; ASPECT=InitContext; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-005; FEATURE="AuthGraphManager Integration"; ASPECT=InitContext; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     auth_graph_mgr: ?*auth_graph_manager.AuthGraphManager = null,
     auth_graph_mgr_storage: ?auth_graph_manager.AuthGraphManager = null,
 
@@ -120,7 +120,7 @@ pub const InitContext = struct {
         else
             null;
 
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-008; FEATURE="Runtime Auth Graph Persistence"; ASPECT=WireCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-008; FEATURE="Runtime Auth Graph Persistence"; ASPECT=WireCallbacks; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
         // Wire SecurityManager's opaque pointer and callbacks to AuthGraphManager
         // so that runtime mutations (user create, login state, password change) are
         // persisted to the auth graph store for durability across restarts.
@@ -134,7 +134,7 @@ pub const InitContext = struct {
             }
         }
 
-        // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
         // Start periodic HMAC verification AFTER all pointer fixups.
         // The thread captures `self` by pointer, so it must not be started until
         // the AuthGraphManager is at its final memory location.
@@ -163,8 +163,8 @@ pub const InitContext = struct {
             self.shared_optimizer = null;
             self.shared_optimizer_storage = null;
         }
-        // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-006; FEATURE="AuthGraphManager Integration"; ASPECT=Cleanup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
-        // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-004; FEATURE="PeriodicHmacVerification"; ASPECT=Shutdown; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-006; FEATURE="AuthGraphManager Integration"; ASPECT=Cleanup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
+        // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-004; FEATURE="PeriodicHmacVerification"; ASPECT=Shutdown; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
         if (self.auth_graph_mgr_storage) |*agm| {
             agm.requestShutdown();
             agm.deinit();
@@ -329,13 +329,13 @@ pub fn initialize(
     const order_expr = if (order_keys_mode_expr) true else env_config.order_keys_expr;
     server_flags.setOrderKeysExpr(order_expr);
 
-    // CANARY: REQ=REQ-QUIC-CATALOG-003; FEATURE="CatalogDataDirIsolation"; ASPECT=ServerInit; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-QUIC-CATALOG-003; FEATURE="CatalogDataDirIsolation"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=engine; UPDATED=2026-06-11
     // Note: GEODE_DATA_DIR environment variable is read at startup if needed;
     // direct configuration via graph_store.setDataDirOverride() is preferred
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=storage; UPDATED=2026-06-11
     // Initialize global store with engine-backed adapter (creates adapter + loads from engine).
     const store = if (data_dir) |dir|
         graph_store.initGlobalStore(allocator, dir) catch |err| blk: {
@@ -347,7 +347,7 @@ pub fn initialize(
     else
         graph_store.getGlobalStore(allocator);
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain
     const hmac_key_result: ?auth_graph_manager.HmacKeyResult = hmac_blk: {
         const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
@@ -521,7 +521,7 @@ pub fn initialize(
                 allocator.free(result.password);
             }
 
-            // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+            // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
             // NOTE: Do NOT start periodic verification here. `agm` is a stack local
             // that will be moved by value into `agm_storage` and then again when
             // InitContext is returned. The thread captures `self` by pointer, so
@@ -583,7 +583,7 @@ pub fn initialize(
         });
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-008; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManagerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-12
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-008; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManagerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     // Always initialize SecurityManager when auth graph is available so that
     // runtime password changes are persisted to disk.  ABAC policy enforcement
     // is gated separately; the SecurityManager is needed for persistence even
@@ -615,7 +615,7 @@ pub fn initialize(
     return ctx;
 }
 
-// CANARY: REQ=REQ-AUTH-GRAPH-WIRE-009; FEATURE="AuthGraphManager Integration"; ASPECT=Hydration; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+// CANARY: REQ=REQ-AUTH-GRAPH-WIRE-009; FEATURE="AuthGraphManager Integration"; ASPECT=Hydration; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 /// Hydrate SecurityManager from AuthGraphManager's stored records.
 /// Creates an empty SecurityManager and populates it with users from the auth graph.
 fn hydrateSecurityManagerFromGraph(
@@ -701,7 +701,7 @@ fn hydrateSecurityManagerFromGraph(
 // These are called via function pointers from SecurityManager, casting the opaque
 // pointer back to *AuthGraphManager. All operations are best-effort (catch + log).
 
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-009; FEATURE="Runtime Auth Graph Persistence"; ASPECT=Callbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-009; FEATURE="Runtime Auth Graph Persistence"; ASPECT=Callbacks; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
 
 fn graphPersistUserCreate(opaque_agm: *anyopaque, hmac_key: *const [32]u8, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool) callconv(.auto) u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
@@ -772,7 +772,7 @@ const multi_graph_security = geode.multi_graph_security;
 const auth_dispatch = geode.auth_dispatch;
 
 // -- PersistentUserWriter callbacks --
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-031; FEATURE="AuthDDLPersistence"; ASPECT=UserWriterCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-031; FEATURE="AuthDDLPersistence"; ASPECT=UserWriterCallbacks; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 
 fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: user_mgmt.Role) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
@@ -837,7 +837,7 @@ fn writerSetActive(ctx: ?*anyopaque, username: []const u8, active: bool) anyerro
 }
 
 // -- RolePersistCallbacks for auth_dispatch --
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-032; FEATURE="AuthDDLPersistence"; ASPECT=RoleCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-032; FEATURE="AuthDDLPersistence"; ASPECT=RoleCallbacks; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 
 fn roleCreate(ctx: ?*anyopaque, name: []const u8, description: []const u8) anyerror!u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
@@ -869,7 +869,7 @@ fn roleList(ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]auth_disp
 }
 
 // -- GrantPersistCallbacks for auth_dispatch --
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-033; FEATURE="AuthDDLPersistence"; ASPECT=GrantCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-033; FEATURE="AuthDDLPersistence"; ASPECT=GrantCallbacks; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 
 fn grantResolveUserId(ctx: ?*anyopaque, username: []const u8) ?u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
@@ -895,7 +895,7 @@ fn grantRevoke(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u
 }
 
 // -- graph_grant_check_fn (injected into execution.zig) --
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-034; FEATURE="AuthDDLPersistence"; ASPECT=GrantCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-034; FEATURE="AuthDDLPersistence"; ASPECT=GrantCheck; STATUS=TESTED; TEST=geodetestlab/specs/gps_phase3_use_graph_authorization.yml; OWNER=security; UPDATED=2026-06-11
 
 fn graphGrantCheck(username: []const u8, graph_name: []const u8, action: u8) bool {
     const agm = auth_graph_manager.AuthGraphManager.getGlobal() orelse return false;
@@ -905,7 +905,7 @@ fn graphGrantCheck(username: []const u8, graph_name: []const u8, action: u8) boo
 }
 
 // -- Startup installation function --
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-035; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-035; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 
 /// Wire all auth-DDL persistence callbacks and hydrate in-memory state from
 /// __geode_security.  Called from fixupSelfPointers() once the AuthGraphManager
