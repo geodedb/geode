@@ -1490,6 +1490,24 @@ pub fn build(b: *std.Build) void {
     const raft_per_peer_drain_step = b.step("test-raft-per-peer-drain", "Run per-peer non-blocking outbox drain isolation test (A2)");
     raft_per_peer_drain_step.dependOn(&run_raft_per_peer_drain_tests.step);
 
+    // k8s root cause #5 (transport wedge): stalled-stream liveness detector.
+    // A leader pod restart with a new IP strands a non-restarted third node as a
+    // silent stuck-candidate because the fire-and-forget transport never errors a
+    // send into the stale connection and the IP-change reaper declines (the
+    // victim's own IP never changed). These tests encode the desired stall
+    // detector (notePeerProgress + shouldEvictOnStall) and FAIL against the
+    // skeleton, proving they catch the wedge.
+    const raft_stall_detector_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_stall_detector.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_stall_detector_tests.root_module.addImport("geode", root_mod);
+    raft_stall_detector_tests.root_module.link_libc = true;
+    const run_raft_stall_detector_tests = b.addRunArtifact(raft_stall_detector_tests);
+    const raft_stall_detector_step = b.step("test-raft-stall-detector", "Run stalled-stream liveness detector regression tests (k8s root cause #5 transport wedge)");
+    raft_stall_detector_step.dependOn(&run_raft_stall_detector_tests.step);
+
     // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
     // distributed cluster testing plan).  Brings up two real
     // ClusterCoordinators with their QUIC listeners on loopback,

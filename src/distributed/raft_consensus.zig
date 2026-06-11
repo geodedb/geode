@@ -438,6 +438,24 @@ pub const Transport = struct {
         /// reopened on the next send.
         send_stream: ?*quic.QuicClientStream = null,
 
+        /// k8s root cause #5 (stalled-stream liveness, 2026-06-11): the raft
+        /// transport is fire-and-forget — a write into a stale/half-open QUIC
+        /// connection (peer's OLD endpoint after a pod reschedule) buffers
+        /// locally and returns success, so neither the send-error eviction path
+        /// nor the IP-change reaper (the strand victim's IP never changed) ever
+        /// fires. This timestamp records the last time we OBSERVED forward
+        /// progress with this peer (an inbound frame / RPC response, stamped via
+        /// `Transport.notePeerProgress`). Initialized at connect time so a brand
+        /// new connection is not immediately judged stalled. The stall reaper
+        /// compares `now - last_progress_ms` against `peer_stall_budget_ms`.
+        last_progress_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+
+        /// Count of frames handed to the wire for this peer. The stall reaper
+        /// must only act on a peer we have actually been SENDING to (a peer with
+        /// no traffic has no progress to expect and must not be evicted). Bumped
+        /// on each successful `send`.
+        frames_sent: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
         fn deinit(self: *PeerConnection) void {
             if (self.send_stream) |s| {
                 s.finish() catch {};
@@ -889,6 +907,70 @@ pub const Transport = struct {
             Attr.uint("peer", pc.peer_id),
         });
         self.evictPeerConnection(pc.peer_id);
+    }
+
+    /// k8s root cause #5 (stalled-stream liveness): the budget, in ms, after
+    /// which a peer we are actively sending to but have observed NO forward
+    /// progress from is judged stalled and its cached connection evicted +
+    /// rebuilt (the same recovery the IP-change reaper performs). Sized as
+    /// several `clientPollLoop` reaper passes (peer_reresolve_ms = 3000) and
+    /// kept at or below the raft election timeout ceiling (5000 ms default —
+    /// `cluster.zig:2403`) so recovery is prompt yet never trips on a merely
+    /// quiet-but-healthy link. SKELETON value pending the real detector.
+    pub const peer_stall_budget_ms: i64 = 3000;
+
+    /// k8s root cause #5 (stalled-stream liveness): PURE, clock-injectable
+    /// decision used by `maybeReconnectOnStall` (and unit tests). Returns true
+    /// iff this connection should be evicted because it has stalled: frames have
+    /// been sent to the peer but no forward progress has been observed for
+    /// longer than `peer_stall_budget_ms`. A peer with recent progress, or a
+    /// peer to which nothing has been sent, must return false.
+    ///
+    /// SKELETON: the bug-fixer agent fills in the real comparison
+    /// (frames_sent > 0 AND now_ms - last_progress_ms > peer_stall_budget_ms).
+    /// Until then it always returns false, so the "stalled peer is evicted"
+    /// regression tests FAIL — proving they catch the wedge.
+    pub fn shouldEvictOnStall(pc: *PeerConnection, now_ms: i64) bool {
+        _ = pc;
+        _ = now_ms;
+        return false;
+    }
+
+    /// Refresh the forward-progress timestamp for the peer identified by
+    /// `peer_id`. Called from the INBOUND path (raft response / heartbeat-ack
+    /// dispatch in `cluster.zig`), which arrives on a DIFFERENT connection
+    /// object than the outbound `PeerConnection`, so progress must be stamped by
+    /// a peer-id keyed lookup into `peers` rather than by pointer. Safe to call
+    /// for an unknown peer (no-op).
+    ///
+    /// SKELETON: the bug-fixer agent fills in the peers_mutex-guarded lookup +
+    /// `pc.last_progress_ms.store(now_ms, ...)`. Until then it is a no-op, so
+    /// the "notePeerProgress stamps the right PeerConnection" regression test
+    /// FAILS.
+    pub fn notePeerProgress(self: *Transport, peer_id: u64, now_ms: i64) void {
+        _ = self;
+        _ = peer_id;
+        _ = now_ms;
+    }
+
+    /// Periodic stalled-stream reaper, sibling to `maybeReconnectOnIpChange`,
+    /// invoked from `clientPollLoop` on the same slow cadence. If the connection
+    /// has stalled (`shouldEvictOnStall`), evict it so the next `send` rebuilds
+    /// via `connectWithTLS` (which re-resolves the FQDN) — exactly like the
+    /// IP-change path. Takes no lock here; `evictPeerConnection` takes
+    /// `peers_mutex` itself.
+    ///
+    /// SKELETON: present so `clientPollLoop` wiring (added by the fixer) and the
+    /// tests compile. Delegates to `shouldEvictOnStall` (which the fixer makes
+    /// real); with the skeleton decision returning false this never evicts.
+    fn maybeReconnectOnStall(self: *Transport, pc: *PeerConnection, now_ms: i64) void {
+        if (shouldEvictOnStall(pc, now_ms)) {
+            log.warn("raft transport peer stalled (no progress within budget); evicting stale connection", &.{
+                Attr.string("endpoint", pc.endpoint),
+                Attr.uint("peer", pc.peer_id),
+            });
+            self.evictPeerConnection(pc.peer_id);
+        }
     }
 
     fn clientPollEntry(ctx: ?*anyopaque) void {
@@ -2943,6 +3025,147 @@ test "raft_consensus: OutOfStreams/WouldBlock are transient (no evict); other er
     try std.testing.expect(Transport.shouldEvictOnSendError(error.ConnectionReset));
     try std.testing.expect(Transport.shouldEvictOnSendError(error.BrokenPipe));
     try std.testing.expect(Transport.shouldEvictOnSendError(error.TransportShutdown));
+}
+
+// ===========================================================================
+// k8s root cause #5 (transport wedge): stalled-stream liveness regression tests
+// ---------------------------------------------------------------------------
+// A leader pod restarts with a NEW IP and re-wins leadership; a third node that
+// did NOT restart is stranded as a silent stuck-candidate forever. The raft
+// transport is fire-and-forget — a write into the stale/half-open connection to
+// the leader's OLD endpoint buffers locally and returns success, so the
+// send-error eviction path never fires; and the IP-change reaper declines
+// because the strand victim's OWN IP never changed. The fix is a stalled-stream
+// liveness detector (sibling to maybeReconnectOnIpChange) keyed off observed
+// forward progress.
+//
+// These tests encode the DESIRED post-fix behavior. They FAIL against the
+// SKELETON (shouldEvictOnStall always returns false; notePeerProgress is a
+// no-op) — which is the proof they catch the bug.
+// CANARY: REQ=REQ-DIST-RAFT-STALL-LIVENESS; FEATURE="Raft transport stalled-stream liveness"; ASPECT=StallEvictDecision; STATUS=TESTED; OWNER=distributed; UPDATED=2026-06-11
+
+/// Build a heap-allocated PeerConnection suitable for the PURE stall-decision
+/// unit tests. In test mode `quic.QuicClient.init` is a no-op stub, so no real
+/// QUIC/TLS connection is created. The endpoint is a dup so deinit's free is
+/// balanced. `established=true` mirrors a live connection.
+fn makeStallTestPeerConnection(
+    allocator: std.mem.Allocator,
+    peer_id: u64,
+    frames_sent: u64,
+    last_progress_ms: i64,
+) !*Transport.PeerConnection {
+    const pc = try allocator.create(Transport.PeerConnection);
+    pc.* = .{
+        .allocator = allocator,
+        .client = quic.QuicClient.init(allocator),
+        .established = true,
+        .endpoint = try allocator.dupe(u8, "raft-peer.cluster.svc"),
+        .port = 7890,
+        .peer_id = peer_id,
+        .resolved_ip = &.{},
+        .frames_sent = std.atomic.Value(u64).init(frames_sent),
+        .last_progress_ms = std.atomic.Value(i64).init(last_progress_ms),
+    };
+    return pc;
+}
+
+test "raft stall: stalled peer (sends happened, no progress past budget) is evicted" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    // Frames were sent, but last observed progress is well beyond the budget.
+    const stale_progress = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makeStallTestPeerConnection(allocator, 7, 12, stale_progress);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // DESIRED post-fix behavior: a peer we are sending to with no progress for
+    // longer than the budget MUST be judged stalled (so the next send rebuilds).
+    // SKELETON returns false -> this assertion FAILS, catching the wedge.
+    try std.testing.expect(Transport.shouldEvictOnStall(pc, now_ms));
+}
+
+test "raft stall: healthy peer (recent progress) is NOT evicted" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    // Progress observed comfortably inside the budget.
+    const recent_progress = now_ms - (Transport.peer_stall_budget_ms - 500);
+    const pc = try makeStallTestPeerConnection(allocator, 7, 12, recent_progress);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // False-positive guard: a peer with recent progress must NEVER be evicted.
+    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms));
+}
+
+test "raft stall: idle peer (no frames sent) is NOT evicted even with an old timestamp" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    // last_progress is ancient, but nothing has ever been sent to this peer, so
+    // there is no progress to expect — it must not be evicted.
+    const pc = try makeStallTestPeerConnection(allocator, 9, 0, 0);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms));
+}
+
+test "raft stall: notePeerProgress stamps the right PeerConnection (peer-id keyed)" {
+    const allocator = std.testing.allocator;
+    var transport = Transport.init(allocator);
+    defer transport.deinit();
+
+    // Publish two established connections into the peers map, simulating two
+    // live outbound peers. Each starts with a stale progress timestamp and a
+    // nonzero frames_sent so it would be judged stalled at now_ms.
+    const now_ms: i64 = 5_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 1000);
+    const pc1 = try makeStallTestPeerConnection(allocator, 1, 4, stale);
+    const pc2 = try makeStallTestPeerConnection(allocator, 2, 4, stale);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    transport.peers_mutex.lockUncancelable(io);
+    try transport.peers.put(1, pc1);
+    try transport.peers.put(2, pc2);
+    transport.peers_mutex.unlock(io);
+    // (transport.deinit frees both entries via the peers map.)
+
+    // Inbound progress arrives for peer 1 only (keyed by peer id, NOT by the
+    // outbound PeerConnection pointer — the inbound connection is a different
+    // object in production).
+    transport.notePeerProgress(1, now_ms);
+
+    // DESIRED post-fix behavior: peer 1's stamp is refreshed (so it is no longer
+    // stalled), peer 2's is untouched (still stalled). SKELETON notePeerProgress
+    // is a no-op -> peer 1's timestamp stays stale -> this assertion FAILS.
+    try std.testing.expectEqual(now_ms, pc1.last_progress_ms.load(.acquire));
+    try std.testing.expect(!Transport.shouldEvictOnStall(pc1, now_ms));
+    // Peer 2 was never stamped — still stalled.
+    try std.testing.expect(Transport.shouldEvictOnStall(pc2, now_ms));
+}
+
+test "raft stall: progress refresh clears the stall (no immediate re-evict loop)" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 2_000_000;
+    // A peer that just reconnected: frames already queued, and progress stamped
+    // at reconnect time == now. The stall clock must read as fresh so the very
+    // next reaper pass does NOT immediately re-evict it (which would spin a
+    // reconnect loop).
+    const pc = try makeStallTestPeerConnection(allocator, 3, 1, now_ms);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // Same instant -> 0 elapsed -> not stalled.
+    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms));
+    // A subsequent progress observation keeps it healthy across the budget.
+    pc.last_progress_ms.store(now_ms + Transport.peer_stall_budget_ms, .release);
+    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms + Transport.peer_stall_budget_ms));
 }
 
 // SEC-D011: Verify connectWithTLS compiles and selects the correct path.
