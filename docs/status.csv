@@ -2446,7 +2446,18 @@ REQ-GQL-FTS-003,FTS Statistics,Performance,TESTED,,,fts,2025-10-04,src/server/in
 REQ-GQL-FTS-004,FTS IndexOptimizer,CostEstimation,TESTED,,,fts,2025-10-04,src/server/index_optimizer.zig
 REQ-GQL-FTS-004,FTS Performance Optimization,INTEGRATION,TESTED,,,search,2025-10-04,tests/test_fts_performance_optimization.zig
 REQ-GQL-FTS-005,FTS Query Optimization,QueryPlanning,TESTED,,,fts,2025-10-04,src/server/index_optimizer.zig
-REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,TESTED,,,search,2025-09-26,src/fts/advanced.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,Dispatch,TESTED,,,index,2026-06-10,src/execution/fts_dispatch.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,E2E,TESTED,,,index,2026-06-10,tests/e2e_fts_advanced.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,GQL-E2E,TESTED,,,index,2026-06-10,tests/test_gap0869_fts_advanced.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,Highlight,TESTED,,,index,2026-06-10,src/index/fulltext.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,OrderedTokenize,TESTED,,,index,2026-06-10,src/index/fts_tokenizer.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,PhraseProc,TESTED,,,index,2026-06-10,src/execution/fts_dispatch.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,PhraseSearch,TESTED,,,index,2026-06-10,src/index/fulltext.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,PositionalSearch,TESTED,,,index,2026-06-10,src/storage/fts_storage_adapter.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,ProximityProc,TESTED,,,index,2026-06-10,src/execution/fts_dispatch.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,ProximitySearch,TESTED,,,index,2026-06-10,src/index/fulltext.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,TESTED,,,search,2026-06-10,src/fts/advanced.zig
+REQ-GQL-FTS-ADV-001,Advanced FTS,ReadOnlyClassification,TESTED,,,index,2026-06-10,src/execution/procedure_access.zig
 REQ-GQL-FTS-ADV-002,Advanced Text Analyzers,TESTING,TESTED,,,search,2025-10-04,tests/test_fts_advanced_analyzers.zig
 REQ-GQL-FTS-COVERAGE-001,Fulltext GQL coverage gaps,E2E,TESTED,,,index,2026-05-31,tests/test_fts_coverage.zig
 REQ-GQL-FTS-DDL-001,Fulltext CREATE/DROP INDEX,DDL,TESTED,,,index,2026-05-30,src/execution/fts_index_ops.zig

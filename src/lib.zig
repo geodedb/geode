@@ -509,7 +509,12 @@ pub const security = struct {
     // auth_graph_manager, which imports geode (circular).  Consumers that need it
     // (server_init.zig, tests) import it as a named build module ("policy_persistence").
 };
-pub const fts_advanced_stub = @import("fts/advanced.zig");
+// GAP-0869 (2026-06-10): renamed from `fts_advanced_stub` — the hard-coded
+// corpus phrase/proximity/highlight stubs were deleted; what remains
+// (analyzers, stemming, fuzzy, soundex, synonyms) is real. The real
+// phrase/proximity/highlight live on FullTextIndex (src/index/fulltext.zig),
+// backed by the persisted fts-storage positional postings.
+pub const fts_advanced = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
 // GAP-0867 (2026-06-10): renamed from `cbo_api_stub` — the stub APIs were
 // deleted; what remains (StatsRegistry, explainEstimateJSON) is real.

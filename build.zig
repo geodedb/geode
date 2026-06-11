@@ -1986,6 +1986,15 @@ pub fn build(b: *std.Build) void {
     const fts_e2e_step = b.step("test-fts-e2e", "FTS end-to-end: CREATE INDEX (nodes-first AND index-first) + CALL geode.fts.search");
     fts_e2e_step.dependOn(&run_fts_e2e_tests.step);
 
+    // GAP-0869: phrase/proximity over the real persisted positional index,
+    // driven through GQL (CALL geode.fts.phrase / geode.fts.proximity).
+    const gap0869_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_gap0869_fts_advanced.zig"), .target = target, .optimize = optimize }) });
+    gap0869_tests.root_module.addImport("geode", root_mod);
+    gap0869_tests.root_module.link_libc = true;
+    const run_gap0869_tests = b.addRunArtifact(gap0869_tests);
+    const gap0869_step = b.step("test-gap0869", "GAP-0869: FTS phrase/proximity/highlight over the real positional index");
+    gap0869_step.dependOn(&run_gap0869_tests.step);
+
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
     match_call_tests.root_module.addImport("json", json_mod);
@@ -4310,7 +4319,12 @@ pub fn build(b: *std.Build) void {
     test_e2e_step.dependOn(&e2e_security_tde_mfa_test.step);
     const e2e_fts_advanced_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_fts_advanced.zig"), .target = target, .optimize = optimize }) });
     e2e_fts_advanced_test.root_module.addImport("geode", root_mod);
+    e2e_fts_advanced_test.root_module.link_libc = true;
     test_e2e_step.dependOn(&e2e_fts_advanced_test.step);
+    // GAP-0869: the facade-level phrase/proximity/highlight tests RUN under
+    // the dedicated test-gap0869 step (test-e2e only compiles them).
+    const run_e2e_fts_advanced = b.addRunArtifact(e2e_fts_advanced_test);
+    gap0869_step.dependOn(&run_e2e_fts_advanced.step);
     const e2e_parallel_execution_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_parallel_execution.zig"), .target = target, .optimize = optimize }) });
     e2e_parallel_execution_test.root_module.addImport("geode", root_mod);
     test_e2e_step.dependOn(&e2e_parallel_execution_test.step);

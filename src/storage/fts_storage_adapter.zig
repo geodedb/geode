@@ -44,6 +44,24 @@ pub const Hit = struct {
     score: f32,
 };
 
+/// A search result carrying the term's token-positions inside the document.
+/// Positions are the raw-stream token ordinals supplied at index time (the
+/// fts-storage positional contract — see the lib's `TermIterator.Match`).
+/// `positions` is owned by the caller (duped out of the iterator, which only
+/// lends its slice until the next `next()`); free each entry's positions and
+/// the outer slice — or use `freePositionalHits`.
+pub const PositionalHit = struct {
+    node_id: u64,
+    score: f32,
+    positions: []u32,
+};
+
+/// Free a slice returned by `searchPositions`.
+pub fn freePositionalHits(allocator: std.mem.Allocator, hits: []PositionalHit) void {
+    for (hits) |h| allocator.free(h.positions);
+    if (hits.len > 0) allocator.free(hits);
+}
+
 pub const Error = error{
     IndexExists,
     IndexNotFound,
@@ -336,5 +354,53 @@ pub const FtsStorageAdapter = struct {
     fn lessByScoreDesc(_: void, a: Hit, b: Hit) bool {
         if (a.score != b.score) return a.score > b.score;
         return a.node_id < b.node_id;
+    }
+
+    /// Search `name` for `term`, returning EVERY hit with its token-positions
+    /// (no cap — phrase/proximity callers must see all candidate docs before
+    /// positional gating). Positions are duped: the lib's `Match.positions` is
+    /// only valid until the iterator advances, so each slice is copied out
+    /// before `next()` is called again. Sorted by node_id ascending for
+    /// deterministic downstream intersection. Caller owns the result; free with
+    /// `freePositionalHits`.
+    ///
+    /// Same locking posture as `search`: iterator fully drained + deinited
+    /// before returning, no `write_mu` taken.
+    // CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=PositionalSearch; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=index; UPDATED=2026-06-10
+    pub fn searchPositions(
+        self: *FtsStorageAdapter,
+        name: []const u8,
+        allocator: std.mem.Allocator,
+        term: []const u8,
+    ) ![]PositionalHit {
+        const ie = try self.requireIndex(name);
+
+        var hits: std.ArrayListUnmanaged(PositionalHit) = .empty;
+        errdefer {
+            for (hits.items) |h| allocator.free(h.positions);
+            hits.deinit(allocator);
+        }
+
+        {
+            var it = try fts.TermIterator.init(allocator, ie.engine, term);
+            defer it.deinit();
+            while (try it.next()) |m| {
+                const pos_copy = try allocator.dupe(u32, m.positions);
+                errdefer allocator.free(pos_copy);
+                try hits.append(allocator, .{
+                    .node_id = m.doc_id,
+                    .score = m.score,
+                    .positions = pos_copy,
+                });
+            }
+        }
+
+        std.mem.sort(PositionalHit, hits.items, {}, struct {
+            fn lessThan(_: void, a: PositionalHit, b: PositionalHit) bool {
+                return a.node_id < b.node_id;
+            }
+        }.lessThan);
+
+        return try hits.toOwnedSlice(allocator);
     }
 };
