@@ -1379,10 +1379,10 @@ pub const ClusterCoordinator = struct {
     /// cluster RPC frame yet (tracked under task S2 in the plan).
     /// JOIN_CLUSTER / LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST
     /// arriving on this path are rejected with ERR so the originator
-    /// surfaces a clear failure rather than silently no-op'ing — the
-    /// pre-A3e handlers for those message types live in
-    /// `handleJoinCluster` / `handleLeaveCluster` / etc. and have
-    /// Zig 0.16 ArrayList API drift that is out of scope here.
+    /// surfaces a clear failure rather than silently no-op'ing. The
+    /// dead pre-A3e leave/replicate/failover stubs were removed
+    /// (GAP-0889); `handleJoinCluster` is retained for the planned
+    /// dynamic-join wire-up but has no caller on this path yet.
     fn handleClusterRpcLocal(self: *ClusterCoordinator, msg: Message) !Response {
         switch (msg.msg_type) {
             .READ => return self.executeLocalRead(msg),
@@ -2113,17 +2113,11 @@ pub const ClusterCoordinator = struct {
         self.message_callback = callback;
     }
 
-    fn handleLeaveCluster(self: *ClusterCoordinator, msg: Message) !Response {
-        _ = self;
-        _ = msg;
-        return Response{ .status = .OK };
-    }
-
-    fn handleReplicateData(self: *ClusterCoordinator, msg: Message) !Response {
-        _ = self;
-        _ = msg;
-        return Response{ .status = .OK };
-    }
+    // GAP-0889: the dead `handleLeaveCluster` / `handleReplicateData` /
+    // `handleFailoverRequest` stubs (zero callers, arg-discard, fake OK)
+    // were removed. The live RPC dispatch (`handleClusterRpcLocal`)
+    // rejects LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST with ERR
+    // so originators see a clear failure instead of a lying no-op ack.
 
     fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
         // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
@@ -2428,12 +2422,6 @@ pub const ClusterCoordinator = struct {
         var reader: std.Io.Reader = .fixed(resp_payload);
         const decoded = try protobuf.decode(Response, &reader, self.allocator);
         return decoded;
-    }
-
-    fn handleFailoverRequest(self: *ClusterCoordinator, msg: Message) !Response {
-        _ = self;
-        _ = msg;
-        return Response{ .status = .OK };
     }
 
     pub const Config = struct {

@@ -72,6 +72,34 @@ const extractNumeric = merge.extractNumeric;
 const orderByCompare = merge.orderByCompare;
 const OrderBySortContext = merge.OrderBySortContext;
 
+/// GAP-0889: shared offset/limit pagination window (was copy-pasted at four
+/// merge sites). Trims `rows` in place to [offset, offset+limit), freeing
+/// every row outside the window. An empty window empties the list, so the
+/// caller's subsequent `toOwnedSlice()` returns an empty row set.
+fn applyPaginationWindow(
+    allocator: std.mem.Allocator,
+    rows: *std.ArrayList(protocol.BindingRow),
+    options: QueryOptions,
+) void {
+    const start = options.offset orelse 0;
+    const end = if (options.limit) |limit| @min(start + limit, rows.items.len) else rows.items.len;
+
+    if (start >= rows.items.len or end <= start) {
+        for (rows.items) |row| freeBindingRow(allocator, row);
+        rows.items.len = 0;
+        return;
+    }
+    if (start > 0 or end < rows.items.len) {
+        for (rows.items[0..start]) |row| freeBindingRow(allocator, row);
+        for (rows.items[end..]) |row| freeBindingRow(allocator, row);
+        const out_len = end - start;
+        if (start > 0) {
+            std.mem.copyForwards(protocol.BindingRow, rows.items[0..out_len], rows.items[start..end]);
+        }
+        rows.items.len = out_len;
+    }
+}
+
 /// Enhanced distributed query coordinator with optimization and monitoring
 pub const EnhancedQueryCoordinator = struct {
     allocator: std.mem.Allocator,
@@ -383,30 +411,7 @@ pub const EnhancedQueryCoordinator = struct {
             }
         }
 
-        const start = options.offset orelse 0;
-        const end = if (options.limit) |limit| @min(start + limit, unique_rows.items.len) else unique_rows.items.len;
-
-        if (start >= unique_rows.items.len or end <= start) {
-            for (unique_rows.items) |row| freeBindingRow(self.allocator, row);
-            unique_rows.items.len = 0;
-            return federation.QueryResults{
-                .rows = &.{},
-                .schema = schema_copy,
-                .execution_time_ms = 0,
-                .ordered = false,
-            };
-        }
-
-        if (start > 0 or end < unique_rows.items.len) {
-            for (unique_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
-            for (unique_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
-            const out_len = end - start;
-            if (start > 0) {
-                std.mem.copyForwards(protocol.BindingRow, unique_rows.items[0..out_len], unique_rows.items[start..end]);
-            }
-            unique_rows.items.len = out_len;
-        }
-
+        applyPaginationWindow(self.allocator, &unique_rows, options);
         const rows_slice = try unique_rows.toOwnedSlice();
 
         return federation.QueryResults{
@@ -497,30 +502,7 @@ pub const EnhancedQueryCoordinator = struct {
         const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
         errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
 
-        const start = options.offset orelse 0;
-        const end = if (options.limit) |limit| @min(start + limit, merged_rows.items.len) else merged_rows.items.len;
-
-        if (start >= merged_rows.items.len or end <= start) {
-            for (merged_rows.items) |row| freeBindingRow(self.allocator, row);
-            merged_rows.items.len = 0;
-            return federation.QueryResults{
-                .rows = &.{},
-                .schema = schema_copy,
-                .execution_time_ms = 0,
-                .ordered = true,
-            };
-        }
-
-        if (start > 0 or end < merged_rows.items.len) {
-            for (merged_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
-            for (merged_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
-            const out_len = end - start;
-            if (start > 0) {
-                std.mem.copyForwards(protocol.BindingRow, merged_rows.items[0..out_len], merged_rows.items[start..end]);
-            }
-            merged_rows.items.len = out_len;
-        }
-
+        applyPaginationWindow(self.allocator, &merged_rows, options);
         const rows_slice = try merged_rows.toOwnedSlice();
 
         return federation.QueryResults{
@@ -676,9 +658,6 @@ pub const EnhancedQueryCoordinator = struct {
                 std.sort.heap(protocol.BindingRow, all_rows.items, {}, simpleRowCompare);
             }
 
-            const start = options.offset orelse 0;
-            const end = @min(start + (options.limit orelse all_rows.items.len), all_rows.items.len);
-
             const schema_source = blk: {
                 for (shard_results) |result| {
                     if (result.schema.len > 0) break :blk result.schema;
@@ -688,27 +667,7 @@ pub const EnhancedQueryCoordinator = struct {
             const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
             errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
 
-            if (start >= all_rows.items.len or end <= start) {
-                for (all_rows.items) |row| freeBindingRow(self.allocator, row);
-                all_rows.items.len = 0;
-                return federation.QueryResults{
-                    .rows = &.{},
-                    .schema = schema_copy,
-                    .execution_time_ms = 0,
-                    .ordered = true,
-                };
-            }
-
-            if (start > 0 or end < all_rows.items.len) {
-                for (all_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
-                for (all_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
-                const out_len = end - start;
-                if (start > 0) {
-                    std.mem.copyForwards(protocol.BindingRow, all_rows.items[0..out_len], all_rows.items[start..end]);
-                }
-                all_rows.items.len = out_len;
-            }
-
+            applyPaginationWindow(self.allocator, &all_rows, options);
             const rows_slice = try all_rows.toOwnedSlice();
 
             return federation.QueryResults{
@@ -840,30 +799,7 @@ pub const EnhancedQueryCoordinator = struct {
         const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
         errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
 
-        const start = options.offset orelse 0;
-        const end = @min(start + (options.limit orelse result_rows.items.len), result_rows.items.len);
-
-        if (start >= result_rows.items.len or end <= start) {
-            for (result_rows.items) |row| freeBindingRow(self.allocator, row);
-            result_rows.items.len = 0;
-            return federation.QueryResults{
-                .rows = &.{},
-                .schema = schema_copy,
-                .execution_time_ms = 0,
-                .ordered = true,
-            };
-        }
-
-        if (start > 0 or end < result_rows.items.len) {
-            for (result_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
-            for (result_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
-            const out_len = end - start;
-            if (start > 0) {
-                std.mem.copyForwards(protocol.BindingRow, result_rows.items[0..out_len], result_rows.items[start..end]);
-            }
-            result_rows.items.len = out_len;
-        }
-
+        applyPaginationWindow(self.allocator, &result_rows, options);
         const rows_slice = try result_rows.toOwnedSlice();
 
         return federation.QueryResults{

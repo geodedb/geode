@@ -658,64 +658,11 @@ const Connection = struct {
     }
 };
 
-/// Node registry for distributed cluster - tracks node addresses
-// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
-pub const NodeRegistry = struct {
-    allocator: std.mem.Allocator,
-    nodes: std.AutoHashMap(u32, NodeInfo),
-
-    pub const NodeInfo = struct {
-        node_id: u32,
-        host: []const u8,
-        port: u16,
-        status: NodeStatus,
-        last_heartbeat: i64,
-    };
-
-    pub const NodeStatus = enum {
-        active,
-        inactive,
-        unknown,
-    };
-
-    pub fn init(allocator: std.mem.Allocator) !NodeRegistry {
-        return NodeRegistry{
-            .allocator = allocator,
-            .nodes = std.AutoHashMap(u32, NodeInfo).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *NodeRegistry) void {
-        self.nodes.deinit();
-    }
-
-    pub fn registerNode(self: *NodeRegistry, node_id: u32, host: []const u8, port: u16) !void {
-        try self.nodes.put(node_id, NodeInfo{
-            .node_id = node_id,
-            .host = host,
-            .port = port,
-            .status = .active,
-            .last_heartbeat = compat_milliTimestamp(),
-        });
-    }
-
-    pub fn getNodeInfo(self: *NodeRegistry, node_id: u32) ?NodeInfo {
-        return self.nodes.get(node_id);
-    }
-
-    pub fn updateHeartbeat(self: *NodeRegistry, node_id: u32) void {
-        if (self.nodes.getPtr(node_id)) |info| {
-            info.last_heartbeat = compat_milliTimestamp();
-            info.status = .active;
-        }
-    }
-
-    pub fn markInactive(self: *NodeRegistry, node_id: u32) void {
-        if (self.nodes.getPtr(node_id)) |info| {
-            info.status = .inactive;
-        }
-    }
-};
+/// Node registry for distributed cluster - tracks node addresses.
+/// GAP-0889: canonical definition extracted to node_registry.zig so the
+/// standalone unit tests exercise the real type (no drift-prone copy).
+// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD; OWNER=distributed; UPDATED=2026-06-11
+pub const NodeRegistry = @import("node_registry.zig").NodeRegistry;
 
 /// Result chunk for streaming
 const ResultChunk = struct {
