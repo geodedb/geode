@@ -1428,3 +1428,104 @@ leader-source wiring exercised), `test-cluster-steady-state`,
    not conflate.
 
 prod remains UNTOUCHED (single-node 0.6.14) until (1)–(3) pass.
+
+---
+
+## ✅ VERIFIED on real Kubernetes (2026-06-11, `dev` = `c42853c`) — stall-detector rework holds; owed items (1)–(3) PASS; item (4) reproduced as predicted (dirty-durable-state recovery)
+
+The `3aeb0fcc` stall-detector rework is **verified on the real arda 3-pod
+cluster**. The owed checklist (1)–(3) passes, and the separate bug the rework doc
+anticipated in item (4) is confirmed real — which also **corrects the attribution
+in my `78bb908` RE-OPEN above**.
+
+### ⚠️ First, the methodology correction (why the `78bb908` report read as catastrophic)
+
+`78bb908` and the first `c42853c` pass were tested on **week-old reused PVCs**. With
+`FileStorage` now persisting the raft log + hard-state across rolls, those PVCs
+carried **divergent durable raft state** accumulated across ~7 days of forced-restart
+testing on buggy interim builds — both clusters booted at `term=13`/`term=14`
+(not a clean `term=1`) with inconsistent per-node logs. On `c42853c` (pre-wipe) the
+result was a stable-but-broken **leader + two stuck candidates**, term frozen at 14,
+writes timing out (`C14L=0/0/0`) — and, crucially, **with the stall-evict storm
+already gone** (0 `peer stalled` warns in steady state). That is exactly the rework
+doc's **item (4)**: "a FileStorage-restored high-term start still fails to re-elect
+AFTER the storm is gone → a SEPARATE bug (candidate election path) — do not
+conflate." My `78bb908` RE-OPEN conflated the two: the stall **storm** was real on
+`78bb908` (it fired every ~3 s), but the *term-frozen non-convergence* was
+substantially this durable-state recovery bug, not the detector.
+
+### A clean-slate boot (PVCs wiped) — everything works
+
+Wiped all three `data-geode-*` PVCs (`scale sts → 0`, `delete pvc`, `scale → 3`) for
+a genuine clean boot:
+
+- **Clean convergence**: all three elect immediately (iter 1) → geode-2 leader,
+  geode-0/1 followers, **`term=1`** (low term confirms fresh durable state).
+- **Replication**: leader `CREATE (a)-[:CLNL]->(b)` → `CLNL=1/1/1`.
+- **Zero transport churn**: across the entire clean-cluster lifetime (boot + 3
+  restarts below), **0** `peer stalled` / `evicting stale` / `HandshakeError` /
+  `InvalidAddress` warns on any node.
+
+### Owed item (1) + (3) — PASS (leader restart no longer strands; no election-window eviction)
+
+- **Leader restart self-heals** (the exact #5 repro). `kubectl delete pod geode-2`
+  (leader) → geode-0 elected leader at **`term=2`**, and **all three reconverge**
+  (the restarted geode-2 rejoins as a follower) in ~40 s. A post-restart leader
+  `CREATE (a)-[:PR1L]->(b)` → `PR1L=1/1/1`.
+- **Repeatable**: restarted the leader again (→ geode-2 leader `term=3`, reconverged
+  ~40 s) and then a follower (reconverged, slower ~2.5 min but clean). After all
+  three restarts: healthy 1 leader + 2 followers, a fresh `CREATE (:FIN)` →
+  `FIN=1/1/1`, and the pre-restart `CLNL` row stays **EXACTLY 1** (no duplication;
+  the intermittent `ERR` reads are a brief post-restart query warm-up timeout on the
+  just-rebooted node, not loss/dup).
+- **Item (1) "NO `peer stalled … evicting` warn during the election window"**:
+  confirmed — **0** such warns cluster-wide across every restart's election window.
+  The leader-only arming + 15 s budget + two-strike rework structurally eliminated
+  the election-window eviction.
+- **Item (3)**: baseline + post-restart writes replicate with **zero** eviction
+  churn.
+
+### Owed item (2) — NOT exercised (no genuine blackhole occurred to recover from)
+
+On the clean cluster the restarted node **reconnected cleanly**, so the detector
+never needed to fire — there was no silent-blackhole stream to catch, hence no
+"single eviction after ~2 strikes (~18–21 s)" recovery event to observe. The
+genuine-stall *recovery* path (the original #5 case) therefore remains
+**unverified on real k8s** — it requires reproducing an actual half-open/silent
+stream (e.g. the netns M9 phase, or a deliberately black-holed peer), not just a
+pod restart that re-resolves cleanly. The *correctness* of the leader-only gate and
+two-strike logic is pinned by the 9/9 in-process tests; only the live blackhole is
+owed.
+
+### Owed item (4) — CONFIRMED as a separate, still-open bug: no recovery from divergent durable raft state
+
+The pre-wipe behavior above is the standalone repro: starting all three from
+`FileStorage`-restored **inconsistent** high-term logs (`term=13`/`14`), the cluster
+elects a leader but the other two never latch as followers — they sit as candidates,
+the term does not advance, and writes time out **with zero transport churn** (so it
+is NOT the stall detector). Wiping the PVCs and booting clean resolves it entirely.
+
+This is a real robustness gap, distinct from #5: **a 3-node cluster cannot recover
+from divergent persisted raft state via a rolling restart — it requires a manual PVC
+wipe.** Under normal operation (graceful restarts, single failures, a consistent log
+prefix) a cluster should not reach this state, and it did not arise in any clean-boot
+test; it accumulated only from this doc's week of deliberately abusive forced-leader
+kills on pre-fix builds. But the durable layer should still self-heal a follower
+whose log diverges from the leader's (truncate-and-refill from the leader, or
+`InstallSnapshot`) rather than wedging as a perpetual candidate. **Suggested
+follow-up:** a netns/3-node test that seeds deliberately divergent on-disk raft logs
+(or force-kills the leader mid-append repeatedly) and asserts the cluster
+re-converges from durable state without a wipe. Likely related to the still-pending
+`reportSnapshot`/compaction wiring (a lagging/divergent follower that cannot be
+caught up by plain AppendEntries needs `InstallSnapshot`, which has no production
+caller yet).
+
+### Bottom line
+
+The stall-detector livelock (`78bb908`) is **fixed and verified** — on a clean
+cluster `c42853c` converges, replicates, and **survives leader restarts with all
+three reconverging and no eviction churn**, which is the milestone #5 was blocking.
+Two items remain before a production 3-node cluster: **(a)** exercise the genuine
+silent-blackhole recovery path on real k8s (owed item 2), and **(b)** the
+divergent-durable-state recovery gap (owed item 4) so a cluster self-heals without a
+PVC wipe. prod remains UNTOUCHED (single-node 0.6.14).
