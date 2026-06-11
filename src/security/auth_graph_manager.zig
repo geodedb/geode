@@ -1416,10 +1416,14 @@ fn sortHmacs(hmacs: [][32]u8) void {
 }
 
 fn computeChainHashChecked(hmac_key: *const [32]u8, record_hmacs: []const [32]u8, record_count: u64) [32]u8 {
+    // error-policy: D — computeChainHash's only error is RecordCountMismatch;
+    // every call site passes record_count == record_hmacs.len by construction.
     return auth_hmac.computeChainHash(hmac_key, record_hmacs, record_count) catch unreachable;
 }
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
+    // error-policy: D — computeRecordHmac's only error is TooManyProperties
+    // (>128 props); every call site passes a fixed-size props array well under that.
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
 }
 
@@ -1493,6 +1497,7 @@ test "resolveHmacKey auto-generates key file when data_dir exists but key file m
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
+    // error-policy: A — test setup; a failure here crashes the test, which is the desired signal.
     const dir_path = tmpDirRealpathAlloc(testing.allocator, &tmp_dir.sub_path) catch unreachable;
     defer testing.allocator.free(dir_path);
 

@@ -241,6 +241,8 @@ pub fn formatAmzDate(epoch_seconds: u64) [16]u8 {
     const month_day = year_day.calculateMonthDay();
     const day_secs = es.getDaySeconds();
     var out: [16]u8 = undefined;
+    // error-policy: D — the amz-date format is exactly 16 bytes
+    // (YYYYMMDD'T'HHMMSS'Z') for any 4-digit year; out is [16]u8.
     _ = std.fmt.bufPrint(&out, "{d:0>4}{d:0>2}{d:0>2}T{d:0>2}{d:0>2}{d:0>2}Z", .{
         year_day.year,
         month_day.month.numeric(),

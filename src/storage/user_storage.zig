@@ -57,6 +57,8 @@ const HAS_ROLE_EDGE = "HAS_ROLE";
 pub const GRAPH_GRANT_LABEL = "GraphGrant";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
+    // error-policy: D — computeRecordHmac's only error is TooManyProperties
+    // (>128 props); every call site passes a fixed-size props array well under that.
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
 }
 

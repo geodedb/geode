@@ -388,7 +388,10 @@ pub const TenantRegistry = struct {
             const f = try std.Io.Dir.cwd().createFile(io, tmp_path, .{ .truncate = true });
             defer f.close(io);
             try f.writeStreamingAll(io, aw.written());
-            f.sync(io) catch {};
+            // error-policy: C — fsync before rename is the durability point of
+            // the atomic-write protocol; swallowing the error could publish an
+            // empty/partial registry after a crash. Callers log persist failures.
+            try f.sync(io);
         }
         try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), final_path, io);
     }

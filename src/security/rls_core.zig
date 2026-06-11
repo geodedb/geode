@@ -2482,6 +2482,8 @@ pub const AttributeBasedAccessControl = struct {
             };
 
             // Cache the result
+            // error-policy: A — best-effort attribute cache; the freshly computed
+            // result is still returned, so a failed put only costs re-evaluation.
             self.attribute_cache.put(rule.name, .{
                 .value = .{ .boolean = result },
                 .timestamp = now,

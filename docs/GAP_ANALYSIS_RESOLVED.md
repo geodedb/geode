@@ -2,11 +2,42 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: June 10, 2026
-**Last Verified**: June 10, 2026
+**Last Updated**: June 11, 2026
+**Last Verified**: June 11, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
 **Current Status**: 31 open/partial actionable gaps (2 Critical, 8 High, 19 Medium, 2 Low). See docs/GAP_ANALYSIS.md.
+
+## 2026-06-11 — GAP-0886b: error-handling policy + high-risk catch audit (quality #721 / #556 / #809 / #810, high-risk tier)
+
+**Resolution**: Tiered closure — the **high-risk tier** (data-loss/security relevance:
+`src/security/`, `src/storage/` + `src/wal.zig`, `src/execution/` write paths) is closed;
+remaining tiers stay open in `docs/QUALITY_GAP_ANALYSIS.md` with a per-directory burn-down table.
+
+- **Policy**: [ERROR_HANDLING_POLICY.md](ERROR_HANDLING_POLICY.md) — four categories
+  (A safe-to-ignore-with-justification, B must-log, C must-propagate, D must-crash/assert)
+  with real code examples from this repo. Every audited site carries an
+  `// error-policy: <cat> — <reason>` comment.
+- **Counts (before → after, code sites)**: `catch {}`: security 18→16, storage 66→65,
+  execution write-paths 12→2 (remaining are A-justified); `catch unreachable`: security 5,
+  storage 6, execution 1 — all 12 carry category-D invariant proofs (error-set or buffer-size).
+- **C/D violations found and fixed (9)**:
+  1. `tenant_registry.zig` persist: `f.sync` swallowed before rename → `try` (durability point of the atomic-write protocol).
+  2. `audit.zig` initFromTail: malformed tail `event_hash` silently partial-overwrote the hash-chain anchor → scratch-buffer decode + `log.warn` (chain restart is now operator-visible).
+  3. `auth_dispatch.zig` role_create: `g_custom_roles.put(...) catch {}` reported "created" on failure and leaked dupes → propagate with errdefer frees.
+  4. `storage_dispatch.zig` geode.cdc.start: reported `status="started"` even when the worker pool failed to spawn → propagate non-`AlreadyRunning` errors (start stays idempotent).
+  5. `audit_dispatch.zig` log_auth_event: set `logged=true` even when the audit write failed → truthful `logged` + warn.
+  6. `audit_dispatch.zig` test-event procedures (2 sites): counted `events_written`/`events_logged`+`success` on failed writes → count only on success.
+  7. `auth_dispatch.zig` MFA rate-limit: record updates failed OPEN silently (attacker gets extra attempts on OOM) → `log.warn` at all three failure points (B).
+  8. `property_mutation.zig` advanced-index rebuild (3 sites): queue/rebuild failures left indexes silently stale → `log.warn` with index name (B).
+  9. `graph_storage_adapter.zig` FTS lazy re-open: corrupt-index open failure silently degraded to "zero hits" → warn on non-`IndexNotFound` (B).
+- **Known accepted residual** (documented in the policy doc + at both sites): TDE tenant-key
+  derivation falls back to a shared `"truncated"` HKDF info string for tenant ids > ~490 bytes.
+- **Verification**: `zig build` clean; named steps PASS: test-gap0854, test-gap0881, test-wal,
+  test-gap0880, test-gap0535, test-gap0509-tenant-isolation, test-tenant-registry,
+  test-tenant-quota, test-fts-storage-adapter, test-fts-e2e, test-s3-sigv4,
+  test-group-commit-coordinator, test-rls-expr-engine-wiring, test-auth-persistence,
+  test-audit-actor-key, test-gap0872, test-gap0869, test-mutation-timing (18/18).
 
 ## 2026-06-09/10 Closure Round — branch gap-closure-2026-06-09 (34 items)
 

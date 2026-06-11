@@ -48,6 +48,8 @@ const Value = value_types.Value;
 
 const audit_mod = @import("../security/audit.zig");
 
+const log = std.log.scoped(.audit_dispatch);
+
 // CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
 pub var audit_event_id_counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(1001);
 pub var global_audit_logger: ?audit_mod.AuditLogger = null;
@@ -324,7 +326,7 @@ fn handleAuditLogAuthEvent(allocator: std.mem.Allocator, call_stmt: ast.CallProc
         else
             .access_denied;
 
-        logger.logEvent(.{
+        if (logger.logEvent(.{
             .timestamp = timestamp,
             .event_type = event_type,
             .user_id = null,
@@ -337,8 +339,14 @@ fn handleAuditLogAuthEvent(allocator: std.mem.Allocator, call_stmt: ast.CallProc
             .session_id = null,
             .query_hash = null,
             .additional_context = null,
-        }) catch {};
-        logged = true;
+        })) |_| {
+            logged = true;
+        } else |err| {
+            // error-policy: C — the procedure surfaces a `logged` column; it
+            // must report false (and warn) when the audit write failed rather
+            // than claim the event was recorded.
+            log.warn("audit logEvent failed; reporting logged=false: {s}", .{@errorName(err)});
+        }
     }
 
     // Create result columns
@@ -662,7 +670,8 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
     // Convert root hash to hex string
     var hex_buf: [64]u8 = undefined;
     for (root_hash, 0..) |byte, i| {
-        _ = std.fmt.bufPrint(hex_buf[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte}) catch {};
+        // error-policy: D — "{x:0>2}" of a u8 is exactly 2 bytes into a 2-byte slice.
+        _ = std.fmt.bufPrint(hex_buf[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte}) catch unreachable;
     }
 
     const columns = try allocator.alloc([]const u8, 3);
@@ -754,7 +763,7 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
 
         if (global_audit_logger) |*logger| {
             // Log additional test event
-            logger.logEvent(.{
+            if (logger.logEvent(.{
                 .timestamp = compat_milliTimestamp(),
                 .event_type = .access_granted,
                 .user_id = 1003,
@@ -767,8 +776,13 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
                 .session_id = null,
                 .query_hash = null,
                 .additional_context = null,
-            }) catch {};
-            events_written += 1;
+            })) |_| {
+                events_written += 1;
+            } else |err| {
+                // error-policy: C — the procedure reports events_written; do not
+                // count an event the logger failed to write.
+                log.warn("audit test event write failed: {s}", .{@errorName(err)});
+            }
         }
     } else |_| {
         success = false;
@@ -833,7 +847,7 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
 
         if (global_audit_logger) |*logger| {
             // Log test event for this category
-            logger.logEvent(.{
+            if (logger.logEvent(.{
                 .timestamp = compat_milliTimestamp(),
                 .event_type = cat.event_type,
                 .user_id = 1000 + @as(u64, @intCast(i)),
@@ -846,9 +860,14 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
                 .session_id = "test_session",
                 .query_hash = null,
                 .additional_context = null,
-            }) catch {};
-            events_logged = 1;
-            success = true;
+            })) |_| {
+                events_logged = 1;
+                success = true;
+            } else |err| {
+                // error-policy: C — the per-category row reports events_logged/
+                // success; do not claim success for a failed audit write.
+                log.warn("audit category test event write failed ({s}): {s}", .{ cat.category, @errorName(err) });
+            }
         }
 
         const row = try allocator.alloc(Value, 3);

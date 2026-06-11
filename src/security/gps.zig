@@ -296,8 +296,8 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
 
     // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=DecideInsert; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
     // Helper: insert a decision into the cache (if cache_key was set) then return it.
-    // Allocation errors from cache.insert are swallowed — a cache failure must never
-    // block an authorization decision.
+    // error-policy: A — allocation errors from cache.insert are swallowed; a cache
+    // failure must never block an authorization decision (decision still returned).
     const cacheAndReturn = struct {
         fn f(key: ?decision_cache.Key, d: PolicyDecision) PolicyDecision {
             if (key) |k| {

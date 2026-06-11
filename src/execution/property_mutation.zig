@@ -200,7 +200,12 @@ fn queueAdvancedIndexRebuild(
     const undo_log = txn_undo_log.getGlobalUndoLog(store.allocator);
     if (undo_log.active) {
         for (names.items) |name| {
-            undo_log.queueAdvancedIndexRebuild(name) catch {};
+            undo_log.queueAdvancedIndexRebuild(name) catch |err| {
+                // error-policy: B — a dropped rebuild entry leaves the advanced
+                // index stale after the txn resolves; the mutation itself is
+                // committed/rolled back independently, so log loudly.
+                log.warn("failed to queue advanced index rebuild for '{s}': {s}", .{ name, @errorName(err) });
+            };
         }
         return;
     }
@@ -212,9 +217,15 @@ fn queueAdvancedIndexRebuild(
             // Using store.allocator here would cause Invalid free when gpa frees them.
             const alloc = ctx.pending_index_rebuilds_allocator orelse store.allocator;
             for (names.items) |name| {
-                const name_copy = alloc.dupe(u8, name) catch continue;
+                // error-policy: B — an OOM here drops the pending rebuild and
+                // leaves the advanced index stale; log loudly and continue.
+                const name_copy = alloc.dupe(u8, name) catch {
+                    log.warn("failed to queue pending index rebuild for '{s}': OutOfMemory", .{name});
+                    continue;
+                };
                 rebuilds.put(name_copy, {}) catch {
                     alloc.free(name_copy);
+                    log.warn("failed to queue pending index rebuild for '{s}': OutOfMemory", .{name});
                 };
             }
             return;
@@ -222,7 +233,12 @@ fn queueAdvancedIndexRebuild(
     }
 
     for (names.items) |name| {
-        manager.rebuildAdvancedIndex(store, name) catch {};
+        manager.rebuildAdvancedIndex(store, name) catch |err| {
+            // error-policy: B — a failed rebuild leaves the advanced index
+            // stale (queries may serve stale entries); the mutation itself
+            // committed, so log loudly instead of failing the statement.
+            log.warn("advanced index rebuild failed for '{s}': {s}", .{ name, @errorName(err) });
+        };
     }
 }
 

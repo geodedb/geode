@@ -497,6 +497,9 @@ pub const ShardedCoordinator = struct {
         // these counters for an existing coordinator appended duplicate registry
         // entries and allocated under the runtime-metrics mutex on every MERGE.
         if (self.metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
+        // error-policy: A (whole block) — metric registration is best-effort
+        // observability; duplicate-name or OOM failures must never block the
+        // commit pipeline.
         reg.register("coord_apply_batches_total", &self.apply_batches_total) catch {};
         reg.register("coord_apply_ops_total", &self.apply_ops_total) catch {};
         reg.register("coord_apply_errors_total", &self.apply_errors_total) catch {};
@@ -607,6 +610,9 @@ pub const ShardedCoordinator = struct {
             }
         }
 
+        // error-policy: A — graph-handle warm-up only; if it fails, the
+        // statement-txn open below and every per-op bulk helper report the
+        // real error through each op's res.err.
         _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
 
         // Task 7 (ShardedGraphEngine migration): open a statement txn pinned

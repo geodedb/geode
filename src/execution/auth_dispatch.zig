@@ -278,14 +278,26 @@ fn recordMfaFailure(allocator: std.mem.Allocator, username: []const u8, now_ms: 
             .fail_count = new_count,
             .last_attempt_ms = now_ms,
             .lockout_until_ms = lockout,
-        }) catch {};
+        }) catch {
+            // error-policy: B — losing this update fails the MFA rate limiter
+            // OPEN (attacker gets extra attempts); must be operator-visible.
+            log.warn("mfa rate-limit record update failed (fail-open)", &.{Attr.string("user", username)});
+        };
     } else {
-        const key = allocator.dupe(u8, username) catch return;
+        const key = allocator.dupe(u8, username) catch {
+            // error-policy: B — same fail-open consequence as above.
+            log.warn("mfa rate-limit record alloc failed (fail-open)", &.{Attr.string("user", username)});
+            return;
+        };
         g_mfa_attempts.put(key, .{
             .fail_count = 1,
             .last_attempt_ms = now_ms,
             .lockout_until_ms = 0,
-        }) catch {};
+        }) catch {
+            // error-policy: B — same fail-open consequence as above.
+            allocator.free(key);
+            log.warn("mfa rate-limit record insert failed (fail-open)", &.{Attr.string("user", username)});
+        };
     }
 }
 
@@ -1006,7 +1018,14 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
-    g_custom_roles.put(try allocator.dupe(u8, role_name), try allocator.dupe(u8, desc)) catch {};
+    // error-policy: C — the procedure reports "created"; a failed in-memory
+    // registration must propagate instead of lying to the client (and the
+    // dupes must not leak on the error path).
+    const role_key = try allocator.dupe(u8, role_name);
+    errdefer allocator.free(role_key);
+    const desc_copy = try allocator.dupe(u8, desc);
+    errdefer allocator.free(desc_copy);
+    try g_custom_roles.put(role_key, desc_copy);
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-021; FEATURE="AuthDDLPersistence"; ASPECT=RoleCreatePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
     if (g_role_persist.create_fn) |f| {
         _ = f(g_role_persist.ctx, role_name, desc) catch |e|

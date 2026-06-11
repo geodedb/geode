@@ -1372,6 +1372,8 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
 
         fn run(ctx: *@This()) void {
             while (!ctx.start.load(.acquire)) {
+                // error-policy: A — yield in a test spin-wait; on failure the
+                // loop simply spins hotter, which is harmless.
                 std.Thread.yield() catch {};
             }
             const auth = authenticate("alice", "Password1!") catch {

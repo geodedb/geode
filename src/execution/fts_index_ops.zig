@@ -72,6 +72,8 @@ pub fn createFulltextIndex(
         },
         else => return err,
     };
+    // error-policy: A — best-effort cleanup of the half-created index on an
+    // already-failing path; the backfill error below is what propagates.
     errdefer fa.dropIndex(index_name) catch {};
 
     try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa);

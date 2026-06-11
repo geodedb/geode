@@ -229,6 +229,8 @@ pub const RemoteKmsServer = struct {
         const response = self.processRequest(request, &response_buf) catch |err| {
             std.debug.print("KMS_SERVER: Failed to process request: {}\n", .{err});
             const err_response = "{\"status\":\"ERR\",\"code\":\"InternalError\"}\n";
+            // error-policy: A — best-effort error reply on an already-logged
+            // failure; if the peer is gone there is nothing further to do.
             stream.writeAll(err_response) catch {};
             return;
         };

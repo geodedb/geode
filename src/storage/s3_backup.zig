@@ -180,6 +180,8 @@ pub const S3BackupManager = struct {
             error.PathAlreadyExists => {},
             else => return err,
         };
+        // error-policy: A — best-effort cleanup of the restore staging dir
+        // under /tmp; a leftover tree affects nothing but disk hygiene.
         defer std.Io.Dir.cwd().deleteTree(io, tmp_dir) catch {};
 
         const s3_key = try std.fmt.allocPrint(
@@ -469,6 +471,7 @@ pub const S3BackupManager = struct {
 
     fn uploadPart(self: *Self, upload_id: []const u8, s3_key: []const u8, part_number: u32, data: []const u8) ![]const u8 {
         var part_buf: [10]u8 = undefined;
+        // error-policy: D — a u32 prints at most 10 decimal digits; part_buf is [10]u8.
         const part_str = std.fmt.bufPrint(&part_buf, "{d}", .{part_number}) catch unreachable;
         const params = [_]sigv4.QueryParam{
             .{ .name = "partNumber", .value = part_str },

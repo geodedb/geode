@@ -695,6 +695,9 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
 
         const io_ef = std.Io.Threaded.global_single_threaded.io();
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
+            // error-policy: A — ensure-parent-dirs is best-effort (the dir may
+            // already exist); a real failure surfaces as a proper error on the
+            // createFile immediately below.
             std.Io.Dir.cwd().createDirPath(io_ef, full_path[0..last_slash]) catch {};
         }
 

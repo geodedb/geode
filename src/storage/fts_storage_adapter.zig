@@ -123,10 +123,10 @@ pub const FtsStorageAdapter = struct {
         var it = self.indexes.iterator();
         while (it.next()) |entry| {
             const ie = entry.value_ptr.*;
-            // Best-effort durability: fts.Engine.deinit does NOT flush, so we
-            // flush here before tearing the engine down. Swallow errors —
-            // deinit must not fail, and a flush failure on shutdown leaves the
-            // WAL as the recovery source of truth.
+            // error-policy: A — best-effort durability: fts.Engine.deinit does
+            // NOT flush, so we flush here before tearing the engine down.
+            // Swallow errors — deinit must not fail, and a flush failure on
+            // shutdown leaves the WAL as the recovery source of truth.
             ie.engine.flush() catch {};
             ie.engine.deinit();
             ie.dir.close(self.io);
@@ -246,13 +246,15 @@ pub const FtsStorageAdapter = struct {
         self.mu.unlock(self.io);
 
         const ie = kv.value;
+        // error-policy: A — the index is being dropped and its on-disk tree
+        // deleted below; a failed final flush cannot lose anything we keep.
         ie.engine.flush() catch {};
         ie.engine.deinit();
         ie.dir.close(self.io);
-        // Best-effort on-disk cleanup. std.Io.Dir.deleteTree exists, so we can
-        // recursively remove the child tree base_dir-relative. Failure (e.g.
-        // ENOENT, EACCES) is non-fatal: the index is already gone from the
-        // registry and a stale on-disk dir is harmless until next boot.
+        // error-policy: A — best-effort on-disk cleanup. std.Io.Dir.deleteTree
+        // exists, so we can recursively remove the child tree base_dir-relative.
+        // Failure (e.g. ENOENT, EACCES) is non-fatal: the index is already gone
+        // from the registry and a stale on-disk dir is harmless until next boot.
         self.base_dir.deleteTree(self.io, name) catch {};
         self.allocator.free(ie.name);
         self.allocator.destroy(ie);

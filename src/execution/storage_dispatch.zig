@@ -2734,7 +2734,15 @@ fn handleCdcStart(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!E
     var recovered_event_count: i64 = 0;
 
     if (global_cdc_engine) |engine| {
-        engine.start() catch {};
+        engine.start() catch |err| switch (err) {
+            // error-policy: A — geode.cdc.start is intentionally idempotent;
+            // an already-running engine still reports status="started".
+            error.AlreadyRunning => {},
+            // error-policy: C — the procedure reports status="started"; a real
+            // start failure (e.g. worker pool spawn) must propagate instead of
+            // lying to the client.
+            else => return err,
+        };
         recovered_event_count = @intCast(engine.total_events);
     }
 

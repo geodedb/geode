@@ -577,9 +577,10 @@ fn dropChildrenCascade(
             c_nodes = counts.nodes;
         }
 
-        // Children were dropped depth-first above, so removeTenant(child) can
-        // only fail with TenantNotFound here — both members of its error set are
-        // benign (the node is already gone / has no descendants left).
+        // error-policy: A — children were dropped depth-first above, so
+        // removeTenant(child) can only fail with TenantNotFound here — both
+        // members of its error set are benign (the node is already gone / has
+        // no descendants left).
         engine.hierarchy_manager.removeTenant(child) catch {};
 
         // Registry record for the child (best-effort: a child registered in the
