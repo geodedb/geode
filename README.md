@@ -339,7 +339,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Advanced Features**
 
-- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
+- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk (experimental)
 - **[Security Progress](docs/SECURITY_PROGRESS.md)** - Enhanced RLS and compliance
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming and pattern detection
 - **[Graph Algorithms](docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md)** - Algorithm usage and performance

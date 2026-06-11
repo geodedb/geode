@@ -55,7 +55,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Advanced Features
 
-- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
+- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk (EXPERIMENTAL — simplified implementations; see GAP-0879 framing in that doc)
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming analytics with ML integration
 - **[Materialized Views](docs/MATERIALIZED_VIEWS.md)** - Enterprise view management
 - **[Enhanced Transaction Isolation](docs/ENHANCED_TRANSACTION_ISOLATION.md)** - Advanced MVCC
@@ -85,7 +85,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **Vector Operations** - HNSW indexing with 6 distance metrics and SIMD acceleration
 4. **Performance Optimization** - 13.18x I/O improvement, memory-mapped operations
 5. **IndexOptimizer** - Cost-based query planning with statistics integration
-6. **ML Graph Embeddings** - Complete Node2Vec, GraphSAGE, DeepWalk implementation
+6. **ML Graph Embeddings** - EXPERIMENTAL Node2Vec (real p/q-biased walks, seeded, real loss reporting), simplified GraphSAGE aggregation, DeepWalk (see docs/ML_GRAPH_EMBEDDINGS.md, GAP-0879)
 7. **Real-time Analytics** - Streaming analytics with pattern detection and anomaly detection
 8. **Enhanced Transaction Isolation** - Advanced MVCC with SSI and phantom read prevention
 9. **Distributed Query Coordination** - Federation-aware optimization with load balancing

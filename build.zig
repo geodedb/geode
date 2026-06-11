@@ -4801,6 +4801,26 @@ pub fn build(b: *std.Build) void {
     const gap0509_step = b.step("test-gap0509-tenant-isolation", "GAP-0509 regression (tenant isolation for MATCH and SHOW TABLES)");
     gap0509_step.dependOn(&run_gap0509_tests.step);
 
+    // GAP-0879 regression: ML embeddings truth. Node2Vec walks honor the
+    // p/q transition bias (Grover & Leskovec 2016) with deterministic
+    // seeding, and trainEmbeddings records a REAL per-epoch skip-gram loss
+    // (never simulated) that decreases on a tiny deterministic graph.
+    const gap0879_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_ml_graph_embeddings_integration.zig"), .target = target, .optimize = optimize });
+    gap0879_test_mod.addImport("geode", root_mod);
+    const gap0879_tests = b.addTest(.{ .root_module = gap0879_test_mod });
+    const run_gap0879_tests = b.addRunArtifact(gap0879_tests);
+    shardDep(test_step, &run_gap0879_tests.step, 1, test_shard_loads, test_shard_index);
+    // Also compile+run the in-module tests of src/ml/integration_enhanced.zig
+    // (caller-owned getNeighbors allocation contract, p/q-biased RandomWalker).
+    const gap0879_ie_tests = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration_enhanced.zig"), .target = target, .optimize = optimize }),
+    });
+    const run_gap0879_ie_tests = b.addRunArtifact(gap0879_ie_tests);
+    shardDep(test_step, &run_gap0879_ie_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0879_step = b.step("test-gap0879", "GAP-0879 regression (Node2Vec p/q bias + real training loss + ML allocator ownership)");
+    gap0879_step.dependOn(&run_gap0879_tests.step);
+    gap0879_step.dependOn(&run_gap0879_ie_tests.step);
+
     // GAP-0840 regression: opt-in strict-tenancy mode. The shared
     // tenancy.resolveTenantFilter decision (delegated to by both
     // crud_operations.tenantFilterFromContext and

@@ -1,6 +1,14 @@
-// CANARY: REQ=REQ-ML-EMBEDDINGS-001; FEATURE="Graph Embeddings Integration"; ASPECT=CoreSystem; STATUS=TESTED; TEST=TestCANARY_ML_EMBEDDINGS_001_CoreSystem; OWNER=ml; UPDATED=2025-10-05
-// CANARY: REQ=REQ-ML-EMBEDDINGS-002; FEATURE="Node2Vec Algorithm"; ASPECT=Implementation; STATUS=TESTED; TEST=TestCANARY_ML_EMBEDDINGS_002_Node2Vec; OWNER=ml; UPDATED=2025-10-05
-// CANARY: REQ=REQ-ML-EMBEDDINGS-003; FEATURE="Graph Neural Networks"; ASPECT=GraphSAGE; STATUS=TESTED; TEST=TestCANARY_ML_EMBEDDINGS_003_GraphSAGE; OWNER=ml; UPDATED=2025-10-05
+// EXPERIMENTAL MODULE (GAP-0879): graph-embedding algorithms in this file are
+// simplified, small-scale implementations intended for experimentation, not
+// production-grade representation learning. Node2Vec walks implement the real
+// p/q transition bias with deterministic seeding; GraphSAGE uses a simplified
+// mean-aggregation + single linear projection. See docs/ML_GRAPH_EMBEDDINGS.md.
+//
+// CANARY: REQ=REQ-ML-EMBEDDINGS-001; FEATURE="Graph Embeddings Integration"; ASPECT=CoreSystem; STATUS=TESTED; TEST=tests/test_ml_graph_embeddings_integration.zig; OWNER=ml; UPDATED=2026-06-11
+// CANARY: REQ=REQ-ML-EMBEDDINGS-002; FEATURE="Node2Vec Algorithm"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_ml_graph_embeddings_integration.zig; OWNER=ml; UPDATED=2026-06-11
+// CANARY: REQ=REQ-ML-EMBEDDINGS-003; FEATURE="Graph Neural Networks"; ASPECT=GraphSAGE; STATUS=IMPL; OWNER=ml; UPDATED=2026-06-11
+// (REQ-ML-EMBEDDINGS-003 honestly downgraded TESTED->IMPL: the previously
+// referenced test never existed; GraphSAGE aggregation is simplified/experimental.)
 
 const std = @import("std");
 
@@ -75,6 +83,10 @@ pub const EmbeddingConfig = struct {
     min_learning_rate: f64 = 0.0001,
     convergence_threshold: f64 = 0.001,
     max_iterations: u32 = 1000,
+
+    /// Deterministic seed for walk sampling and embedding initialization.
+    /// null = seed from wall clock (non-reproducible).
+    seed: ?u64 = null,
 };
 
 /// Types of aggregation functions for GraphSAGE
@@ -146,17 +158,19 @@ pub const EmbeddingVector = struct {
 
 /// Random walk state for Node2Vec algorithm
 pub const RandomWalk = struct {
+    allocator: Allocator,
     path: ArrayList(u64),
     current_node: u64,
     previous_node: ?u64,
     p: f64, // Return parameter
     q: f64, // In-out parameter
 
-    pub fn init(allocator: Allocator, start_node: u64, p: f64, q: f64) RandomWalk {
-        var path = ArrayList(u64).init(allocator);
-        path.append(start_node) catch {};
+    pub fn init(allocator: Allocator, start_node: u64, p: f64, q: f64) !RandomWalk {
+        var path: ArrayList(u64) = .empty;
+        try path.append(allocator, start_node);
 
         return RandomWalk{
+            .allocator = allocator,
             .path = path,
             .current_node = start_node,
             .previous_node = null,
@@ -166,10 +180,13 @@ pub const RandomWalk = struct {
     }
 
     pub fn deinit(self: *RandomWalk) void {
-        self.path.deinit();
+        self.path.deinit(self.allocator);
     }
 
-    /// Calculate transition probability for Node2Vec biased walk
+    /// Unnormalized Node2Vec transition weight (Grover & Leskovec 2016, §3.2):
+    /// 1/p for returning to the previous node (distance 0 from prev),
+    /// 1 for nodes adjacent to the previous node (distance 1),
+    /// 1/q for nodes not adjacent to the previous node (distance 2).
     pub fn transitionProbability(self: *const RandomWalk, target_node: u64, graph: *const geode.graph_common.GraphStore) f64 {
         if (self.previous_node == null) return 1.0;
 
@@ -193,7 +210,13 @@ pub const RandomWalk = struct {
 pub const TrainingContext = struct {
     epoch: u32,
     batch: u32,
+    /// Mean skip-gram proxy loss (squared Euclidean distance between
+    /// co-occurring pair embeddings, measured pre-update) for the most
+    /// recently completed epoch. Real computation — never simulated.
     loss: f64,
+    /// Loss of the first epoch, kept so callers can verify the training
+    /// trend (loss should decrease from initial_loss to loss).
+    initial_loss: f64 = std.math.inf(f64),
     learning_rate: f64,
     convergence_score: f64,
 
@@ -263,7 +286,7 @@ pub const GraphEmbeddingsManager = struct {
         // Register algorithm implementations
         try manager.registerAlgorithms();
 
-        log.info("Initialized Graph Embeddings Manager with {} dimensions", .{config.dimensions});
+        log.info("Initialized Graph Embeddings Manager", &.{Attr.uint("dimensions", config.dimensions)});
         return manager;
     }
 
@@ -275,6 +298,15 @@ pub const GraphEmbeddingsManager = struct {
         }
         self.embeddings.deinit();
         self.algorithm_registry.deinit();
+
+        // Clean up learned GraphSAGE aggregation weights
+        if (self.aggregation_weights) |weights| {
+            for (weights) |layer_weights| {
+                self.allocator.free(layer_weights);
+            }
+            self.allocator.free(weights);
+            self.aggregation_weights = null;
+        }
     }
 
     /// Register algorithm implementations
@@ -303,7 +335,7 @@ pub const GraphEmbeddingsManager = struct {
             .similarity_fn = calculateSimilarity,
         });
 
-        log.info("Registered {} ML algorithms", .{self.algorithm_registry.count()});
+        log.info("Registered ML algorithms", &.{Attr.uint("count", self.algorithm_registry.count())});
     }
 
     /// Train embeddings using specified algorithm.
@@ -334,7 +366,7 @@ pub const GraphEmbeddingsManager = struct {
             .convergence_score = std.math.inf(f64),
         };
 
-        log.info("Starting {} training with {} dimensions, {} epochs", .{ algorithm, config.dimensions, config.epochs });
+        log.info("Starting embedding training", &.{ Attr.string("algorithm", @tagName(algorithm)), Attr.uint("dimensions", config.dimensions), Attr.uint("epochs", config.epochs) });
 
         // Get algorithm implementation
         const implementation = self.algorithm_registry.get(algorithm) orelse {
@@ -355,7 +387,7 @@ pub const GraphEmbeddingsManager = struct {
         // Calculate average embedding quality (simplified metric)
         self.statistics.average_embedding_quality = self.calculateAverageQuality();
 
-        log.info("Completed {} training in {}ms, generated {} embeddings", .{ algorithm, training_time, self.embeddings.count() });
+        log.info("Completed embedding training", &.{ Attr.string("algorithm", @tagName(algorithm)), Attr.int("duration_ms", training_time), Attr.uint("embeddings", self.embeddings.count()) });
     }
 
     /// Get embedding for a specific node
@@ -415,7 +447,7 @@ pub const GraphEmbeddingsManager = struct {
         std.mem.copyForwards(f32, embedding_entry.embedding, new_embedding);
         embedding_entry.updated_at = compat_milliTimestamp();
 
-        log.debug("Updated embedding for node {}", .{node_id});
+        log.debug("Updated embedding for node", &.{Attr.uint("node_id", node_id)});
     }
 
     /// Calculate average quality metric for all embeddings
@@ -444,15 +476,25 @@ pub const GraphEmbeddingsManager = struct {
     /// Connect to index manager for vector similarity search
     pub fn connectIndexManager(self: *GraphEmbeddingsManager, idx_manager: *geode.index.IndexManager) void {
         self.index_manager = idx_manager;
-        log.info("Connected to IndexManager for vector similarity search");
+        log.info("Connected to IndexManager for vector similarity search", &.{});
     }
 };
 
 // Algorithm Implementation Functions
 
+/// Derive the PRNG seed for a training run: explicit config seed (deterministic,
+/// reproducible runs) or wall clock fallback.
+fn trainingSeed(config: EmbeddingConfig) u64 {
+    return config.seed orelse @as(u64, @bitCast(compat_milliTimestamp()));
+}
+
 /// Node2Vec training implementation
 fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
-    log.info("Training Node2Vec algorithm with p={d:.2}, q={d:.2}", .{ config.p, config.q });
+    log.info("Training Node2Vec algorithm", &.{ Attr.float("p", config.p), Attr.float("q", config.q) });
+
+    // Single PRNG for the whole run: deterministic when config.seed is set.
+    var prng = std.Random.DefaultPrng.init(trainingSeed(config));
+    const rng = prng.random();
 
     // Initialize embeddings for all nodes (null = cross-tenant, admin-level operation)
     const nodes = try graph.getAllNodesForTenant(manager.allocator, null);
@@ -460,20 +502,22 @@ fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
 
     for (nodes) |node_id| {
         const embedding = try manager.allocator.alloc(f32, config.dimensions);
+        errdefer manager.allocator.free(embedding);
 
         // Initialize with small random values
-        var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
         for (embedding) |*value| {
-            value.* = (prng.random().float(f32) - 0.5) * 0.1;
+            value.* = (rng.float(f32) - 0.5) * 0.1;
         }
 
-        try manager.embeddings.put(node_id, EmbeddingVector{
+        const gop = try manager.embeddings.getOrPut(node_id);
+        if (gop.found_existing) manager.allocator.free(gop.value_ptr.embedding);
+        gop.value_ptr.* = EmbeddingVector{
             .node_id = node_id,
             .embedding = embedding,
             .algorithm = .node2vec,
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
-        });
+        };
     }
 
     // Generate random walks and train embeddings
@@ -483,27 +527,52 @@ fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
             ctx.updateLearningRate(&config);
         }
 
+        var epoch_loss_sum: f64 = 0.0;
+        var epoch_pairs: u64 = 0;
+
         // Perform random walks for each node
         for (nodes) |start_node| {
             for (0..config.num_walks) |_| {
-                var walk = RandomWalk.init(manager.allocator, start_node, config.p, config.q);
+                var walk = try RandomWalk.init(manager.allocator, start_node, config.p, config.q);
                 defer walk.deinit();
 
-                // Generate walk of specified length
-                try generateRandomWalk(&walk, graph, config.walk_length);
+                // Generate walk of specified length (p/q-biased sampling)
+                try generateRandomWalk(&walk, graph, config.walk_length, rng);
 
-                // Train embeddings using skip-gram model
-                try trainSkipGram(manager, walk.path.items, config);
+                // Train embeddings using skip-gram model; accumulate real loss
+                const stats = trainSkipGram(manager, walk.path.items, config);
+                epoch_loss_sum += stats.loss_sum;
+                epoch_pairs += stats.pairs;
             }
         }
 
-        log.debug("Completed epoch {}/{}", .{ epoch + 1, config.epochs });
+        // Record the real per-epoch loss (mean over all trained pairs).
+        const epoch_loss = if (epoch_pairs > 0)
+            epoch_loss_sum / @as(f64, @floatFromInt(epoch_pairs))
+        else
+            0.0;
+        if (manager.training_context) |*ctx| {
+            if (epoch == 0) ctx.initial_loss = epoch_loss;
+            ctx.convergence_score = if (std.math.isFinite(ctx.loss)) @abs(ctx.loss - epoch_loss) else std.math.inf(f64);
+            ctx.loss = epoch_loss;
+        }
+
+        log.debug("Completed Node2Vec epoch", &.{ Attr.uint("epoch", epoch + 1), Attr.uint("epochs", config.epochs), Attr.float("loss", epoch_loss) });
     }
 }
 
-/// GraphSAGE training implementation
+/// GraphSAGE training implementation.
+///
+/// EXPERIMENTAL: this is a simplified GraphSAGE variant. Aggregation uses
+/// mean pooling plus a single learned linear projection (see
+/// applyAggregationWeights) instead of the full per-layer weight matrices,
+/// non-linearities, and unsupervised loss of Hamilton et al. 2017. Do not
+/// treat its output as reference-quality GraphSAGE embeddings.
 fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
-    log.info("Training GraphSAGE algorithm with {} neighbor samples", .{config.neighbor_samples});
+    log.info("Training GraphSAGE algorithm (experimental simplified aggregation)", &.{Attr.uint("neighbor_samples", config.neighbor_samples)});
+
+    var prng = std.Random.DefaultPrng.init(trainingSeed(config));
+    const rng = prng.random();
 
     // GAP-0081: Store graph reference for inductive learning on unseen nodes
     manager.trained_graph = graph;
@@ -513,9 +582,8 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
         manager.aggregation_weights = try manager.allocator.alloc([]f32, manager.num_layers);
         for (manager.aggregation_weights.?) |*layer_weights| {
             layer_weights.* = try manager.allocator.alloc(f32, config.dimensions * 2);
-            var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
             for (layer_weights.*) |*w| {
-                w.* = prng.random().floatNorm(f32) * 0.1;
+                w.* = rng.floatNorm(f32) * 0.1;
             }
         }
     }
@@ -527,23 +595,25 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
     // Initialize embeddings
     for (nodes) |node_id| {
         const embedding = try manager.allocator.alloc(f32, config.dimensions);
+        errdefer manager.allocator.free(embedding);
 
         // Initialize with Xavier initialization
-        var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp() + node_id));
         const fan_in = @as(f32, @floatFromInt(config.dimensions));
         const xavier_std = @sqrt(2.0 / fan_in);
 
         for (embedding) |*value| {
-            value.* = prng.random().floatNorm(f32) * xavier_std;
+            value.* = rng.floatNorm(f32) * xavier_std;
         }
 
-        try manager.embeddings.put(node_id, EmbeddingVector{
+        const gop = try manager.embeddings.getOrPut(node_id);
+        if (gop.found_existing) manager.allocator.free(gop.value_ptr.embedding);
+        gop.value_ptr.* = EmbeddingVector{
             .node_id = node_id,
             .embedding = embedding,
             .algorithm = .graphsage,
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
-        });
+        };
     }
 
     // Training iterations
@@ -558,13 +628,13 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
             try aggregateNeighborFeatures(manager, graph, node_id, config);
         }
 
-        log.debug("Completed GraphSAGE epoch {}/{}", .{ epoch + 1, config.epochs });
+        log.debug("Completed GraphSAGE epoch", &.{ Attr.uint("epoch", epoch + 1), Attr.uint("epochs", config.epochs) });
     }
 }
 
 /// DeepWalk training implementation (simplified Node2Vec with p=1, q=1)
 fn trainDeepWalk(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
-    log.info("Training DeepWalk algorithm");
+    log.info("Training DeepWalk algorithm", &.{});
 
     // DeepWalk is Node2Vec with p=1, q=1 (uniform random walks)
     var deepwalk_config = config;
@@ -576,19 +646,25 @@ fn trainDeepWalk(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
 
 // Helper functions for algorithm implementations
 
-/// Generate a biased random walk for Node2Vec
-fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphStore, walk_length: u32) !void {
+/// Generate a Node2Vec p/q-biased random walk (Grover & Leskovec 2016).
+///
+/// Each step samples the next node proportionally to its unnormalized
+/// transition weight from `RandomWalk.transitionProbability`: 1/p for
+/// returning to the previous node, 1 for neighbors at distance 1 from the
+/// previous node, 1/q for nodes at distance 2. The caller supplies the RNG so
+/// a whole training run shares one (optionally seeded, deterministic) stream.
+pub fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphStore, walk_length: u32, rng: std.Random) !void {
     var current = walk.current_node;
 
     for (1..walk_length) |_| {
-        const neighbors = try graph.getNeighbors(walk.path.allocator, current);
-        defer walk.path.allocator.free(neighbors);
+        const neighbors = try graph.getNeighbors(walk.allocator, current);
+        defer walk.allocator.free(neighbors);
 
         if (neighbors.len == 0) break;
 
         // Calculate transition probabilities
-        var probabilities = try walk.path.allocator.alloc(f64, neighbors.len);
-        defer walk.path.allocator.free(probabilities);
+        const probabilities = try walk.allocator.alloc(f64, neighbors.len);
+        defer walk.allocator.free(probabilities);
 
         var total_prob: f64 = 0.0;
         for (neighbors, 0..) |neighbor, i| {
@@ -596,15 +672,14 @@ fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphS
             total_prob += probabilities[i];
         }
 
-        // Sample next node based on probabilities
-        var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
-        const random_value = prng.random().float(f64) * total_prob;
+        // Sample next node proportionally to its transition weight
+        const random_value = rng.float(f64) * total_prob;
 
         var cumulative: f64 = 0.0;
-        var selected_neighbor: u64 = neighbors[0];
+        var selected_neighbor: u64 = neighbors[neighbors.len - 1];
         for (neighbors, probabilities) |neighbor, prob| {
             cumulative += prob;
-            if (random_value <= cumulative) {
+            if (random_value < cumulative) {
                 selected_neighbor = neighbor;
                 break;
             }
@@ -612,13 +687,22 @@ fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphS
 
         walk.previous_node = current;
         current = selected_neighbor;
-        try walk.path.append(current);
+        try walk.path.append(walk.allocator, current);
         walk.current_node = current;
     }
 }
 
-/// Train embeddings using skip-gram model
-fn trainSkipGram(manager: *GraphEmbeddingsManager, walk: []const u64, config: EmbeddingConfig) !void {
+/// Accumulated skip-gram loss over the (center, context) pairs of one walk.
+pub const SkipGramLoss = struct {
+    loss_sum: f64 = 0.0,
+    pairs: u64 = 0,
+};
+
+/// Train embeddings using skip-gram model. Returns the real accumulated loss
+/// (pre-update squared distance per pair) for trend tracking.
+fn trainSkipGram(manager: *GraphEmbeddingsManager, walk: []const u64, config: EmbeddingConfig) SkipGramLoss {
+    var acc = SkipGramLoss{};
+
     for (walk, 0..) |center_node, i| {
         const start = if (i >= config.window_size) i - config.window_size else 0;
         const end = @min(i + config.window_size + 1, walk.len);
@@ -629,24 +713,38 @@ fn trainSkipGram(manager: *GraphEmbeddingsManager, walk: []const u64, config: Em
             const context_node = walk[j];
 
             // Update embeddings using gradient descent (simplified)
-            try updateEmbeddingsPair(manager, center_node, context_node, config);
+            if (updateEmbeddingsPair(manager, center_node, context_node, config)) |pair_loss| {
+                acc.loss_sum += pair_loss;
+                acc.pairs += 1;
+            }
         }
     }
+
+    return acc;
 }
 
-/// Update embeddings for a pair of nodes (simplified gradient descent)
-fn updateEmbeddingsPair(manager: *GraphEmbeddingsManager, node1: u64, node2: u64, config: EmbeddingConfig) !void {
-    const emb1 = manager.embeddings.getPtr(node1) orelse return;
-    const emb2 = manager.embeddings.getPtr(node2) orelse return;
+/// Update embeddings for a pair of nodes (simplified gradient descent).
+/// Returns the pre-update squared Euclidean distance between the pair
+/// (the proxy loss this update rule minimizes), or null when either node
+/// has no embedding.
+fn updateEmbeddingsPair(manager: *GraphEmbeddingsManager, node1: u64, node2: u64, config: EmbeddingConfig) ?f64 {
+    const emb1 = manager.embeddings.getPtr(node1) orelse return null;
+    const emb2 = manager.embeddings.getPtr(node2) orelse return null;
+
+    var sq_dist: f64 = 0.0;
 
     // Simplified update - in practice would use proper gradient descent
     for (emb1.embedding, emb2.embedding) |*e1, e2| {
+        const diff = @as(f64, e2) - @as(f64, e1.*);
+        sq_dist += diff * diff;
         const grad = (e2 - e1.*) * @as(f32, @floatCast(config.learning_rate * 0.1));
         e1.* += grad;
     }
 
     emb1.updated_at = compat_milliTimestamp();
     emb2.updated_at = compat_milliTimestamp();
+
+    return sq_dist;
 }
 
 /// Aggregate neighbor features for GraphSAGE
@@ -722,14 +820,14 @@ fn predictGraphSAGE(manager: *GraphEmbeddingsManager, node_id: u64) ![]f32 {
     // Get neighbors of the unseen node
     const neighbors = graph.getNeighbors(manager.allocator, node_id) catch |err| {
         // If getNeighbors fails (node truly not in graph), return error
-        log.warn("Failed to get neighbors for node {}: {}", .{ node_id, err });
+        log.warn("Failed to get neighbors for node", &.{ Attr.uint("node_id", node_id), Attr.string("err", @errorName(err)) });
         return error.NodeNotInGraph;
     };
     defer manager.allocator.free(neighbors);
 
     if (neighbors.len == 0) {
         // Node exists but has no neighbors - initialize random embedding
-        log.debug("Node {} has no neighbors, initializing random embedding", .{node_id});
+        log.debug("Node has no neighbors, initializing random embedding", &.{Attr.uint("node_id", node_id)});
         return initializeRandomEmbedding(manager);
     }
 
@@ -789,7 +887,7 @@ fn predictGraphSAGE(manager: *GraphEmbeddingsManager, node_id: u64) ![]f32 {
         }
     }
 
-    log.debug("Generated inductive embedding for unseen node {} using {} neighbors", .{ node_id, valid_neighbors });
+    log.debug("Generated inductive embedding for unseen node", &.{ Attr.uint("node_id", node_id), Attr.uint("neighbors", valid_neighbors) });
 
     return current_embedding;
 }
@@ -797,7 +895,7 @@ fn predictGraphSAGE(manager: *GraphEmbeddingsManager, node_id: u64) ![]f32 {
 /// Initialize a random embedding for nodes without neighbors
 fn initializeRandomEmbedding(manager: *GraphEmbeddingsManager) ![]f32 {
     const embedding = try manager.allocator.alloc(f32, manager.config.dimensions);
-    var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
+    var prng = std.Random.DefaultPrng.init(trainingSeed(manager.config));
     const fan_in = @as(f32, @floatFromInt(manager.config.dimensions));
     const xavier_std = @sqrt(2.0 / fan_in);
 
@@ -808,7 +906,9 @@ fn initializeRandomEmbedding(manager: *GraphEmbeddingsManager) ![]f32 {
     return embedding;
 }
 
-/// Apply learned aggregation weights (simplified linear transformation)
+/// Apply learned aggregation weights (simplified linear transformation).
+/// EXPERIMENTAL: single linear projection, not the full GraphSAGE
+/// W * [self || aggregated] layer stack — see trainGraphSAGE doc comment.
 fn applyAggregationWeights(manager: *GraphEmbeddingsManager, input: []f32, weights: []f32) ![]f32 {
     const output = try manager.allocator.alloc(f32, manager.config.dimensions);
 

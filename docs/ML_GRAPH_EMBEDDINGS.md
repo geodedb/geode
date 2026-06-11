@@ -1,8 +1,25 @@
 # ML Graph Embeddings Integration System
 
+> **STATUS: EXPERIMENTAL (GAP-0879, 2026-06-11).** The graph-embedding
+> algorithms in `src/ml/graph_embeddings.zig` are simplified, small-scale
+> implementations intended for experimentation — not production-grade
+> representation learning. What is real and regression-tested
+> (`zig build test-gap0879`):
+>
+> - **Node2Vec / DeepWalk walks** implement the genuine p/q transition bias
+>   (Grover & Leskovec 2016) with deterministic seeding (`EmbeddingConfig.seed`).
+> - **Training loss** is computed from the actual embeddings every epoch
+>   (mean pre-update squared distance over skip-gram pairs) and is recorded in
+>   `TrainingContext.initial_loss` / `TrainingContext.loss` — never simulated.
+> - **GraphSAGE** uses a simplified aggregation (mean pooling + a single
+>   learned linear projection), NOT the full per-layer weight stack of
+>   Hamilton et al. 2017. Treat its output as experimental.
+> - The skip-gram update itself is a simplified pull-together rule, not
+>   negative-sampling SGNS.
+
 ## Overview
 
-The ML Graph Embeddings system provides comprehensive machine learning capabilities for generating, managing, and utilizing graph embeddings in Geode. This system implements state-of-the-art graph embedding algorithms including Node2Vec, GraphSAGE, and DeepWalk, enabling advanced analytics, recommendation systems, and similarity search functionality.
+The ML Graph Embeddings system provides experimental machine learning capabilities for generating, managing, and utilizing graph embeddings in Geode. This system implements simplified variants of graph embedding algorithms including Node2Vec, GraphSAGE, and DeepWalk for analytics experimentation and similarity search prototyping.
 
 ## Architecture
 
@@ -19,9 +36,9 @@ The central component that manages all embedding operations:
 
 #### Algorithm Implementations
 
-- **Node2Vec**: Biased random walks with flexible exploration strategies
-- **GraphSAGE**: Inductive learning with neighbor aggregation
-- **DeepWalk**: Uniform random walks for structural embeddings
+- **Node2Vec**: Biased random walks with flexible exploration strategies (real p/q transition sampling)
+- **GraphSAGE**: Inductive learning with simplified aggregation (experimental)
+- **DeepWalk**: Uniform random walks (Node2Vec with p = q = 1)
 
 #### Training System
 
@@ -34,147 +51,120 @@ The central component that manages all embedding operations:
 
 ### Node2Vec
 
-Biased random walk algorithm with configurable exploration parameters:
+Biased random walk algorithm with configurable exploration parameters
+(`EmbeddingConfig` in `src/ml/graph_embeddings.zig`):
 
 ```zig
-// Configuration parameters
-.p = 1.0,          // Return parameter (likelihood of returning to previous node)
-.q = 1.0,          // In-out parameter (likelihood of exploring vs exploiting)
-.walk_length = 10, // Length of each random walk
-.num_walks = 20,   // Number of walks per node
+// EmbeddingConfig fields
+.p = 1.0,          // Return parameter: transition weight 1/p back to the previous node
+.q = 1.0,          // In-out parameter: weight 1/q to nodes at distance 2 from the previous node
+.walk_length = 80, // Length of each random walk
+.num_walks = 10,   // Number of walks per node per epoch
+.window_size = 10, // Skip-gram context window
+.seed = null,      // Set for deterministic, reproducible walks and init
 ```
 
 **Key Features:**
 
-- Flexible exploration via p and q parameters
-- Transition probability calculation with bias
-- Support for directed and undirected graphs
-- Configurable walk parameters
+- Real p/q transition bias per Grover & Leskovec 2016 §3.2: unnormalized
+  weight `1/p` to return to the previous node, `1` for neighbors of the
+  previous node, `1/q` for distance-2 nodes (verified by
+  `tests/test_ml_graph_embeddings_integration.zig`)
+- Deterministic seeding via `EmbeddingConfig.seed`
+- Per-epoch loss recorded in `TrainingContext` from real computation
 
-### GraphSAGE
+### GraphSAGE (simplified aggregation — experimental)
 
-Inductive learning algorithm with neighbor sampling and aggregation:
+Inductive learning with neighbor sampling and a SIMPLIFIED aggregation:
+mean pooling over sampled neighbor embeddings followed by a single learned
+linear projection, ReLU, and L2 normalization. This is NOT the full
+GraphSAGE layer stack (`W · [self ‖ aggregated]` per layer with trained
+unsupervised loss) from Hamilton et al. 2017.
 
 ```zig
-// Configuration parameters
-.aggregation_function = "mean",  // mean, max, lstm
-.num_samples = 5,               // Number of neighbors to sample
-.inductive = true,              // Enable inductive learning
+// EmbeddingConfig fields
+.neighbor_samples = 25,   // Number of neighbors to sample
+.aggregator_type = .mean, // Only mean aggregation is actually applied
 ```
 
 **Key Features:**
 
-- Neighbor sampling and aggregation
-- Multiple aggregation functions (mean, max, LSTM)
-- Inductive capability for unseen nodes
-- Scalable to large graphs
+- Neighbor sampling with mean aggregation
+- Inductive prediction for unseen nodes (`predictEmbedding`)
+- EXPERIMENTAL: do not treat output as reference-quality GraphSAGE
 
 ### DeepWalk
 
-Uniform random walk algorithm for structural embeddings:
+Uniform random walk algorithm — implemented as Node2Vec with p = q = 1:
 
 ```zig
-// Configuration parameters
-.walk_length = 10,   // Length of each random walk
-.num_walks = 20,     // Number of walks per node
-.window_size = 5,    // Context window for skip-gram
+// EmbeddingConfig fields
+.walk_length = 80,   // Length of each random walk
+.num_walks = 10,     // Number of walks per node per epoch
+.window_size = 10,   // Context window for skip-gram
 ```
-
-**Key Features:**
-
-- Uniform random walks
-- Skip-gram model integration
-- Structural similarity preservation
-- Efficient for large graphs
 
 ## Usage Examples
 
 ### Basic Embedding Generation
 
-```zig
-// Initialize embeddings manager
-var embeddings_manager = try GraphEmbeddingsManager.init(allocator, 128);
-defer embeddings_manager.deinit();
+Real API (see `tests/test_ml_graph_embeddings_integration.zig` for a full,
+compiling example):
 
-// Configure Node2Vec algorithm
-try embeddings_manager.configureAlgorithm(MLAlgorithm.node2vec, .{
+```zig
+const ml = geode.ml.graph_embeddings;
+
+// Initialize embeddings manager with a config
+var manager = try ml.GraphEmbeddingsManager.init(allocator, .{
+    .dimensions = 64,
     .learning_rate = 0.01,
-    .num_epochs = 50,
-    .batch_size = 32,
+    .epochs = 50,
     .p = 1.0,
     .q = 1.0,
     .walk_length = 10,
     .num_walks = 20,
+    .seed = 42, // deterministic runs
 });
+defer manager.deinit();
 
-// Generate embedding for a node
-try embeddings_manager.generateEmbedding(node_id, MLAlgorithm.node2vec);
+// Train embeddings for ALL nodes of a GraphStore (cross-tenant: requires
+// Admin role when authentication is enabled)
+try manager.trainEmbeddings(&store, .node2vec, null, .Admin);
+
+// Inspect the real training-loss trend
+const ctx = manager.training_context.?;
+std.debug.assert(ctx.loss < ctx.initial_loss);
+
+// Read an embedding
+const emb = manager.getEmbedding(node_id).?;
 ```
 
 ### Similarity Search
 
 ```zig
-// Find similar nodes using cosine similarity
-const similar_nodes = try embeddings_manager.findSimilarNodes(
-    target_node_id,
-    10,  // Number of results
-    SimilarityMetric.cosine
-);
-defer allocator.free(similar_nodes);
+// Find similar nodes by cosine similarity over stored embeddings
+// (threshold is a minimum cosine similarity, k caps the result count)
+var results = try manager.findSimilarNodes(target_node_id, 10, 0.5);
+defer results.deinit(allocator);
 
-// Calculate similarity between two specific nodes
-const similarity = try embeddings_manager.calculateSimilarity(
-    node1_id,
-    node2_id,
-    SimilarityMetric.cosine
-);
+// Pairwise cosine similarity via the stored vectors
+const a = manager.getEmbedding(node1_id).?;
+const b = manager.getEmbedding(node2_id).?;
+const similarity = a.cosineSimilarity(b);
 ```
 
-### K-Nearest Neighbors
+### Training Context
+
+`trainEmbeddings` populates `manager.training_context`; the fields are
+computed from the real training run, never simulated:
 
 ```zig
-// Find k-nearest neighbors
-const knn_results = try embeddings_manager.kNearestNeighbors(
-    query_node_id,
-    k,  // Number of neighbors
-    SimilarityMetric.euclidean
-);
-defer allocator.free(knn_results);
-```
-
-### Training Context Management
-
-```zig
-// Create training context
-var training_ctx = TrainingContext{
-    .algorithm = MLAlgorithm.graphsage,
-    .current_epoch = 0,
-    .max_epochs = 100,
-    .learning_rate = 0.01,
-    .batch_size = 32,
-    .convergence_threshold = 0.001,
-    .early_stopping_patience = 10,
-    .current_loss = 1.0,
-    .previous_loss = 1.0,
-    .patience_counter = 0,
-    .start_time = std.time.milliTimestamp(),
-};
-
-// Training loop with convergence detection
-for (0..training_ctx.max_epochs) |epoch| {
-    training_ctx.current_epoch = epoch;
-
-    // Perform training step
-    // ... training logic ...
-
-    // Update learning rate with decay
-    training_ctx.updateLearningRate(0.95);  // 5% decay per epoch
-
-    // Check convergence
-    if (training_ctx.hasConverged()) {
-        break;
-    }
-}
+const ctx = manager.training_context.?; // after trainEmbeddings
+_ = ctx.epoch;             // last completed epoch
+_ = ctx.initial_loss;      // mean skip-gram pair loss of epoch 0
+_ = ctx.loss;              // mean skip-gram pair loss of the final epoch
+_ = ctx.learning_rate;     // decayed learning rate
+_ = ctx.convergence_score; // |loss delta| between the last two epochs
 ```
 
 ## Similarity Metrics
@@ -250,8 +240,11 @@ try embeddings_manager.generateEmbedding(node_id, MLAlgorithm.node2vec);
 
 ### Query Integration
 
+> NOT IMPLEMENTED: there is no `ml.similarity` / `ml.knn` GQL surface today.
+> The examples below are a design sketch only (kept for future reference).
+
 ```gql
--- Example GQL queries with ML embeddings
+-- Example GQL queries with ML embeddings (DESIGN SKETCH — not implemented)
 MATCH (n:Person)
 WHERE ml.similarity(n.embedding, $target_embedding, 'cosine') > 0.8
 RETURN n.name, ml.similarity(n.embedding, $target_embedding, 'cosine') AS similarity
@@ -350,55 +343,48 @@ pub const MLError = error{
 
 ## Testing Framework
 
-### Unit Tests
+Regression tests run via `zig build test-gap0879`:
 
-Located in `tests/test_ml_graph_embeddings.zig`:
+`tests/test_ml_graph_embeddings_integration.zig` (drives the real
+`GraphEmbeddingsManager` against a real `GraphStore`):
 
-- Algorithm initialization and configuration
-- Embedding generation and storage
-- Similarity calculations
-- Training context management
-- Error handling scenarios
+- Node2Vec return-parameter bias: walks with small `p` return to the previous
+  node far more often than walks with large `p` (K4, deterministic seed)
+- Node2Vec in-out-parameter bias: walks with small `q` step outward to
+  distance-2 nodes far more often than walks with large `q` (5-cycle)
+- Real training loss: finite, non-negative, and strictly decreasing from
+  epoch 0 to the final epoch on a two-triangle graph
+- Deterministic seeding: identical `config.seed` reproduces identical
+  embeddings and loss trajectory
 
-### Integration Tests
+In-module tests in `src/ml/integration_enhanced.zig` (same build step):
 
-Located in `tests/test_ml_graph_embeddings_integration.zig`:
+- `GraphData.getNeighbors` caller-owned allocation contract
+- `RandomWalker` p/q transition bias
+- Node2Vec / PageRank / Louvain smoke tests on tiny graphs
 
-- End-to-end Node2Vec embedding generation
-- GraphSAGE neighbor aggregation workflows
-- Multi-algorithm performance comparison
-- Real-time embedding updates
-- Large-scale memory management
+> The previous version of the integration test file SIMULATED decreasing
+> training loss with fabricated numbers and ignored the p/q parameters in its
+> walk helper; it also targeted an API that never existed and was not wired
+> into any build step. It was replaced wholesale (GAP-0879).
 
-### Test Coverage
+## Performance
 
-```
-test "CANARY_REQ_ML_001_Node2Vec_End_To_End_Integration"
-test "CANARY_REQ_ML_002_GraphSAGE_Neighbor_Aggregation_Integration"
-test "CANARY_REQ_ML_003_Multi_Algorithm_Performance_Comparison"
-test "CANARY_REQ_ML_004_Real_Time_Embedding_Updates"
-test "CANARY_REQ_ML_005_Large_Scale_Memory_Management"
-```
+No published throughput numbers: earlier revisions of this document quoted
+nodes/second figures with no referenced benchmark run, and they were removed
+(GAP-0879). There is currently no benchmark harness for this experimental
+module; if you need numbers, write a `benchmarks/`-style VarianceEnvelope
+benchmark (see `benchmarks/benchmark_fts_storage.zig` for the house pattern)
+and cite the run.
 
-## Performance Benchmarks
+### Memory Usage (arithmetic, not measured)
 
-### Training Performance
+- **Per Embedding**: `dimensions × 4` bytes (f32), e.g. 128-dim = 512 bytes
+- **1M Embeddings**: ~512MB + hash-map overhead
 
-- **Node2Vec**: ~1000 nodes/second (128-dim, 10 walks, length 10)
-- **GraphSAGE**: ~800 nodes/second (128-dim, 5 neighbors)
-- **DeepWalk**: ~1200 nodes/second (128-dim, 10 walks, length 10)
+### Search Complexity
 
-### Memory Usage
-
-- **Base Overhead**: ~2MB for manager initialization
-- **Per Embedding**: 128 dimensions × 4 bytes = 512 bytes
-- **1M Embeddings**: ~512MB + overhead
-
-### Search Performance
-
-- **Brute Force k-NN**: O(n) for n embeddings
-- **Approximate k-NN**: O(log n) with vector indexes
-- **Similarity Calculation**: ~50ns per comparison (128-dim)
+- **Brute Force similarity search** (`findSimilarNodes`): O(n) over stored embeddings
 
 ## Future Enhancements
 
@@ -441,33 +427,35 @@ test "CANARY_REQ_ML_005_Large_Scale_Memory_Management"
 
 ## API Reference
 
-### Core Methods
+Actual exported surface of `src/ml/graph_embeddings.zig`
+(`geode.ml.graph_embeddings`):
 
 ```zig
 // Manager lifecycle
-pub fn init(allocator: Allocator, embedding_dimension: u32) !GraphEmbeddingsManager
+pub fn init(allocator: Allocator, config: EmbeddingConfig) !GraphEmbeddingsManager
 pub fn deinit(self: *GraphEmbeddingsManager) void
 
-// Algorithm configuration
-pub fn configureAlgorithm(self: *GraphEmbeddingsManager, algorithm: MLAlgorithm, config: AlgorithmConfig) !void
+// Training (cross-tenant: requires Admin when auth is enabled)
+pub fn trainEmbeddings(self: *GraphEmbeddingsManager, graph: *const GraphStore, algorithm: MLAlgorithm, custom_config: ?EmbeddingConfig, caller_role: ?Role) !void
 
-// Embedding generation
-pub fn generateEmbedding(self: *GraphEmbeddingsManager, node_id: u64, algorithm: MLAlgorithm) !void
+// Prediction / updates
+pub fn predictEmbedding(self: *GraphEmbeddingsManager, node_id: u64, algorithm: MLAlgorithm) ![]f32
+pub fn updateEmbedding(self: *GraphEmbeddingsManager, node_id: u64, new_embedding: []const f32) !void
 
-// Similarity and search
-pub fn calculateSimilarity(self: *GraphEmbeddingsManager, node1: u64, node2: u64, metric: SimilarityMetric) !f32
-pub fn findSimilarNodes(self: *GraphEmbeddingsManager, node_id: u64, count: u32, metric: SimilarityMetric) ![]u64
-pub fn kNearestNeighbors(self: *GraphEmbeddingsManager, node_id: u64, k: u32, metric: SimilarityMetric) ![]u64
+// Lookup / search
+pub fn getEmbedding(self: *const GraphEmbeddingsManager, node_id: u64) ?*const EmbeddingVector
+pub fn findSimilarNodes(self: *const GraphEmbeddingsManager, node_id: u64, k: u32, similarity_threshold: f64) !ArrayList(...)
+pub fn getStatistics(self: *const GraphEmbeddingsManager) EmbeddingStatistics
 
-// Utility methods
-pub fn hasEmbedding(self: *GraphEmbeddingsManager, node_id: u64) bool
-pub fn getEmbedding(self: *GraphEmbeddingsManager, node_id: u64) ?EmbeddingVector
-pub fn getEmbeddingCount(self: *GraphEmbeddingsManager) u32
-pub fn getStatistics(self: *GraphEmbeddingsManager) Statistics
+// Walks (exposed for verification/experimentation)
+pub const RandomWalk = struct { ... pub fn transitionProbability(...) f64 ... };
+pub fn generateRandomWalk(walk: *RandomWalk, graph: *const GraphStore, walk_length: u32, rng: std.Random) !void
 ```
 
 ## Conclusion
 
-The ML Graph Embeddings Integration system provides a comprehensive foundation for machine learning capabilities in Geode. With support for multiple state-of-the-art algorithms, flexible configuration options, and robust performance characteristics, this system enables advanced graph analytics and intelligent applications built on top of the Geode graph database.
-
-The implementation prioritizes performance, scalability, and ease of use while maintaining the high standards of reliability and correctness expected from enterprise-grade database systems.
+The ML Graph Embeddings system is an EXPERIMENTAL foundation for embedding
+workflows in Geode. The Node2Vec walk bias, deterministic seeding, and
+per-epoch loss reporting are real and regression-tested; the skip-gram update
+and GraphSAGE aggregation are simplified variants. Validate quality on your
+own data before relying on the embeddings for anything user-facing.

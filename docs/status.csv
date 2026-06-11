@@ -3512,16 +3512,17 @@ REQ-MFA-TEST-COMPREHENSIVE,MFA Enforcement Verification,SECURITY,TESTED,,,securi
 REQ-MFA-TOGGLE-001,MFAToggleSecure,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
 REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,UnitTests,TESTED,,,cli,2026-01-25,src/cli/backup_cli.zig
 REQ-MIGRATION-SCHEMA-001,Migration,SchemaMigration,TESTED,,,admin,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
-REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,,,ml,2025-10-05,src/ml/graph_embeddings.zig
-REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,,,ml,2025-10-05,src/ml/graph_embeddings.zig
-REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,TESTED,,,ml,2025-10-05,src/ml/graph_embeddings.zig
+REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig
+REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig
+REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Regression,TESTED,,,ml,2026-06-11,tests/test_ml_graph_embeddings_integration.zig
+REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,,,ml,2026-06-11,src/ml/graph_embeddings.zig
 REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,TESTED,,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
 REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,TESTED,,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
 REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,TESTED,,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
-REQ-ML-HASEDGE-001,GraphData.hasEdge,EdgeLookup,TESTED,,,ml,2026-01-10,src/ml/integration_enhanced.zig
+REQ-ML-HASEDGE-001,GraphData.hasEdge,EdgeLookup,TESTED,,,ml,2026-06-11,src/ml/integration_enhanced.zig
 REQ-ML-MODULARITY-001,Louvain Modularity Gain,Core,TESTED,,,ml,2026-01-25,src/ml/integration_enhanced.zig
 REQ-ML-MODULARITY-002,Graph Modularity Calculation,Graph,TESTED,,,ml,2026-01-25,src/ml/integration_enhanced.zig
-REQ-ML-NEIGHBORS-001,GraphData.getNeighbors,NeighborLookup,TESTED,,,ml,2026-01-11,src/ml/integration_enhanced.zig
+REQ-ML-NEIGHBORS-001,GraphData.getNeighbors,NeighborLookup,IMPL,,,ml,2026-06-11,src/ml/integration_enhanced.zig
 REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-002,MultiGraphSupport,PerGraphStore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,,,engine,2025-12-22,src/graph_store.zig

@@ -3852,7 +3852,8 @@ pub const GraphStore = struct {
     }
 
     pub fn getNeighbors(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
-        var result = std.ArrayList(u64).init(allocator);
+        var result: std.ArrayList(u64) = .empty;
+        errdefer result.deinit(allocator);
         if (self.outgoing_edges.get(node_id)) |outgoing| {
             for (outgoing.items) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {

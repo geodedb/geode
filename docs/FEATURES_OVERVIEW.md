@@ -32,7 +32,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - **Vector Types**: VectorF32/VectorI32 with SIMD acceleration
 - **HNSW Indexing**: Hierarchical navigable small world for K-NN search
 - **6 Distance Metrics**: L2, cosine, dot product, Manhattan, Hamming, Jaccard
-- **ML Graph Embeddings**: Node2Vec, GraphSAGE, DeepWalk algorithms
+- **ML Graph Embeddings**: Node2Vec, GraphSAGE, DeepWalk algorithms (experimental — simplified implementations, see [ML_GRAPH_EMBEDDINGS.md](ML_GRAPH_EMBEDDINGS.md))
 - **Real-time Analytics**: Streaming pattern detection and anomaly analysis
 
 ### **Advanced Data Types**
