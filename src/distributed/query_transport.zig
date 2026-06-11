@@ -38,7 +38,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const protocol = @import("../protocol.zig");
-const quic = @import("../transport/quic.zig");
+const quic = @import("transport/quic");
 const federation = @import("federation.zig");
 // GAP-0856: distributed EXPLAIN/PROFILE are node-local only.
 const distributed_explain = @import("distributed_explain.zig");

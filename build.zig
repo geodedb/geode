@@ -3095,6 +3095,38 @@ pub fn build(b: *std.Build) void {
     const raft_apply_step = b.step("test-raft-apply", "Run Raft apply callback command-routing tests (GAP-0520 + slice-A edge create)");
     raft_apply_step.dependOn(&run_raft_apply_tests.step);
 
+    // GAP-0870: Raft command variants (config_change / snapshot_pointer /
+    // txn_prepare / txn_decide / alter_graph rejection) + enhanced query
+    // transport dispatch honesty (route-or-fail-loud handlers).
+    const gap0870_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0870_raft_command_variants.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gap0870_test_mod.addImport("geode", root_mod);
+    const gap0870_tests = b.addTest(.{ .root_module = gap0870_test_mod });
+    const run_gap0870_tests = b.addRunArtifact(gap0870_tests);
+    shardDep(test_step, &run_gap0870_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0870 (transport half): enhanced_query_transport compiles as its own
+    // standalone test root — it cannot live inside the geode lib graph
+    // (query_coordinator/federation pull server-module files like
+    // rls_filter.zig into the lib, conflicting with the exe's module map).
+    const gap0870_eqt_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/enhanced_query_transport.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gap0870_eqt_test_mod.addImport("protobuf", protobuf_mod);
+    gap0870_eqt_test_mod.addImport("distributed_schema", distributed_schema_mod);
+    gap0870_eqt_test_mod.addImport("transport/quic", transport_quic_mod);
+    gap0870_eqt_test_mod.addImport("logging", logging_mod);
+    const gap0870_eqt_tests = b.addTest(.{ .root_module = gap0870_eqt_test_mod });
+    const run_gap0870_eqt_tests = b.addRunArtifact(gap0870_eqt_tests);
+    shardDep(test_step, &run_gap0870_eqt_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0870_step = b.step("test-gap0870", "GAP-0870: Raft command variants applied + transport handlers route or fail loud");
+    gap0870_step.dependOn(&run_gap0870_tests.step);
+    gap0870_step.dependOn(&run_gap0870_eqt_tests.step);
+
     // Root cause #6 follow-up: durable raft hard-state (currentTerm/votedFor) +
     // log across a process restart. A FileStorage-backed RaftNode must restore
     // its term after deinit + re-init on the same dir. Regression for

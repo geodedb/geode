@@ -39,7 +39,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const protocol = @import("../protocol.zig");
-const quic = @import("../transport/quic.zig");
+const quic = @import("transport/quic");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
@@ -81,7 +81,7 @@ pub fn cloneOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) ![
 }
 
 pub fn cloneOrderDirs(allocator: std.mem.Allocator, dirs: []const bool) ![]const bool {
-    var cloned = try allocator.alloc(bool, dirs.len);
+    const cloned = try allocator.alloc(bool, dirs.len);
     std.mem.copyForwards(bool, cloned, dirs);
     return cloned;
 }

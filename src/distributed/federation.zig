@@ -35,7 +35,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const protocol = @import("../protocol.zig");
-const quic = @import("../transport/quic.zig");
+const quic = @import("transport/quic");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
@@ -400,7 +400,7 @@ pub const Connection = struct {
                 request_id: u64,
             ) !query_runner.QueryEventSummary {
                 _ = request_id;
-                const self: *@This() = @ptrCast(@alignCast(consumer.context));
+                const sink: *@This() = @ptrCast(@alignCast(consumer.context));
                 return switch (event) {
                     .hello_failure => error.AuthFailed,
                     .execute => |exec_resp| blk: {
@@ -412,13 +412,13 @@ pub const Connection = struct {
                                         try allocator_.dupe(u8, col.type)
                                     else
                                         try allocator_.dupe(u8, "ANY");
-                                    try self.columns.append(allocator_, .{ .name = name, .data_type = dtype });
+                                    try sink.columns.append(allocator_, .{ .name = name, .data_type = dtype });
                                 }
                                 break :blk .{ .schema_received = true };
                             },
                             .page => |page| {
-                                try captureOrderMeta(allocator_, page, self.ordered, self.order_keys);
-                                try appendPageRows(allocator_, page, self.rows);
+                                try captureOrderMeta(allocator_, page, sink.ordered, sink.order_keys);
+                                try appendPageRows(allocator_, page, sink.rows);
                                 break :blk .{
                                     .saw_page = true,
                                     .page_final = page.final,
@@ -949,8 +949,8 @@ pub const FederationManager = struct {
 
                 // Helper methods grouped for parsing clarity
                 const MergeUtil = struct {
-                    pub fn findColIndex(schema: []const protocol.ColumnDef, name: []const u8) usize {
-                        for (schema, 0..) |c, i| if (std.mem.eql(u8, c.name, name)) return i;
+                    pub fn findColIndex(cols: []const protocol.ColumnDef, name: []const u8) usize {
+                        for (cols, 0..) |c, i| if (std.mem.eql(u8, c.name, name)) return i;
                         return 0;
                     }
                     pub fn getKey(row: protocol.BindingRow, idx: usize) protocol.BindingValue {
@@ -1095,9 +1095,17 @@ pub const FederationManager = struct {
                 };
             },
 
-            else => {
-                // Other strategies not yet implemented
-                return mergeResults(undefined, local, remote, .union_all, allocator);
+            // GAP-0870: hash_join / nested_loop_join / broadcast_join are NOT
+            // implemented.  The old code silently fell back to union_all,
+            // which returns semantically wrong rows for a join strategy
+            // (concatenation is not a join).  Fail loud instead; the planner
+            // only ever emits union_all/union_distinct/merge_sorted today.
+            // Documented as unsupported in docs/DISTRIBUTED_QUERY_COORDINATION.md.
+            .hash_join, .nested_loop_join, .broadcast_join => {
+                log.err("federation: merge strategy not implemented", &.{
+                    Attr.string("strategy", @tagName(strategy)),
+                });
+                return error.UnsupportedMergeStrategy;
             },
         }
     }
@@ -1421,7 +1429,7 @@ test "TestCANARY_REQ_GQL_052_FederationResultLineDeinit" {
 // CANARY: REQ=REQ-GQL-052; FEATURE="FederationOrderedMerge"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_052_FederationOrderedMerge; OWNER=federation; UPDATED=2025-09-23
 test "TestCANARY_REQ_GQL_052_FederationOrderedMerge" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{.{ .name = "k", .data_type = "ANY" }};
+    const test_schema = &[_]protocol.ColumnDef{.{ .name = "k", .data_type = "ANY" }};
     // Create per-row value arrays (two local, four remote)
     var v_l1 = [_]protocol.BindingValue{.{ .Int = 1 }};
     var v_l2 = [_]protocol.BindingValue{.{ .Int = 4 }};
@@ -1433,9 +1441,9 @@ test "TestCANARY_REQ_GQL_052_FederationOrderedMerge" {
     const remote1_rows = &[_]protocol.BindingRow{ .{ .cols = &v_r11 }, .{ .cols = &v_r12 } };
     const remote2_rows = &[_]protocol.BindingRow{ .{ .cols = &v_r21 }, .{ .cols = &v_r22 } };
     const order_keys = &[_][]const u8{"k"};
-    const local = QueryResults{ .rows = local_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys };
-    const r1 = QueryResults{ .rows = remote1_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys };
-    const r2 = QueryResults{ .rows = remote2_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys };
+    const r1 = QueryResults{ .rows = remote1_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys };
+    const r2 = QueryResults{ .rows = remote2_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys };
     var rem = [_]QueryResults{ r1, r2 };
     var fm: FederationManager = undefined; // manager not needed for merge
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
@@ -1490,7 +1498,7 @@ test "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyMerge" {
 // CANARY: REQ=REQ-GQL-052; FEATURE="FederationOrderedMultiKeyDirMerge"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMerge; OWNER=federation; UPDATED=2025-09-23
 test "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMerge" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{ .{ .name = "k1", .data_type = "ANY" }, .{ .name = "k2", .data_type = "ANY" } };
+    const test_schema = &[_]protocol.ColumnDef{ .{ .name = "k1", .data_type = "ANY" }, .{ .name = "k2", .data_type = "ANY" } };
     // Ascending on k1, descending on k2
     const order_keys = &[_][]const u8{ "k1", "k2" };
     const order_dirs = &[_]bool{ true, false }; // second key descending
@@ -1506,9 +1514,9 @@ test "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMerge" {
     var c1 = [_]protocol.BindingValue{ .{ .Int = 2 }, .{ .Int = 4 } }; // (2,4)
     var c2 = [_]protocol.BindingValue{ .{ .Int = 3 }, .{ .Int = 8 } }; // (3,8)
     const remote2_rows = &[_]protocol.BindingRow{ .{ .cols = &c1 }, .{ .cols = &c2 } };
-    const local = QueryResults{ .rows = local_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = order_dirs };
-    const r1 = QueryResults{ .rows = remote1_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = order_dirs };
-    const r2 = QueryResults{ .rows = remote2_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = order_dirs };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = order_dirs };
+    const r1 = QueryResults{ .rows = remote1_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = order_dirs };
+    const r2 = QueryResults{ .rows = remote2_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = order_dirs };
     var rem = [_]QueryResults{ r1, r2 };
     var fm: FederationManager = undefined;
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
@@ -1526,14 +1534,14 @@ test "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMerge" {
 // Additional test: parse order_dirs from JSON line
 test "federation: clone preserves order dirs" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{ .{ .name = "a", .data_type = "ANY" }, .{ .name = "b", .data_type = "ANY" } };
+    const test_schema = &[_]protocol.ColumnDef{ .{ .name = "a", .data_type = "ANY" }, .{ .name = "b", .data_type = "ANY" } };
     var v = [_]protocol.BindingValue{ .{ .Int = 1 }, .{ .Int = 2 } };
     const rows = &[_]protocol.BindingRow{.{ .cols = &v }};
     const order_keys = &[_][]const u8{ "a", "b" };
     const order_dirs = &[_]bool{ true, false };
     const original = QueryResults{
         .rows = rows,
-        .schema = schema,
+        .schema = test_schema,
         .execution_time_ms = 3,
         .ordered = true,
         .order_keys = order_keys,
@@ -1550,14 +1558,14 @@ test "federation: clone preserves order dirs" {
 // Test: clone preserves nulls_first flag
 test "federation: clone preserves nulls_first" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{.{ .name = "a", .data_type = "ANY" }};
+    const test_schema = &[_]protocol.ColumnDef{.{ .name = "a", .data_type = "ANY" }};
     var v = [_]protocol.BindingValue{.{ .Int = 1 }};
     const rows = &[_]protocol.BindingRow{.{ .cols = &v }};
     const order_keys = &[_][]const u8{"a"};
     const order_dirs = &[_]bool{true};
     const original = QueryResults{
         .rows = rows,
-        .schema = schema,
+        .schema = test_schema,
         .execution_time_ms = 2,
         .ordered = true,
         .order_keys = order_keys,
@@ -1573,7 +1581,7 @@ test "federation: clone preserves nulls_first" {
 // CANARY: REQ=REQ-GQL-052; FEATURE="FederationNullsOrdering"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_052_FederationNullsOrdering; OWNER=federation; UPDATED=2025-09-23
 test "TestCANARY_REQ_GQL_052_FederationNullsOrdering" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{.{ .name = "k", .data_type = "ANY" }};
+    const test_schema = &[_]protocol.ColumnDef{.{ .name = "k", .data_type = "ANY" }};
     // Values with nulls interspersed
     var v1 = [_]protocol.BindingValue{.{ .Null = {} }}; // null
     var v2 = [_]protocol.BindingValue{.{ .Int = 1 }};
@@ -1582,8 +1590,8 @@ test "TestCANARY_REQ_GQL_052_FederationNullsOrdering" {
     const local_rows = &[_]protocol.BindingRow{ .{ .cols = &v2 }, .{ .cols = &v3 } }; // (1,2)
     const remote_rows = &[_]protocol.BindingRow{ .{ .cols = &v1 }, .{ .cols = &v4 } }; // (null,null)
     const order_keys = &[_][]const u8{"k"};
-    const local_nf = QueryResults{ .rows = local_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = true };
-    const remote_nf = QueryResults{ .rows = remote_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = true };
+    const local_nf = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = true };
+    const remote_nf = QueryResults{ .rows = remote_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = true };
     var rem = [_]QueryResults{remote_nf};
     var fm: FederationManager = undefined;
     const merged = try fm.mergeResults(local_nf, rem[0..], .merge_sorted, ally);
@@ -1598,7 +1606,7 @@ test "TestCANARY_REQ_GQL_052_FederationNullsOrdering" {
 
 test "federation: nulls_last ordering" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{.{ .name = "k", .data_type = "ANY" }};
+    const test_schema = &[_]protocol.ColumnDef{.{ .name = "k", .data_type = "ANY" }};
     var v1 = [_]protocol.BindingValue{.{ .Null = {} }};
     var v2 = [_]protocol.BindingValue{.{ .Int = 1 }};
     var v3 = [_]protocol.BindingValue{.{ .Int = 2 }};
@@ -1606,8 +1614,8 @@ test "federation: nulls_last ordering" {
     const local_rows = &[_]protocol.BindingRow{ .{ .cols = &v1 }, .{ .cols = &v2 } }; // (null,1)
     const remote_rows = &[_]protocol.BindingRow{ .{ .cols = &v3 }, .{ .cols = &v4 } }; // (2,null)
     const order_keys = &[_][]const u8{"k"};
-    const local = QueryResults{ .rows = local_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = false };
-    const remote = QueryResults{ .rows = remote_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = false };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = false };
+    const remote = QueryResults{ .rows = remote_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .nulls_first = false };
     var rem = [_]QueryResults{remote};
     var fm: FederationManager = undefined;
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
@@ -1622,7 +1630,7 @@ test "federation: nulls_last ordering" {
 // Test: mismatch in order_dirs across contributors => fallback to unordered concatenation
 test "federation: merge_sorted direction mismatch fallback" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{ .{ .name = "k1", .data_type = "ANY" }, .{ .name = "k2", .data_type = "ANY" } };
+    const test_schema = &[_]protocol.ColumnDef{ .{ .name = "k1", .data_type = "ANY" }, .{ .name = "k2", .data_type = "ANY" } };
     const order_keys = &[_][]const u8{ "k1", "k2" };
     const asc_desc = &[_]bool{ true, false };
     const asc_asc = &[_]bool{ true, true };
@@ -1630,12 +1638,12 @@ test "federation: merge_sorted direction mismatch fallback" {
     var v_l1 = [_]protocol.BindingValue{ .{ .Int = 1 }, .{ .Int = 1 } };
     var v_l2 = [_]protocol.BindingValue{ .{ .Int = 2 }, .{ .Int = 2 } };
     const local_rows = &[_]protocol.BindingRow{ .{ .cols = &v_l1 }, .{ .cols = &v_l2 } };
-    const local = QueryResults{ .rows = local_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_desc };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_desc };
     // Remote with differing direction flags (asc,asc)
     var v_r1 = [_]protocol.BindingValue{ .{ .Int = 1 }, .{ .Int = 3 } };
     var v_r2 = [_]protocol.BindingValue{ .{ .Int = 2 }, .{ .Int = 0 } };
     const remote_rows = &[_]protocol.BindingRow{ .{ .cols = &v_r1 }, .{ .cols = &v_r2 } };
-    const r1 = QueryResults{ .rows = remote_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_asc };
+    const r1 = QueryResults{ .rows = remote_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_asc };
     var rem = [_]QueryResults{r1};
     var fm: FederationManager = undefined;
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
@@ -1649,17 +1657,17 @@ test "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission" {
     // Currently we do not have protocol-level flag plumbing here; this test exercises the code path
     // where a direction mismatch occurs (same as prior test) to ensure the CANARY marker is tied to runtime logic.
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{ .{ .name = "k1", .data_type = "ANY" }, .{ .name = "k2", .data_type = "ANY" } };
+    const test_schema = &[_]protocol.ColumnDef{ .{ .name = "k1", .data_type = "ANY" }, .{ .name = "k2", .data_type = "ANY" } };
     const order_keys = &[_][]const u8{ "k1", "k2" };
     const asc_desc = &[_]bool{ true, false };
     const asc_asc = &[_]bool{ true, true };
     var v_l1 = [_]protocol.BindingValue{ .{ .Int = 5 }, .{ .Int = 1 } };
     var v_l2 = [_]protocol.BindingValue{ .{ .Int = 6 }, .{ .Int = 2 } };
     const local_rows = &[_]protocol.BindingRow{ .{ .cols = &v_l1 }, .{ .cols = &v_l2 } };
-    const local = QueryResults{ .rows = local_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_desc };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_desc };
     var v_r1 = [_]protocol.BindingValue{ .{ .Int = 7 }, .{ .Int = 3 } };
     const remote_rows = &[_]protocol.BindingRow{.{ .cols = &v_r1 }};
-    const r1 = QueryResults{ .rows = remote_rows, .schema = schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_asc };
+    const r1 = QueryResults{ .rows = remote_rows, .schema = test_schema, .execution_time_ms = 0, .ordered = true, .order_keys = order_keys, .order_dirs = asc_asc };
     var rem = [_]QueryResults{r1};
     var fm: FederationManager = undefined;
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
@@ -1758,7 +1766,7 @@ test "federation: buildFederationHelloRequest propagates tenant_id" {
     // SEC-D010: Verify HELLO request carries tenant_id when provided.
     // In test env GEODE_CLUSTER_TOKEN is NOT set, so we expect MissingClusterToken.
     const ally = std.testing.allocator;
-    const result = buildFederationHelloRequest(ally, "tenant-123");
+    const result = Connection.buildFederationHelloRequest(ally, "tenant-123");
     if (result) |_| {
         // Token was set (unlikely in test env)
     } else |err| {
@@ -1782,7 +1790,7 @@ test "federation: rls_filter_fn callback is invoked when set" {
 
     Filter.call_count = 0;
 
-    var config = FederationConfig{
+    const config = FederationConfig{
         .rls_filter_fn = &Filter.filter,
     };
 
@@ -1818,4 +1826,18 @@ test "federation: tenant_id propagates from config to connection" {
     defer conn.deinit();
     conn.tenant_id = manager.config.tenant_id;
     try std.testing.expectEqualStrings("org-42", conn.tenant_id.?);
+}
+
+// GAP-0870: unimplemented merge strategies must fail loud, not silently
+// degrade to union_all (a concatenation is not a join).
+// CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Federation Merge Strategies"; ASPECT=UnsupportedFailLoud; STATUS=TESTED; TEST="federation: unimplemented merge strategies fail loud"; OWNER=distributed; UPDATED=2026-06-11
+test "federation: unimplemented merge strategies fail loud (GAP-0870)" {
+    const ally = std.testing.allocator;
+    const local = QueryResults{ .rows = &.{}, .schema = &.{}, .execution_time_ms = 0 };
+    var rem = [_]QueryResults{};
+    var fm: FederationManager = undefined; // manager not needed for merge
+
+    try std.testing.expectError(error.UnsupportedMergeStrategy, fm.mergeResults(local, rem[0..], .hash_join, ally));
+    try std.testing.expectError(error.UnsupportedMergeStrategy, fm.mergeResults(local, rem[0..], .nested_loop_join, ally));
+    try std.testing.expectError(error.UnsupportedMergeStrategy, fm.mergeResults(local, rem[0..], .broadcast_join, ally));
 }

@@ -44,16 +44,18 @@ const NetworkTransport = network_transport.NetworkTransport;
 const ClusterMessage = network_transport.ClusterMessage;
 const protobuf = @import("protobuf");
 const dist_schema = @import("distributed_schema");
-const query_coordinator = @import("query_coordinator.zig");
-const raft_consensus = @import("raft_consensus.zig");
-const txn_coordinator = @import("txn_coordinator.zig");
+// GAP-0870: the vestigial query_coordinator / raft_consensus /
+// txn_coordinator imports were dropped — none were used, and removing them
+// keeps this module compilable as a standalone test root (see
+// `test-gap0870` in build.zig) without dragging the whole lib graph in.
 
 const logging = @import("logging");
 const log = logging.scoped("enhanced_query_transport");
 const Attr = logging.Attr;
 
-const QueryMessageType = dist_schema.QueryMessageType;
-const QueryMessage = dist_schema.QueryMessage;
+// GAP-0870: pub so dispatch tests can construct inbound messages.
+pub const QueryMessageType = dist_schema.QueryMessageType;
+pub const QueryMessage = dist_schema.QueryMessage;
 const QueryMetadata = dist_schema.QueryMetadata;
 const ProtoQueryFragment = dist_schema.QueryFragment;
 const ProtoQueryResult = dist_schema.QueryResult;
@@ -62,7 +64,6 @@ const ProtoQueryResult = dist_schema.QueryResult;
 pub const EnhancedQueryTransport = struct {
     allocator: Allocator,
     network_transport: *NetworkTransport,
-    query_coordinator: *query_coordinator.QueryCoordinator,
     shard_registry: ShardRegistry,
     connection_pool: ConnectionPool,
     message_handlers: MessageHandlers,
@@ -81,7 +82,7 @@ pub const EnhancedQueryTransport = struct {
         heartbeat_interval_ms: u64 = 5_000,
         compression_enabled: bool = true,
         encryption_required: bool = true,
-        load_balancing_strategy: enum { round_robin, least_connections, hash_based, adaptive },
+        load_balancing_strategy: enum { round_robin, least_connections, hash_based, adaptive } = .round_robin,
     };
 
     pub const TransportStatistics = struct {
@@ -106,12 +107,10 @@ pub const EnhancedQueryTransport = struct {
     pub fn init(
         allocator: Allocator,
         net_transport: *NetworkTransport,
-        coordinator: *query_coordinator.QueryCoordinator,
     ) !EnhancedQueryTransport {
         var transport = EnhancedQueryTransport{
             .allocator = allocator,
             .network_transport = net_transport,
-            .query_coordinator = coordinator,
             .shard_registry = try ShardRegistry.init(allocator),
             .connection_pool = try ConnectionPool.init(allocator, 50),
             .message_handlers = MessageHandlers.init(),
@@ -130,17 +129,70 @@ pub const EnhancedQueryTransport = struct {
             .active_trackers = std.AutoHashMap(u64, *QueryTracker).init(allocator),
         };
 
-        // Register message handlers
-        transport.network_transport.onMessage(handleNetworkMessage);
+        // Register message handlers.  GAP-0870: the old code also installed
+        // a `handleNetworkMessage` no-op on the network transport that
+        // silently dropped every inbound ClusterMessage; the honest entry
+        // point is now `dispatchQueryMessage`, which the owner of the
+        // network loop calls with a decoded QueryMessage and which surfaces
+        // handler errors to the caller.
         transport.setupMessageHandlers();
 
         return transport;
     }
 
     pub fn deinit(self: *EnhancedQueryTransport) void {
+        // GAP-0870: free any trackers still active at shutdown (previously
+        // leaked: the map itself was never deinitialized either).
+        var it = self.active_trackers.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.fragment_results.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.active_trackers.deinit();
         self.shard_registry.deinit();
         self.connection_pool.deinit();
         self.statistics.shard_utilization.deinit();
+    }
+
+    /// GAP-0870: single honest dispatch entry point for inbound query
+    /// messages.  Routes to the registered handler for the message type and
+    /// PROPAGATES handler errors to the caller — nothing is silently
+    /// log-and-dropped.  Message types with no real counterpart yet return
+    /// `error.NotImplemented`.
+    // CANARY: REQ=REQ-DIST-QUERY-MSG-DISPATCH; FEATURE="Enhanced Query Transport"; ASPECT=MessageDispatch; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
+    pub fn dispatchQueryMessage(self: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
+        const handler: ?MessageHandlers.HandlerFn = switch (message.msg_type) {
+            .EXECUTE_FRAGMENT => self.message_handlers.execute_fragment,
+            .FRAGMENT_RESULT => self.message_handlers.fragment_result,
+            .QUERY_CANCEL => self.message_handlers.query_cancel,
+            .SHARD_HEARTBEAT => self.message_handlers.shard_heartbeat,
+            .SHARD_REGISTRATION => self.message_handlers.shard_registration,
+            .QUERY_PLAN_REQUEST => self.message_handlers.query_plan_request,
+            .QUERY_PLAN_RESPONSE => self.message_handlers.query_plan_response,
+            .CROSS_SHARD_JOIN => self.message_handlers.cross_shard_join,
+            .AGGREGATE_PARTIAL => self.message_handlers.aggregate_partial,
+            .COORDINATOR_MERGE => self.message_handlers.coordinator_merge,
+            .QUERY_MESSAGE_TYPE_UNSPECIFIED => return error.InvalidMessage,
+        };
+        const h = handler orelse return error.NotImplemented;
+        try h(self, message);
+    }
+
+    /// GAP-0870: cancel an in-flight distributed query — real counterpart
+    /// for QUERY_CANCEL messages.  Unknown query ids fail loud (the cancel
+    /// raced completion or targeted a query this node never tracked).
+    pub fn cancelQuery(self: *EnhancedQueryTransport, query_id: u64) !void {
+        if (self.getQueryTracker(query_id) == null) return error.UnknownQuery;
+        self.removeQueryTracker(query_id);
+        log.info("Cancelled distributed query", &.{Attr.uint("query_id", query_id)});
+    }
+
+    /// GAP-0870: record a shard heartbeat — real counterpart for
+    /// SHARD_HEARTBEAT messages.  Marks the shard online in the registry;
+    /// a heartbeat from an unregistered shard fails loud.
+    pub fn recordShardHeartbeat(self: *EnhancedQueryTransport, shard_id: u64) !void {
+        const shard = self.shard_registry.getShardPtr(shard_id) orelse return error.ShardNotFound;
+        shard.status = .online;
     }
 
     /// Setup query-specific message handlers
@@ -242,9 +294,9 @@ pub const EnhancedQueryTransport = struct {
     fn sendFragmentToShard(self: *EnhancedQueryTransport, query_id: u64, fragment: QueryFragment) !void {
         const shard = try self.shard_registry.getShard(fragment.shard_id);
 
-        var deps = std.ArrayList(u64).init(self.allocator);
-        defer deps.deinit();
-        try deps.appendSlice(fragment.dependencies);
+        var deps: std.ArrayList(u64) = .empty;
+        defer deps.deinit(self.allocator);
+        try deps.appendSlice(self.allocator, fragment.dependencies);
 
         const proto_fragment = ProtoQueryFragment{
             .fragment_id = fragment.fragment_id,
@@ -301,7 +353,7 @@ pub const EnhancedQueryTransport = struct {
                 if (attempts + 1 < max_attempts) {
                     // Exponential backoff
                     const delay_ms = @as(u64, 100) << @intCast(attempts);
-                    std.time.sleep(delay_ms * std.time.ns_per_ms);
+                    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
                     self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
                     self.statistics.retry_count += 1;
                     self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -361,12 +413,12 @@ pub const EnhancedQueryTransport = struct {
         });
 
         // Collect all fragment results
-        var results = std.ArrayList(QueryResult).init(self.allocator);
-        defer results.deinit();
+        var results: std.ArrayList(QueryResult) = .empty;
+        defer results.deinit(self.allocator);
 
         var result_it = query_tracker.fragment_results.iterator();
         while (result_it.next()) |entry| {
-            try results.append(entry.value_ptr.*);
+            try results.append(self.allocator, entry.value_ptr.*);
         }
 
         // Merge results using coordinator
@@ -417,22 +469,22 @@ pub const EnhancedQueryTransport = struct {
 
         // For now, simple concatenation of JSON results
         // In production, this would need sophisticated merging logic
-        var merged_data = std.ArrayList(u8).init(self.allocator);
-        defer merged_data.deinit();
+        var merged_data: std.ArrayList(u8) = .empty;
+        defer merged_data.deinit(self.allocator);
 
-        try merged_data.appendSlice("{\"merged_results\":[");
+        try merged_data.appendSlice(self.allocator, "{\"merged_results\":[");
         for (results, 0..) |result, i| {
-            if (i > 0) try merged_data.appendSlice(",");
-            try merged_data.appendSlice(result.data);
+            if (i > 0) try merged_data.appendSlice(self.allocator, ",");
+            try merged_data.appendSlice(self.allocator, result.data);
         }
-        try merged_data.appendSlice("]}");
+        try merged_data.appendSlice(self.allocator, "]}");
 
         return QueryResult{
             .query_id = results[0].query_id,
             .fragment_id = 0, // Merged result
             .shard_id = 0, // Coordinator result
             .status = .success,
-            .data = try merged_data.toOwnedSlice(),
+            .data = try merged_data.toOwnedSlice(self.allocator),
             .error_message = null,
             .execution_time_ms = total_time,
             .rows_returned = total_rows,
@@ -528,9 +580,9 @@ pub const EnhancedQueryTransport = struct {
     // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0162: Implements fragment serialization using protobuf encoding
     fn serializeFragment(allocator: Allocator, fragment: QueryFragment) ![]u8 {
-        var deps = std.ArrayList(u64).init(allocator);
-        defer deps.deinit();
-        try deps.appendSlice(fragment.dependencies);
+        var deps: std.ArrayList(u64) = .empty;
+        defer deps.deinit(allocator);
+        try deps.appendSlice(allocator, fragment.dependencies);
 
         const proto_fragment = ProtoQueryFragment{
             .fragment_id = fragment.fragment_id,
@@ -903,6 +955,11 @@ const ShardRegistry = struct {
     pub fn getShard(self: *ShardRegistry, shard_id: u64) !ShardInfo {
         return self.shards.get(shard_id) orelse error.ShardNotFound;
     }
+
+    /// GAP-0870: mutable lookup for in-place status updates (heartbeats).
+    pub fn getShardPtr(self: *ShardRegistry, shard_id: u64) ?*ShardInfo {
+        return self.shards.getPtr(shard_id);
+    }
 };
 
 const ConnectionPool = struct {
@@ -923,87 +980,120 @@ const ConnectionPool = struct {
 };
 
 const MessageHandlers = struct {
-    execute_fragment: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    fragment_result: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    query_cancel: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    shard_heartbeat: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    shard_registration: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    query_plan_request: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    query_plan_response: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    cross_shard_join: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    aggregate_partial: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
-    coordinator_merge: ?*const fn (*EnhancedQueryTransport, *const QueryMessage) void = null,
+    pub const HandlerFn = *const fn (*EnhancedQueryTransport, *const QueryMessage) anyerror!void;
+
+    execute_fragment: ?HandlerFn = null,
+    fragment_result: ?HandlerFn = null,
+    query_cancel: ?HandlerFn = null,
+    shard_heartbeat: ?HandlerFn = null,
+    shard_registration: ?HandlerFn = null,
+    query_plan_request: ?HandlerFn = null,
+    query_plan_response: ?HandlerFn = null,
+    cross_shard_join: ?HandlerFn = null,
+    aggregate_partial: ?HandlerFn = null,
+    coordinator_merge: ?HandlerFn = null,
 
     pub fn init() MessageHandlers {
         return MessageHandlers{};
     }
 };
 
-// Message handler implementations (placeholders)
-fn handleNetworkMessage(transport: *NetworkTransport, message: *const ClusterMessage) void {
+// ---------------------------------------------------------------------------
+// Message handler implementations (GAP-0870)
+//
+// HONESTY CONTRACT: every handler either routes to its real counterpart on
+// EnhancedQueryTransport, or returns explicit `error.NotImplemented`, which
+// `dispatchQueryMessage` surfaces to the caller.  The previous bodies only
+// logged at debug level and dropped the message.
+// ---------------------------------------------------------------------------
+
+fn handleExecuteFragment(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
+    // No local fragment-execution engine is wired to this transport yet —
+    // executing an inbound fragment requires routing through the GQL
+    // executor with the shard's local store, which is a coordinator-side
+    // concern this module does not own.
     _ = transport;
     _ = message;
-    // Implementation would route to enhanced query transport
+    return error.NotImplemented;
 }
 
-fn handleExecuteFragment(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
-    _ = transport;
-    _ = message;
-    log.debug("Handling execute fragment message", &.{});
+fn handleFragmentResult(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
+    // Real counterpart: handleQueryResult (tracker bookkeeping, completion
+    // detection, merge + callback, shard utilization stats).
+    const proto_result = message.result orelse return error.InvalidMessage;
+    if (proto_result.page != null) {
+        // DataPage → row-data conversion is not implemented; refusing is
+        // honest — accepting would record a result whose payload we dropped.
+        return error.NotImplemented;
+    }
+    const status: @FieldType(QueryResult, "status") = switch (proto_result.status) {
+        .SUCCESS => .success,
+        .FAILED => .failed,
+        .TIMEOUT => .timeout,
+        .CANCELLED => .cancelled,
+        .QUERY_STATUS_UNSPECIFIED => return error.InvalidMessage,
+    };
+    try transport.handleQueryResult(.{
+        .query_id = proto_result.query_id,
+        .fragment_id = proto_result.fragment_id,
+        .shard_id = proto_result.shard_id,
+        .status = status,
+        .data = "",
+        .error_message = proto_result.error_message,
+        .execution_time_ms = proto_result.execution_time_ms,
+        .rows_returned = proto_result.rows_returned,
+    });
 }
 
-fn handleFragmentResult(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
-    _ = transport;
-    _ = message;
-    log.debug("Handling fragment result message", &.{});
+fn handleQueryCancel(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
+    // Real counterpart: cancelQuery (tracker removal, fail-loud on unknown id).
+    try transport.cancelQuery(message.query_id);
 }
 
-fn handleQueryCancel(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
-    _ = transport;
-    _ = message;
-    log.debug("Handling query cancel message", &.{});
+fn handleShardHeartbeat(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
+    // Real counterpart: recordShardHeartbeat (marks the shard online in the
+    // registry, fail-loud for unregistered shards).
+    try transport.recordShardHeartbeat(message.shard_id);
 }
 
-fn handleShardHeartbeat(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
+fn handleShardRegistration(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
+    // The QueryMessage proto carries no registration payload (endpoint,
+    // port, partitions) — there is nothing honest to register from this
+    // message.  `registerShard` is the real API; callers with shard
+    // topology must use it directly.
     _ = transport;
     _ = message;
-    log.debug("Handling shard heartbeat message", &.{});
+    return error.NotImplemented;
 }
 
-fn handleShardRegistration(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
+fn handleQueryPlanRequest(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
     _ = transport;
     _ = message;
-    log.debug("Handling shard registration message", &.{});
+    return error.NotImplemented;
 }
 
-fn handleQueryPlanRequest(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
+fn handleQueryPlanResponse(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
     _ = transport;
     _ = message;
-    log.debug("Handling query plan request message", &.{});
+    return error.NotImplemented;
 }
 
-fn handleQueryPlanResponse(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
+fn handleCrossShardJoin(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
     _ = transport;
     _ = message;
-    log.debug("Handling query plan response message", &.{});
+    return error.NotImplemented;
 }
 
-fn handleCrossShardJoin(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
+fn handleAggregatePartial(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
     _ = transport;
     _ = message;
-    log.debug("Handling cross-shard join message", &.{});
+    return error.NotImplemented;
 }
 
-fn handleAggregatePartial(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
+fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const QueryMessage) anyerror!void {
     _ = transport;
     _ = message;
-    log.debug("Handling aggregate partial message", &.{});
-}
-
-fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
-    _ = transport;
-    _ = message;
-    log.debug("Handling coordinator merge message", &.{});
+    return error.NotImplemented;
 }
 
 // Unit tests for fragment serialization
@@ -1136,4 +1226,126 @@ test "serializeFragment handles empty dependencies" {
     }
 
     try std.testing.expectEqual(@as(usize, 0), recovered.dependencies.len);
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0870 dispatch honesty tests — every message type either routes to its
+// real counterpart or fails loud through dispatchQueryMessage.
+// ---------------------------------------------------------------------------
+
+fn makeTestTransport(allocator: Allocator) !EnhancedQueryTransport {
+    // The network transport is never dereferenced by the dispatch paths
+    // under test; init only stores the pointer.
+    return EnhancedQueryTransport.init(allocator, undefined);
+}
+
+test "dispatch: unimplemented message types return error.NotImplemented (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    var transport = try makeTestTransport(allocator);
+    defer transport.deinit();
+
+    const unimplemented = [_]QueryMessageType{
+        .EXECUTE_FRAGMENT,
+        .SHARD_REGISTRATION,
+        .QUERY_PLAN_REQUEST,
+        .QUERY_PLAN_RESPONSE,
+        .CROSS_SHARD_JOIN,
+        .AGGREGATE_PARTIAL,
+        .COORDINATOR_MERGE,
+    };
+    for (unimplemented) |mt| {
+        const m = QueryMessage{ .msg_type = mt, .query_id = 1 };
+        try std.testing.expectError(error.NotImplemented, transport.dispatchQueryMessage(&m));
+    }
+
+    // Unspecified message type is invalid, not ignored.
+    const bad = QueryMessage{ .msg_type = .QUERY_MESSAGE_TYPE_UNSPECIFIED };
+    try std.testing.expectError(error.InvalidMessage, transport.dispatchQueryMessage(&bad));
+}
+
+test "dispatch: QUERY_CANCEL routes to cancelQuery (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    var transport = try makeTestTransport(allocator);
+    defer transport.deinit();
+
+    // Cancel of an untracked query fails loud.
+    const unknown = QueryMessage{ .msg_type = .QUERY_CANCEL, .query_id = 404 };
+    try std.testing.expectError(error.UnknownQuery, transport.dispatchQueryMessage(&unknown));
+
+    // Track a query, then cancel it through dispatch.
+    const tracker = try allocator.create(QueryTracker);
+    tracker.* = .{
+        .query_id = 42,
+        .start_time = 0,
+        .fragment_results = std.AutoHashMap(u64, QueryResult).init(allocator),
+        .completion_callback = null,
+    };
+    try transport.active_trackers.put(42, tracker);
+    try std.testing.expectEqual(@as(usize, 1), transport.active_trackers.count());
+
+    const cancel = QueryMessage{ .msg_type = .QUERY_CANCEL, .query_id = 42 };
+    try transport.dispatchQueryMessage(&cancel);
+    try std.testing.expectEqual(@as(usize, 0), transport.active_trackers.count());
+}
+
+test "dispatch: FRAGMENT_RESULT routes to handleQueryResult (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    var transport = try makeTestTransport(allocator);
+    defer transport.deinit();
+
+    // A result message without a result payload is invalid, not dropped.
+    const empty = QueryMessage{ .msg_type = .FRAGMENT_RESULT, .query_id = 7 };
+    try std.testing.expectError(error.InvalidMessage, transport.dispatchQueryMessage(&empty));
+
+    // Track a query, then deliver its (only) fragment result through
+    // dispatch: the tracker completes, merges, and is removed.
+    const tracker = try allocator.create(QueryTracker);
+    tracker.* = .{
+        .query_id = 7,
+        .start_time = 0,
+        .fragment_results = std.AutoHashMap(u64, QueryResult).init(allocator),
+        .completion_callback = null,
+    };
+    try transport.active_trackers.put(7, tracker);
+
+    const msg = QueryMessage{
+        .msg_type = .FRAGMENT_RESULT,
+        .query_id = 7,
+        .fragment_id = 1,
+        .shard_id = 3,
+        .result = .{
+            .query_id = 7,
+            .fragment_id = 1,
+            .shard_id = 3,
+            .status = .SUCCESS,
+            .execution_time_ms = 12,
+            .rows_returned = 2,
+        },
+    };
+    try transport.dispatchQueryMessage(&msg);
+    try std.testing.expectEqual(@as(usize, 0), transport.active_trackers.count());
+}
+
+test "dispatch: SHARD_HEARTBEAT routes to recordShardHeartbeat (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    var transport = try makeTestTransport(allocator);
+    defer transport.deinit();
+
+    // Heartbeat from an unregistered shard fails loud.
+    const unknown = QueryMessage{ .msg_type = .SHARD_HEARTBEAT, .shard_id = 99 };
+    try std.testing.expectError(error.ShardNotFound, transport.dispatchQueryMessage(&unknown));
+
+    // Register a degraded shard; a heartbeat marks it online.
+    try transport.registerShard(.{
+        .shard_id = 99,
+        .node_id = 2,
+        .endpoint = "127.0.0.1",
+        .port = 3141,
+        .status = .degraded,
+        .data_partitions = &.{},
+    });
+    const hb = QueryMessage{ .msg_type = .SHARD_HEARTBEAT, .shard_id = 99 };
+    try transport.dispatchQueryMessage(&hb);
+    const shard = try transport.shard_registry.getShard(99);
+    try std.testing.expect(shard.status == .online);
 }

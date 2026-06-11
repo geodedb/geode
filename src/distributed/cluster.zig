@@ -519,6 +519,13 @@ pub const ClusterCoordinator = struct {
     /// ever elected" that Task A6 (2026-05-25 plan) is closing.
     raft_transport: raft_consensus.Transport,
 
+    /// GAP-0870: applied cluster membership view, mutated by committed
+    /// `config_change` Raft entries (registered with raft_apply at init).
+    applied_cluster_config: *raft_apply.AppliedClusterConfig,
+    /// GAP-0870: 2PC coordinator that committed `txn_prepare` / `txn_decide`
+    /// Raft entries route into (registered with raft_apply at init).
+    txn_coord: *raft_consensus.TxnCoordinator,
+
     // QUAL-D004: Shutdown signal and pool handles for graceful stop.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     raft_pool: ?*pooled.ThreadPool = null,
@@ -731,6 +738,26 @@ pub const ClusterCoordinator = struct {
         raft_apply.setGlobalStore(store);
         raft.apply_callback = &raft_apply.applyCallbackFn;
 
+        // GAP-0870: register the applied-membership view and the 2PC
+        // coordinator so committed config_change / txn_prepare / txn_decide
+        // entries have a real apply target (raft_apply fails loud otherwise).
+        const applied_cfg = try allocator.create(raft_apply.AppliedClusterConfig);
+        errdefer allocator.destroy(applied_cfg);
+        applied_cfg.* = raft_apply.AppliedClusterConfig.init(allocator);
+        errdefer applied_cfg.deinit();
+        // Seed with bootstrap membership (self + static peers) so committed
+        // config_change deltas apply on top of the configured topology.
+        try applied_cfg.upsertMember(node_id, config.listen_address, config.cluster_port);
+        for (config.peers) |pc| {
+            try applied_cfg.upsertMember(pc.id, pc.address, pc.port);
+        }
+        const txn_coord = try allocator.create(raft_consensus.TxnCoordinator);
+        errdefer allocator.destroy(txn_coord);
+        txn_coord.* = try raft_consensus.TxnCoordinator.init(allocator, store);
+        errdefer txn_coord.deinit();
+        raft_apply.setGlobalClusterConfig(applied_cfg);
+        raft_apply.setGlobalTxnCoordinator(txn_coord);
+
         var cluster_state = try initClusterState(allocator);
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
         // so the network transport's findNodeEndpoint() lookup works from
@@ -775,6 +802,8 @@ pub const ClusterCoordinator = struct {
             .node_id = node_id,
             .raft = raft,
             .store = store,
+            .applied_cluster_config = applied_cfg,
+            .txn_coord = txn_coord,
             .replication_factor = config.replication_factor,
             .sharding_strategy = config.sharding_strategy,
             .failover_config = config.failover_config,
@@ -808,6 +837,19 @@ pub const ClusterCoordinator = struct {
         self.stop();
         self.raft_nonce_tracker.deinit();
         self.replay_guard.deinit();
+        // GAP-0870: unregister + free the applied-config / 2PC apply targets.
+        // Only reset the module-level registration if it is still ours (an
+        // in-process multi-coordinator test may have re-registered).
+        if (raft_apply.getGlobalClusterConfig() == self.applied_cluster_config) {
+            raft_apply.resetGlobalClusterConfig();
+        }
+        if (raft_apply.getGlobalTxnCoordinator() == self.txn_coord) {
+            raft_apply.resetGlobalTxnCoordinator();
+        }
+        self.applied_cluster_config.deinit();
+        self.allocator.destroy(self.applied_cluster_config);
+        self.txn_coord.deinit();
+        self.allocator.destroy(self.txn_coord);
         // resolvePeers duped each peer.endpoint into self.allocator; raft's
         // own deinit doesn't reclaim them, so free them here before the
         // backing slice goes away.

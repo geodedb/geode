@@ -160,6 +160,16 @@ const merged = try coordinator.topKResults(shard_results, options);
 - **Performance**: O(n log k) where k is the limit
 - **Memory**: Heap of size k for efficient Top-K
 
+#### Unsupported Merge Strategies (GAP-0870)
+
+The `MergeStrategy` enum in `src/distributed/federation.zig` also declares
+`hash_join`, `nested_loop_join`, and `broadcast_join`. These are **NOT
+implemented**. As of GAP-0870 (2026-06-11), requesting one of them returns
+`error.UnsupportedMergeStrategy` — the previous behavior silently fell back
+to `union_all`, which returns semantically wrong rows for a join strategy
+(a concatenation is not a join). The federation planner only ever emits
+`union_all`, `union_distinct`, and `merge_sorted` today.
+
 ### 4. Connection Management
 
 The query transport layer implements sophisticated connection management:

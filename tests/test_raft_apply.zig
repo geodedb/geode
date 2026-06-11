@@ -24,19 +24,25 @@ test "write command returns empty result (MVP)" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "unhandled command types return empty without error" {
+test "command variants without registered apply targets fail loud (GAP-0870)" {
+    // GAP-0870 replaced the old log-and-skip behavior: config_change needs a
+    // registered AppliedClusterConfig, txn_prepare/txn_decide need a
+    // registered TxnCoordinator.  Without them, apply FAILS (counted in
+    // apply_errors) instead of silently dropping the committed entry.
     const allocator = std.testing.allocator;
+    raft_apply.resetGlobalClusterConfig();
+    raft_apply.resetGlobalTxnCoordinator();
 
     // config_change
-    const r1 = try raft_apply.applyCommand(allocator, null, .{ .config_change = .{
+    try std.testing.expectError(error.ClusterConfigNotAvailable, raft_apply.applyCommand(allocator, null, .{ .config_change = .{
         .change_type = .add_server,
         .server_id = 42,
         .server_endpoint = "10.0.0.1",
-    } }, 1);
-    defer allocator.free(r1);
-    try std.testing.expectEqual(@as(usize, 0), r1.len);
+    } }, 1));
 
-    // snapshot_pointer
+    // snapshot_pointer needs no registry — it records module-level metadata.
+    raft_apply.resetSnapshotPointer();
+    defer raft_apply.resetSnapshotPointer();
     const r2 = try raft_apply.applyCommand(allocator, null, .{ .snapshot_pointer = .{
         .last_included_index = 1,
         .last_included_term = 1,
@@ -44,25 +50,21 @@ test "unhandled command types return empty without error" {
         .checksum = 0,
     } }, 1);
     defer allocator.free(r2);
-    try std.testing.expectEqual(@as(usize, 0), r2.len);
+    try std.testing.expectEqual(@as(u64, 1), raft_apply.lastSnapshotPointer().?.last_included_index);
 
     // txn_prepare
-    const r3 = try raft_apply.applyCommand(allocator, null, .{ .txn_prepare = .{
+    try std.testing.expectError(error.TxnCoordinatorNotAvailable, raft_apply.applyCommand(allocator, null, .{ .txn_prepare = .{
         .xid = 1,
         .shard_id = 0,
         .write_set = "",
         .metadata = "",
-    } }, 1);
-    defer allocator.free(r3);
-    try std.testing.expectEqual(@as(usize, 0), r3.len);
+    } }, 1));
 
     // txn_decide
-    const r4 = try raft_apply.applyCommand(allocator, null, .{ .txn_decide = .{
+    try std.testing.expectError(error.TxnCoordinatorNotAvailable, raft_apply.applyCommand(allocator, null, .{ .txn_decide = .{
         .xid = 1,
         .commit = true,
-    } }, 1);
-    defer allocator.free(r4);
-    try std.testing.expectEqual(@as(usize, 0), r4.len);
+    } }, 1));
 }
 
 test "graph_mutation create with unknown payload version is skipped (no junk node)" {

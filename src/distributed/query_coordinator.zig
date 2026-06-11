@@ -223,7 +223,7 @@ pub const QueryCoordinator = struct {
             return results;
         }
 
-        var errors = try self.allocator.alloc(?anyerror, fragment_count);
+        const errors = try self.allocator.alloc(?anyerror, fragment_count);
         defer self.allocator.free(errors);
         for (errors) |*e| e.* = null;
 
@@ -290,6 +290,7 @@ pub const QueryCoordinator = struct {
     // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// Execute query fragment on local shard using the actual query executor
     fn executeLocalFragment(self: *Self, query_text: []const u8, params: []const protocol.Value) !federation.QueryResults {
+        _ = params; // reserved: parameter binding for local fragments is not wired yet
         const start_time = compat_milliTimestamp();
 
         // GAP-0043: Wire to actual executor instead of returning mock results
@@ -582,7 +583,7 @@ pub const QueryCoordinator = struct {
 
         const order_key_names = try self.extractOrderKeyNames(order_keys);
         errdefer {
-            for (order_key_names) |k| self.allocator.free(k);
+            for (order_key_names) |kn| self.allocator.free(kn);
             self.allocator.free(order_key_names);
         }
 
@@ -966,7 +967,7 @@ const CoordinatorMetrics = struct {
 
 test "QueryCoordinator: initialization" {
     const ally = std.testing.allocator;
-    var config = federation.FederationConfig{};
+    const config = federation.FederationConfig{};
     var coordinator = try QueryCoordinator.init(ally, config);
     defer coordinator.deinit();
 

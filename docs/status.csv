@@ -811,11 +811,19 @@ REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,IMPL,,,dist,
 REQ-DIST-QUERY-COORD-INT-001,Distributed Query Coordination Integration Tests,IntegrationTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination_integration.zig
 REQ-DIST-QUERY-COORD-TEST-001,DistQueryCoord,CoordinationTests,TESTED,,,dist,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-DIST-QUERY-COORD-TEST-001,Distributed Query Coordination Tests,UnitTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination.zig
+REQ-DIST-QUERY-MSG-DISPATCH,Enhanced Query Transport,MessageDispatch,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
 REQ-DIST-RAFT-A1-NO-EVICT-BACKPRESSURE,Raft transport backpressure,SendErrorClassify,TESTED,,,distributed,2026-06-08,src/distributed/raft_consensus.zig
 REQ-DIST-RAFT-A2-PER-PEER-DRAIN,Raft per-peer non-blocking outbox drain,PeerIsolation,TESTED,,,distributed,2026-06-08,tests/test_raft_per_peer_drain.zig
 REQ-DIST-RAFT-A6E-OUTBOX-DISPATCH,Raft Outbox Async Dispatch,Send,TESTED,,,distributed,2026-05-26,src/distributed/raft_consensus.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Federation Merge Strategies,UnsupportedFailLoud,TESTED,,,distributed,2026-06-11,src/distributed/federation.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,ApplyConfigChange,TESTED,,,distributed,2026-06-11,src/distributed/raft_apply.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,ApplySnapshotPointer,TESTED,,,distributed,2026-06-11,src/distributed/raft_apply.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,ApplyTxnDecide,TESTED,,,distributed,2026-06-11,src/distributed/raft_apply.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,ApplyTxnPrepare,TESTED,,,distributed,2026-06-11,src/distributed/raft_apply.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,IntegrationTest,TESTED,,,distributed,2026-06-11,tests/test_gap0870_raft_command_variants.zig
+REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,WireRoundTrip,TESTED,,,distributed,2026-06-11,src/distributed/raft_consensus.zig
 REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,BridgeAndDrainReady,TESTED,,,distributed,2026-05-25,tests/test_drainready_dispatch.zig
 REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,DrainReadyMessages,TESTED,,,distributed,2026-05-25,src/distributed/raft_consensus.zig
 REQ-DIST-RAFT-RESTART-IDEMPOTENT,DistributedCluster,RestartApplyIdempotency,TESTED,,,distributed,2026-06-09,tests/test_raft_apply_restart_idempotent.zig
@@ -2304,16 +2312,16 @@ REQ-GQL-203,VectorKNNIntegration,IndexIntegration,TESTED,,,index,2025-10-04,test
 REQ-GQL-204,FullTextBM25Integration,IndexIntegration,TESTED,,,index,2025-10-04,tests/test_fulltext_bm25_integration.zig
 REQ-GQL-2PC-001,Distributed 2PC,TXN,TESTED,,,txn,2025-12-30,src/transactions/two_phase_commit.zig
 REQ-GQL-2PC-002,2PC,Coordinator,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
-REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,,,distributed,2025-09-29,src/distributed/txn_coordinator.zig
+REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,,,distributed,2026-06-11,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,,,distributed,2026-06-10,tests/test_txn_coordinator_2pc.zig
 REQ-GQL-2PC-003,2PC,Idempotence,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,,,distributed,2026-06-10,tests/test_txn_coordinator_2pc.zig
 REQ-GQL-2PC-004,2PC,RaftIntegration,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,IMPL,,,distributed,2026-04-05,src/distributed/cluster.zig
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
-REQ-GQL-2PC-APPLY-001,2PC Write Set Application,2PC,IMPL,,,distributed,2026-04-10,src/distributed/txn_coordinator.zig
+REQ-GQL-2PC-APPLY-001,2PC Write Set Application,2PC,TESTED,,,distributed,2026-06-11,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-APPLY-002,2PC,WriteSetParser,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
-REQ-GQL-2PC-APPLY-002,Write Set Parser and Applicator,2PC,IMPL,,,distributed,2026-04-10,src/distributed/txn_coordinator.zig
+REQ-GQL-2PC-APPLY-002,Write Set Parser and Applicator,2PC,TESTED,,,distributed,2026-06-11,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-TEST,2PC Test Suite,Testing,TESTED,,,test,2025-09-29,tests/test_2pc_distributed.zig
 REQ-GQL-ADVANCED-INDEX-INTEGRATION,Advanced Types Index Integration,Index,TESTED,,,index,2026-01-15,src/index/advanced_types_index.zig
 REQ-GQL-ADVANCED-TYPES-GA-001,AdvancedTypesGAConformance,Integration,TESTED,,,engine,2026-04-01,tests/test_advanced_property_ga_conformance.zig
