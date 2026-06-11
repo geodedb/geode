@@ -167,6 +167,17 @@ test "GAP-0868: PROFILE fallback reports time_ms bounded by real wall clock (non
 }
 
 test "GAP-0868: PROFILE time_ms reflects elapsed time for a non-trivial tenant-scoped scan" {
+    // Slow opt-in (GEODE_RUN_SLOW_TESTS=1, repo convention): the workload
+    // calibration ingests up to ~1.3M nodes, which takes tens of minutes
+    // under std.testing.allocator since the GAP-0535 strict-ownership
+    // switch. The always-on SHOW TABLES test above keeps time_ms presence,
+    // upper bound, and leak coverage in the sweep.
+    const should_run: bool = blk: {
+        const ptr = std.c.getenv("GEODE_RUN_SLOW_TESTS") orelse break :blk false;
+        break :blk std.mem.span(ptr).len > 0;
+    };
+    if (!should_run) return error.SkipZigTest;
+
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
