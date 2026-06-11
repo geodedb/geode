@@ -1,8 +1,42 @@
 # Timeseries Requirements Inventory
 
 **Generated:** 2026-04-01
+**Re-audited:** 2026-06-10 (GAP-0866) — see the addendum below; several 2026-04-01 findings are stale
 **Scope:** `src/timeseries/`, `tests/ts_store_integration.zig`, `tests/e2e_timeseries.zig`, `src/benchmarks/bench_timeseries.zig`, `specs/signal-analysis/`, build system, GitLab issues
 **Mode:** --skip-issues (no platform issues created)
+
+---
+
+## 0. Re-audit Addendum (2026-06-10, GAP-0866)
+
+The 2026-04-01 snapshot predates GAP-0280/0282/0283/0290 (eval wiring), the
+`CALL geode.ts.*` procedure family (`src/execution/ts_dispatch.zig`), and the
+GAP-0866 integration-test sweep. Corrections, each with current evidence:
+
+| Stale 2026-04-01 claim | 2026-06-10 reality |
+|---|---|
+| §3.6 TS-INT-004/005: "Store not wired in QUIC/gRPC server execution path — NO EVIDENCE" | Wired. The server boots a durable Store and publishes it process-wide via `eval.setGlobalTimeseriesStore` (`src/server/main.zig:1972-2008`); both QUIC (`src/server/quic_connection_handler.zig`) and gRPC (`src/transport/grpc_server.zig:2317`) route statements through `execution.executeStatementWithContext`, which resolves that store. Server-level execution-path evidence: `tests/ts_ingest_roundtrip.zig` (`zig build test-ts-ingest`, the `CALL geode.ts.*` write/read family), `tests/test_ts_latency.zig` (`zig build test-ts-latency`), and `tests/test_gap0866_ts_scalar_eval.zig` (`zig build test-gap0866`, the scalar `timeseries.*` family). |
+| §5.3: "gql_functions.zig defines a parallel GQL function system completely independent from the actual GQL eval path; its functions are not callable from GQL queries" | Stale. Since GAP-0282/0290 the eval fallback `.Call` branch (`evalTimeseriesFunction` / `evalArrayBasedTsFunction`, `src/eval.zig`) builds `TSFunctionCall`s and runs `gql_functions.executeFunction` / `executeDTW*` / `executeCosineSimilarity` / `executeCrossCorrelate` / `executeSBD` against the real Store. `gql_functions.zig` is the live execution backend, not a parallel dead system. Every documented function is now integration-tested through real parsed queries in `tests/test_gap0866_ts_scalar_eval.zig` (one test per function: value, last_value, value_at, sample_by, time_bucket, interpolate, moving_avg, rate, derivative, change_points, extract_features, matrix_profile, z_normalize, invariants, dtw, dtw_derivative, dtw_open_end, dtw_shape, dtw_soft, cosine_similarity, cross_correlate, sbd). |
+| §3.3/§5.1 GAP-TS-005: "derivative() only implements 1st order" | Fixed by GAP-0283 — arbitrary order via iterative differentiation (`src/timeseries/gql_functions.zig`, `.derivative` branch). |
+| §3.2 TS-AGG-006/007/008: "SUM/FIRST/LAST defined, NOT TESTED" | Tested through the real path: `tests/test_gap0866_ts_scalar_eval.zig` ("sample_by sum/first/last aggregations") and rejected-aggregation coverage in `tests/ts_ingest_roundtrip.zig`. |
+| §3.8 TS-LIB-001..007: "library modules NOT WIRED into GQL" | Wired by GAP-0290 as `timeseries.*` eval functions: dtw variants (`lib.dtw`), cross-correlate/sbd (`lib.distances`), matrix_profile (`lib.matrix_profile`), extract_features + cosine_similarity (`lib.features`), change_points (`lib.pelt`), z_normalize (`lib.preprocess`), invariants (`lib.invariants`). TS-LIB-008 (C ABI) and TS-LIB-009 (PointF64 float lane) remain not wired — the GQL value lane is i64-only (see `docs/TIMESERIES.md`). |
+| §4: "ZERO CANARY tokens in the timeseries subsystem" | Stale — `src/timeseries/gql_functions.zig` carries a full CANARY header block (REQ-TS-GQL-*), and `tests/test_gap0866_ts_scalar_eval.zig` carries REQ-TS-GQL-EXEC-001. |
+| §5.2: "MIGRATION_GUIDE.md claims timeseries.value() is production; reality: null store in server path" | The server path now resolves the boot-time global store (GAP-0280); pinned by `tests/test_gap0866_ts_scalar_eval.zig` and the eval.zig GAP-0280 unit tests. |
+
+**Reachability fix landed with the re-audit (2026-06-10):** parsed float
+literals (`[1.0, 2.0]`, penalty/gamma `1.0`) evaluate to exact-numeric
+`.Decimal`, which the array-based argument extraction rejected — so dtw*,
+cosine_similarity, cross_correlate, sbd, change_points, and dtw_soft were
+unreachable from real queries despite passing AST-built unit tests.
+`src/eval.zig` now accepts all numeric variants (`value_types.toDouble`), and
+the GAP-0866 suite pins it.
+
+**Still true (and now explicitly gated):** the entire §3.7 signal-analysis
+surface (FFT/STFT/wavelets, spectral-residual + SR-CNN anomaly detection,
+`spectral_anomaly_score()`, AnomalyEvent graph schema, GPU acceleration, WASM
+detectors) is **FUTURE / NON-GA — design-only**. No user-facing document
+advertises these as present; `specs/signal-analysis/integrating-signal-analysis.md`
+carries a status header to the same effect.
 
 ---
 
@@ -163,11 +197,16 @@ No dedicated timeseries feature/bug/gap issues exist in the tracker. The GAP-004
 | TS-INT-001 | timeseries_store field on Env for GQL evaluation | `value_types.zig:159` | `timeseries_store: ?*const Store = null` | IMPLEMENTED |
 | TS-INT-002 | Store passed through exec.runGroupedQuery | `exec.zig:321,465` | Parameter threaded to Env | IMPLEMENTED |
 | TS-INT-003 | Store initialized and wired in CLI test path | `gql/main.zig:425` | GAP-004 comment | IMPLEMENTED |
-| TS-INT-004 | Store wired in QUIC server execution path | -- | **NO EVIDENCE** -- `src/server/` has no `timeseries_store` references | **NOT IMPLEMENTED** |
-| TS-INT-005 | Store wired in gRPC server execution path | -- | **NO EVIDENCE** | **NOT IMPLEMENTED** |
+| TS-INT-004 | Store wired in QUIC server execution path | `src/server/main.zig:1972-2008` (boot-time `eval.setGlobalTimeseriesStore`) | *(re-audited 2026-06-10)* `tests/ts_ingest_roundtrip.zig` (`zig build test-ts-ingest`), `tests/test_ts_latency.zig`, `tests/test_gap0866_ts_scalar_eval.zig` (`zig build test-gap0866`) — all through `executeStatementWithContext`, the QUIC entry | IMPLEMENTED, TESTED |
+| TS-INT-005 | Store wired in gRPC server execution path | `src/transport/grpc_server.zig:2317` routes through the same `executeStatementWithContext` + global store | *(re-audited 2026-06-10)* same executor-level tests as TS-INT-004 | IMPLEMENTED, TESTED (executor level) |
 | TS-INT-006 | Build system dependency wiring | `build.zig`, `build.zig.zon` | `timeseries_lib` import on root module + executable | IMPLEMENTED |
 
 ### 3.7 Signal Analysis / Anomaly Detection Requirements (from spec)
+
+> **STATUS (2026-06-10, GAP-0866): FUTURE / NON-GA — design-only.** Every row
+> below remains NOT IMPLEMENTED. These capabilities MUST NOT be advertised in
+> user-facing documentation until implemented; the spec file carries a matching
+> status header.
 
 These are from `specs/signal-analysis/integrating-signal-analysis.md` -- a design spec describing future integration. None are currently tracked as GitLab issues and none have implementation evidence beyond the external library capabilities.
 
@@ -209,13 +248,22 @@ These modules exist in the `timeseries` v0.1.0 library and are accessible via `t
 
 ## 4. CANARY Token Status
 
-**There are ZERO CANARY tokens in the timeseries subsystem.** No file in `src/timeseries/` contains any CANARY markers. This is a governance gap -- all other major subsystems have CANARY coverage.
+~~**There are ZERO CANARY tokens in the timeseries subsystem.**~~ *(Stale — resolved before 2026-06-10: `src/timeseries/gql_functions.zig` carries a full REQ-TS-GQL-\* CANARY header block and `tests/test_gap0866_ts_scalar_eval.zig` carries REQ-TS-GQL-EXEC-001. See §0 addendum.)*
 
 ---
 
 ## 5. Gaps and Conflicts
 
 ### 5.1 Critical Gaps
+
+> **Re-audit note (2026-06-10, GAP-0866):** GAP-TS-001 resolved by GAP-0280
+> (boot-time global store, `src/server/main.zig:1972-2008`); GAP-TS-004
+> resolved by GAP-0282/0290 (eval dispatch into `gql_functions.zig`) with
+> per-function integration cover in `tests/test_gap0866_ts_scalar_eval.zig`;
+> GAP-TS-005 resolved by GAP-0283 (arbitrary-order derivative); GAP-TS-006
+> resolved by the GAP-0866 sample_by sum/first/last tests. GAP-TS-002
+> resolved (CANARY markers landed, see §4). GAP-TS-003 superseded by the
+> GAP-0865/0866 tracker rows in `docs/GAP_ANALYSIS.md`.
 
 | Gap ID | Description | Evidence |
 |--------|------------|----------|
@@ -237,7 +285,15 @@ These modules exist in the `timeseries` v0.1.0 library and are accessible via `t
 
 ### 5.3 Architecture Notes
 
-The `src/timeseries/gql_functions.zig` module defines a parallel GQL function system (TSFunctionType, TSFunctionCall, executeFunction) that is **completely independent** from the actual GQL eval path in `src/eval.zig`. The eval.zig path only supports `timeseries.value()` directly. The 8 function types in gql_functions.zig (last_value, value_at, sample_by, time_bucket, interpolate, moving_avg, rate, derivative) are tested via direct Zig calls but are not callable from GQL queries.
+> **SUPERSEDED (2026-06-10, GAP-0866):** the paragraph below was true on
+> 2026-04-01 but is stale. `gql_functions.zig` is now the live execution
+> backend for the scalar `timeseries.*` family dispatched from
+> `src/eval.zig` (`evalTimeseriesFunction` / `evalArrayBasedTsFunction`,
+> GAP-0282/0290), and every documented function is callable from real GQL
+> queries — pinned per-function by `tests/test_gap0866_ts_scalar_eval.zig`
+> (`zig build test-gap0866`). See the §0 addendum.
+
+The `src/timeseries/gql_functions.zig` module defines a parallel GQL function system (TSFunctionType, TSFunctionCall, executeFunction) that ~~is **completely independent** from~~ *(stale — now the execution backend of)* the actual GQL eval path in `src/eval.zig`.
 
 ---
 

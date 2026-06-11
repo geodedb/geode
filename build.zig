@@ -1809,6 +1809,25 @@ pub fn build(b: *std.Build) void {
     const ts_ingest_step = b.step("test-ts-ingest", "Run only the native geode.ts.* round-trip tests");
     ts_ingest_step.dependOn(&run_ts_ingest_tests.step);
 
+    // ----- TS SCALAR FUNCTION EVAL (GAP-0866) -----
+    // Drives the scalar `timeseries.*` GQL function family (value, last_value,
+    // value_at, sample_by, time_bucket, interpolate, moving_avg, rate,
+    // derivative, change_points, extract_features, matrix_profile, z_normalize,
+    // invariants, dtw*, cosine_similarity, cross_correlate, sbd) through the
+    // full parse → executeStatementWithContext → eval path against the real
+    // Store. Closes the "parallel TSFunctionCall system independent from GQL
+    // eval" inventory claim with execution-path evidence.
+    const ts_scalar_eval_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0866_ts_scalar_eval.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    ts_scalar_eval_tests.root_module.addImport("geode", root_mod);
+    const run_ts_scalar_eval_tests = b.addRunArtifact(ts_scalar_eval_tests);
+    const ts_scalar_eval_step = b.step("test-gap0866", "Run GAP-0866 scalar timeseries.* GQL function eval integration tests");
+    ts_scalar_eval_step.dependOn(&run_ts_scalar_eval_tests.step);
+
     // ----- TS DURABILITY (GAP-0865) -----
     // Regression suite for the time-series durability contract: fail-closed
     // open on corrupt artefacts (with explicit best_effort opt-out),

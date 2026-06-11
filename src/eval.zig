@@ -3975,11 +3975,8 @@ fn evalTimeseriesFunction(
         const min_size_val = try evalExpr(allocator, args[5].*, env);
         if (start != .Int or end != .Int or min_size_val != .Int)
             return EvalError.TypeMismatch;
-        const penalty = switch (penalty_val) {
-            .Double => |d| d,
-            .Int => |i| @as(f64, @floatFromInt(i)),
-            else => return EvalError.TypeMismatch,
-        };
+        // GAP-0866: parsed float literals evaluate to .Decimal — accept all numerics.
+        const penalty = value_types.toDouble(penalty_val) orelse return EvalError.TypeMismatch;
         if (min_size_val.Int < 1) return EvalError.InvalidArgs;
         call.function_type = .change_points;
         call.params = .{ .change_points = .{
@@ -4063,16 +4060,18 @@ fn evalArrayBasedTsFunction(
     args: []*ast.Expr,
     env: Env,
 ) EvalError!?Value {
-    // Helper: evaluate a Value and extract []f64 from a List of Int/Double values.
+    // Helper: evaluate a Value and extract []f64 from a List of numeric values.
+    // GAP-0866: real parsed float literals (e.g. `[1.0, 2.5]`) evaluate to
+    // `.Decimal` (exact numeric), not `.Double`, so this must accept every
+    // numeric variant — use value_types.toDouble (Int/Double/Decimal) plus Real.
     const extractF64List = struct {
         fn run(alloc: std.mem.Allocator, val: Value) EvalError!?[]f64 {
             if (val != .List) return null;
             const list = val.List;
             const out = alloc.alloc(f64, list.len) catch return EvalError.OutOfMemory;
             for (list, 0..) |item, i| {
-                out[i] = switch (item) {
-                    .Double => |d| d,
-                    .Int => |n| @as(f64, @floatFromInt(n)),
+                out[i] = value_types.toDouble(item) orelse switch (item) {
+                    .Real => |r| @as(f64, r),
                     else => {
                         alloc.free(out);
                         return EvalError.TypeMismatch;
@@ -4143,11 +4142,8 @@ fn evalArrayBasedTsFunction(
         defer allocator.free(a_arr);
         const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
         defer allocator.free(b_arr);
-        const gamma = switch (g_val) {
-            .Double => |d| d,
-            .Int => |i| @as(f64, @floatFromInt(i)),
-            else => return EvalError.TypeMismatch,
-        };
+        // GAP-0866: parsed float literals evaluate to .Decimal — accept all numerics.
+        const gamma = value_types.toDouble(g_val) orelse return EvalError.TypeMismatch;
         const ts_result = ts_gql.executeDTWSoft(allocator, a_arr, b_arr, gamma) catch return EvalError.OutOfMemory;
         return try tsValueToCanonical(ts_result, allocator);
     } else if (std.mem.eql(u8, suffix, "cosine_similarity")) {

@@ -4810,6 +4810,7 @@ REQ-TS-GQL-DTWOPENEND-001,TimeSeriesGqlDTWOpenEnd,GqlFunction,TESTED,,,timeserie
 REQ-TS-GQL-DTWSHAPE-001,TimeSeriesGqlDTWShape,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
 REQ-TS-GQL-DTWSOFT-001,TimeSeriesGqlDTWSoft,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
 REQ-TS-GQL-EXEC-001,TimeSeriesGqlExecute,Integration,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-EXEC-001,TimeSeriesGqlExecute,Integration,TESTED,,,timeseries,2026-06-10,tests/test_gap0866_ts_scalar_eval.zig
 REQ-TS-GQL-EXTRACTFEAT-001,TimeSeriesGqlExtractFeatures,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
 REQ-TS-GQL-FUNCTYPE-001,TSFunctionTypeEnum,Types,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
 REQ-TS-GQL-INTERPOLATE-001,TimeSeriesGqlInterpolate,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
