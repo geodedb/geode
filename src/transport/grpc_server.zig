@@ -2377,7 +2377,10 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 },
                 .rows => {
                     const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
-                    if (!rls_active) {
+                    // GAP-0892: node-scan streaming executes only `analysis.target`;
+                    // bail when other statements (SESSION SET, DDL, ...) must run
+                    // (same gate as the QUIC handler).
+                    if (!rls_active and !analysis.has_effectful_preamble) {
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
