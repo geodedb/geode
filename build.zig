@@ -3127,6 +3127,23 @@ pub fn build(b: *std.Build) void {
     gap0870_step.dependOn(&run_gap0870_tests.step);
     gap0870_step.dependOn(&run_gap0870_eqt_tests.step);
 
+    // GAP-0889: distributed quality batch. Named step so the 2PC
+    // commit-delivery honesty regression (tests/test_twophase_unit.zig) and
+    // the raft_persistent fail-loud tests run outside the blocked monolithic
+    // `zig build test` (test_twophase_unit was previously only reachable
+    // through all_tests.zig there).
+    const gap0889_twophase_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_twophase_unit.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gap0889_twophase_test_mod.addImport("geode", root_mod);
+    const gap0889_twophase_tests = b.addTest(.{ .root_module = gap0889_twophase_test_mod });
+    const run_gap0889_twophase_tests = b.addRunArtifact(gap0889_twophase_tests);
+    const gap0889_step = b.step("test-gap0889", "GAP-0889: distributed quality batch — 2PC delivery honesty + raft persistent fail-loud");
+    gap0889_step.dependOn(&run_gap0889_twophase_tests.step);
+    gap0889_step.dependOn(&run_raft_persistent_tests.step);
+
     // Root cause #6 follow-up: durable raft hard-state (currentTerm/votedFor) +
     // log across a process restart. A FileStorage-backed RaftNode must restore
     // its term after deinit + re-init on the same dir. Regression for

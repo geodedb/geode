@@ -212,6 +212,10 @@ pub const Statistics = struct {
     entries_applied: u64,
     // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ApplyErrorCount; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
     apply_errors: u64,
+    // GAP-0889 (F1): committed entries whose command bytes failed to decode.
+    // These entries are NOT applied (no silent `.write` fabrication) — a
+    // non-zero count means a poisoned/future-format entry reached commit.
+    decode_errors: u64,
     snapshots_sent: u64,
     snapshots_received: u64,
 };
@@ -1651,7 +1655,18 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             for (items, 0..) |pe, i| {
                 const dup = try allocator.dupe(u8, pe.command_bytes);
                 errdefer allocator.free(dup);
-                const cmd = deserializeCommand(dup) catch Command{ .write = dup };
+                // GAP-0889 (F1): transit path — keep the raw bytes moving as an
+                // opaque `.write` (owned_wire_bytes preserves the exact wire
+                // encoding for storage/forwarding) but make the decode failure
+                // visible. The apply site (decodeCommittedCommand) is the
+                // enforcement point that refuses to apply such an entry.
+                const cmd = deserializeCommand(dup) catch |err| fallback: {
+                    log.warn("Raft inbound entry decode failed — forwarding raw bytes", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("entry_index", pe.index),
+                    });
+                    break :fallback Command{ .write = dup };
+                };
                 entries[i] = .{
                     .term = pe.term,
                     .index = pe.index,
@@ -1915,6 +1930,24 @@ pub fn serializeCommand(allocator: Allocator, cmd: Command) ![]u8 {
             return buf;
         },
     }
+}
+
+/// GAP-0889 (F1): decode a committed entry's command bytes for apply.
+/// On decode failure the entry is reported loudly (log.err + dedicated
+/// `decode_errors` counter) and `null` is returned so the caller SKIPS the
+/// entry instead of fabricating an inert `.write` command from poisoned or
+/// future-format bytes. Pulled out of `drainReady` so it is unit-testable
+/// without standing up a full RaftNode.
+fn decodeCommittedCommand(stats: *Statistics, data: []const u8, entry_index: u64, term: u64) ?Command {
+    return deserializeCommand(data) catch |err| {
+        log.err("Raft committed entry decode failed — entry NOT applied", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.uint("entry_index", entry_index),
+            Attr.uint("term", term),
+        });
+        stats.decode_errors += 1;
+        return null;
+    };
 }
 
 /// Deserialize a tag-prefixed byte array back into a Command.
@@ -2538,7 +2571,10 @@ pub const RaftNode = struct {
         for (rd.committed_entries) |entry| {
             if (entry.kind == .normal and entry.data.len > 0) {
                 if (self.apply_callback) |callback| {
-                    const cmd = deserializeCommand(entry.data) catch Command{ .write = entry.data };
+                    // GAP-0889 (F1): a committed entry that fails to decode is
+                    // skipped loudly — fabricating an inert `.write` here would
+                    // silently degrade poisoned/future-format entries.
+                    const cmd = decodeCommittedCommand(&self.stats, entry.data, entry.index, self.current_term) orelse continue;
                     // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ErrorLogging; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
                     // Pass the committed entry's globally-unique, cross-node-identical
                     // log index so the apply layer can derive a deterministic,
@@ -2783,8 +2819,17 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
             for (ae.entries, 0..) |e, i| {
                 const owned: ?[]u8 = if (e.data.len > 0) try allocator.dupe(u8, e.data) else null;
                 errdefer if (owned) |b| allocator.free(b);
+                // GAP-0889 (F1): outbound transit — same posture as the inbound
+                // path above: forward the raw bytes verbatim, but log so a
+                // poisoned entry in the log is visible while replicating.
                 const cmd = if (owned) |b|
-                    (deserializeCommand(b) catch Command{ .write = b })
+                    (deserializeCommand(b) catch |err| fallback: {
+                        log.warn("Raft outbound entry decode failed — forwarding raw bytes", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.uint("entry_index", e.index),
+                        });
+                        break :fallback Command{ .write = b };
+                    })
                 else
                     Command{ .write = e.data };
                 entries[i] = .{
@@ -3010,6 +3055,29 @@ test "serializeCommand: txn_prepare round-trips (GAP-0870)" {
 test "deserializeCommand: unknown tag fails loud (GAP-0870)" {
     const bogus = [_]u8{ 0xFF, 1, 2, 3 };
     try std.testing.expectError(error.UnknownCommandTag, deserializeCommand(&bogus));
+}
+
+test "decodeCommittedCommand: poisoned entry skipped + counted, valid entry decoded (GAP-0889 F1)" {
+    var stats = std.mem.zeroes(Statistics);
+
+    // Poisoned/future-format entry: no fabricated `.write`, returns null and
+    // bumps the dedicated decode_errors counter.
+    const bogus = [_]u8{ 0xFF, 1, 2, 3 };
+    try std.testing.expect(decodeCommittedCommand(&stats, &bogus, 7, 2) == null);
+    try std.testing.expectEqual(@as(u64, 1), stats.decode_errors);
+
+    // Empty payload is also a decode failure, not an inert write.
+    try std.testing.expect(decodeCommittedCommand(&stats, &.{}, 8, 2) == null);
+    try std.testing.expectEqual(@as(u64, 2), stats.decode_errors);
+
+    // A valid encoding still decodes and does not touch the counter.
+    var buf: [64]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const bytes = try serializeCommand(fba.allocator(), .{ .txn_decide = .{ .xid = 42, .commit = true } });
+    const cmd = decodeCommittedCommand(&stats, bytes, 9, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 42), cmd.txn_decide.xid);
+    try std.testing.expect(cmd.txn_decide.commit);
+    try std.testing.expectEqual(@as(u64, 2), stats.decode_errors);
 }
 
 test "validateCommand: rejects invalid variants at proposal time (GAP-0870)" {

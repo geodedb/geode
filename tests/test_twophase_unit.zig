@@ -46,6 +46,25 @@ fn sendNetworkError(
     return error.ConnectionFailed;
 }
 
+/// GAP-0889: votes commit during PREPARE, then the participant becomes
+/// unreachable for the COMMIT delivery — the classic "decided but not acked"
+/// 2PC failure window.
+fn sendCommitVoteThenFailCommit(
+    _: ?*anyopaque,
+    _: []const u8,
+    msg: twophase.TwoPhaseMessage,
+    _: u64,
+) anyerror!twophase.TwoPhaseResponse {
+    if (msg.msg_type == .COMMIT) return error.ConnectionFailed;
+    return twophase.TwoPhaseResponse{
+        .msg_type = .PREPARE,
+        .transaction_id = "",
+        .participant_id = "",
+        .vote = .VOTE_COMMIT,
+        .timestamp = 0,
+    };
+}
+
 // --- Tests ---
 
 test "Transaction: init produces active state" {
@@ -57,6 +76,7 @@ test "Transaction: init produces active state" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -77,6 +97,7 @@ test "Transaction: addParticipant accumulates participants" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -98,6 +119,7 @@ test "Transaction: prepare with all VOTE_COMMIT transitions to prepared" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -118,6 +140,7 @@ test "Transaction: prepare with VOTE_ABORT transitions to aborting" {
         sendAbortVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -137,6 +160,7 @@ test "Transaction: prepare with network error transitions to aborting" {
         sendNetworkError,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -158,6 +182,7 @@ test "Transaction: commit after prepare transitions to committed" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -172,6 +197,36 @@ test "Transaction: commit after prepare transitions to committed" {
     try std.testing.expectEqual(twophase.TransactionState.committed, txn.participants.items[0].state);
 }
 
+test "Transaction: commit surfaces undelivered participant instead of reporting success (GAP-0889)" {
+    const allocator = std.testing.allocator;
+    var txn = try twophase.Transaction.init(
+        allocator,
+        "txn-gap0889",
+        "coord-1",
+        sendCommitVoteThenFailCommit,
+        null,
+        30_000,
+        null,
+    );
+    defer txn.deinit();
+
+    try txn.addParticipant("p1", "host1:5000");
+
+    const can_commit = try txn.prepare();
+    try std.testing.expect(can_commit);
+
+    // The COMMIT decision is made (2PC point of no return), but delivery to
+    // the participant exhausts its retries. The old code marked the
+    // participant .committed anyway and reported success — it must surface
+    // the incomplete delivery instead.
+    try std.testing.expectError(error.CommitDeliveryIncomplete, txn.commit());
+
+    // The decision itself is still commit...
+    try std.testing.expectEqual(twophase.TransactionState.committed, txn.state);
+    // ...but the unreachable participant must NOT be recorded as committed.
+    try std.testing.expect(txn.participants.items[0].state != .committed);
+}
+
 test "Transaction: commit without prepare returns InvalidState" {
     const allocator = std.testing.allocator;
     var txn = try twophase.Transaction.init(
@@ -181,6 +236,7 @@ test "Transaction: commit without prepare returns InvalidState" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -198,6 +254,7 @@ test "Transaction: abort transitions to aborted" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -217,6 +274,7 @@ test "Transaction: createSavepoint and rollbackToSavepoint" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 
@@ -243,6 +301,7 @@ test "Transaction: prepare with no participants succeeds (vacuous truth)" {
         sendCommitVote,
         null,
         30_000,
+        null,
     );
     defer txn.deinit();
 

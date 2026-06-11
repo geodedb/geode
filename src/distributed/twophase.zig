@@ -1,5 +1,25 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.Thread.sleep was removed; use raw nanosleep.
+fn compat_sleepNs(ns: u64) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    } else {
+        // POSIX fallback via libc nanosleep.
+        const req = std.c.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.c.timespec = undefined;
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
@@ -371,14 +391,14 @@ fn readExact(
         const n = stream.read(buf[offset..]) catch |err| {
             if (err == error.WouldBlock) {
                 client.poll(10) catch {};
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                compat_sleepNs(5 * std.time.ns_per_ms);
                 continue;
             }
             return err;
         };
         if (n == 0) {
             client.poll(10) catch {};
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            compat_sleepNs(5 * std.time.ns_per_ms);
             continue;
         }
         offset += n;
@@ -712,15 +732,15 @@ pub const Transaction = struct {
             .allocator = allocator,
             .id = try allocator.dupe(u8, id),
             .coordinator_id = try allocator.dupe(u8, coordinator_id),
-            .participants = std.ArrayList(Participant).init(allocator),
+            .participants = .empty,
             .state = .active,
             .start_time = compat_timestamp(),
             .timeout_ms = timeout_ms,
             .send_fn = send_fn,
             .send_ctx = send_ctx,
-            .operations = std.ArrayList(Operation).init(allocator),
+            .operations = .empty,
             .isolation_level = .read_committed,
-            .savepoints = std.ArrayList(Savepoint).init(allocator),
+            .savepoints = .empty,
             .store = store,
         };
     }
@@ -750,8 +770,8 @@ pub const Transaction = struct {
             .state = .active,
             .last_message_time = compat_timestamp(),
             .prepare_response = null,
-            .undo_log = std.ArrayList(UndoEntry).init(self.allocator),
-            .redo_log = std.ArrayList(RedoEntry).init(self.allocator),
+            .undo_log = .empty,
+            .redo_log = .empty,
         };
         try self.participants.append(self.allocator, participant);
     }
@@ -803,7 +823,7 @@ pub const Transaction = struct {
             .auth_token = getClusterToken(),
             .nonce = nonce_tracker.NonceTracker.generateNonce(),
         };
-        const response = ctx.txn.send_fn(ctx.txn.send_ctx, participant.endpoint, msg, ctx.txn.timeout_ms) catch {
+        var response = ctx.txn.send_fn(ctx.txn.send_ctx, participant.endpoint, msg, ctx.txn.timeout_ms) catch {
             participant.prepare_response = .VOTE_TIMEOUT;
             return;
         };
@@ -825,12 +845,15 @@ pub const Transaction = struct {
     const CommitWorkerCtx = struct {
         txn: *Transaction,
         idx: usize,
+        /// GAP-0889: per-participant delivery flag — exhausting retries must
+        /// not be reported as a successful commit ack.
+        delivered: []bool,
     };
 
     // PERF-D004: Worker function for parallel commit
     fn commitWorker(ctx: CommitWorkerCtx) void {
         const participant = &ctx.txn.participants.items[ctx.idx];
-        var ops = std.ArrayList(Operation).init(ctx.txn.allocator);
+        var ops: std.ArrayList(Operation) = .empty;
         defer ops.deinit(ctx.txn.allocator);
         // SEC-D009: Include cryptographic nonce for replay protection
         const msg = TwoPhaseMessage{
@@ -844,17 +867,37 @@ pub const Transaction = struct {
         };
         var retries: u32 = 0;
         const max_retries: u32 = 3;
+        var last_err: ?anyerror = null;
+        var acked = false;
         while (retries < max_retries) : (retries += 1) {
             if (ctx.txn.send_fn(ctx.txn.send_ctx, participant.endpoint, msg, ctx.txn.timeout_ms)) |resp| {
-                resp.deinit(ctx.txn.allocator);
-            } else |_| {
+                var owned_resp = resp;
+                owned_resp.deinit(ctx.txn.allocator);
+                acked = true;
+            } else |err| {
+                last_err = err;
                 const backoff_ms: u64 = @as(u64, 100) << @as(u6, @intCast(retries));
-                std.time.sleep(backoff_ms * std.time.ns_per_ms);
+                compat_sleepNs(backoff_ms * std.time.ns_per_ms);
                 continue;
             }
             break;
         }
-        participant.state = .committed;
+        // GAP-0889: the old code unconditionally marked the participant
+        // .committed here — a participant that never received the COMMIT was
+        // reported as committed and the coordinator returned success. Leave
+        // it in .committing (decision made, delivery unacked) and surface the
+        // failure through `delivered` so commit() can report it.
+        if (acked) {
+            participant.state = .committed;
+            ctx.delivered[ctx.idx] = true;
+        } else {
+            log.warn("2PC COMMIT delivery failed after retries", &.{
+                Attr.string("transaction_id", ctx.txn.id),
+                Attr.string("participant", participant.endpoint),
+                Attr.string("error", if (last_err) |e| @errorName(e) else "unknown"),
+                Attr.uint("retries", max_retries),
+            });
+        }
         participant.last_message_time = compat_timestamp();
     }
 
@@ -938,12 +981,18 @@ pub const Transaction = struct {
         });
         defer pool.deinit();
         var wg = pool.waitGroup();
+        // GAP-0889: track per-participant COMMIT delivery so an unreachable
+        // participant is surfaced instead of silently reported committed.
+        const delivered = try self.allocator.alloc(bool, participant_count);
+        defer self.allocator.free(delivered);
+        for (delivered) |*d| d.* = false;
         const worker_ctxs = try self.allocator.alloc(CommitWorkerCtx, participant_count);
         defer self.allocator.free(worker_ctxs);
         for (0..participant_count) |idx| {
             worker_ctxs[idx] = .{
                 .txn = self,
                 .idx = idx,
+                .delivered = delivered,
             };
             _ = try pool.submitTask(runCommitWorker, @ptrCast(&worker_ctxs[idx]), .{
                 .wait_group = &wg,
@@ -952,7 +1001,15 @@ pub const Transaction = struct {
             });
         }
         wg.wait();
+        // The commit DECISION stands (2PC point of no return was the prepare
+        // vote), so the transaction is committed — but if any participant
+        // never acked the COMMIT message, say so instead of lying. The caller
+        // (or a future recovery pass) must re-deliver to the unacked
+        // participants; their locks are still held on the participant side.
         self.state = .committed;
+        for (delivered) |d| {
+            if (!d) return error.CommitDeliveryIncomplete;
+        }
     }
 
     pub fn abort(self: *Transaction) !void {
@@ -966,7 +1023,7 @@ pub const Transaction = struct {
             // Create and send abort message
             // SEC-D003: Include cluster token for inter-node authentication
             // SEC-D009: Include cryptographic nonce for replay protection
-            var ops = std.ArrayList(Operation).init(self.allocator);
+            var ops: std.ArrayList(Operation) = .empty;
             defer ops.deinit(self.allocator);
             const msg = TwoPhaseMessage{
                 .msg_type = .ABORT,
@@ -980,13 +1037,22 @@ pub const Transaction = struct {
 
             // Send abort message (best effort - proceed even if some fail)
             if (self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms)) |resp| {
-                resp.deinit(self.allocator);
-            } else |_| {
-                // Log failure but continue aborting other participants
+                var owned_resp = resp;
+                owned_resp.deinit(self.allocator);
+            } else |err| {
+                // GAP-0889: the comment said "log failure" but nothing was
+                // logged — an undeliverable ABORT leaves that participant's
+                // locks held until its own timeout. Make it visible.
+                log.warn("2PC ABORT delivery failed — participant will release on its own timeout", &.{
+                    Attr.string("transaction_id", self.id),
+                    Attr.string("participant", participant.endpoint),
+                    Attr.string("error", @errorName(err)),
+                });
             }
 
             // Apply undo log to rollback changes
-            while (participant.undo_log.popOrNull()) |undo_entry| {
+            // Zig 0.16: ArrayList.popOrNull was renamed to pop (returns ?T).
+            while (participant.undo_log.pop()) |undo_entry| {
                 // Apply undo operation to restore previous state (best-effort)
                 applyUndoOperation(self.store, undo_entry);
             }
@@ -1023,7 +1089,9 @@ pub const Coordinator = struct {
         pub fn writeEntry(self: *LogWriter, entry: LogEntry) !void {
             const framed = try encodeFrame(self.allocator, entry);
             defer self.allocator.free(framed);
-            try self.file.writeAll(framed);
+            // Zig 0.16: Io.File has no writeAll; stream-append at the current
+            // file position (same pattern as raft_persistent.zig).
+            try self.file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), framed);
         }
     };
 
@@ -1036,7 +1104,7 @@ pub const Coordinator = struct {
         pub const _desc_table = .{
             .timestamp = fd(1, .{ .scalar = .int64 }),
             .transaction_id = fd(2, .{ .scalar = .string }),
-            .event_type = fd(3, .{ .scalar = .@"enum" }),
+            .event_type = fd(3, .{ .@"enum" = {} }),
             .data = fd(4, .{ .scalar = .bytes }),
         };
 
@@ -1150,7 +1218,8 @@ pub const Coordinator = struct {
 
         // Remove completed transaction to avoid unbounded growth
         if (self.transactions.fetchRemove(transaction_id)) |entry| {
-            entry.value.deinit();
+            var removed_txn = entry.value;
+            removed_txn.deinit();
         }
 
         return can_commit;
@@ -1284,7 +1353,7 @@ pub const TwoPCCoordinator = struct {
     pub fn tick(self: *TwoPCCoordinator) !void {
         if (!self.enable_coordinator) return;
 
-        var to_abort = std.ArrayList([]const u8).init(self.allocator);
+        var to_abort: std.ArrayList([]const u8) = .empty;
         defer to_abort.deinit(self.allocator);
 
         var it = self.coordinator.transactions.iterator();

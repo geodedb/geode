@@ -1564,14 +1564,26 @@ pub const ClusterCoordinator = struct {
                 try self.promoteReplica(shard);
             }
 
-            // Remove from replica list
-            const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - 1);
+            // Remove the failed node from the replica list (GAP-0889: the old
+            // unconditional `len - 1` alloc underflowed when the list was
+            // empty, sized the slice wrong when the node wasn't a replica,
+            // and leaked the previous slice on every pass).
+            var occurrences: usize = 0;
+            for (shard.replica_nodes) |replica| {
+                if (replica == failed_node) occurrences += 1;
+            }
+            if (occurrences == 0) continue;
+
+            const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - occurrences);
             var idx: usize = 0;
             for (shard.replica_nodes) |replica| {
                 if (replica != failed_node) {
                     new_replicas[idx] = replica;
                     idx += 1;
                 }
+            }
+            if (shard.replica_nodes.len > 0) {
+                self.allocator.free(shard.replica_nodes);
             }
             shard.replica_nodes = new_replicas;
         }
@@ -1612,15 +1624,17 @@ pub const ClusterCoordinator = struct {
         });
         shard.primary_node = best_replica;
 
-        // Remove from replica list
+        // Remove the promoted replica from the replica list (GAP-0889: free
+        // the previous slice — it was leaked on every promotion).
         const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - 1);
         var idx: usize = 0;
         for (shard.replica_nodes) |replica| {
-            if (replica != best_replica) {
+            if (replica != best_replica and idx < new_replicas.len) {
                 new_replicas[idx] = replica;
                 idx += 1;
             }
         }
+        self.allocator.free(shard.replica_nodes);
         shard.replica_nodes = new_replicas;
     }
 
@@ -1631,6 +1645,9 @@ pub const ClusterCoordinator = struct {
             if (current_replicas < self.replication_factor) {
                 const needed = self.replication_factor - current_replicas;
                 const available_nodes = try self.getAvailableNodes(shard);
+                // GAP-0889: this slice was leaked on every path (including
+                // the happy path).
+                defer self.allocator.free(available_nodes);
 
                 if (available_nodes.len < needed) {
                     log.warn("Insufficient nodes to maintain replication factor for shard", &.{
@@ -1641,6 +1658,9 @@ pub const ClusterCoordinator = struct {
 
                 // Add new replicas
                 const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len + needed);
+                // GAP-0889: don't leak the new slice if startReplication fails
+                // mid-loop (ownership only transfers at the assignment below).
+                errdefer self.allocator.free(new_replicas);
                 // Zig 0.16: std.mem.copy was removed; use @memcpy.
                 @memcpy(new_replicas[0..shard.replica_nodes.len], shard.replica_nodes);
 
@@ -1649,7 +1669,9 @@ pub const ClusterCoordinator = struct {
                     try self.startReplication(shard.id, available_nodes[i]);
                 }
 
-                self.allocator.free(shard.replica_nodes);
+                if (shard.replica_nodes.len > 0) {
+                    self.allocator.free(shard.replica_nodes);
+                }
                 shard.replica_nodes = new_replicas;
             }
         }

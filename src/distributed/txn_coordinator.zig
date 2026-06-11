@@ -408,6 +408,13 @@ pub const TxnCoordinator = struct {
         // No conflicts, acquire locks and prepare
         var locks = try std.ArrayList(Lock).initCapacity(self.allocator, 0);
         errdefer locks.deinit(self.allocator);
+        // GAP-0889 (Task-28 nit): if anything below fails (OOM in the dupe
+        // or the prepared_txns.put), the lock_table entries inserted so far
+        // must be rolled back too — otherwise the resources stay locked by
+        // an xid that was never registered and can never be decided.
+        errdefer for (locks.items) |lock| {
+            _ = self.lock_table.remove(lock.resource_id);
+        };
         for (decoded.ops) |op| {
             const lock = Lock{
                 .resource_id = resourceIdOf(op),
@@ -473,7 +480,21 @@ pub const TxnCoordinator = struct {
         }
     }
 
-    /// Check for timed-out transactions
+    /// Check for timed-out transactions.
+    ///
+    /// GAP-0889 (Task-28 F2) — DOCUMENTED RESIDUAL, do not wire as-is:
+    /// this function has NO production caller, and that is deliberate. The
+    /// TxnCoordinator is a *replicated state machine* applied on every raft
+    /// node; a wall-clock timeout abort taken locally would be
+    /// replica-divergent (each node's clock crosses `timeout_ms` at a
+    /// different moment relative to its apply stream, so one replica could
+    /// abort an xid that another replica then commits via a late
+    /// `txn_decide`). The correct design is for the *leader* to detect the
+    /// timeout and propose a `txn_decide{commit=false}` through raft, so
+    /// every replica aborts at the same log position. Implementing
+    /// raft-proposed timeout decides is tracked future work
+    /// (docs/DISTRIBUTED_QUALITY_GAP_ANALYSIS.md); until then this helper
+    /// exists for tests and for that future leader-side caller only.
     pub fn checkTimeouts(self: *TxnCoordinator) !void {
         const now = compat_milliTimestamp();
         var to_abort = try std.ArrayList(u64).initCapacity(self.allocator, 0);
