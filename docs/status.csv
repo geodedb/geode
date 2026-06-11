@@ -566,7 +566,7 @@ REQ-CLI-CHUNKED-EXEC-003,ChunkedExecution,SizeDetection,TESTED,,,cli,2026-06-10,
 REQ-CLI-CHUNKED-EXEC-004,ChunkedExecution,BatchExecution,TESTED,,,cli,2026-06-10,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-005,ChunkedExecution,OptionsStruct,TESTED,,,cli,2026-06-10,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,TESTED,,,cli,2026-06-10,src/cli/main.zig
-REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,IMPL,,,cli,2026-06-10,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,TESTED,,,cli,2026-06-11,src/cli/main.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,FalsePositiveRegression,TESTED,,,cli,2026-04-16,tests/test_deadline_watchdog_false_positive.sh
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,Lifetime,TESTED,,,cli,2026-04-16,src/cli/query_deadline.zig

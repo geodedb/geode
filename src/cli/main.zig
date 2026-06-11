@@ -1389,7 +1389,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-11
     // Allow null query_text when using chunked execution (file_statements is set)
     if (query_text == null and file_statements == null) {
         std.debug.print("Error: query text required\n", .{});
