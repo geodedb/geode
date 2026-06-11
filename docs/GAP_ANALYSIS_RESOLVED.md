@@ -8,6 +8,46 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Current Status**: 10 open/partial actionable gaps (2 Critical, 5 High, 3 Medium, 0 Low). See docs/GAP_ANALYSIS.md.
 
+## 2026-06-11 — PERF-A / #808: RLS row-rebuild elimination in match filtering (Closed; GAP-0887a)
+
+**Resolution**: Closed via the bytecode-aware skip suggested in the register. The match
+loop's per-row RLS hot path (`passesRLSExprFilter`, reached from all 17 `passesRLSFilter`
+call sites in `src/execution/match_operations.zig`) no longer rebuilds the
+`StringHashMap(rls.Value)` row unconditionally:
+
+- **`CompiledExpression.needs_row_data`** (`src/security/rls_core.zig`) — computed once at
+  compile time (`compileExpression`) and for pinned pre-compiled expressions at
+  `createPolicy` time via `bytecodeNeedsRowData`, an operand-width-aware scan for the
+  `load_row` opcode (the only opcode that reads row data). Defaults to `true`
+  (conservative) for hand-constructed expressions that bypass both paths.
+- **`RLSEngine.needsRowDataForTable(operation, graph, table)`** — pre-scan over the
+  applicable (enabled, operation-matching) policies; returns `false` when no applicable
+  compiled policy reads row data AND for tables with no policies at all (the default-allow
+  path never reads the row either). Temporal constraints deliberately not consulted
+  (they can flip between pre-scan and evaluation); uncompiled expressions conservatively
+  report `true`.
+- **Match loop** — `passesRLSExprFilter` builds the row via
+  `rls_value_bridge.nodePropertiesToRLSRowInto` only when the gate says it is needed;
+  otherwise it `clearRetainingCapacity()`s the per-function scratch row (kept empty so
+  stale entries can never leak into a policy evaluation). The scratch row was already
+  per-function/per-worker (H5a), so threading is unchanged.
+- **Drive-by fix**: the `load_user` opcode's `@intCast` of the u64 Wyhash username hash
+  into i64 panicked (Debug) / was UB (release) for ~50% of usernames; now `@bitCast`.
+
+**Benchmark** (`zig build bench-rls-row-skip -Doptimize=ReleaseFast`,
+`benchmarks/benchmark_rls_row_skip.zig`, 200 samples × 100 rows, 8-property node):
+row-free policy 203 → 57 ns/row (**3.2–3.5x** across 3 runs: 3.53x / 3.15x / 3.35x);
+row-reading policy pays the gate's extra policy lookup (~24–65 ns/row, 196 → 234 ns/row
+in the first run) — accepted: row construction is required there anyway and the gate also
+eliminates the build for every no-policy table.
+
+**Tests**: 4 new PERF-A regression tests in `tests/test_rls_expr_engine_wiring.zig`
+(`zig build test-rls-expr-engine-wiring` 8/8) — bytecode scan incl. operand-byte
+false-positive pin, compile-time + pin-time flag computation, row-free pinned policy
+verdict against an empty never-populated scratch row (count stays 0), and a no-false-skip
+pin for row-reading policies. Adjacent: `test-rls-indeterminate-policy`,
+`test-rls-row-build-hot-path`, `test-gap0509-tenant-isolation` all pass unchanged.
+
 ## 2026-06-11 — GAP-0886: quality / maintainability backlog roll-up (Closed, residuals tracked)
 
 **Resolution**: Closed with residuals tracked. The row's acceptance was "turn the quality

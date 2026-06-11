@@ -235,12 +235,25 @@ fn passesRLSExprFilter(
         }
     }
 
-    // Reuse the caller's row buffer to avoid one HashMap init/deinit per
-    // node. GAP-0524: Fail closed on conversion errors.
-    rls_value_bridge.nodePropertiesToRLSRowInto(reusable_row, &node.properties) catch return false;
-
     // Use first label as the table name for policy lookup.
     const table = if (node.labels.len > 0) node.labels[0] else "default";
+
+    // CANARY: REQ=REQ-PERF-RLS-ROW-SKIP-003; FEATURE="RLSRowBuildSkip"; ASPECT=MatchLoopSkip; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-06-11
+    // PERF-A / #808: only rebuild the RLS row when an applicable compiled
+    // policy actually reads row data (bytecode contains `load_row`). For
+    // row-free policies (e.g. pure current_user / principal.attribute
+    // checks) and for tables with no policies at all, the VM never touches
+    // the row, so an empty scratch row is sufficient and the per-property
+    // conversion + hash-insert cost vanishes from the per-row hot path.
+    if (expr_engine.needsRowDataForTable(.select, node.graph_name, table)) {
+        // Reuse the caller's row buffer to avoid one HashMap init/deinit per
+        // node. GAP-0524: Fail closed on conversion errors.
+        rls_value_bridge.nodePropertiesToRLSRowInto(reusable_row, &node.properties) catch return false;
+    } else {
+        // Keep the scratch row empty so stale entries from a previous node
+        // can never leak into a policy evaluation (hygiene; no allocation).
+        reusable_row.clearRetainingCapacity();
+    }
 
     // Phase C2: this is the REAL expression-RLS evaluation point — the
     // compiled-policy VM decides per-row allow/deny. Measure the VM call and

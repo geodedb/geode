@@ -4173,6 +4173,20 @@ pub fn build(b: *std.Build) void {
     const run_rls_value_bridge_tests = b.addRunArtifact(rls_value_bridge_tests);
     shardDep(test_step, &run_rls_value_bridge_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // PERF-A / #808: RLS row-rebuild elimination micro-benchmark. Measures the
+    // old unconditional nodePropertiesToRLSRowInto + checkRowAccessByUsername
+    // per-row path against the new needsRowDataForTable-gated path (skip for
+    // row-free policies, build for row-reading policies). VarianceEnvelope
+    // JSON + VARIANCE_OK/VARIANCE_FAIL tokens + PERF_A_SPEEDUP summary line.
+    // Run with: zig build bench-rls-row-skip -Doptimize=ReleaseFast
+    const rls_row_skip_bench_exe = b.addExecutable(.{ .name = "benchmark_rls_row_skip", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_rls_row_skip.zig"), .target = target, .optimize = optimize }) });
+    rls_row_skip_bench_exe.root_module.addImport("rls", rls_mod);
+    rls_row_skip_bench_exe.root_module.addImport("geode", root_mod);
+    rls_row_skip_bench_exe.root_module.addImport("rls_value_bridge", rls_value_bridge_mod);
+    const run_rls_row_skip_bench = b.addRunArtifact(rls_row_skip_bench_exe);
+    const rls_row_skip_bench_step = b.step("bench-rls-row-skip", "Run the PERF-A/#808 RLS row-build skip micro-benchmark");
+    rls_row_skip_bench_step.dependOn(&run_rls_row_skip_bench.step);
+
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
     audit_security_mod.addImport("logging", logging_mod);
