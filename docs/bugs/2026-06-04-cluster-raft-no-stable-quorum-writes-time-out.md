@@ -1350,3 +1350,81 @@ debug build + `zig fmt` clean.
   (`src/transport/quic.zig:274`) — secondary hardening, unchanged.
 
 prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ✅ REWORKED (2026-06-11) — stall detector gated on leadership + 15s budget + two-strike eviction (closes the livelock; real-k8s verification owed)
+
+The `78bb908` all-candidate election livelock above is **fixed on `main`**
+(commits `c7d07e2a` red-phase tests, `3aeb0fcc` rework). Triage **confirmed
+the over-fire but corrected the mechanism**:
+
+- The tester's response-path hypothesis ("the leader never observes follower
+  progress because responses ride the unread inbound stream") is **refuted**:
+  the raft lib emits ALL output — votes, heartbeats, and every response type —
+  via `sendMsg` → the transport bridge → the responder's OWN outbound
+  connection, so every inbound frame (including RequestVote/Response and
+  heartbeat AppendEntriesResponse) already landed in `applyDecodedRaftFrame`
+  and stamped `notePeerProgress`. Progress stamping was symmetric all along.
+- The REAL three-part mechanism: **(1)** `peer_stall_budget_ms = 3000` was
+  derived against the wrong number — the "5000 ms election timeout" is config
+  ms, but `election_tick = election_timeout_ms/50 = 100` ticks × the 10 ms
+  raft loop = **1000–2000 ms per election round** (randomized ×2), multi-round
+  under churn, so the budget sat BELOW election convergence while the reaper
+  interval (3000 ms) EQUALLED the budget — the check window measured itself.
+  **(2)** The check was armed regardless of raft role: during a leaderless
+  window there is legitimately no AppendEntries flow, `frames_sent > 0` from
+  RequestVote, so every peer tripped. **(3)** Eviction destroyed its own
+  clear-evidence: `notePeerProgress` no-ops for an evicted (map-absent) peer,
+  and the ~1 s `connectWithTLS` rebuild lands votes/responses in dead windows
+  — so each eviction manufactured the next "no progress" observation. The
+  same instability explains the pre-restart baseline write failure
+  (`R13L=0/0/ERR`): heartbeats DO stamp progress every ~10 ms, but one
+  eviction-induced stamp-loss window tripped the next eviction mid-propose.
+
+**The rework** (`src/distributed/raft_consensus.zig`, `cluster.zig`):
+
+- **Leader-only arming**: `shouldEvictOnStall(pc, now_ms, is_leader)` returns
+  false off-leader. A stalled stream is only meaningfully detectable in
+  steady state under a leader expecting AppendEntriesResponse flow — which is
+  exactly the original #5 silent-blackhole case. Election-window eviction is
+  now structurally impossible. No coverage lost: the IP-change reaper still
+  recovers moved peers regardless of role. The leader flag is injected via
+  `Transport.setLeaderSource` (wired in `ClusterCoordinator.start`, closure
+  over `raft.role() == .leader`); unwired (standalone) defaults to false —
+  the detector never arms outside cluster mode.
+- **Budget 3000 → 15000 ms**, decoupled from the 3000 ms reaper interval:
+  ≥7× the corrected 2000 ms worst-case election round, 5× the reaper
+  interval. The old "≤ 5000 ms election ceiling" sizing note was the bug.
+- **Two-strike eviction** (`recordStallPass`, `peer_stall_strikes_required=2`):
+  one stalled reaper pass records a strike; only consecutive stalled passes
+  evict; any `notePeerProgress` resets strikes to 0. A single lost-stamp
+  window from a rebuild can no longer trip eviction. The eviction warn now
+  logs strikes/budget/stall-age for operators.
+
+**Verification at closure:** `zig build test-raft-stall-detector` 9/9 (4 new
+red tests at `c7d07e2a` — leader-gating, budget-vs-convergence assertion,
+two-strike, strike-reset — all green at `3aeb0fcc`; the 5 original detector
+tests stay green, adapted to the new API). Distributed suite green 7/7:
+`test-raft-per-peer-drain`, `test-cluster-3node-election` (real election —
+leader-source wiring exercised), `test-cluster-steady-state`,
+`test-cluster-propose-write`, `test-raft-envelope-roundtrip`,
+`test-drainready-dispatch`, `test-cluster-replicable-mutations`. Full build +
+`zig fmt` clean.
+
+**Owed on real k8s (next dev build carrying `3aeb0fcc`):**
+
+1. Delete the leader pod → a new leader is elected (term advances), all three
+   nodes reconverge, writes succeed; NO `peer stalled … evicting` warn during
+   the election window.
+2. Re-run the ORIGINAL #5 silent-strand repro (leader restart, new IP) and
+   confirm the detector still catches the genuine blackhole: on the new
+   leader, eviction fires once after ~2 strikes (~18–21 s worst case) and the
+   stranded node reconverges — recovery, not a storm.
+3. Baseline steady-state write replicates with zero eviction churn; an idle
+   gap > 15 s followed by a write does not evict.
+4. If a FileStorage-restored high-term start still fails to re-elect AFTER
+   the storm is gone, that is a SEPARATE bug (candidate election path) — do
+   not conflate.
+
+prod remains UNTOUCHED (single-node 0.6.14) until (1)–(3) pass.
