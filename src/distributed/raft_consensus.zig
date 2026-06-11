@@ -871,6 +871,14 @@ pub const Transport = struct {
                 // the QUIC client). May evict pc; our snapshot ref keeps it alive
                 // until the release below.
                 if (do_reresolve) self.maybeReconnectOnIpChange(pc);
+                // k8s root cause #5: stalled-stream reaper, same slow cadence.
+                // Catches the silent-blackhole case the IP-change reaper cannot
+                // (the strand victim's OWN IP never changed): frames have been
+                // sent but no inbound progress observed within the budget. Pure
+                // atomic reads + (on stall) evictPeerConnection; never touches
+                // the QUIC client, so it is safe outside client_mutex. May evict
+                // pc; our snapshot ref keeps it alive until the release below.
+                if (do_reresolve) self.maybeReconnectOnStall(pc, now_ms);
                 if (pc.release()) {
                     // Eviction completed while we were polling/re-resolving; we
                     // hold the last reference and must deinit.
@@ -916,7 +924,9 @@ pub const Transport = struct {
     /// several `clientPollLoop` reaper passes (peer_reresolve_ms = 3000) and
     /// kept at or below the raft election timeout ceiling (5000 ms default —
     /// `cluster.zig:2403`) so recovery is prompt yet never trips on a merely
-    /// quiet-but-healthy link. SKELETON value pending the real detector.
+    /// quiet-but-healthy link. At the steady-state 50 ms heartbeat/response
+    /// cadence this budget gives a 60x margin, so a healthy link is never
+    /// judged stalled.
     pub const peer_stall_budget_ms: i64 = 3000;
 
     /// k8s root cause #5 (stalled-stream liveness): PURE, clock-injectable
@@ -926,31 +936,44 @@ pub const Transport = struct {
     /// longer than `peer_stall_budget_ms`. A peer with recent progress, or a
     /// peer to which nothing has been sent, must return false.
     ///
-    /// SKELETON: the bug-fixer agent fills in the real comparison
-    /// (frames_sent > 0 AND now_ms - last_progress_ms > peer_stall_budget_ms).
-    /// Until then it always returns false, so the "stalled peer is evicted"
-    /// regression tests FAIL — proving they catch the wedge.
+    /// Two guards keep this from evicting a healthy peer:
+    ///   1. `frames_sent == 0` → we have never sent to this peer, so there is no
+    ///      progress to expect (an idle/quiet peer must never be evicted).
+    ///   2. `now_ms - last_progress_ms <= peer_stall_budget_ms` → progress was
+    ///      observed recently. A freshly connected peer stamps `last_progress_ms`
+    ///      at connect time (`getOrCreatePeerConnection`), so a brand new
+    ///      connection reads as fresh and is never immediately re-evicted (no
+    ///      reconnect loop). Equal-to-budget is NOT stalled (strict `>`), giving
+    ///      the steady-state 50 ms heartbeat/response cadence enormous margin
+    ///      under the 3000 ms budget.
     pub fn shouldEvictOnStall(pc: *PeerConnection, now_ms: i64) bool {
-        _ = pc;
-        _ = now_ms;
-        return false;
+        if (pc.frames_sent.load(.acquire) == 0) return false;
+        const last = pc.last_progress_ms.load(.acquire);
+        return (now_ms - last) > peer_stall_budget_ms;
     }
 
     /// Refresh the forward-progress timestamp for the peer identified by
-    /// `peer_id`. Called from the INBOUND path (raft response / heartbeat-ack
-    /// dispatch in `cluster.zig`), which arrives on a DIFFERENT connection
-    /// object than the outbound `PeerConnection`, so progress must be stamped by
-    /// a peer-id keyed lookup into `peers` rather than by pointer. Safe to call
-    /// for an unknown peer (no-op).
+    /// `peer_id`. Called from the INBOUND path (raft AppendEntries from the
+    /// leader / AppendEntriesResponse from a follower, dispatched in
+    /// `cluster.zig:applyDecodedRaftFrame`), which arrives on a DIFFERENT
+    /// connection object than the outbound `PeerConnection`, so progress must be
+    /// stamped by a peer-id keyed lookup into `peers` rather than by pointer.
+    /// Safe to call for an unknown peer (no-op) — e.g. before the outbound
+    /// connection has been built, or for a frame whose sender we never send to.
     ///
-    /// SKELETON: the bug-fixer agent fills in the peers_mutex-guarded lookup +
-    /// `pc.last_progress_ms.store(now_ms, ...)`. Until then it is a no-op, so
-    /// the "notePeerProgress stamps the right PeerConnection" regression test
-    /// FAILS.
+    /// Locking: takes `peers_mutex` (tier 3) only, and writes a leaf atomic; it
+    /// never acquires a lower-tier lock while held, so it respects the GAP-0278
+    /// ordering. We do NOT bump the refcount: the store is a single atomic on a
+    /// field that lives for the PeerConnection's lifetime, and `peers_mutex`
+    /// keeps the entry in the map (eviction also runs under `peers_mutex`) for
+    /// the duration of the store.
     pub fn notePeerProgress(self: *Transport, peer_id: u64, now_ms: i64) void {
-        _ = self;
-        _ = peer_id;
-        _ = now_ms;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        if (self.peers.get(peer_id)) |pc| {
+            pc.last_progress_ms.store(now_ms, .release);
+        }
     }
 
     /// Periodic stalled-stream reaper, sibling to `maybeReconnectOnIpChange`,
@@ -958,11 +981,8 @@ pub const Transport = struct {
     /// has stalled (`shouldEvictOnStall`), evict it so the next `send` rebuilds
     /// via `connectWithTLS` (which re-resolves the FQDN) — exactly like the
     /// IP-change path. Takes no lock here; `evictPeerConnection` takes
-    /// `peers_mutex` itself.
-    ///
-    /// SKELETON: present so `clientPollLoop` wiring (added by the fixer) and the
-    /// tests compile. Delegates to `shouldEvictOnStall` (which the fixer makes
-    /// real); with the skeleton decision returning false this never evicts.
+    /// `peers_mutex` itself. Logs at warn (mirroring the IP-change reaper) so the
+    /// previously-silent wedge is now observable to an operator.
     fn maybeReconnectOnStall(self: *Transport, pc: *PeerConnection, now_ms: i64) void {
         if (shouldEvictOnStall(pc, now_ms)) {
             log.warn("raft transport peer stalled (no progress within budget); evicting stale connection", &.{
@@ -1118,6 +1138,15 @@ pub const Transport = struct {
         // NOTE: no per-RPC finish()/deinit() — the stream stays open for the
         // next frame. The dedicated client_poll_thread (A6e) flushes the write
         // onto the wire; the bridge returns immediately.
+
+        // k8s root cause #5 (stalled-stream liveness): we successfully handed a
+        // frame to the wire. Mark that this peer now has traffic to expect a
+        // response for, so the stall reaper is allowed to act if no inbound
+        // progress is observed within the budget. Frames written to a
+        // stale/half-open connection buffer locally and "succeed" here (that is
+        // precisely the fire-and-forget wedge), which is why the eviction
+        // decision is gated on OBSERVED inbound progress, not on send success.
+        _ = conn.frames_sent.fetchAdd(1, .acq_rel);
     }
 
     /// Look up or construct a persistent peer connection.  The
@@ -1167,6 +1196,14 @@ pub const Transport = struct {
             .port = peer.port,
             .peer_id = peer.id,
             .resolved_ip = resolved,
+            // k8s root cause #5: stamp the stall clock at connect time and reset
+            // the frame counter so a brand new connection reads as "fresh, no
+            // sends yet" — the stall reaper never fires on it until we have both
+            // sent a frame AND observed no progress for the full budget. This is
+            // the "stall clock resets on reconnect" guarantee that prevents a
+            // re-evict loop after the stall reaper rebuilds a connection.
+            .last_progress_ms = std.atomic.Value(i64).init(compat_milliTimestamp()),
+            .frames_sent = std.atomic.Value(u64).init(0),
         };
         errdefer conn.client.deinit();
 

@@ -1491,6 +1491,22 @@ pub const ClusterCoordinator = struct {
         // unused) for binary compatibility with downstream tests that
         // exercise it directly.
 
+        // k8s root cause #5 (stalled-stream liveness): stamp forward progress
+        // for the OUTBOUND peer connection keyed by this frame's sender. Every
+        // inbound raft frame — a follower observing AppendEntries FROM the leader
+        // (`frame_res.from` == leader id) and a leader observing
+        // AppendEntriesResponse FROM a follower (`frame_res.from` == follower id)
+        // — is evidence that the bidirectional path to `frame_res.from` is alive,
+        // so it refreshes the stall clock on the outbound `PeerConnection` keyed
+        // by that id (a DIFFERENT object than the inbound connection this frame
+        // arrived on). We stamp only AFTER the token + nonce gates above so a
+        // forged/replayed frame can never reset a genuinely stalled peer's clock
+        // and hide the wedge. `notePeerProgress` is a no-op if we have no
+        // outbound connection to that peer yet (it is built lazily on first
+        // send), which is the conservative choice — it can never cause a false
+        // eviction of a healthy peer.
+        self.raft_transport.notePeerProgress(frame_res.from, compat_milliTimestamp());
+
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{
                 Attr.string("error", @errorName(e)),
