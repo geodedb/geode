@@ -1529,3 +1529,77 @@ Two items remain before a production 3-node cluster: **(a)** exercise the genuin
 silent-blackhole recovery path on real k8s (owed item 2), and **(b)** the
 divergent-durable-state recovery gap (owed item 4) so a cluster self-heals without a
 PVC wipe. prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ✅ OWED ITEM 4 FIX LANDED (2026-06-11) — candidate-armed stall detector + frozen-term visibility (divergent-state wedge; k8s re-verify owed)
+
+The "divergent persisted raft state → all-candidate frozen-term wedge" (owed
+item 4 above) is **fixed on `main`** (commits `79f60b8d` red tests, `67d0d1cc`
+fix). Triage **refuted the divergent-log hypothesis** with an in-process
+reproduction against the pinned raft lib (v0.1.6, lib FileStorage + TestCluster
+harness):
+
+- Under **reliable delivery**, severely divergent durable logs at high terms
+  (conflicting tails, spent votedFor, term 13/14) re-elect a leader within ~2
+  rounds and divergent followers are truncated-and-refilled by the standard
+  AppendEntries consistency check. The lib is correct; **InstallSnapshot /
+  `reportSnapshot` wiring is NOT implicated** (no compaction ever runs, so no
+  follower's next_index can fall below a log start).
+- The wedge needs **two interacting mechanisms**: (1) vote frames silently
+  undelivered at restart (the same stale/half-open-QUIC-stream class as owed
+  item 2) while the stall detector was **leader-only gated** (3aeb0fcc) — so
+  nothing detects or recovers the stall exactly when votes must flow; and
+  (2) `pre_vote=true` (geode config) **freezes the term** — pre-vote does not
+  increment the term until a pre-vote is WON (`raft/src/node.zig:751-758`), so
+  a candidate whose votes vanish retries elections forever at an unchanging
+  term with zero log output. Reproduced in-process: full silent partition +
+  pre_vote=true → all three frozen at term 13 forever; same partition with
+  pre_vote=false → term advances 13→27.
+
+**The fix** (`67d0d1cc`):
+
+- **Stall detector arming widened from leader-only to leader-OR-candidate**
+  (`shouldEvictOnStallArmed(pc, now_ms, arm)`; only `.follower` is
+  suppressed). Safe against the old livelock by construction: the 15000 ms
+  budget + two-strike machine means eviction takes ≥ ~18–30 s vs 1–2 s healthy
+  election rounds — a progressing election always delivers frames long before
+  the budget. A follower stays suppressed (it expects inbound heartbeats; its
+  outbound health is the leader-side detector's job; the IP-change reaper
+  covers moved peers for every role). The leader-source injection became a
+  role source (`Transport.setRoleSource`, wired in `ClusterCoordinator.start`;
+  unwired/standalone → `.follower` → never arms).
+- **Frozen-term visibility**: `FrozenCandidateTracker` polled from the raft
+  loop (~1 s cadence) emits a rate-limited warn when a node has been a
+  candidate at an UNCHANGING term for > 15 s ("possible vote-delivery stall or
+  divergent durable state; check peer connectivity"). The silent-by-design
+  pre-vote freeze is now operator-visible.
+- **Green pin added**: `tests/test_raft_divergent_state_recovery.zig`
+  (`zig build test-raft-divergent-state-recovery`) seeds 3 FileStorage dirs at
+  divergent terms 7/9/11 and asserts an in-process 3-node cluster (real
+  loopback QUIC) elects a leader with the term advancing past the restored
+  value — pinning lib+geode divergent-state recovery under healthy transport.
+
+**Verification at closure:** `test-raft-stall-detector` 20/20 (4 red →
+green), `test-raft-divergent-state-recovery` green, distributed suite green
+(per-peer-drain, 3node-election, steady-state, propose-write,
+envelope-roundtrip, drainready-dispatch, replicable-mutations,
+hardstate-durability, apply-restart-idempotent). Full build + fmt clean.
+
+**Owed on real k8s (next dev build carrying `67d0d1cc`):**
+
+1. The pre-wipe reused-PVC scenario (divergent durable logs at high terms):
+   rolling restart must reconverge WITHOUT a PVC wipe — the candidate-armed
+   detector should evict the wedged streams after ~18–30 s and the election
+   should then complete; the frozen-term warn should fire in any window where
+   it can't.
+2. Owed item 2 (unchanged): the genuine silent-blackhole recovery on a LEADER
+   (original #5 case) still needs a live half-open stream to verify.
+
+**Deferred residuals:** netns M9 divergent-state phase; upstream lib-repo
+regression scenario (divergent FileStorage election — the lib has no coverage
+of restored-divergent-log elections today); boot-time durable-state
+validation (cluster-identity check on restore); de-swallowing repeated lib
+errors in the raft loop (rate-limited escalation).
+
+prod remains UNTOUCHED (single-node 0.6.14).
