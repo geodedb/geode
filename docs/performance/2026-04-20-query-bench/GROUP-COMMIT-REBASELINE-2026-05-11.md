@@ -39,9 +39,10 @@ planner rows in the refreshed baseline remain real regression detectors.
 ## Surfaced because of the CI timeout fix
 
 `bench-query-path` had been hitting its 1h `job_execution_timeout` on the
-slow shared runners for weeks (it never reached `compare-bench`). Pipeline
-#2516770059 bumped the job to 2h and pinned it to the fast pool, so it ran
-to completion for the first time and exposed the stale baseline.
+slow shared runners for weeks (it never reached `compare-bench`).
+Pipeline `#2516770059` bumped the job to 2h and pinned it to the fast
+pool, so it ran to completion for the first time and exposed the stale
+baseline.
 
 ## Future work
 

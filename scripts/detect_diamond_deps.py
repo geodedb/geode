@@ -58,9 +58,8 @@ from __future__ import annotations
 import os
 import re
 import sys
-from pathlib import Path
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from pathlib import Path
 
 # build.zig.zon parsing — Zig anonymous-struct literals.
 #
@@ -89,6 +88,8 @@ DEP_BLOCK_RE = re.compile(
 )
 URL_RE = re.compile(r'\.url\s*=\s*"(?P<url>[^"]+)"')
 HASH_RE = re.compile(r'\.hash\s*=\s*"(?P<hash>[^"]+)"')
+
+
 # Strip `// ...` line comments BUT NOT when the `//` sits inside a
 # string literal (e.g. inside a `.url = "git+https://..."`).  We walk
 # the text and only strip after we've confirmed we're outside an
@@ -148,11 +149,11 @@ def _find_dependencies_block(text: str) -> str | None:
     return None
 
 
-def _parse_dep_entries(deps_block: str) -> List[Tuple[str, str, str | None]]:
+def _parse_dep_entries(deps_block: str) -> list[tuple[str, str, str | None]]:
     """Yield (name, hash, url) for each `.name = .{ .url=, .hash= }`
     entry inside `deps_block`.  Skips entries that lack a `hash`
     (path-pinned deps, malformed entries) — they cannot diamond."""
-    out: List[Tuple[str, str, str | None]] = []
+    out: list[tuple[str, str, str | None]] = []
     for m in DEP_BLOCK_RE.finditer(deps_block):
         name = m.group("name")
         body = m.group("body")
@@ -180,13 +181,13 @@ def _zon_path_for_hash(project_root: Path, zig_global_cache: Path, pkg_hash: str
     return None
 
 
-def collect_transitive(root_zon: Path, zig_global_cache: Path) -> Dict[str, Set[Tuple[str, str | None]]]:
+def collect_transitive(root_zon: Path, zig_global_cache: Path) -> dict[str, set[tuple[str, str | None]]]:
     """Walk the project's dependency graph.  Returns a map
     name -> set of (hash, url) seen across the transitive closure."""
     project_root = root_zon.parent
-    result: Dict[str, Set[Tuple[str, str | None]]] = defaultdict(set)
-    seen_hashes: Set[str] = set()
-    queue: List[Path] = [root_zon]
+    result: dict[str, set[tuple[str, str | None]]] = defaultdict(set)
+    seen_hashes: set[str] = set()
+    queue: list[Path] = [root_zon]
     while queue:
         zon_path = queue.pop(0)
         try:
@@ -207,17 +208,17 @@ def collect_transitive(root_zon: Path, zig_global_cache: Path) -> Dict[str, Set[
     return result
 
 
-def find_diamonds(graph: Dict[str, Set[Tuple[str, str | None]]]) -> List[Tuple[str, List[Tuple[str, str | None]]]]:
+def find_diamonds(graph: dict[str, set[tuple[str, str | None]]]) -> list[tuple[str, list[tuple[str, str | None]]]]:
     """Return [(name, [(hash, url), ...]), ...] for every package name
     that appears with more than one distinct hash."""
-    diamonds: List[Tuple[str, List[Tuple[str, str | None]]]] = []
+    diamonds: list[tuple[str, list[tuple[str, str | None]]]] = []
     for name, pinned in graph.items():
         if len({h for (h, _u) in pinned}) > 1:
             diamonds.append((name, sorted(pinned)))
     return sorted(diamonds, key=lambda x: x[0])
 
 
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     project_root = Path(argv[1]).resolve() if len(argv) >= 2 else Path.cwd()
     zon = project_root / "build.zig.zon"
     if not zon.exists():
