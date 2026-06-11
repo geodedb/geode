@@ -511,7 +511,9 @@ pub const security = struct {
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
-pub const cbo_api_stub = @import("planner/cbo.zig");
+// GAP-0867 (2026-06-10): renamed from `cbo_api_stub` — the stub APIs were
+// deleted; what remains (StatsRegistry, explainEstimateJSON) is real.
+pub const cbo = @import("planner/cbo.zig");
 
 // Distributed consensus primitives (Raft) for tests/benchmarks
 // (Removed distributed.raft re-export to avoid duplicate module inclusion with separate distributed module import)

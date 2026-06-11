@@ -2359,9 +2359,9 @@ REQ-GQL-CATALOG-003,Catalog,E2E,TESTED,,,server,2026-01-16,tests/test_gap_0193_b
 REQ-GQL-CATALOG-003,End-to-End Catalog Operations,IntegrationTesting,TESTED,,,server,2025-10-04,tests/test_catalog_integration_e2e.zig
 REQ-GQL-CATALOG-004,Error Handling Regression,ErrorTesting,TESTED,,,server,2025-10-04,tests/test_catalog_integration_e2e.zig
 REQ-GQL-CATALOG-005,Catalog Regression Test Suite,TestAutomation,EXEMPT,,,testing,2025-10-04,tests/catalog_regression_test.sh
-REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,,,planner,2025-09-25,src/planner/cbo.zig
+REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,,,planner,2026-06-10,src/planner/cbo.zig
+REQ-GQL-CBO,Cost Based Optimizer,RealStatistics,TESTED,,,planner,2026-06-10,tests/test_gap0867_cbo_estimates.zig
 REQ-GQL-CBO-002,CBO Small-N Calibration,Optimization,TESTED,,,planner,2026-01-17,src/planner/cbo_small_n.zig
-REQ-GQL-CBO-JOIN-001,DPJoinEnumeration,JoinOrdering,EXEMPT,,,planner,2026-01-10,src/planner/cbo.zig
 REQ-GQL-CBO-STATS-001,CBOStorageProvider,Statistics,EXEMPT,,,planner,2026-01-10,src/planner/cbo.zig
 REQ-GQL-CHAIN,Query Chaining via WITH,AST,TESTED,,,parser,2025-10-10,src/gql/ast.zig
 REQ-GQL-CHAIN,Query Chaining via WITH,Execution,TESTED,,,execution,2026-01-17,src/execution/query_execution.zig
@@ -3972,9 +3972,6 @@ REQ-PERF-SPICE-003,ParallelWrapper,CoreInterface,IMPL,,,performance,2026-04-12,s
 REQ-PERF-SPICE-004,ParallelPool,GlobalPool,IMPL,,,performance,2026-04-12,src/parallel/thread_pool_parallel.zig
 REQ-PERF-SPICE-008,ParallelWrapperModule,BuildIntegration,IMPL,,,performance,2026-04-12,build.zig
 REQ-PERF-SPICE-009,ParallelWrapperIntegration,ExecutionPool,IMPL,,,performance,2026-04-12,src/execution/parallel.zig
-REQ-PERF-SPICE-018,CBOParallelIntegration,PlannerParallelism,IMPL,,,performance,2026-04-12,src/planner/cbo.zig
-REQ-PERF-SPICE-019,CBOParallelPool,PlannerField,IMPL,,,performance,2026-04-12,src/planner/cbo.zig
-REQ-PERF-SPICE-020,ParallelDPJoinEnum,JoinOrderingParallel,IMPL,,,performance,2026-02-02,src/planner/cbo.zig
 REQ-PERF-SPICE-026,ParallelWrapperTests,Testing,IMPL,,,performance,2026-04-12,tests/test_thread_pool_parallel.zig
 REQ-PERF-SPICE-027,ParallelWrapperBenchmarks,Performance,IMPL,,,performance,2026-04-12,benchmarks/benchmark_thread_pool_parallelism.zig
 REQ-PERF-SPICE-027,ParallelWrapperTests,BuildIntegration,IMPL,,,performance,2026-04-12,build.zig

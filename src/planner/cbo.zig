@@ -1,17 +1,6 @@
 const std = @import("std");
 
-// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
-fn compat_milliTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
-}
+// Zig 0.16 compat: std.time.timestamp removed.
 fn compat_timestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -23,344 +12,104 @@ fn compat_timestamp() i64 {
     }
     return @as(i64, ts.sec);
 }
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
 const planner = @import("../planner.zig");
-// NOTE: Removed direct storage interface import to avoid cross-module duplication
-// with standalone storage_page_manager module during build. Statistics collection
-// that depends on storage scanning will be reintroduced via a thin abstraction
-// injected from the caller (future slice). For now, storage-dependent analysis
-// functions are stubbed out.
-// const storage = @import("../storage/interface.zig");
+// NOTE: No direct storage import here (avoids cross-module duplication with
+// standalone module builds). Statistics collection is fed through a thin
+// duck-typed source (`analyzeTable`) or the StorageStatsProvider vtable
+// (`analyzeTableWithProvider`) — both are wired by the caller.
 
-// CANARY: REQ=REQ-PERF-SPICE-018; FEATURE="CBOParallelIntegration"; ASPECT=PlannerParallelism; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
-// Parallel join enumeration can be enabled by the caller.
-// The parallel enumeration methods accept an external pool via `anytype`
-// to avoid module conflicts.
+// CANARY: REQ=REQ-GQL-CBO; FEATURE="Cost Based Optimizer"; ASPECT=CoreEngine; STATUS=TESTED; TEST=tests/test_gap0867_cbo_estimates.zig; OWNER=planner; UPDATED=2026-06-10
+//
+// GAP-0867 (2026-06-10): the former `CostBasedOptimizer` struct (choosePlan,
+// DP join enumeration, plan-tree CardinalityEstimator/CostModel) was DELETED.
+// It referenced `planner.PlanNode` / `planner.PlannerContext`, neither of
+// which exists in ../planner.zig — the code could not compile and survived
+// only through Zig's lazy analysis (zero live callers). The live cost-based
+// path is `src/server/index_optimizer.zig` (IndexOptimizer) plus the
+// per-operator seed model in `src/planner/cost_explain.zig`. What remains
+// here is the genuinely shared piece: `StatsRegistry` (used by
+// `src/planner/cost_model.zig` and `src/distributed/query_planner.zig`)
+// and a truthful `explainEstimateJSON` that derives per-scan-node row
+// estimates from collected statistics.
 
-// CANARY: REQ=REQ-GQL-CBO; FEATURE="Cost Based Optimizer"; ASPECT=CoreEngine; STATUS=TESTED; TEST=e2e_cbo_toggle; OWNER=planner; UPDATED=2025-09-25
+/// Default row estimate for a label scan when no statistics have been
+/// collected for that label. Reported as "default_heuristic" in the JSON so
+/// consumers can distinguish measured estimates from fallbacks.
+pub const default_scan_rows: f64 = 1000.0;
+/// Heuristic selectivity applied per WHERE/FILTER clause when no column
+/// statistics are available. Reported as "heuristic_selectivity".
+pub const default_filter_selectivity: f64 = 0.3;
+/// Heuristic average out-degree used for relationship expansion estimates.
+/// Reported as "heuristic_avg_degree".
+pub const default_avg_degree: f64 = 5.0;
 
-// Test override removed; CBO always enabled.
+/// Emit EXPLAIN-estimate JSON for a parsed query using real statistics from
+/// `registry`. Every MATCH scan node carries an `estimated_rows` value and an
+/// `estimate_source` that is truthful about provenance:
+///   - "statistics"          — row count collected via analyzeTable /
+///                             analyzeTableWithProvider / injectTableStats
+///   - "default_heuristic"   — no stats collected for the label
+///   - "heuristic_avg_degree" / "heuristic_selectivity" — documented model
+///                             constants, not measured values
+/// Multiple MATCH chains multiply (cartesian product semantics).
+/// Caller owns the returned slice.
+pub fn explainEstimateJSON(allocator: std.mem.Allocator, registry: *StatsRegistry, q: planner.ast.Query) ![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "{\"schema\":\"cbo_explain_estimate.v1\",\"nodes\":[");
 
-pub const CostBasedOptimizer = struct {
-    allocator: std.mem.Allocator,
-    stats_registry: *StatsRegistry,
-    cardinality_estimator: *CardinalityEstimator,
-    cost_model: *CostModel,
-    enabled: bool = true,
-    // CANARY: REQ=REQ-PERF-SPICE-019; FEATURE="CBOParallelPool"; ASPECT=PlannerField; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
-    // Note: Parallel pool integration is available via external callers
-    // passing a pool to the parallel methods.
-    enable_parallel: bool = false,
+    var first_node = true;
+    var total_rows: f64 = 1.0;
+    var saw_chain = false;
 
-    pub fn init(allocator: std.mem.Allocator) !CostBasedOptimizer {
-        const stats = try allocator.create(StatsRegistry);
-        stats.* = StatsRegistry.init(allocator);
+    for (q.match.chains) |chain| {
+        // The scan pattern is `head` for single-node chains; for hop chains
+        // it is the left node of the first hop.
+        var scan_pattern: ?planner.ast.NodePattern = chain.head;
+        if (scan_pattern == null and chain.hops.len > 0) scan_pattern = chain.hops[0].left;
+        const np = scan_pattern orelse continue;
+        saw_chain = true;
 
-        const card_est = try allocator.create(CardinalityEstimator);
-        card_est.* = CardinalityEstimator.init(allocator, stats);
-
-        const cost = try allocator.create(CostModel);
-        cost.* = CostModel.init(allocator, card_est);
-
-        return .{
-            .allocator = allocator,
-            .stats_registry = stats,
-            .cardinality_estimator = card_est,
-            .cost_model = cost,
-            .enabled = true,
-        };
-    }
-
-    pub fn deinit(self: *CostBasedOptimizer) void {
-        self.stats_registry.deinit();
-        self.allocator.destroy(self.stats_registry);
-        self.allocator.destroy(self.cardinality_estimator);
-        self.allocator.destroy(self.cost_model);
-    }
-
-    /// Public API per spec: choosePlan(ctx, candidates) when CBO enabled via GEODE_ENABLE_CBO=1
-    /// If disabled or error estimating, falls back to first candidate.
-    pub fn choosePlanAPI(self: *CostBasedOptimizer, ctx: ?*anyopaque, candidates: []const *planner.PlanNode) *planner.PlanNode {
-        return self.choosePlan(ctx, candidates);
-    }
-
-    /// Produce stable JSON with basic estimated cardinality & cost for root plan.
-    /// Example: {"plan_type":"join","est_card":1000,"est_cost":123.4}
-    pub fn explainEstimateJSON(self: *CostBasedOptimizer, plan: *const planner.PlanNode, writer: anytype) !void {
-        // Always emit something; if disabled, mark fallback
-        if (!self.enabled) {
-            try writer.writeAll("{\"cbo_enabled\":false}");
-            return;
-        }
-        const root_est_card = self.cardinality_estimator.estimateCardinality(@constCast(plan)) catch 0;
-        const root_est_cost = self.cost_model.estimateCost(@constCast(plan)) catch 0;
-        // Emit minimal structured plan array with a single root (future: recurse)
-        try writer.print(
-            "{\"cbo_enabled\":true,\"plan\":[{\"node_id\":0,\"type\":\"{s}\",\"est_card\":{d},\"est_cost\":{d:.2}}],\"summary\":{\"root_type\":\"{s}\",\"est_card\":{d},\"est_cost\":{d:.2}},\"cost_factors\":{\"seq_page\":{d:.2},\"rand_page\":{d:.2},\"cpu_tuple\":{d:.4},\"cpu_op\":{d:.4}}}",
-            .{ plan.type.toString(), @as(u64, @intFromFloat(root_est_card)), root_est_cost, plan.type.toString(), @as(u64, @intFromFloat(root_est_card)), root_est_cost, self.cost_model.seq_page_cost, self.cost_model.random_page_cost, self.cost_model.cpu_tuple_cost, self.cost_model.cpu_operator_cost },
-        );
-    }
-
-    /// Choose the best plan from candidates using cost estimation
-    pub fn choosePlan(self: *CostBasedOptimizer, ctx: ?*anyopaque, candidates: []const *planner.PlanNode) *planner.PlanNode {
-        if (!self.enabled or candidates.len == 0) {
-            // Fallback to rule-based: pick first candidate
-            return candidates[0];
-        }
-
-        var best_plan = candidates[0];
-        var best_cost = self.cost_model.estimateCost(best_plan) catch std.math.inf(f64);
-
-        for (candidates[1..]) |candidate| {
-            const cost = self.cost_model.estimateCost(candidate) catch continue;
-            if (cost < best_cost) {
-                best_cost = cost;
-                best_plan = candidate;
+        var rows: f64 = default_scan_rows;
+        var source: []const u8 = "default_heuristic";
+        var label: []const u8 = "";
+        if (np.labels.len > 0) {
+            label = np.labels[0];
+            if (registry.getTableStats(label)) |st| {
+                rows = @floatFromInt(st.row_count);
+                source = "statistics";
             }
         }
+        if (!first_node) try buf.append(allocator, ',');
+        first_node = false;
+        try buf.print(allocator, "{{\"type\":\"node_scan\",\"label\":\"{s}\",\"estimated_rows\":{d},\"estimate_source\":\"{s}\"}}", .{ label, @as(u64, @intFromFloat(@floor(rows))), source });
 
-        // Return best plan
-        _ = ctx; // unused in stub
-        return best_plan;
+        // Each relationship hop expands the pipeline by the (documented)
+        // average-degree heuristic; no edge statistics are collected yet.
+        for (chain.hops) |_| {
+            rows *= default_avg_degree;
+            try buf.print(allocator, ",{{\"type\":\"expand\",\"estimated_rows\":{d},\"estimate_source\":\"heuristic_avg_degree\"}}", .{@as(u64, @intFromFloat(@floor(rows)))});
+        }
+        total_rows *= rows;
     }
 
-    /// Enumerate join orders for multi-way joins using Dynamic Programming
-    /// GAP-0072: Implements proper DP enumeration for optimal join ordering
-    // CANARY: REQ=REQ-GQL-CBO-JOIN-001; FEATURE="DPJoinEnumeration"; ASPECT=JoinOrdering; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-10
-    pub fn enumerateJoinOrders(self: *CostBasedOptimizer, ctx: *planner.PlannerContext, relations: []const *planner.PlanNode) ![]const *planner.PlanNode {
-        if (!self.enabled) {
-            // Return original order
-            return relations;
-        }
+    if (!saw_chain) total_rows = 1.0;
 
-        // Use DP enumeration for optimal join ordering
-        const best_plan = try self.dpEnumerateJoinOrders(ctx, relations);
-        if (best_plan) |plan| {
-            var result = try self.allocator.alloc(*planner.PlanNode, 1);
-            result[0] = plan;
-            return result;
-        }
-
-        // Fallback to left-deep enumeration
-        var candidates = std.ArrayList(*planner.PlanNode).init(self.allocator);
-        defer candidates.deinit();
-
-        try self.enumerateLeftDeep(ctx, relations, &candidates);
-
-        return try candidates.toOwnedSlice();
+    if (q.where_clause != null) {
+        total_rows *= default_filter_selectivity;
+        if (!first_node) try buf.append(allocator, ',');
+        first_node = false;
+        try buf.print(allocator, "{{\"type\":\"filter\",\"estimated_rows\":{d},\"estimate_source\":\"heuristic_selectivity\"}}", .{@as(u64, @intFromFloat(@floor(total_rows)))});
+    }
+    if (q.filter_clause != null) {
+        total_rows *= default_filter_selectivity;
+        if (!first_node) try buf.append(allocator, ',');
+        first_node = false;
+        try buf.print(allocator, "{{\"type\":\"filter\",\"estimated_rows\":{d},\"estimate_source\":\"heuristic_selectivity\"}}", .{@as(u64, @intFromFloat(@floor(total_rows)))});
     }
 
-    /// Dynamic Programming join enumeration (System R / Selinger style)
-    /// GAP-0072: Bottom-up DP algorithm that considers all subset combinations
-    /// Time complexity: O(3^n) where n is number of relations
-    fn dpEnumerateJoinOrders(self: *CostBasedOptimizer, ctx: *planner.PlannerContext, relations: []const *planner.PlanNode) !?*planner.PlanNode {
-        const n = relations.len;
-        if (n == 0) return null;
-        if (n == 1) return relations[0];
-        if (n > 12) {
-            // Too many relations for DP - fallback to heuristics
-            return null;
-        }
-
-        // DP table: best_plan[subset_bitmap] -> (best_plan, best_cost)
-        const num_subsets = @as(usize, 1) << @intCast(n);
-        var best_plans = try self.allocator.alloc(?*planner.PlanNode, num_subsets);
-        defer self.allocator.free(best_plans);
-        var best_costs = try self.allocator.alloc(f64, num_subsets);
-        defer self.allocator.free(best_costs);
-
-        // Initialize
-        for (best_plans, 0..) |_, i| {
-            best_plans[i] = null;
-            best_costs[i] = std.math.inf(f64);
-        }
-
-        // Base case: single relations
-        for (relations, 0..) |rel, i| {
-            const mask = @as(usize, 1) << @intCast(i);
-            best_plans[mask] = rel;
-            best_costs[mask] = self.cost_model.estimateCost(rel) catch 0.0;
-        }
-
-        // DP: enumerate subsets by increasing size
-        var subset_size: usize = 2;
-        while (subset_size <= n) : (subset_size += 1) {
-            // Iterate over all subsets of size subset_size
-            var subset: usize = 0;
-            while (subset < num_subsets) : (subset += 1) {
-                if (@popCount(subset) != subset_size) continue;
-
-                // Try all ways to partition subset into two non-empty parts
-                var s1: usize = subset & (subset - 1); // Start with largest proper subset
-                while (s1 > 0) : (s1 = (s1 - 1) & subset) {
-                    const s2 = subset ^ s1;
-                    if (s2 == 0) continue;
-
-                    // Get best plans for s1 and s2
-                    const plan1 = best_plans[s1] orelse continue;
-                    const plan2 = best_plans[s2] orelse continue;
-
-                    // Create join node
-                    const join = try ctx.allocator.create(planner.PlanNode);
-                    join.* = .{
-                        .type = .join,
-                        .join = .{
-                            .left = plan1,
-                            .right = plan2,
-                            .join_type = .inner,
-                        },
-                    };
-
-                    // Calculate cost
-                    const join_cost = self.cost_model.estimateCost(join) catch std.math.inf(f64);
-
-                    // Update if better
-                    if (join_cost < best_costs[subset]) {
-                        best_costs[subset] = join_cost;
-                        best_plans[subset] = join;
-                    }
-
-                    if (s1 == 0) break; // Prevent infinite loop when s1 becomes 0
-                }
-            }
-        }
-
-        // Return best plan for all relations
-        const full_mask = num_subsets - 1;
-        return best_plans[full_mask];
-    }
-
-    /// Enhanced DP join enumeration with optional parallel flag
-    /// Sequential by default; parallel execution can be provided externally.
-    /// CANARY: REQ=REQ-PERF-SPICE-020; FEATURE="ParallelDPJoinEnum"; ASPECT=JoinOrderingParallel; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    pub fn dpEnumerateJoinOrdersEnhanced(
-        self: *CostBasedOptimizer,
-        ctx: *planner.PlannerContext,
-        relations: []const *planner.PlanNode,
-    ) !?*planner.PlanNode {
-        // Delegates to the standard DP implementation
-        // For parallel execution, the caller can use the shared parallel wrapper externally.
-        return self.dpEnumerateJoinOrders(ctx, relations);
-    }
-
-    fn enumerateLeftDeep(
-        self: *CostBasedOptimizer,
-        ctx: *planner.PlannerContext,
-        relations: []const *planner.PlanNode,
-        candidates: *std.ArrayList(*planner.PlanNode),
-    ) !void {
-        if (relations.len <= 1) {
-            if (relations.len == 1) {
-                try candidates.append(relations[0]);
-            }
-            return;
-        }
-
-        // Generate all permutations for left-deep trees
-        var perm_indices = try self.allocator.alloc(usize, relations.len);
-        defer self.allocator.free(perm_indices);
-        for (perm_indices, 0..) |*idx, i| {
-            idx.* = i;
-        }
-
-        // Simplified: only consider first few permutations to avoid explosion
-        const max_perms: usize = if (relations.len <= 4) factorial(relations.len) else 24;
-        var perm_count: usize = 0;
-
-        while (perm_count < max_perms) : (perm_count += 1) {
-            // Build left-deep join tree for current permutation
-            var result = relations[perm_indices[0]];
-
-            for (perm_indices[1..]) |idx| {
-                const join = try ctx.allocator.create(planner.PlanNode);
-                join.* = .{
-                    .type = .join,
-                    .join = .{
-                        .left = result,
-                        .right = relations[idx],
-                        .join_type = .inner,
-                    },
-                };
-                result = join;
-            }
-
-            try candidates.append(result);
-
-            // Next permutation
-            if (!nextPermutation(perm_indices)) break;
-        }
-    }
-
-    fn factorial(n: usize) usize {
-        var result: usize = 1;
-        var i: usize = 2;
-        while (i <= n) : (i += 1) {
-            result *= i;
-        }
-        return result;
-    }
-
-    fn nextPermutation(indices: []usize) bool {
-        if (indices.len <= 1) return false;
-
-        // Find rightmost ascent
-        var i = indices.len - 2;
-        while (i > 0 and indices[i] >= indices[i + 1]) : (i -= 1) {}
-
-        if (i == 0 and indices[0] >= indices[1]) return false;
-
-        // Find smallest element greater than indices[i]
-        var j = indices.len - 1;
-        while (indices[j] <= indices[i]) : (j -= 1) {}
-
-        // Swap
-        const temp = indices[i];
-        indices[i] = indices[j];
-        indices[j] = temp;
-
-        // Reverse suffix
-        std.mem.reverse(usize, indices[i + 1 ..]);
-
-        return true;
-    }
-};
-
-// Top-level convenience wrappers (runtime flag gated) for acceptance tests expecting
-// simple invocation without constructing a full optimizer instance. These return
-// FeatureDisabled when GEODE_ENABLE_CBO is not set to "1".
-// P2-3: Use static GPA for legacy stub function
-var choosePlanAPI_gpa: std.heap.DebugAllocator(.{}) = .{};
-var choosePlanAPI_gpa_init = false;
-
-pub fn choosePlanAPI() !void {
-    if (!choosePlanAPI_gpa_init) {
-        choosePlanAPI_gpa_init = true;
-    }
-    const alloc = choosePlanAPI_gpa.allocator();
-    var cbo = try CostBasedOptimizer.init(alloc);
-    defer cbo.deinit();
-    if (!cbo.enabled) return error.FeatureDisabled;
-    // Minimal stub: no-op; just exercise disabled check.
-}
-
-pub fn explainEstimateJSON(allocator: std.mem.Allocator) ![]u8 {
-    var cbo = try CostBasedOptimizer.init(allocator);
-    defer cbo.deinit();
-    const disabled = !cbo.enabled;
-    const text = if (disabled) "{\"cbo_enabled\":false}" else "{\"cbo_enabled\":true,\"plan\":[{\"node_id\":0}],\"summary\":{}}";
-    const out = try allocator.alloc(u8, text.len);
-    std.mem.copyForwards(u8, out, text);
-    return out;
+    try buf.print(allocator, "],\"estimated_total_rows\":{d}}}", .{@as(u64, @intFromFloat(@floor(total_rows)))});
+    return buf.toOwnedSlice(allocator);
 }
 
 pub const StatsRegistry = struct {
@@ -646,10 +395,26 @@ pub const StatsRegistry = struct {
         });
     }
 
-    // Deprecated: analyzeTable without provider - returns FeatureDisabled
-    // Use analyzeTableWithProvider or injectTableStats instead
-    pub fn analyzeTable(_: *StatsRegistry, _: []const u8, _: anytype) !void {
-        return error.FeatureDisabled;
+    /// Analyze a node label ("table") and record REAL row statistics.
+    ///
+    /// GAP-0867: previously returned `error.FeatureDisabled`. Now counts live
+    /// rows through `source`, which must provide
+    /// `rowCountForLabel(label: []const u8) usize` — typically a thin adapter
+    /// over `GraphStore.countNodesByLabel(graph, label, tenant)` (kept
+    /// duck-typed so this module never imports the storage module; see note
+    /// at top of file). `page_count` is derived from the row count using the
+    /// same 100-tuples-per-page assumption the cost model uses;
+    /// `avg_row_size` is 0 (not collected from the store yet — documented
+    /// unknown, not a fabricated value).
+    pub fn analyzeTable(self: *StatsRegistry, table: []const u8, source: anytype) !void {
+        const row_count: u64 = @intCast(source.rowCountForLabel(table));
+        const tuples_per_page: u64 = 100;
+        try self.updateTableStats(table, .{
+            .row_count = row_count,
+            .page_count = (row_count + tuples_per_page - 1) / tuples_per_page,
+            .avg_row_size = 0,
+            .last_updated = compat_timestamp(),
+        });
     }
 
     fn buildColumnStats(self: *StatsRegistry, table: []const u8, column: []const u8, values: [][]const u8) !ColumnStats {
@@ -771,263 +536,43 @@ pub const StatsRegistry = struct {
     }
 };
 
-pub const CardinalityEstimator = struct {
-    allocator: std.mem.Allocator,
-    stats_registry: *StatsRegistry,
-
-    pub fn init(allocator: std.mem.Allocator, stats: *StatsRegistry) CardinalityEstimator {
-        return .{
-            .allocator = allocator,
-            .stats_registry = stats,
-        };
-    }
-
-    pub fn estimateCardinality(self: *CardinalityEstimator, node: *planner.PlanNode) !f64 {
-        return switch (node.type) {
-            .node_scan => self.estimateNodeScan(node),
-            .expand => self.estimateExpand(node),
-            .filter => self.estimateFilter(node),
-            .join => self.estimateJoin(node),
-            .group => self.estimateGroup(node),
-            else => 1000.0, // Default estimate
-        };
-    }
-
-    fn estimateNodeScan(self: *CardinalityEstimator, node: *planner.PlanNode) !f64 {
-        // Get table stats if available
-        const scan = node.node_scan;
-        if (scan.labels.len > 0) {
-            if (self.stats_registry.getTableStats(scan.labels[0])) |stats| {
-                return @floatFromInt(stats.row_count);
-            }
-        }
-        return 10000.0; // Default
-    }
-
-    fn estimateExpand(self: *CardinalityEstimator, node: *planner.PlanNode) !f64 {
-        const expand = node.expand;
-        const input_card = try self.estimateCardinality(expand.input);
-
-        // Estimate expansion factor
-        const avg_degree = 5.0; // Default average degree
-        const expansion_factor = if (expand.max_hops) |max|
-            std.math.pow(f64, avg_degree, @floatFromInt(max))
-        else
-            avg_degree;
-
-        return input_card * expansion_factor;
-    }
-
-    fn estimateFilter(self: *CardinalityEstimator, node: *planner.PlanNode) !f64 {
-        const filter = node.filter;
-        const input_card = try self.estimateCardinality(filter.input);
-
-        // Estimate selectivity of predicates
-        var selectivity: f64 = 1.0;
-        for (filter.predicates) |_| {
-            selectivity *= 0.3; // Default 30% selectivity per predicate
-        }
-
-        return input_card * selectivity;
-    }
-
-    fn estimateJoin(self: *CardinalityEstimator, node: *planner.PlanNode) !f64 {
-        const join = node.join;
-        const left_card = try self.estimateCardinality(join.left);
-        const right_card = try self.estimateCardinality(join.right);
-
-        // Simplified join cardinality estimation
-        return switch (join.join_type) {
-            .inner => @min(left_card * right_card * 0.01, left_card * right_card),
-            .left => left_card,
-            .right => right_card,
-            .full => left_card + right_card,
-        };
-    }
-
-    fn estimateGroup(self: *CardinalityEstimator, node: *planner.PlanNode) !f64 {
-        // Group reduces cardinality based on distinct values
-        const input_card = try self.estimateCardinality(node.group.input);
-        return @sqrt(input_card); // Simplified: square root of input
-    }
-};
-
-pub const CostModel = struct {
-    allocator: std.mem.Allocator,
-    cardinality_estimator: *CardinalityEstimator,
-
-    // Cost factors
-    seq_page_cost: f64 = 1.0,
-    random_page_cost: f64 = 4.0,
-    cpu_tuple_cost: f64 = 0.01,
-    cpu_operator_cost: f64 = 0.0025,
-
-    pub fn init(allocator: std.mem.Allocator, card_est: *CardinalityEstimator) CostModel {
-        return .{
-            .allocator = allocator,
-            .cardinality_estimator = card_est,
-        };
-    }
-
-    pub fn estimateCost(self: *CostModel, node: *planner.PlanNode) !f64 {
-        const cardinality = try self.cardinality_estimator.estimateCardinality(node);
-
-        return switch (node.type) {
-            .node_scan => self.costNodeScan(cardinality),
-            .expand => self.costExpand(node, cardinality),
-            .filter => self.costFilter(node, cardinality),
-            .join => self.costJoin(node, cardinality),
-            .group => self.costGroup(node, cardinality),
-            .sort => self.costSort(cardinality),
-            else => cardinality * self.cpu_tuple_cost,
-        };
-    }
-
-    fn costNodeScan(self: *CostModel, cardinality: f64) f64 {
-        // Sequential scan cost
-        const pages = cardinality / 100.0; // Assume 100 tuples per page
-        return pages * self.seq_page_cost + cardinality * self.cpu_tuple_cost;
-    }
-
-    fn costExpand(self: *CostModel, node: *planner.PlanNode, cardinality: f64) f64 {
-        _ = node;
-        // Random access for each expansion
-        return cardinality * (self.random_page_cost + self.cpu_operator_cost);
-    }
-
-    fn costFilter(self: *CostModel, node: *planner.PlanNode, cardinality: f64) f64 {
-        const input_cost = self.estimateCost(node.filter.input) catch cardinality;
-        return input_cost + cardinality * self.cpu_operator_cost;
-    }
-
-    fn costJoin(self: *CostModel, node: *planner.PlanNode, cardinality: f64) f64 {
-        const join = node.join;
-        const left_cost = self.estimateCost(join.left) catch 0;
-        const right_cost = self.estimateCost(join.right) catch 0;
-
-        // Join algorithm cost (simplified)
-        const join_cost = switch (join.join_type) {
-            .inner => cardinality * self.cpu_operator_cost * 2,
-            else => cardinality * self.cpu_operator_cost,
-        };
-
-        return left_cost + right_cost + join_cost;
-    }
-
-    fn costGroup(self: *CostModel, node: *planner.PlanNode, cardinality: f64) f64 {
-        const input_cost = self.estimateCost(node.group.input) catch cardinality;
-        // Grouping requires sorting or hashing
-        return input_cost + cardinality * @log2(cardinality) * self.cpu_operator_cost;
-    }
-
-    fn costSort(self: *CostModel, cardinality: f64) f64 {
-        // Sort cost: n log n
-        return cardinality * @log2(cardinality) * self.cpu_operator_cost;
-    }
-};
-
-test "CBO toggle" {
-    const allocator = std.testing.allocator;
-
-    // Test with CBO disabled
-    {
-        var cbo = try CostBasedOptimizer.init(allocator);
-        defer cbo.deinit();
-        cbo.enabled = false;
-
-        var ctx = try planner.PlannerContext.init(allocator);
-        defer ctx.deinit();
-
-        // Create dummy plans
-        const plan1 = try ctx.allocator.create(planner.PlanNode);
-        plan1.* = .{ .type = .node_scan };
-
-        const plan2 = try ctx.allocator.create(planner.PlanNode);
-        plan2.* = .{ .type = .node_scan };
-
-        const candidates = [_]*planner.PlanNode{ plan1, plan2 };
-        const chosen = cbo.choosePlan(&ctx, &candidates);
-
-        try std.testing.expect(chosen == plan1);
-        std.debug.print("CBO_OFF_RULE_PLANS\n", .{});
-    }
-
-    // Test with CBO enabled
-    {
-        var cbo = try CostBasedOptimizer.init(allocator);
-        defer cbo.deinit();
-        cbo.enabled = true;
-
-        var ctx = try planner.PlannerContext.init(allocator);
-        defer ctx.deinit();
-
-        const plan1 = try ctx.allocator.create(planner.PlanNode);
-        plan1.* = .{ .type = .node_scan };
-
-        const candidates = [_]*planner.PlanNode{plan1};
-        _ = cbo.choosePlan(&ctx, &candidates);
-
-        std.debug.print("CBO_ON_CHOSE_HASH_JOIN\n", .{});
-    }
-}
-
 test "CBO statistics provider interface" {
     const allocator = std.testing.allocator;
 
-    var cbo = try CostBasedOptimizer.init(allocator);
-    defer cbo.deinit();
+    var registry = StatsRegistry.init(allocator);
+    defer registry.deinit();
 
     // Test manual statistics injection (GAP-0065)
-    try cbo.stats_registry.injectTableStats("users", 10000, 500, 100);
-    try cbo.stats_registry.injectTableStats("orders", 50000, 2500, 200);
+    try registry.injectTableStats("users", 10000, 500, 100);
+    try registry.injectTableStats("orders", 50000, 2500, 200);
 
     // Verify statistics were stored
-    const user_stats = cbo.stats_registry.getTableStats("users");
+    const user_stats = registry.getTableStats("users");
     try std.testing.expect(user_stats != null);
     try std.testing.expectEqual(@as(u64, 10000), user_stats.?.row_count);
     try std.testing.expectEqual(@as(u64, 500), user_stats.?.page_count);
     try std.testing.expectEqual(@as(u64, 100), user_stats.?.avg_row_size);
 
-    const order_stats = cbo.stats_registry.getTableStats("orders");
+    const order_stats = registry.getTableStats("orders");
     try std.testing.expect(order_stats != null);
     try std.testing.expectEqual(@as(u64, 50000), order_stats.?.row_count);
-
-    std.debug.print("CBO_STATS_PROVIDER_OK\n", .{});
 }
 
-test "CBO DP join enumeration" {
+test "analyzeTable records real counts from a duck-typed source" {
     const allocator = std.testing.allocator;
 
-    var cbo = try CostBasedOptimizer.init(allocator);
-    defer cbo.deinit();
+    var registry = StatsRegistry.init(allocator);
+    defer registry.deinit();
 
-    var ctx = try planner.PlannerContext.init(allocator);
-    defer ctx.deinit();
+    const FakeStore = struct {
+        pub fn rowCountForLabel(_: @This(), label: []const u8) usize {
+            if (std.mem.eql(u8, label, "A")) return 100;
+            return 0;
+        }
+    };
+    try registry.analyzeTable("A", FakeStore{});
 
-    // Create 3 relations for testing DP enumeration
-    const rel1 = try ctx.allocator.create(planner.PlanNode);
-    rel1.* = .{ .type = .node_scan };
-
-    const rel2 = try ctx.allocator.create(planner.PlanNode);
-    rel2.* = .{ .type = .node_scan };
-
-    const rel3 = try ctx.allocator.create(planner.PlanNode);
-    rel3.* = .{ .type = .node_scan };
-
-    const relations = [_]*planner.PlanNode{ rel1, rel2, rel3 };
-
-    // Test DP enumeration (GAP-0072)
-    const result = try cbo.enumerateJoinOrders(&ctx, &relations);
-
-    // Should return exactly one optimal plan
-    try std.testing.expect(result.len == 1);
-    try std.testing.expect(result[0].type == .join);
-
-    // Verify it's a complete join tree (contains all 3 relations)
-    const join = result[0].join;
-    try std.testing.expect(join.left != null);
-    try std.testing.expect(join.right != null);
-
-    std.debug.print("CBO_DP_JOIN_ENUM_OK\n", .{});
-    allocator.free(result);
+    const stats = registry.getTableStats("A") orelse return error.StatsMissing;
+    try std.testing.expectEqual(@as(u64, 100), stats.row_count);
+    try std.testing.expectEqual(@as(u64, 1), stats.page_count);
 }

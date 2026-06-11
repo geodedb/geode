@@ -5365,6 +5365,25 @@ pub fn build(b: *std.Build) void {
     const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
     gap0884_step.dependOn(&run_gap0884_tests.step);
 
+    // GAP-0867: real statistics into the CBO + truthful EXPLAIN estimates.
+    // Pins (a) StatsRegistry.analyzeTable collecting live row counts from the
+    // graph store (was error.FeatureDisabled), (b) explainEstimateJSON
+    // deriving per-scan-node estimated_rows from those statistics (was a
+    // canned skeleton), and (c) chooseIndexForPredicate only selecting an
+    // index when the predicate references the indexed property (the
+    // predicate was previously ignored).
+    const gap0867_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/server/index_catalog.zig"), .target = target, .optimize = optimize });
+    gap0867_catalog_mod.addImport("index_selectivity", index_selectivity_mod);
+    const gap0867_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0867_cbo_estimates.zig"), .target = target, .optimize = optimize });
+    gap0867_test_mod.addImport("geode", root_mod);
+    gap0867_test_mod.addImport("index_catalog", gap0867_catalog_mod);
+    gap0867_test_mod.link_libc = true;
+    const gap0867_tests = b.addTest(.{ .root_module = gap0867_test_mod });
+    const run_gap0867_tests = b.addRunArtifact(gap0867_tests);
+    shardDep(test_step, &run_gap0867_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0867_step = b.step("test-gap0867", "GAP-0867: real CBO statistics + truthful EXPLAIN estimates + predicate-aware index choice");
+    gap0867_step.dependOn(&run_gap0867_tests.step);
+
     // GAP-0885b: LSP/MCP hardening batch (LSP-SEC-002/005/008). Roots the
     // regression file through src/cli/lsp/server.zig (exposed as
     // `lsp_server`, same wiring rationale as gap0831/gap0832) for the URI

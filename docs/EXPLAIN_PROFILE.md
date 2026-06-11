@@ -437,13 +437,45 @@ These features implement ISO/IEC 39075:2024 GQL standard query explanation capab
 - PROFILE statement for execution profiling
 - Query optimization hints and analysis
 
+## What Is Estimated vs Heuristic (GAP-0867, 2026-06-10)
+
+Be precise about provenance when reading any cost or row number Geode reports:
+
+- **GQL `EXPLAIN` statement costs are fixed heuristic constants**, not measured
+  statistics: NodeScan=100, IndexSeek=10, ExpandRelationships=50/hop,
+  Filter=10, Aggregate=200, Sort=150, Limit=5, Distinct=100, Project=5
+  (`src/execution/statement_handlers.zig:executeExplain`). The IndexSeek vs
+  NodeScan decision IS real — it checks the live index catalog for an index
+  matching the pattern's label+property (including WHERE equality predicates) —
+  but the cost numbers attached are model constants.
+- **Index selection at runtime is cost-based from live statistics** via
+  `src/server/index_optimizer.zig` (IndexOptimizer) and the per-property
+  `SelectivityEstimator`; `chooseIndexForPredicate`
+  (`src/server/index_catalog.zig`) only considers an index when the predicate
+  actually references the indexed property.
+- **`StatsRegistry` row statistics are real when collected**:
+  `analyzeTable()` counts live rows from the graph store (per-label counts via
+  `GraphStore.countNodesByLabel`); `analyzeTableWithProvider()` /
+  `injectTableStats()` record caller-supplied values.
+  `cbo.explainEstimateJSON()` (`src/planner/cbo.zig`) emits per-scan-node
+  `estimated_rows` and labels each one with its provenance:
+  `"statistics"` (collected), `"default_heuristic"` (no stats for the label),
+  or `"heuristic_avg_degree"`/`"heuristic_selectivity"` (documented model
+  constants for expand/filter). Regression: `zig build test-gap0867`.
+- **Calibration objects are only emitted when actual row counts exist**:
+  `explainChainWithCalibration` (`src/planner/cost_explain.zig`) omits the
+  `calibration` block entirely when no runtime actuals are supplied (it
+  previously emitted a stub `{"mape":0,"entries":[]}` that looked like a
+  perfect calibration). Runtime calibration feedback into the planner is a
+  documented future item, not a current feature.
+
 ## Current Limitations
 
-1. **Simplified Plans**: EXPLAIN shows logical operators but not detailed cost estimates
+1. **Heuristic EXPLAIN costs**: the GQL `EXPLAIN` statement's per-operator costs are the fixed constants listed above, not statistics-derived estimates
 2. **Placeholder Timing**: PROFILE execution_time_ms is currently a placeholder (always returns 1)
-3. **No Index Information**: Plans don't currently show index usage
-4. **No Operator Statistics**: PROFILE doesn't show per-operator metrics
-5. **No Memory Usage**: Memory consumption not tracked
+3. **No Operator Statistics**: PROFILE doesn't show per-operator metrics
+4. **No Memory Usage**: Memory consumption not tracked
+5. **No automatic ANALYZE**: `StatsRegistry.analyzeTable()` must be invoked by the caller; statistics are not refreshed automatically on write
 
 ## Future Enhancements
 
