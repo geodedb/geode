@@ -2221,6 +2221,10 @@ pub fn build(b: *std.Build) void {
     const iso_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_iso_conformance.zig"), .target = target, .optimize = optimize }) });
     iso_conformance_tests.root_module.addImport("geode", root_mod);
     const run_iso_conformance_tests = b.addRunArtifact(iso_conformance_tests);
+    // GAP-0514 Phase 6: named step so the 70/70 ISO suite is runnable outside
+    // the (blocked) monolithic `zig build test` shard sweep.
+    const iso_conformance_step = b.step("test-iso-conformance", "Run the ISO/IEC 39075:2024 GQL conformance suite (tests/gql_iso_conformance.zig)");
+    iso_conformance_step.dependOn(&run_iso_conformance_tests.step);
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });

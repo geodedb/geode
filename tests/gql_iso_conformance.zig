@@ -1,6 +1,6 @@
 // ISO/IEC 39075:2024 Conformance Test Suite
 // GAP-0257: Comprehensive evidence for GQL compliance claims
-// CANARY: REQ=REQ-GQL-ISO-CONFORM-001; FEATURE="ISOConformanceEvidence"; ASPECT=TestSuite; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-CONFORM-001; FEATURE="ISOConformanceEvidence"; ASPECT=TestSuite; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 //
 // Tests organized by ISO 39075:2024 sections to provide traceable evidence
 // that each claimed feature is actually parsed/handled correctly.
@@ -56,7 +56,7 @@ fn parseFirstStmt(src: []const u8, arena: *std.heap.ArenaAllocator) !ast.Stateme
 
 // ============================================================================
 // Section 7: Graph Pattern Matching (MATCH)
-// CANARY: REQ=REQ-GQL-ISO-SEC-7-001; FEATURE="ISOGraphPatternMatching"; ASPECT=MATCH; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-7-001; FEATURE="ISOGraphPatternMatching"; ASPECT=MATCH; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 7.1: Basic node pattern" {
@@ -102,7 +102,7 @@ test "ISO Sec 7.10: Pattern with alias" {
 
 // ============================================================================
 // Section 9: Data Manipulation Language (DML)
-// CANARY: REQ=REQ-GQL-ISO-SEC-9-001; FEATURE="ISODataManipulation"; ASPECT=DML; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-9-001; FEATURE="ISODataManipulation"; ASPECT=DML; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 9.1: INSERT node" {
@@ -135,7 +135,7 @@ test "ISO Sec 9.7: INSERT with RETURN" {
 
 // ============================================================================
 // Section 10: Data Definition Language (DDL)
-// CANARY: REQ=REQ-GQL-ISO-SEC-10-001; FEATURE="ISODataDefinition"; ASPECT=DDL; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-10-001; FEATURE="ISODataDefinition"; ASPECT=DDL; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 10.1: CREATE GRAPH" {
@@ -160,7 +160,7 @@ test "ISO Sec 10.5: CREATE GRAPH TYPE" {
 
 // ============================================================================
 // Section 11: Transactions
-// CANARY: REQ=REQ-GQL-ISO-SEC-11-001; FEATURE="ISOTransactions"; ASPECT=Transactions; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-11-001; FEATURE="ISOTransactions"; ASPECT=Transactions; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 11.1: Implicit transaction (single statement)" {
@@ -173,7 +173,7 @@ test "ISO Sec 11.2: Multi-statement query" {
 
 // ============================================================================
 // Section 12: Functions
-// CANARY: REQ=REQ-GQL-ISO-SEC-12-001; FEATURE="ISOFunctions"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-12-001; FEATURE="ISOFunctions"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 12.1: COUNT aggregate" {
@@ -226,7 +226,7 @@ test "ISO Sec 12.12: COLLECT aggregate" {
 
 // ============================================================================
 // Section 13: Type System
-// CANARY: REQ=REQ-GQL-ISO-SEC-13-001; FEATURE="ISOTypeSystem"; ASPECT=Types; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-13-001; FEATURE="ISOTypeSystem"; ASPECT=Types; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 13.1: Integer literal" {
@@ -275,7 +275,7 @@ test "ISO Sec 13.11: Scientific notation float" {
 
 // ============================================================================
 // Section 14: NULL Semantics (Three-Valued Logic)
-// CANARY: REQ=REQ-GQL-ISO-SEC-14-001; FEATURE="ISONullSemantics"; ASPECT=ThreeValuedLogic; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-14-001; FEATURE="ISONullSemantics"; ASPECT=ThreeValuedLogic; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 14.1: IS NULL predicate" {
@@ -308,7 +308,7 @@ test "ISO Sec 14.7: NULL comparison" {
 
 // ============================================================================
 // Section 15: Path Patterns
-// CANARY: REQ=REQ-GQL-ISO-SEC-15-001; FEATURE="ISOPathPatterns"; ASPECT=Paths; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-15-001; FEATURE="ISOPathPatterns"; ASPECT=Paths; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 15.1: Variable-length path" {
@@ -337,7 +337,7 @@ test "ISO Sec 15.6: Exact length path" {
 
 // ============================================================================
 // Section 16: Aggregation
-// CANARY: REQ=REQ-GQL-ISO-SEC-16-001; FEATURE="ISOAggregation"; ASPECT=GroupBy; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-16-001; FEATURE="ISOAggregation"; ASPECT=GroupBy; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 16.1: GROUP BY with aggregate" {
@@ -358,7 +358,7 @@ test "ISO Sec 16.4: Aggregate without GROUP BY" {
 
 // ============================================================================
 // Section 17: Ordering and Pagination
-// CANARY: REQ=REQ-GQL-ISO-SEC-17-001; FEATURE="ISOOrdering"; ASPECT=OrderByLimit; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-17-001; FEATURE="ISOOrdering"; ASPECT=OrderByLimit; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 17.1: ORDER BY ascending" {
@@ -391,7 +391,7 @@ test "ISO Sec 17.7: NULLS LAST" {
 
 // ============================================================================
 // Section 18: Set Operations
-// CANARY: REQ=REQ-GQL-ISO-SEC-18-001; FEATURE="ISOSetOperations"; ASPECT=Union; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-SEC-18-001; FEATURE="ISOSetOperations"; ASPECT=Union; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Sec 18.1: UNION" {
@@ -412,7 +412,7 @@ test "ISO Sec 18.4: EXCEPT" {
 
 // ============================================================================
 // Additional Compliance Tests: Expressions
-// CANARY: REQ=REQ-GQL-ISO-EXPR-001; FEATURE="ISOExpressions"; ASPECT=Operators; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-EXPR-001; FEATURE="ISOExpressions"; ASPECT=Operators; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Expr: Arithmetic operators" {
@@ -457,7 +457,7 @@ test "ISO Expr: Nested property access" {
 
 // ============================================================================
 // Additional Compliance Tests: LET / WITH / FOR
-// CANARY: REQ=REQ-GQL-ISO-LET-001; FEATURE="ISOLetBinding"; ASPECT=VariableScoping; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-LET-001; FEATURE="ISOLetBinding"; ASPECT=VariableScoping; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Let: WITH projection" {
@@ -478,7 +478,7 @@ test "ISO Let: Chained WITH clauses" {
 
 // ============================================================================
 // Additional Compliance Tests: Schema / Catalog
-// CANARY: REQ=REQ-GQL-ISO-CATALOG-001; FEATURE="ISOCatalog"; ASPECT=SchemaManagement; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-CATALOG-001; FEATURE="ISOCatalog"; ASPECT=SchemaManagement; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Catalog: CREATE SCHEMA" {
@@ -495,7 +495,7 @@ test "ISO Catalog: USE SCHEMA" {
 
 // ============================================================================
 // Negative Tests: Syntax Errors
-// CANARY: REQ=REQ-GQL-ISO-NEGATIVE-001; FEATURE="ISOSyntaxValidation"; ASPECT=ErrorDetection; STATUS=IMPL; OWNER=compliance; UPDATED=2026-02-13
+// CANARY: REQ=REQ-GQL-ISO-NEGATIVE-001; FEATURE="ISOSyntaxValidation"; ASPECT=ErrorDetection; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
 
 test "ISO Negative: Missing RETURN" {
