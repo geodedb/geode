@@ -56,6 +56,25 @@
 // These tests use NO real QUIC/TLS (the in-test QUIC stubs make
 // `QuicClient.init` a no-op), so they are deterministic and fast and inject the
 // clock + leader flag directly.
+//
+// OWED ITEM (4) EXTENSION (2026-06-11, RED): the leader-only arming above fixed
+// the livelock but over-corrected for the divergent-durable-state RESTART wedge
+// — at restart, vote frames are silently undelivered over a stale/half-open QUIC
+// stream while the stall detector is LEADER-ONLY gated, so during the leaderless
+// window NOTHING detects/recovers the stall and the node sits as a silent
+// candidate forever; and `pre_vote=true` freezes the term (term only increments
+// after a WON pre-vote), making the wedge silent. The two new sections at the
+// bottom of this file encode the corrected behavior and FAIL against the
+// skeleton:
+//   (A) role-arming widens to leader-OR-candidate; only FOLLOWERS suppressed
+//       (`shouldEvictOnStallArmed` / `recordStallPassArmed` / `StallArm` /
+//       `setRoleSource`). SKELETON keeps leader-only -> candidate tests RED.
+//   (B) frozen-term pre-vote VISIBILITY: `FrozenCandidateTracker.update` fires a
+//       rate-limited warn when a node is a candidate at an unchanging term past
+//       ~3x the election timeout. SKELETON never warns -> "due" tests RED.
+// The legacy `shouldEvictOnStall(.., is_leader: bool)` tests above stay green
+// (that API is unchanged during red phase; the fixer migrates callers to the
+// armed API and removes the bool form).
 
 const std = @import("std");
 const geode = @import("geode");
@@ -275,4 +294,262 @@ test "stall: progress refresh clears the stall (reconnected peer is not immediat
     // And a later observation keeps it healthy across the full budget window.
     pc.last_progress_ms.store(now_ms + Transport.peer_stall_budget_ms, .release);
     try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms + Transport.peer_stall_budget_ms, true));
+}
+
+// ===========================================================================
+// owed item (4): all-candidate frozen-term wedge
+// ===========================================================================
+// The leader-only arming above (3aeb0fcc) fixed the election livelock but
+// over-corrected for the divergent-durable-state RESTART wedge: at restart, vote
+// frames are silently undelivered over a stale/half-open QUIC stream, and the
+// stall detector is LEADER-ONLY gated — so during the leaderless window NOTHING
+// detects or recovers the stalled outbound vote stream and the node sits as a
+// silent candidate forever. (`pre_vote=true` also freezes the term — the term
+// only increments after a WON pre-vote — so the wedge is SILENT. That visibility
+// half is section (B) below.)
+//
+// CORRECTED arming (section A): the detector must arm for a node that is the
+// LEADER **or a CANDIDATE**, and suppress ONLY a FOLLOWER:
+//   * a FOLLOWER expects inbound heartbeats; its outbound health is the leader's
+//     detector's job, so it stands down. This is the SAFE REFINEMENT of the old
+//     "suppress when not leader" rule — it now suppresses ONLY the follower.
+//   * a CANDIDATE is exactly the role that must get its RequestVote frames
+//     through a possibly-wedged stream, so it MUST be armed. The 15 s budget +
+//     2 consecutive strikes (≥ ~18-30 s to evict, vs 1-2 s healthy election
+//     rounds) cannot recreate the old 3 s-budget livelock.
+//
+// API the fixer will land (see raft_consensus.zig skeleton):
+//   * `StallArm = enum { leader, candidate, follower }`
+//   * `shouldEvictOnStallArmed(pc, now_ms, arm)` — suppress ONLY `.follower`
+//   * `recordStallPassArmed(pc, now_ms, arm)` — strike machine over the above
+//   * `setRoleSource(ctx, fn(ctx) StallArm)` — role injection (mirrors
+//     `setLeaderSource`); `maybeReconnectOnStall` rewired to read it.
+// SKELETON keeps the OLD leader-only body (`if (arm != .leader) return false`),
+// so the CANDIDATE-arming assertions below FAIL (red) while the follower /
+// leader assertions already match.
+
+const StallArm = Transport.StallArm;
+
+// ---------------------------------------------------------------------------
+// (A.1) Candidate + stalled outbound stream -> ARMED (single pass reads stalled)
+// ---------------------------------------------------------------------------
+// This is the restart wedge: the strand victim is a CANDIDATE whose RequestVote
+// frames buffer into a dead stream (frames_sent>0, no progress past budget).
+// A candidate MUST be armed so the reaper can rebuild the stream and let votes
+// flow. SKELETON returns false for a non-leader arm -> FAILS.
+test "stall(armed): candidate with a stalled outbound stream is armed (single pass)" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makePeerConn(allocator, 7, 12, stale);
+    defer freePeerConn(allocator, pc);
+
+    // DESIRED: a stalled candidate reads as stalled (armed). RED: skeleton is
+    // leader-only and returns false.
+    try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .candidate));
+}
+
+// ---------------------------------------------------------------------------
+// (A.2) Candidate + stalled -> EVICTS after M consecutive passes
+// ---------------------------------------------------------------------------
+// The full eviction path for the wedge victim: a candidate accrues strikes and
+// evicts on the Mth consecutive armed-stalled pass (so a single quiet leaderless
+// pass never evicts, but a genuinely wedged candidate recovers). SKELETON never
+// arms a candidate, so the first-pass strike never accrues and `recordStallPassArmed`
+// returns false forever -> the "evicts on the Mth pass" assertion FAILS.
+test "stall(armed): candidate evicts only after M consecutive stalled passes" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makePeerConn(allocator, 7, 12, stale);
+    defer freePeerConn(allocator, pc);
+
+    try std.testing.expect(Transport.peer_stall_strikes_required >= 2);
+
+    // First armed-stalled pass: strike 1, no evict.
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, now_ms, .candidate));
+    try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
+
+    // Drive to the required number of consecutive stalled passes; only the last
+    // pass evicts.
+    var pass: u32 = 1;
+    while (pass < Transport.peer_stall_strikes_required) : (pass += 1) {
+        const is_last = (pass + 1) == Transport.peer_stall_strikes_required;
+        const evict = Transport.recordStallPassArmed(pc, now_ms, .candidate);
+        try std.testing.expectEqual(is_last, evict);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (A.3) Follower + same conditions -> SUPPRESSED (refines the old not-leader test)
+// ---------------------------------------------------------------------------
+// A follower's outbound health is the leader's detector's job; arming it would
+// re-introduce the leaderless-window eviction storm. Same shape as the candidate
+// wedge (frames sent, ancient progress) but MUST NOT evict. SKELETON returns
+// false for `.follower` already, so this PASSES now and pins the post-fix
+// suppression (it is the reworked "not leader" -> "follower" test).
+test "stall(armed): follower with a stalled outbound stream is suppressed" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makePeerConn(allocator, 7, 12, stale);
+    defer freePeerConn(allocator, pc);
+
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .follower));
+    // And no strike accrues / no eviction across repeated passes.
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, now_ms, .follower));
+    try std.testing.expectEqual(@as(u32, 0), pc.stall_strikes.load(.acquire));
+}
+
+// ---------------------------------------------------------------------------
+// (A.4) Leader behavior is unchanged under the armed API
+// ---------------------------------------------------------------------------
+// The leader is still armed (it always was). This pins parity between the legacy
+// `shouldEvictOnStall(.., is_leader=true)` and the new `shouldEvictOnStallArmed(.., .leader)`
+// so the fixer's rewrite does not regress the leader path. Passes now and after.
+test "stall(armed): leader arming matches the legacy leader-only decision" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makePeerConn(allocator, 7, 12, stale);
+    defer freePeerConn(allocator, pc);
+
+    try std.testing.expectEqual(
+        Transport.shouldEvictOnStall(pc, now_ms, true),
+        Transport.shouldEvictOnStallArmed(pc, now_ms, .leader),
+    );
+    try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+}
+
+// (A.5) Armed candidate still respects the per-connection guards: a candidate
+// with recent progress, or one we've never sent to, must NOT be armed. These
+// guards are arm-independent, so they pass against the skeleton too (the
+// skeleton returns false for a candidate for the WRONG reason — leader-only —
+// but the assertion is the same `false`). Kept so the fixer's widening does not
+// drop the frames_sent / progress guards for the newly-armed candidate role.
+test "stall(armed): candidate with recent progress is not armed" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const recent = now_ms - (Transport.peer_stall_budget_ms - 500);
+    const pc = try makePeerConn(allocator, 7, 12, recent);
+    defer freePeerConn(allocator, pc);
+
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .candidate));
+}
+
+test "stall(armed): candidate we have never sent to is not armed" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const pc = try makePeerConn(allocator, 9, 0, 0); // frames_sent == 0
+    defer freePeerConn(allocator, pc);
+
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .candidate));
+}
+
+// ===========================================================================
+// (B) Frozen-term pre-vote VISIBILITY
+// ===========================================================================
+// `pre_vote = true` freezes the term while a node is wedged as a candidate (the
+// term only increments after a WON pre-vote), so the all-candidate wedge is
+// SILENT — zero transport errors, zero term churn, nothing for an operator to
+// see. `FrozenCandidateTracker.update(role, term, now_ms)` fires a rate-limited
+// operator warn when a node has been a CANDIDATE at an UNCHANGING term for longer
+// than `frozen_candidate_warn_after_ms` (≈ 3× the 5000 ms election timeout =
+// 15 s), then suppresses further warns for `frozen_candidate_warn_interval_ms`.
+//
+// SKELETON `update` ALWAYS returns false (never due), so the "warn is due past
+// threshold" assertions FAIL (red); the reset / not-due / rate-limit assertions
+// (which expect false) already pass and pin the post-fix contract.
+
+const FrozenCandidateTracker = raft_consensus.FrozenCandidateTracker;
+
+// Threshold derivation pin: the warn must fire at ≈ 3× the default 5000 ms
+// election timeout (15 s) so a single slow-but-progressing election round never
+// trips it, and the rate-limit interval must be strictly positive and >= the
+// warn-after threshold (so a node that warns does not immediately re-warn).
+test "frozen-term: warn threshold is ~3x the election timeout and rate-limited" {
+    const default_election_timeout_ms: i64 = 5000; // cluster.zig Config default
+    try std.testing.expect(
+        FrozenCandidateTracker.frozen_candidate_warn_after_ms >= 3 * default_election_timeout_ms,
+    );
+    try std.testing.expect(FrozenCandidateTracker.frozen_candidate_warn_interval_ms > 0);
+    try std.testing.expect(
+        FrozenCandidateTracker.frozen_candidate_warn_interval_ms >=
+            FrozenCandidateTracker.frozen_candidate_warn_after_ms,
+    );
+}
+
+// (B.1) Candidate at the SAME term past the threshold -> warn DUE.
+// SKELETON returns false -> FAILS.
+test "frozen-term: candidate stuck at one term past threshold warns" {
+    var t: FrozenCandidateTracker = .{};
+    const start_ms: i64 = 1_000_000;
+    const term: u64 = 4;
+
+    // Enter candidate at term 4; the run begins now, not yet due.
+    try std.testing.expect(!t.update(.candidate, term, start_ms));
+
+    // Still a candidate at the SAME term, but only halfway to the threshold.
+    const half = start_ms + @divTrunc(FrozenCandidateTracker.frozen_candidate_warn_after_ms, 2);
+    try std.testing.expect(!t.update(.candidate, term, half));
+
+    // Past the threshold at the SAME term -> the wedge is now visible: DUE.
+    const past = start_ms + FrozenCandidateTracker.frozen_candidate_warn_after_ms + 1;
+    try std.testing.expect(t.update(.candidate, term, past));
+}
+
+// (B.2) The term advancing (election progressing) restarts the run -> NOT due,
+// even though wall time exceeds the threshold relative to the ORIGINAL start.
+// This expects false and passes against the skeleton; it pins that a progressing
+// election (term churn) is NEVER flagged as frozen.
+test "frozen-term: an advancing term is never flagged as frozen" {
+    var t: FrozenCandidateTracker = .{};
+    const start_ms: i64 = 2_000_000;
+
+    try std.testing.expect(!t.update(.candidate, 4, start_ms));
+    // Term advances to 5 just before the threshold -> run restarts at term 5.
+    const bump_at = start_ms + FrozenCandidateTracker.frozen_candidate_warn_after_ms - 10;
+    try std.testing.expect(!t.update(.candidate, 5, bump_at));
+    // Now past the ORIGINAL threshold, but the term-5 run is young -> NOT due.
+    const past_original = start_ms + FrozenCandidateTracker.frozen_candidate_warn_after_ms + 1;
+    try std.testing.expect(!t.update(.candidate, 5, past_original));
+}
+
+// (B.3) Becoming leader or follower resets the tracker -> NOT due. Expects false;
+// passes against the skeleton and pins the role-transition reset.
+test "frozen-term: becoming leader or follower resets and is never due" {
+    var t: FrozenCandidateTracker = .{};
+    const start_ms: i64 = 3_000_000;
+
+    try std.testing.expect(!t.update(.candidate, 7, start_ms));
+    // Won the election: now leader, far past the threshold -> NOT due.
+    const past = start_ms + FrozenCandidateTracker.frozen_candidate_warn_after_ms + 1;
+    try std.testing.expect(!t.update(.leader, 8, past));
+    // And a follower likewise is never flagged.
+    try std.testing.expect(!t.update(.follower, 8, past + 100));
+}
+
+// (B.4) Rate limit: after a warn fires, a node STILL stuck must NOT warn again
+// until the interval elapses, then warns once more.
+// SKELETON never warns at all -> the FIRST "due" assertion already FAILS (red);
+// the post-fix contract is the full sequence below.
+test "frozen-term: a warn is rate-limited until the interval elapses" {
+    var t: FrozenCandidateTracker = .{};
+    const start_ms: i64 = 4_000_000;
+    const term: u64 = 9;
+
+    try std.testing.expect(!t.update(.candidate, term, start_ms));
+
+    // First warn fires once past the threshold.
+    const first_due = start_ms + FrozenCandidateTracker.frozen_candidate_warn_after_ms + 1;
+    try std.testing.expect(t.update(.candidate, term, first_due));
+
+    // Immediately after, still stuck, but inside the rate-limit window -> NOT due.
+    try std.testing.expect(!t.update(.candidate, term, first_due + 1));
+    const within_interval = first_due + FrozenCandidateTracker.frozen_candidate_warn_interval_ms - 1;
+    try std.testing.expect(!t.update(.candidate, term, within_interval));
+
+    // Once the interval elapses and the node is STILL a stuck candidate -> due again.
+    const after_interval = first_due + FrozenCandidateTracker.frozen_candidate_warn_interval_ms + 1;
+    try std.testing.expect(t.update(.candidate, term, after_interval));
 }

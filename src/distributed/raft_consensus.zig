@@ -126,6 +126,78 @@ pub const State = enum {
     shutdown,
 };
 
+// ===========================================================================
+// owed item (4): frozen-term pre-vote VISIBILITY
+// ---------------------------------------------------------------------------
+// With `pre_vote = true` (raft_consensus.zig initWithStorageDir), the term only
+// increments AFTER a node WINS a pre-vote round. So when a node is wedged as a
+// candidate because its RequestVote frames are silently undelivered at restart,
+// the term NEVER changes — the cluster sits at an all-candidate frozen term with
+// ZERO transport errors and ZERO term churn. The wedge is therefore SILENT: no
+// log, no metric, nothing for an operator to see. This tracker makes it visible.
+//
+// `frozenCandidateWarnDue` is a PURE, clock-injectable decision: it fires a
+// rate-limited operator warning when a node has been a CANDIDATE at an UNCHANGING
+// term for longer than `frozen_candidate_warn_after_ms` (≈ 3× the default
+// election timeout = 15 s, so a single slow-but-progressing election round never
+// trips it), and then not again until `frozen_candidate_warn_interval_ms` has
+// elapsed (rate limit). Any term advance (election progressing) or a transition
+// to leader/follower resets the tracker.
+//
+// The fixer polls this from the raft loop (likely `cluster.zig` raftLoop /
+// `clientPollLoop`), feeding it the live `(role, term, now_ms)` each pass and
+// emitting `log.warn` when it returns true. The tracker itself owns no I/O.
+pub const FrozenCandidateTracker = struct {
+    /// Warn once a node has been a candidate at an unchanging term for this long.
+    /// ≈ 3× the default 5000 ms election timeout: a healthy election round is
+    /// 1-2 s, so 15 s of NO term movement while still a candidate is the wedge.
+    pub const frozen_candidate_warn_after_ms: i64 = 15000;
+
+    /// After a warn fires, suppress further warns for this interval (rate limit).
+    pub const frozen_candidate_warn_interval_ms: i64 = 30000;
+
+    /// The role observed on the last `update`. `null` until first observation.
+    last_role: ?State = null,
+    /// The term observed on the last `update`.
+    last_term: u64 = 0,
+    /// Wall-clock ms at which the CURRENT (role==candidate, term==last_term) run
+    /// began. Reset whenever the role leaves candidate or the term advances.
+    candidate_since_ms: i64 = 0,
+    /// Wall-clock ms of the last warn emitted, for rate limiting. `null` = never.
+    last_warn_ms: ?i64 = null,
+
+    /// Feed the live `(role, term, now_ms)` and return whether an operator warn
+    /// is DUE on this pass. Updates internal state (candidate-run start, term
+    /// tracking, role transitions) as a side effect so the next call rate-limits
+    /// correctly.
+    ///
+    /// DESIRED (post-fix) semantics:
+    ///   1. candidate at an unchanging term for > frozen_candidate_warn_after_ms
+    ///      → due (and stamp last_warn_ms);
+    ///   2. term changed since the candidate run began (election progressing)
+    ///      → NOT due, and the candidate run restarts at the new term;
+    ///   3. role left candidate (became leader/follower) → NOT due, state resets;
+    ///   4. rate limit: immediately after a warn, NOT due again until
+    ///      frozen_candidate_warn_interval_ms has elapsed.
+    ///
+    /// SKELETON (this revision, RED): records state but ALWAYS returns false
+    /// (never due), so the "warn is due past threshold" assertion FAILS (as
+    /// intended). The reset / not-due / rate-limit assertions that expect false
+    /// already pass; the fixer implements the real threshold + rate-limit logic.
+    pub fn update(self: *FrozenCandidateTracker, role: State, term: u64, now_ms: i64) bool {
+        // SKELETON: track just enough that the not-due assertions can read state,
+        // but never report a warn as due. The fixer replaces this body.
+        const role_changed = self.last_role == null or self.last_role.? != role;
+        const term_changed = self.last_term != term;
+        if (role != .candidate or role_changed or term_changed) {
+            self.candidate_since_ms = now_ms;
+        }
+        self.last_role = role;
+        self.last_term = term;
+        return false;
+    }
+};
+
 pub const Command = union(enum) {
     noop,
     write: []const u8,
@@ -327,6 +399,19 @@ pub const Transport = struct {
     /// path never evicts on stall. Mirrors the `send_override` injection pattern.
     is_leader_fn: ?*const fn (ctx: ?*anyopaque) bool = null,
     is_leader_ctx: ?*anyopaque = null,
+
+    /// owed item (4) — frozen-term wedge: the CORRECTED role source for the
+    /// stalled-stream reaper. Where `is_leader_fn` answered a leader-only
+    /// boolean, this answers the full `StallArm` role (leader / candidate /
+    /// follower) so the reaper can arm for a CANDIDATE too — the role that must
+    /// get vote frames through a possibly-wedged stream at restart. The cluster
+    /// coordinator will wire this from `RaftNode.role()` mapped onto `StallArm`.
+    /// SKELETON: unset; `maybeReconnectOnStall` still reads `is_leader_fn`, and
+    /// the fixer rewires it to read `role_source_fn` (mapping a null source to
+    /// `.follower` so the standalone path never evicts). Mirrors the
+    /// `is_leader_fn` injection shape.
+    role_source_fn: ?*const fn (ctx: ?*anyopaque) StallArm = null,
+    role_source_ctx: ?*anyopaque = null,
 
     /// Task A6c (2026-05-25 distributed cluster testing plan):
     /// Persistent per-peer QUIC connection pool.  Each entry is keyed
@@ -1056,6 +1141,81 @@ pub const Transport = struct {
         return strikes >= peer_stall_strikes_required;
     }
 
+    // =======================================================================
+    // owed item (4): all-candidate frozen-term wedge — role-arming widening
+    // -----------------------------------------------------------------------
+    // The leader-only `shouldEvictOnStall`/`recordStallPass` above (added in
+    // 3aeb0fcc to stop the election livelock) over-corrected for the
+    // divergent-durable-state restart wedge: when vote frames are silently
+    // undelivered over a stale/half-open QUIC stream AT RESTART, the stall
+    // detector is LEADER-ONLY gated, so during the leaderless window NOTHING
+    // detects or recovers the stalled outbound vote stream — the node sits as a
+    // silent candidate forever (`pre_vote=true` also freezes the term, so the
+    // wedge is silent; see FrozenCandidateTracker below).
+    //
+    // CORRECTED arming: the stall detector must arm for a node that is the
+    // LEADER **or a CANDIDATE**, and suppress ONLY a FOLLOWER. Rationale:
+    //   * a FOLLOWER expects inbound heartbeats and its OUTBOUND health is the
+    //     leader's detector's job, so a follower stands down (this is the safe
+    //     refinement of the old "suppress when not leader" rule — it now
+    //     suppresses only the follower, not the candidate);
+    //   * a CANDIDATE is EXACTLY the role that must get its RequestVote frames
+    //     through a possibly-wedged stream to make progress, so it must be
+    //     armed; and the 15 s budget + 2 consecutive strikes (≥ ~18-30 s to
+    //     evict, vs the 1-2 s healthy election round) cannot recreate the old
+    //     3 s-budget livelock.
+    //
+    /// Role the stall detector arms against. Replaces the `is_leader: bool`
+    /// flag of `shouldEvictOnStall`. `.follower` suppresses the detector;
+    /// `.leader` and `.candidate` arm it.
+    pub const StallArm = enum {
+        leader,
+        candidate,
+        follower,
+    };
+
+    /// CORRECTED, role-armed stall decision (owed item (4)). Returns true iff
+    /// this connection LOOKS stalled on a single pass AND the local node is in
+    /// an ARMED role (leader OR candidate). Same per-connection guards as
+    /// `shouldEvictOnStall` (frames sent, progress budget). Pure / clock- and
+    /// role-injectable.
+    ///
+    /// DESIRED (post-fix) semantics:
+    ///   * arm == .follower  → false (follower never evicts its outbound stream);
+    ///   * arm == .candidate → armed: a stalled outbound vote stream IS the
+    ///     restart wedge, so a candidate observing no progress past budget reads
+    ///     as stalled;
+    ///   * arm == .leader    → armed (unchanged from `shouldEvictOnStall`).
+    ///
+    /// SKELETON (this revision, RED): keeps the OLD leader-only behavior —
+    /// `if (arm != .leader) return false` — so the CANDIDATE case wrongly
+    /// returns false. The candidate-arming tests therefore FAIL (as intended),
+    /// while the follower-suppressed and leader cases already match.
+    pub fn shouldEvictOnStallArmed(pc: *PeerConnection, now_ms: i64, arm: StallArm) bool {
+        // SKELETON: leader-only (pre-fix) behavior. The fixer must widen this to
+        // `if (arm == .follower) return false;` so a candidate is also armed.
+        if (arm != .leader) return false;
+        if (pc.frames_sent.load(.acquire) == 0) return false;
+        const last = pc.last_progress_ms.load(.acquire);
+        return (now_ms - last) > peer_stall_budget_ms;
+    }
+
+    /// Role-armed analogue of `recordStallPass`: tracks `peer_stall_strikes_required`
+    /// CONSECUTIVE armed-and-stalled passes before returning true. Resets strikes
+    /// when the armed decision is false on this pass (healthy / follower / idle /
+    /// progress observed). A progress stamp (`notePeerProgress`) independently
+    /// resets strikes. Shares the same `stall_strikes` field and atomicity
+    /// discipline as `recordStallPass`.
+    pub fn recordStallPassArmed(pc: *PeerConnection, now_ms: i64, arm: StallArm) bool {
+        if (!shouldEvictOnStallArmed(pc, now_ms, arm)) {
+            pc.stall_strikes.store(0, .release);
+            return false;
+        }
+        const strikes = pc.stall_strikes.load(.acquire) + 1;
+        pc.stall_strikes.store(strikes, .release);
+        return strikes >= peer_stall_strikes_required;
+    }
+
     /// Refresh the forward-progress timestamp for the peer identified by
     /// `peer_id`. Called from the INBOUND path (raft AppendEntries from the
     /// leader / AppendEntriesResponse from a follower, dispatched in
@@ -1094,6 +1254,16 @@ pub const Transport = struct {
     pub fn setLeaderSource(self: *Transport, ctx: ?*anyopaque, f: *const fn (ctx: ?*anyopaque) bool) void {
         self.is_leader_ctx = ctx;
         self.is_leader_fn = f;
+    }
+
+    /// owed item (4): wire the live `StallArm` role source the corrected
+    /// stalled-stream reaper arms on (leader OR candidate; suppress follower).
+    /// Mirrors `setLeaderSource`. The cluster coordinator passes a closure that
+    /// maps `RaftNode.role()` onto `StallArm`. Leaving it unset (standalone)
+    /// means the reaper treats the node as a follower and never evicts on stall.
+    pub fn setRoleSource(self: *Transport, ctx: ?*anyopaque, f: *const fn (ctx: ?*anyopaque) StallArm) void {
+        self.role_source_ctx = ctx;
+        self.role_source_fn = f;
     }
 
     /// Periodic stalled-stream reaper, sibling to `maybeReconnectOnIpChange`,

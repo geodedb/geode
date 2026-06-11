@@ -3003,6 +3003,27 @@ pub fn build(b: *std.Build) void {
     const raft_hardstate_dur_step = b.step("test-raft-hardstate-durability", "Regression: raft hard-state must be durable across a process restart (FileStorage)");
     raft_hardstate_dur_step.dependOn(&run_raft_hardstate_dur_tests.step);
 
+    // owed item (4): divergent durable raft state recovery. GREEN PIN — seeds 3
+    // FileStorage dirs at divergent high terms, boots an in-process 3-node
+    // cluster on them (reliable InProcessTransport, no QUIC), and asserts a leader
+    // elects and the term advances past the restored value. Proves the raft lib +
+    // geode recover divergent durable state when the transport is healthy (the
+    // wedge is a transport-delivery + leader-only-stall-gate bug, NOT a
+    // consensus-logic bug). Regression for
+    // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+    const raft_divergent_recovery_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_divergent_state_recovery.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_divergent_recovery_test_mod.addImport("geode", root_mod);
+    raft_divergent_recovery_test_mod.link_libc = true;
+    const raft_divergent_recovery_tests = b.addTest(.{ .root_module = raft_divergent_recovery_test_mod });
+    const run_raft_divergent_recovery_tests = b.addRunArtifact(raft_divergent_recovery_tests);
+    shardDep(test_step, &run_raft_divergent_recovery_tests.step, 1, test_shard_loads, test_shard_index);
+    const raft_divergent_recovery_step = b.step("test-raft-divergent-state-recovery", "owed item (4) green pin: divergent durable raft state recovers a leader + advances term under reliable transport");
+    raft_divergent_recovery_step.dependOn(&run_raft_divergent_recovery_tests.step);
+
     // Root cause #6: restart re-apply idempotency — re-applying a committed
     // replicated create must NOT duplicate the node. Regression for
     // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
