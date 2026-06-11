@@ -1,6 +1,6 @@
 # Quality Gap Analysis
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 This file now contains only open/deferred quality gaps. Historical quality findings live in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
@@ -20,10 +20,7 @@ This file now contains only open/deferred quality gaps. Historical quality findi
 | #556 / #809 / #810 | Medium | Error handling | Surviving `catch unreachable` and `unreachable` hot-path sites need invariant audit or error-union rewrites. | Open |
 | #725 | Medium | Tooling/docs CI | Ruff, shellcheck, and markdownlint debt remains. | Open |
 | #736 / #815 | Medium | Concurrency | Lock-tier discipline and QUIC lock TODOs need enforcement/design. | Open |
-| #728 | Low | Security tooling | gitleaks allowlist noise for test fixtures remains. | Open |
 | #730 | Medium | Governance tooling | CANARY parser/generator regex coverage needs golden tests. | Open / partial |
 | #733 | Medium | Tests | Parser, match, and execution hot paths need inline/unit test backfill. | Open |
-| #813 | High | Security tests | FLE enforcement TODOs need promotion to assertions or explicit rationale. | Open |
 | #806 | Medium | LSP maintainability | `features.zig` aggregates all LSP handlers in one large file. | Open |
-| #812 | Low | WAL cleanup | Dead `if (false)` block guarding legacy replay remains. | Open |
 | Q9/Q13/Q15/Q17/Q18/Q19 | Medium/Low | Migration quality residuals | Migration monolith, API contract, docs, and ownership residuals remain from the re-audit. | Open |

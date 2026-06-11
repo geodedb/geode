@@ -4843,6 +4843,40 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
   - Pinned by `zig build test-s3-sigv4` (gate policy + live debug-posture tests).
   - GitLab issue [#744](https://gitlab.com/devnw/codepros/geode/geode/-/issues/744) ready to close.
 
+### #813: FLE enforcement TODOs promoted to invariants + executable regression (Resolved 2026-06-10, GAP-0886a)
+
+- **Original Gap:** Three TODO markers in `src/security/test_fle_enforcement.zig` carried security/correctness signal (catalog-error fail-open, master-key production check, encrypted-fields flag verification) — #813 (High, PriorityScore 27).
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `fa6ba9ac` — `fix: close quality #813/#812/#728`. No enforcement hole found: all three TODOs described behavior already fixed in the code; each site now documents the named invariant and the verifying mechanism.
+  - TODO 1 (L222, "fix fle_integration.zig:447 to return false on error"): already fixed — `canReadPlaintext()` denies on catalog error (`src/fle_integration.zig` catch → `return false` with SECURITY log). Comment rewritten to the fail-secure invariant; the catch is a defensive backstop only reachable on global-allocator OOM.
+  - TODO 2 (L292, "add production mode check for master key"): superseded by stronger behavior — `src/keys/manager.zig:loadMasterKeyFromEnv` returns `Error.MasterKeyRequired` in ALL build modes; the deterministic test-key fallback and `GEODE_FLE_TEST_MODE`/`isTestModeEnabled` escape hatch no longer exist. Stale comments claiming a debug-build fallback corrected.
+  - TODO 3 (L522, "verify fle_has_encrypted_fields is set"): NEW executable regression `"GAP-0886: hasEncryptedFields reflects catalog state (flag self-heal + setter)"` in `src/fle_integration.zig` (run via `zig build test-gap0844`, filter extended to GAP-0886) — proves the lazy self-heal flips the flag from catalog state even when `setHasEncryptedFields` is bypassed, plus the explicit-setter round-trip.
+  - `rg -n "TODO|FIXME" src/security/test_fle_enforcement.zig` → 0; standalone file suite 38/38; FLE steps green (test-gap0854 1/1, test-gps-fle-enforcement 11/11, test-gap0852 5/5, test-perf-c-introspection-index 8/8, test-gap0844 2/2).
+  - GitLab issue [#813](https://gitlab.com/devnw/codepros/geode/geode/-/issues/813) ready to close.
+
+### #812: Dead `if (false)` legacy WAL replay block removed (Resolved 2026-06-10, GAP-0886a)
+
+- **Original Gap:** `src/wal.zig:296-306` gated `replayLegacy` behind a hard-coded `if (false)` (double-gate dead code on a critical-path module) — #812 (Low, PriorityScore 8).
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `fa6ba9ac` — `fix: close quality #813/#812/#728`. The whole unreachable closure was deleted, not just the gate: `if (false)` block, `replayLegacy`, `applyRecord`, `deserializePropertyValue`, the `read*` deserialization helpers, the never-called `appendI128`, and the now-unused `property_codec` import (~180 lines). `replay()` keeps its signature and deprecation contract (returns 0; crash recovery is the graph-storage engine's WAL since commit `a4f18bf4`).
+  - `tests/test_wal.zig` replay tests had silently encoded pre-demotion semantics since 2026-03-31 (only reachable via the blocked monolithic `test` step); rewritten to pin the deprecation contract (replay returns 0, store untouched) and append-side LSN assertions.
+  - NEW named step `zig build test-wal` (15/15) so the WAL unit suite is runnable in the canonical per-step sweep.
+  - `rg -n "if \(false\)" src/` → 0; `rg -n replayLegacy src/` → 0.
+  - GitLab issue [#812](https://gitlab.com/devnw/codepros/geode/geode/-/issues/812) ready to close.
+
+### #728: gitleaks allowlist tightened from directory-wide to file-specific (Resolved 2026-06-10, GAP-0886a)
+
+- **Original Gap:** `.gitleaks.toml` carried over-broad allowlist entries (`^docs/`, `^tests/`, `^src/crypto/`, `^\.env$`, dead cert paths) that could mask real secrets, while CI noise on new fixtures remained a risk — #728 (Low).
+- **Resolved date:** 2026-06-10
+- **Resolution evidence:**
+  - Commit `fa6ba9ac` — `fix: close quality #813/#812/#728`. Removed dangerous/dead entries: `^\.env$` (would have masked a real committed .env), `^certs/server\.key$`, `^data/server\.key$`, `^source-test-.*`, `^src/tests/test_.*\.zig$`, `^src/audit_demo\.zig$` (no findings), and the `clients/test-harness/certs/` path (tree relocated; history stays covered by the targeted `commits` allowlist for the two rotated-key SHAs).
+  - Narrowed `^docs/` → 4 specific files, `^tests/` → 9 specific fixture files, `^src/crypto/` → `aead.zig`+`hkdf.zig` (re-export false positives). All 24 masked findings were individually reviewed (test master keys, AWS docs vectors `AKIAIOSFODNN7EXAMPLE`, JWT/private-key filter fixtures) — none real.
+  - Policy comment added: new fixtures should use inline `gitleaks:allow`; never allowlist whole directories, `.env`, or production key paths.
+  - Verified: CI command `gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1` clean; negative test — planted secrets in `docs/NEW_DOC.md` and `.env` ARE flagged with the tightened config (previously masked). No pre-commit gitleaks hook exists (`.pre-commit-config.yaml`); enforcement is the `governance-gitleaks` CI job.
+  - GitLab issue [#728](https://gitlab.com/devnw/codepros/geode/geode/-/issues/728) ready to close.
+
 ### F-04: Buffered stdin reader for LSP transport (Resolved 2026-05-06)
 
 - **Original Gap:** LSP transport read loop made one syscall per byte; F-04 (PerfScore 100, P0).
