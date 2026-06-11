@@ -4000,6 +4000,13 @@ pub fn build(b: *std.Build) void {
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     remote_kms_tests.root_module.link_libc = true;
     shardDep(test_step, &remote_kms_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: these tests were COMPILE-ONLY (shardDep got the
+    // Compile step, never a run artifact). Named step actually RUNS the
+    // remote-KMS QUIC round trip — the only live exerciser of
+    // QuicClient.connect/connectInsecure + QuicClientStream.readLine.
+    const run_remote_kms_tests = b.addRunArtifact(remote_kms_tests);
+    const remote_kms_step = b.step("test-remote-kms", "Run remote KMS QUIC round-trip tests (generate/attest/unwrap over real QUIC)");
+    remote_kms_step.dependOn(&run_remote_kms_tests.step);
 
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
     const remote_kms_hardening_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms_hardening.zig"), .target = target, .optimize = optimize }) });
