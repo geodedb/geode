@@ -8,6 +8,7 @@ const protocol = @import("../protocol.zig");
 const Document = @import("../document.zig").Document;
 const geode = @import("geode");
 const semantic = @import("../semantic.zig");
+const ast_cache = @import("../ast_cache.zig");
 
 /// GAP-0818: caller identity threaded into every feature provider.
 const LspContext = @import("../context.zig").LspContext;
@@ -26,13 +27,15 @@ pub fn provideDiagnostics(
     errdefer diagnostics.deinit(allocator);
 
     // Parse the document using outcome to get better error info.
-    // ParseOutcome owns its own memory (Ok arena, Err msg) — defer
-    // deinit so the duped Err.msg returned after the parser arena is
-    // freed (lib.zig parseGqlOutcome) gets released.
-    var outcome = try geode.parseGqlOutcome(doc.text, allocator, .{});
-    defer outcome.deinit();
+    // LSP-F-02/#770: route through the per-document AST cache. The
+    // DocParse wrapper either borrows the session cache's outcome (no
+    // free) or owns a direct parse (freed by dp.deinit() — covering the
+    // duped Err.msg that lib.zig parseGqlOutcome returns after the
+    // parser arena is freed).
+    var dp = try ast_cache.parseDocument(allocator, doc, .{});
+    defer dp.deinit();
 
-    switch (outcome) {
+    switch (dp.outcome().*) {
         .Err => |err_info| {
             // Check for double-dash comments (Geode extension - supported but non-standard)
             if (err_info.has_double_dash_comment) {
@@ -81,9 +84,9 @@ pub fn provideDiagnostics(
             try diagnostics.append(allocator, diag);
         },
         .Ok => |result| {
-            // Arena cleanup is handled by the top-level
-            // `defer outcome.deinit()` above, which routes to
-            // ParseResult.deinit() for the .Ok variant.
+            // Arena cleanup: for an owned parse the top-level
+            // `defer dp.deinit()` routes to ParseResult.deinit(); for a
+            // cached parse the cache owns the arena — never freed here.
 
             // Check for double-dash comments (Geode extension - supported but non-standard)
             if (result.has_double_dash_comment) {

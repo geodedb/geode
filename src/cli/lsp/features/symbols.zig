@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const Document = @import("../document.zig").Document;
 const geode = @import("geode");
+const ast_cache = @import("../ast_cache.zig");
 
 // ============================================================================
 // Document Symbols Provider
@@ -18,19 +19,17 @@ pub fn provideDocumentSymbols(allocator: Allocator, doc: *const Document) ![]pro
     var symbols = std.ArrayList(protocol.DocumentSymbol).initCapacity(allocator, 16) catch return error.OutOfMemory;
     errdefer symbols.deinit(allocator);
 
-    // Try to parse the document
-    const outcome = geode.parseGqlOutcome(doc.text, allocator, .{}) catch {
+    // Try to parse the document.
+    // LSP-F-02/#770: routed through the per-document AST cache; dp owns
+    // (or borrows) the outcome — see ast_cache.DocParse.
+    var dp = ast_cache.parseDocument(allocator, doc, .{}) catch {
         // Fall back to text-based symbol extraction on parse errors
         return try extractSymbolsFromText(allocator, doc);
     };
+    defer dp.deinit();
 
-    switch (outcome) {
+    switch (dp.outcome().*) {
         .Ok => |result| {
-            defer {
-                var res = result;
-                res.deinit();
-            }
-
             // Extract symbols from the AST
             for (result.program.statements) |stmt| {
                 try extractSymbolsFromStatement(allocator, &symbols, doc, stmt);

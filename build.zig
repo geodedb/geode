@@ -5438,6 +5438,28 @@ pub fn build(b: *std.Build) void {
     const test_lsp_embedded_e2e_step = b.step("test-lsp-embedded-e2e", "Run LSP embedded-TCP listener end-to-end auth-rejection test");
     test_lsp_embedded_e2e_step.dependOn(&run_lsp_embedded_e2e_tests.step);
 
+    // LSP-F-02 / #770: per-document AST cache regression. Same wiring shape
+    // as the embedded-e2e block directly above — one `lsp_server` module
+    // rooted at src/cli/lsp/server.zig (its own test executable, so no
+    // file-diamond with lsp_tests), with `geode` + `schema_introspection`
+    // surfaced for server.zig's transitive imports. The test reaches the
+    // cache through server.zig's `pub const ast_cache` re-export and the
+    // Transport type via `@TypeOf` on the Server.transport field. libc for
+    // lspMonoNanos (std.c.clock_gettime) as in the e2e block.
+    const lsp_server_ast_cache_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    lsp_server_ast_cache_mod.addImport("geode", root_mod);
+    lsp_server_ast_cache_mod.addImport("schema_introspection", schema_introspection_mod);
+    lsp_server_ast_cache_mod.link_libc = true;
+
+    const lsp_ast_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_lsp_ast_cache.zig"), .target = target, .optimize = optimize });
+    lsp_ast_cache_test_mod.addImport("lsp_server", lsp_server_ast_cache_mod);
+    lsp_ast_cache_test_mod.link_libc = true;
+    const lsp_ast_cache_tests = b.addTest(.{ .root_module = lsp_ast_cache_test_mod });
+    const run_lsp_ast_cache_tests = b.addRunArtifact(lsp_ast_cache_tests);
+    shardDep(test_step, &run_lsp_ast_cache_tests.step, 1, test_shard_loads, test_shard_index);
+    const test_lsp_ast_cache_step = b.step("test-lsp-ast-cache", "LSP-F-02/#770: per-document AST cache for LSP parse paths");
+    test_lsp_ast_cache_step.dependOn(&run_lsp_ast_cache_tests.step);
+
     // GAP-0818: LSP feature providers must enforce caller tenant identity.
     // We root a single module at features.zig (exposed as `lsp_features`)
     // so the tests/ regression file can construct Document / SchemaProvider

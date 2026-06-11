@@ -8,6 +8,7 @@ const protocol = @import("../protocol.zig");
 const Document = @import("../document.zig").Document;
 const geode = @import("geode");
 const language_metadata = geode.language_metadata;
+const ast_cache = @import("../ast_cache.zig");
 
 /// GAP-0818: caller identity threaded into every feature provider.
 const LspContext = @import("../context.zig").LspContext;
@@ -31,16 +32,16 @@ pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, 
     if (language_metadata.findFunction(word) != null) return null;
     if (language_metadata.findType(word) != null) return null;
 
-    // Try parsing the document to find variable definitions
-    const outcome = geode.parseGqlOutcome(doc.text, allocator, .{}) catch return null;
+    // Try parsing the document to find variable definitions.
+    // LSP-F-02/#770: routed through the per-document AST cache; dp owns
+    // (or borrows) the outcome — see ast_cache.DocParse. This also fixes
+    // the pre-cache leak where an .Err outcome's duped msg was never
+    // released on this path.
+    var dp = ast_cache.parseDocument(allocator, doc, .{}) catch return null;
+    defer dp.deinit();
 
-    switch (outcome) {
+    switch (dp.outcome().*) {
         .Ok => |result| {
-            defer {
-                var res = result;
-                res.deinit();
-            }
-
             // Search for variable definition in the AST
             if (findVariableDefinition(allocator, result.program, word)) |def_info| {
                 // Convert text offset to line/column using document

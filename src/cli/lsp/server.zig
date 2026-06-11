@@ -12,6 +12,13 @@ const json_helpers = @import("json_helpers.zig");
 const auth_mod = @import("auth.zig");
 const schema_provider_mod = @import("schema_provider.zig");
 
+/// LSP-F-02/#770: per-document AST cache. `pub` so the out-of-tree
+/// regression (tests/test_lsp_ast_cache.zig, which roots an `lsp_server`
+/// named module at this file) can reach LspAstCache / DocParse / Document
+/// without rooting a second module at ast_cache.zig (Zig 0.16 forbids one
+/// file living in two modules of a compilation).
+pub const ast_cache = @import("ast_cache.zig");
+
 // Task 12: reach the unified authentication provider and the execution
 // context type via the `geode` named module. We deliberately do not pull
 // these via relative `../../security/authn.zig` / `../../execution.zig`
@@ -755,6 +762,14 @@ pub const Server = struct {
     /// hover / diagnostics handlers.
     exec_context: ?execution.ExecutionContext = null,
 
+    /// LSP-F-02/#770: per-document AST cache for the parsing feature
+    /// providers (diagnostics / definition / symbols). One per session;
+    /// installed as this thread's active cache at every message entry
+    /// point (see `activateAstCache`) and invalidated by
+    /// didOpen/didChange/didClose. Single-threaded by the run-loop
+    /// contract — no mutex (not a lock-table tier).
+    ast_cache: ast_cache.LspAstCache,
+
     /// F-01: minimum interval between successive diagnostic flushes
     /// for the same document. Real LSP clients debounce around
     /// 100 ms; 80 ms gives plenty of headroom.
@@ -786,6 +801,7 @@ pub const Server = struct {
             .documents = DocumentStore.init(allocator),
             .debounce_state = std.StringHashMap(DebounceState).init(allocator),
             .debounce_state_initialized = true,
+            .ast_cache = ast_cache.LspAstCache.init(allocator, ast_cache.DEFAULT_MAX_ENTRIES),
             .verifier = verifier,
             .allow_unauth = allow_unauth,
         };
@@ -810,6 +826,7 @@ pub const Server = struct {
             .documents = DocumentStore.init(allocator),
             .debounce_state = std.StringHashMap(DebounceState).init(allocator),
             .debounce_state_initialized = true,
+            .ast_cache = ast_cache.LspAstCache.init(allocator, ast_cache.DEFAULT_MAX_ENTRIES),
             .verifier = verifier,
             .allow_unauth = allow_unauth,
         };
@@ -819,6 +836,13 @@ pub const Server = struct {
         if (self.debounce_state_initialized) {
             self.debounce_state.deinit();
         }
+        // LSP-F-02: clear the thread's active-cache pointer if it still
+        // points at us (so a later direct provider call on this thread —
+        // e.g. a features_test running after a server_test in the same
+        // test binary — can never dereference a freed cache), then free
+        // every cached AST.
+        ast_cache.clearActiveIf(&self.ast_cache);
+        self.ast_cache.deinit();
         // Tear down session state in reverse order of allocation so the
         // DDL notifier never dispatches on a freed SchemaProvider.
         if (self.schema) |sp| {
@@ -1090,7 +1114,20 @@ pub const Server = struct {
         };
     }
 
+    /// LSP-F-02: install this session's AST cache as the thread's active
+    /// cache so the parsing feature providers (which only receive
+    /// `*const Document`) can consult it. Called at every entry point
+    /// that can reach a provider: `handleMessage` (the run-loop path),
+    /// `computeDefinition` (public helper tests drive directly), and
+    /// `sendDiagnostics` (also reached from the run-loop debounce flush).
+    /// A threadlocal store — cheap enough to repeat per message.
+    fn activateAstCache(self: *Server) void {
+        ast_cache.setActive(&self.ast_cache);
+    }
+
     pub fn handleMessage(self: *Server, message_text: []const u8) !void {
+        self.activateAstCache();
+
         // LSP-SEC-003: reject deeply nested or oversized payloads BEFORE
         // entering the recursive parser. checkJsonDepth is O(n), allocation-free,
         // and aware of in-string brace characters.
@@ -1724,6 +1761,8 @@ pub const Server = struct {
         const version = try json_helpers.castI32(try json_helpers.getInteger(text_document, "version"));
 
         try self.documents.open(uri, text, version);
+        // LSP-F-02: a re-open replaces the document — drop any cached AST.
+        self.ast_cache.invalidate(uri);
 
         // Send diagnostics
         try self.sendDiagnostics(uri);
@@ -1746,6 +1785,11 @@ pub const Server = struct {
             if (first != .object) return json_helpers.JsonError.InvalidParams;
             const text = try json_helpers.getString(first.object, "text");
             try self.documents.update(uri, text, version);
+            // LSP-F-02: the cached AST is for the old (version, text) —
+            // drop it eagerly so the next provider request re-parses.
+            // (The cache's version/text check would also catch this; the
+            // eager invalidate just frees the memory immediately.)
+            self.ast_cache.invalidate(uri);
 
             // F-01: defer diagnostic emission to the run-loop debounce
             // flush instead of firing eagerly on every keystroke.
@@ -1760,6 +1804,8 @@ pub const Server = struct {
         const uri = try json_helpers.getString(text_document, "uri");
 
         self.documents.close(uri);
+        // LSP-F-02: free the closed document's cached AST.
+        self.ast_cache.invalidate(uri);
     }
 
     fn handleHover(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
@@ -1901,6 +1947,9 @@ pub const Server = struct {
     /// or null if not found / unknown / keyword.
     /// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinitionWired"; ASPECT=VariableLookup; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
     pub fn computeDefinition(self: *Server, uri: []const u8, line: u32, character: u32) !?protocol.Location {
+        // LSP-F-02: public helper is also a provider entry point (tests
+        // drive it without going through handleMessage).
+        self.activateAstCache();
         const doc = self.documents.get(uri) orelse return null;
         return try features.provideDefinition(self.allocator, doc, line, character, self.callerContext());
     }
@@ -2317,6 +2366,9 @@ pub const Server = struct {
     }
 
     fn sendDiagnostics(self: *Server, uri: []const u8) !void {
+        // LSP-F-02: also reached from the run-loop debounce flush (not
+        // just handleMessage), so install the cache here too.
+        self.activateAstCache();
         // F-01: count every send for test introspection.
         self.diagnostics_send_count_for_test += 1;
         const doc = self.documents.get(uri) orelse return;

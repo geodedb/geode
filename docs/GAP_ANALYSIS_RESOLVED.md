@@ -6,7 +6,55 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: June 11, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: 10 open/partial actionable gaps (2 Critical, 5 High, 3 Medium, 0 Low). See docs/GAP_ANALYSIS.md.
+**Current Status**: 9 open/partial actionable gaps (2 Critical, 4 High, 3 Medium, 0 Low). See docs/GAP_ANALYSIS.md.
+
+## 2026-06-11 — LSP-F-02 / #770: per-document AST cache for LSP providers (Closed; GAP-0887b — GAP-0887 fully closed)
+
+**Resolution**: Closed via the AST cache keystone the LSP perf tracker was gated on. The
+three parsing feature providers — diagnostics, go-to-definition, document symbols — each
+re-ran `geode.parseGqlOutcome(doc.text, ...)` on every request; a didOpen followed by a
+definition and an outline request parsed the identical buffer three times (the parser is
+~100x the planner per `docs/performance/2026-04-20-query-bench/FINAL.md` §6).
+
+- **`src/cli/lsp/ast_cache.zig`** — `LspAstCache`, one per LSP session (owned by
+  `Server`), keyed by document URI with hits requiring (version, parse-options, text) to
+  all match (string-keyed → no hash-collision lane, unlike the server-side
+  `SharedAstCache`). Bounded at 16 documents with logical-tick LRU eviction.
+  Hit/miss/invalidation/eviction counters exposed via `stats()`.
+- **Memory ownership** — the zero-copy lexer makes AST lexeme slices point into the
+  source buffer, so each entry parses from its OWN heap copy of the text; a cached AST
+  never dangles when `Document.update` frees the old `doc.text`. Entries (text copy +
+  `ParseOutcome` + uri key) are freed on invalidation, staleness replacement, eviction,
+  and `deinit`. Parse-ERROR outcomes are cached too (the common mid-edit state).
+- **Provider hookup without signature churn** — providers receive only
+  `*const Document` and their signatures are pinned by many out-of-tree tests
+  (GAP-0818, e2e), so they call `ast_cache.parseDocument(...)`, which consults a
+  `threadlocal` active-cache pointer installed by `Server.handleMessage` /
+  `computeDefinition` / `sendDiagnostics` and falls back to a direct caller-owned parse
+  when no cache is active (e.g. tests driving a provider directly). `Server.deinit`
+  clears the pointer (`clearActiveIf`) so it can never dangle.
+- **Invalidation** — `handleDidOpen` / `handleDidChange` / `handleDidClose` invalidate
+  the URI eagerly; the (version, text) check on lookup makes even a missed invalidate a
+  cache miss, never a wrong answer.
+- **Threading** — single-threaded per session by the run-loop contract (the embedded TCP
+  listener spawns one thread per connection, each with its own `Server` + cache); the
+  threadlocal pointer means no cross-thread sharing and NO mutex (not a lock-table tier).
+- **Drive-by fix** — `provideDefinition` previously leaked the duped `Err.msg` on the
+  parse-error path (the outcome was never deinit'd there); the `DocParse` wrapper's
+  uniform `deinit` closes that.
+
+**Tests**: `tests/test_lsp_ast_cache.zig` (`zig build test-lsp-ast-cache`, 9/9) — direct
+cache miss→hit with pointer-stable outcome, version/text staleness, explicit invalidate,
+LRU eviction at the bound, parse-error caching, no-cache provider fallback, and the real
+request path: two successive `computeDefinition` calls on the same doc version = 1
+parse + 1 cache hit with identical answers, then a didChange driven through the real
+`handleMessage` notification path → invalidation → exactly one re-parse. Adjacent gates
+unchanged: `test-lsp` 260/260, `test-gap0818` 7/7, `test-gap0818-gate` 5/5,
+`test-gap0885-lsp` 14/14, `test-lsp-embedded-e2e` 1/1.
+
+**Downstream**: the LSP perf subtasks gated on this keystone — F-05/F-06/F-12/F-15/F-16
+(2026-05-06 LSP tracking archive) — are now unblocked; `docs/PERF_GAP_ANALYSIS.md` has
+zero open rows. With GAP-0887a (PERF-A, below) this closes GAP-0887 entirely.
 
 ## 2026-06-11 — PERF-A / #808: RLS row-rebuild elimination in match filtering (Closed; GAP-0887a)
 
