@@ -1181,3 +1181,75 @@ Verification at closure: cluster suite 7/7 green; 4-shard `zig build test`
 sweep green; named steps `test-raft-apply` (28/28),
 `test-match-create-counters`, `test-fts-apply-symmetry` (3/3),
 `test-cluster-coord-config` (6/6) green.
+
+---
+
+## ✅ FIX LANDED (2026-06-11) — root cause #5 transport wedge: stalled-stream liveness detector (pending real-k8s verification)
+
+The #5 silent-stall wedge ("leader restart strands the third node as a
+permanent stuck-candidate, zero transport errors on either side") is **fixed
+on `main`** (commits `6b4647c0` red-phase tests, `1637bcf8` fix).
+
+**Root cause (file:line confirmed):** the transport had exactly two recovery
+triggers, and the wedge provably escaped both:
+
+1. Hard-send-error eviction (`shouldEvictOnSendError` →
+   `evictPeerConnection` → next-send `connectWithTLS` FQDN re-resolve) never
+   fired, because `Transport.send` is fire-and-forget — a frame written onto
+   the long-lived `send_stream` of a stale/half-open QUIC connection buffers
+   locally and **returns success**. That is exactly why neither side logged
+   an error.
+2. The IP-change reaper (`maybeReconnectOnIpChange`, ~3s cadence) evicts only
+   when the *peer's* fresh FQDN resolution differs from `pc.resolved_ip`. The
+   strand victim (geode-2) never restarted — its IP never changed — so the
+   reaper declined to act every pass.
+
+**The fix — a third recovery trigger, sibling to the IP-change reaper, same
+~3s `clientPollLoop` cadence** (`src/distributed/raft_consensus.zig`):
+
+- `PeerConnection` gains `last_progress_ms` + `frames_sent` atomics, stamped
+  at connect time (stall clock resets on reconnect — no re-evict loop).
+- `Transport.send` increments `frames_sent` on every successful frame write
+  (send "success" is explicitly NOT trusted as liveness — that's the wedge).
+- `notePeerProgress(peer_id, now_ms)` — peer-id keyed, `peers_mutex` tier-3
+  only — is called from the inbound dispatch (`cluster.zig`
+  `applyDecodedRaftFrame`) **after** the cluster-token + nonce gates, so a
+  follower observing AppendEntries from the leader and a leader observing
+  AppendEntriesResponse from a follower both refresh the stall clock on the
+  OUTBOUND `PeerConnection` for that peer; a forged/replayed frame can never
+  hide a stall.
+- `shouldEvictOnStall` (pure, clock-injectable): evict iff `frames_sent > 0`
+  AND no progress for > `peer_stall_budget_ms` (3000 ms — several reaper
+  passes, ≤ the 5000 ms election-timeout ceiling, 60× the 50 ms heartbeat
+  cadence). Idle peers (nothing ever sent) are never evicted.
+- `maybeReconnectOnStall` logs at **warn** (the wedge is no longer silent)
+  and calls `evictPeerConnection`; the next send rebuilds via
+  `connectWithTLS`, which **re-resolves the FQDN** — identical mechanics to
+  the IP-change path. `maybeReconnectOnIpChange` and the send-error
+  classification are unchanged.
+
+**Verification at closure:** `zig build test-raft-stall-detector` 5/5
+(`tests/test_raft_stall_detector.zig` + in-file blocks; red-phase commit
+`6b4647c0` proved the stalled-peer and progress-stamp tests fail without the
+fix). Distributed suite green: `test-raft-per-peer-drain`,
+`test-cluster-3node-election`, `test-cluster-steady-state`,
+`test-cluster-propose-write`, `test-raft-envelope-roundtrip`,
+`test-drainready-dispatch`, `test-cluster-replicable-mutations` (7/7). Full
+debug build + `zig fmt` clean.
+
+**Residuals / follow-ups:**
+
+- **Real-k8s verification owed:** redo the 2026-06-11 reproduction (delete
+  the leader pod, assert the non-restarted third node reconverges to
+  follower within the election budget instead of parking as a candidate) on
+  the next dev build carrying `1637bcf8`. The in-process tests pin the
+  detector logic; only real k8s exercises the genuine silent-blackhole QUIC
+  topology.
+- **netns M9 phase** ("leader restart must not strand the third node",
+  ideally wedging the stream *without* an IP change so the stall reaper —
+  not the IP reaper — is what recovers it) — designed during triage,
+  deferred (needs root + minutes).
+- `client_writer_max_blocked_ns = 60s` dead-write budget
+  (`src/transport/quic.zig:274`) — secondary hardening, unchanged.
+
+prod remains UNTOUCHED (single-node 0.6.14).
