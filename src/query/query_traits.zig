@@ -128,7 +128,13 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
             if (i == t) continue;
         }
         switch (stmt.*) {
-            .StartTransaction, .Commit, .Rollback => {},
+            // A braced `START TRANSACTION { ... }` carries a parsed body
+            // whose statements (e.g. SESSION SET) escape this loop —
+            // treat it as effectful unless the body is absent.
+            .StartTransaction => |txn| {
+                if (txn.body != null) analysis.has_effectful_preamble = true;
+            },
+            .Commit, .Rollback => {},
             else => analysis.has_effectful_preamble = true,
         }
     }
