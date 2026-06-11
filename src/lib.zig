@@ -873,3 +873,17 @@ test "lib.parseGql basic" {
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);
 }
+
+// Quality #733 (2026-06-11): test-reference root for the hot-path inline
+// test backfill. Zig 0.16 only discovers `test` decls in the test ROOT file
+// plus files referenced from analyzed test blocks — a plain runtime
+// `@import` does NOT pull inline tests in (same rationale as the
+// `test { _ = ts_call_handlers; }` block in src/eval.zig). The block is
+// NAMED with the "#733" prefix so the `zig build test-quality733` filter
+// keeps it analyzed; without the name it would be filtered out and the
+// imports below would never enter test discovery.
+test "#733 hot-path inline test roots" {
+    _ = @import("gql/parser.zig");
+    _ = @import("execution.zig");
+    _ = @import("execution/match_operations.zig");
+}

@@ -32,7 +32,7 @@ endif
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
-.PHONY: transport-parity-smokes status-generate no-feature-flags zig-package-cache-check cluster-test
+.PHONY: transport-parity-smokes status-generate status-generate-test no-feature-flags zig-package-cache-check cluster-test
 .PHONY: loadtest-compare loadtest-save-baseline loadtest-save-all-baselines bench-timeseries
 # Note: geodetestlab and client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
@@ -124,6 +124,7 @@ help:
 	@echo "Utility targets:"
 	@echo "  make cert-gen    - Generate TLS certificates"
 	@echo "  make status-generate    - Generate docs/status.csv"
+	@echo "  make status-generate-test - Golden tests for the CANARY parser/generator"
 	@echo "  make no-feature-flags   - Check for compile-time flags"
 	@echo "  make match-ops-parity   - Run MATCH staged parity golden suite"
 	@echo "  make match-ops-bench    - Run MATCH staged benchmark campaign suite"
@@ -1092,6 +1093,14 @@ status-generate:
 		echo "tools/status_generate.py not found or not executable"; \
 		exit 1; \
 	fi
+
+# Quality #730: golden unit tests for the CANARY parser/generator tooling
+# (status_generate.py marker regex + strict STATUS filter, canary_lint.py
+# patterns). Run after any change to tools/status_generate.py or
+# tools/canary_lint.py; also wired as a pre-commit hook.
+status-generate-test:
+	@python3 tools/test_status_generate.py
+	@python3 tools/test_canary_lint.py
 
 # Check for compile-time feature flags
 no-feature-flags:

@@ -20,10 +20,9 @@ This file now contains only open/deferred quality gaps. Historical quality findi
 | #556 / #809 / #810 | Medium | Error handling | `catch unreachable` / `unreachable` hot-path sites need invariant audit. **High-risk tier CLOSED 2026-06-11 (GAP-0886b)**: all 12 code sites in security/storage/execution audited — every one carries a category-D invariant comment (error-set or buffer-size proof); none required rewrites. Remaining trees (types, index, tools, cli, migration, …) in the burn-down table below. | Tiered: high-risk tier Closed; remaining tiers Open |
 | #725 | Medium | Tooling/docs CI | Ruff, shellcheck, and markdownlint debt remains. | Open |
 | #736 / #815 | Medium | Concurrency | Lock-tier discipline and QUIC lock TODOs need enforcement/design. | Open |
-| #730 | Medium | Governance tooling | CANARY parser/generator regex coverage needs golden tests. | Open / partial |
-| #733 | Medium | Tests | Parser, match, and execution hot paths need inline/unit test backfill. | Open |
-| #806 | Medium | LSP maintainability | `features.zig` aggregates all LSP handlers in one large file. | Open |
 | Q9/Q13/Q15/Q17/Q18/Q19 | Medium/Low | Migration quality residuals | Migration monolith, API contract, docs, and ownership residuals remain from the re-audit. | Open |
+
+Closed 2026-06-11 (GAP-0886c): #806 (LSP `features.zig` split into `features/` modules with a re-export facade; all LSP steps green), #730 (golden end-to-end fixture tests for the CANARY parser/generator — `make status-generate-test` + `status-generate-selftest` pre-commit hook), #733 (hot-path inline test backfill: parser 8-level nesting + error path, `passesTenantFilter` unit contract incl. hierarchy, `validateGroupBy` error branch; `zig build test-quality733`). Details in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
 ## Error-swallow burn-down (#721 + #556/#809/#810)
 

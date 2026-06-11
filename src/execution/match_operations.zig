@@ -8551,3 +8551,85 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         return result;
     }
 }
+
+// ============================================================================
+// Quality #733 (2026-06-11): inline coverage for the tenant-filter hot path.
+// `passesTenantFilter` guards every full-scan MATCH row (GAP-0509/GAP-0846)
+// but had no inline tests — the regression cover lived only in the
+// integration suite (tests/test_gap0509_tenant_isolation.zig). These tests
+// pin the unit contract: admin pass-through, exact-match isolation
+// (fail-closed cross-tenant), and hierarchy-aware ancestor access with
+// sibling/upward denial. Run via `zig build test-quality733`.
+// ============================================================================
+
+test "#733 passesTenantFilter - admin pass-through and exact-match isolation" {
+    const allocator = std.testing.allocator;
+    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    defer props.deinit();
+    var no_labels = [_][]const u8{};
+    const node = graph_store.Node{
+        .id = 1,
+        .labels = no_labels[0..],
+        .properties = props,
+        .tenant_id = "tenant-a",
+    };
+
+    // No filter (admin / all-tenants context) -> always visible.
+    try std.testing.expect(passesTenantFilter(node, null));
+    // Exact tenant match -> visible (GAP-0509 fast path).
+    try std.testing.expect(passesTenantFilter(node, "tenant-a"));
+    // Cross-tenant with no hierarchy configured -> fail-closed.
+    try std.testing.expect(!passesTenantFilter(node, "tenant-b"));
+}
+
+test "#733 passesTenantFilter - hierarchy grants ancestor access, denies sibling and upward" {
+    const allocator = std.testing.allocator;
+
+    var engine = try rls.RLSEngine.init(allocator);
+    defer engine.deinit();
+    try engine.hierarchy_manager.addTenant("parent", null);
+    try engine.hierarchy_manager.addTenant("child", "parent");
+    try engine.hierarchy_manager.addTenant("sibling", "parent");
+
+    // Install the engine as the process-global expression-RLS engine the way
+    // server startup does (setGlobalExprRLSEngine in src/server/main.zig),
+    // saving and restoring whatever was there so this test cannot poison
+    // sibling tests in the same binary.
+    const prev = rls_types.getGlobalExprRLSEngine();
+    rls_types.setGlobalExprRLSEngine(@ptrCast(&engine));
+    defer rls_types.setGlobalExprRLSEngine(prev);
+
+    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    defer props.deinit();
+    var no_labels = [_][]const u8{};
+    const child_node = graph_store.Node{
+        .id = 2,
+        .labels = no_labels[0..],
+        .properties = props,
+        .tenant_id = "child",
+    };
+    const parent_node = graph_store.Node{
+        .id = 3,
+        .labels = no_labels[0..],
+        .properties = props,
+        .tenant_id = "parent",
+    };
+
+    // Parent (ancestor) session reads its descendant's rows (GAP-0846 grant).
+    try std.testing.expect(passesTenantFilter(child_node, "parent"));
+    // Child session must NOT read the parent's rows (no upward access).
+    try std.testing.expect(!passesTenantFilter(parent_node, "child"));
+    // Sibling tenants stay isolated (fail-closed).
+    try std.testing.expect(!passesTenantFilter(child_node, "sibling"));
+    // The edge variant shares the same contract.
+    const child_edge = graph_store.Edge{
+        .id = 1,
+        .from_id = 2,
+        .to_id = 3,
+        .label = "OWNS",
+        .properties = props,
+        .tenant_id = "child",
+    };
+    try std.testing.expect(passesTenantFilterEdge(child_edge, "parent"));
+    try std.testing.expect(!passesTenantFilterEdge(child_edge, "sibling"));
+}

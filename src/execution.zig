@@ -3575,3 +3575,40 @@ test "GAP-0525: PathIterator streaming with early termination" {
 }
 
 // Count matches of a graph pattern
+
+// ============================================================================
+// Quality #733 (2026-06-11): inline coverage for a hot-path error branch.
+// `validateGroupBy` enforces the GQL grouping rule (mixed aggregation +
+// non-aggregation projection requires an explicit GROUP BY) on every RETURN
+// evaluation, but its error.GroupingError branch had no inline test. These
+// tests construct the AST directly and pin both the reject and accept paths.
+// Run via `zig build test-quality733`.
+// ============================================================================
+
+test "#733 validateGroupBy - rejects mixed aggregation without GROUP BY, accepts valid forms" {
+    var count_callee = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var empty_args = [_]*ast.Expr{};
+    const agg_expr = ast.Expr{ .Call = .{ .callee = &count_callee, .args = empty_args[0..] } };
+    const non_agg_expr = ast.Expr{ .PropertyAccess = .{ .object = "n", .property = "name" } };
+
+    // Error path: count(...) projected next to n.name with NO GROUP BY.
+    var mixed_items = [_]ast.ReturnItem{
+        .{ .expr = agg_expr, .alias = null },
+        .{ .expr = non_agg_expr, .alias = null },
+    };
+    const mixed_ret = ast.ReturnClause{ .items = mixed_items[0..], .distinct = false };
+    try std.testing.expectError(error.GroupingError, validateGroupBy(mixed_ret, null));
+
+    // Happy path 1: the same projection IS legal once GROUP BY is explicit.
+    var group_keys = [_]ast.Expr{non_agg_expr};
+    const group_by = ast.GroupBy{ .keys = group_keys[0..] };
+    try validateGroupBy(mixed_ret, group_by);
+
+    // Happy path 2: aggregation-only projection needs no GROUP BY.
+    var agg_only_items = [_]ast.ReturnItem{.{ .expr = agg_expr, .alias = null }};
+    try validateGroupBy(.{ .items = agg_only_items[0..], .distinct = false }, null);
+
+    // Happy path 3: non-aggregation-only projection needs no GROUP BY.
+    var plain_items = [_]ast.ReturnItem{.{ .expr = non_agg_expr, .alias = null }};
+    try validateGroupBy(.{ .items = plain_items[0..], .distinct = false }, null);
+}

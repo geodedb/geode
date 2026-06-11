@@ -1246,6 +1246,20 @@ pub fn build(b: *std.Build) void {
     const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role) + GAP-0886 FLE flag invariant");
     gap0844_step.dependOn(&run_gap0844_tests.step);
 
+    // Quality #733 (2026-06-11): focused runner for the hot-path inline test
+    // backfill — deep-nesting parse in src/gql/parser.zig, the tenant-filter
+    // path (passesTenantFilter) in src/execution/match_operations.zig, and the
+    // validateGroupBy error branch in src/execution.zig. Those files cannot be
+    // module roots themselves (their `../` imports escape their directories),
+    // so this test reuses the geode lib module (root_mod, src/lib.zig) — whose
+    // import graph reaches all three files — and filters to the "#733" tests.
+    // Reusing root_mod avoids re-wiring its ~40 named imports and cannot trip
+    // the Zig 0.16 "file exists in modules X and X0" diamond (same module).
+    const quality733_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"#733"} });
+    const run_quality733_tests = b.addRunArtifact(quality733_tests);
+    const quality733_step = b.step("test-quality733", "Run quality #733 hot-path inline tests (parser deep nesting, passesTenantFilter, validateGroupBy)");
+    quality733_step.dependOn(&run_quality733_tests.step);
+
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
     custom_tests.root_module.addImport("auth_lib", auth_ext_mod);

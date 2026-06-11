@@ -4908,6 +4908,39 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
   - Verified: CI command `gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1` clean; negative test — planted secrets in `docs/NEW_DOC.md` and `.env` ARE flagged with the tightened config (previously masked). No pre-commit gitleaks hook exists (`.pre-commit-config.yaml`); enforcement is the `governance-gitleaks` CI job.
   - GitLab issue [#728](https://gitlab.com/devnw/codepros/geode/geode/-/issues/728) ready to close.
 
+### #806: LSP features.zig split into per-feature modules (Resolved 2026-06-11, GAP-0886c)
+
+- **Original Gap:** `src/cli/lsp/features.zig` aggregated all LSP feature providers (diagnostics, hover, completion, definition, symbols, signature help, references, semantic tokens, formatting) in one 3,175-line file — #806 (Medium, LSP maintainability).
+- **Resolved date:** 2026-06-11
+- **Resolution evidence:**
+  - Mechanical split into 10 modules under `src/cli/lsp/features/`: `common.zig` (startsWithCI + GQL metadata lists), `diagnostics.zig`, `hover.zig`, `completion.zig`, `definition.zig`, `symbols.zig`, `signature_help.zig`, `references.zig`, `semantic_tokens.zig`, `formatting.zig`. `features.zig` is now a ~90-line re-export facade preserving the full public API (all `provide*` functions, `FormattingOptions`, `startsWithCI`, and the GAP-0818 re-exports `LspContext`/`Protocol`/`DocumentType`/`SchemaProviderType`).
+  - All GAP-0818 tenant gates (`schemaTenantMatches` shadows in diagnostics/hover/completion) and every CANARY marker moved verbatim with their code; `docs/status.csv` regenerated (File-column moves only, row count unchanged at 5,085).
+  - Module-diamond safe: the facade stays the root of the `lsp_features` named module (build.zig wiring untouched); the inline formatting/symbols/signature-help/references/semantic-tokens tests moved into their modules and stay discovered via a named `test` block in the facade.
+  - Dead `suppressUnused` helper deleted during the move.
+  - Verified green: `zig build` PASS; `test-lsp` 260/260 (259 baseline + facade aggregator block), `test-lsp-features` 112/112, `test-gap0818` 7/7, `test-gap0818-gate` 5/5, `test-gap0885-lsp` 14/14, `test-lsp-embedded-e2e` 1/1.
+  - GitLab issue [#806](https://gitlab.com/devnw/codepros/geode/geode/-/issues/806) ready to close.
+
+### #730: CANARY parser/generator golden tests (Resolved 2026-06-11, GAP-0886c)
+
+- **Original Gap:** The CANARY marker regex in `tools/status_generate.py` (and the canary_lint patterns) lacked golden-fixture coverage — regressions like GAP-0539 (newline straddle, COMPLETE-status pollution) were only caught after corrupting `docs/status.csv` — #730 (Medium, Governance tooling, partial).
+- **Resolved date:** 2026-06-11
+- **Resolution evidence:**
+  - `tools/test_status_generate.py` gained `TestGoldenFixtureEndToEnd`: an ~11-marker-line fixture tree (basic/TEST=/multi-TEST+BENCH/escaped-quote FEATURE, all six VALID_STATUS values, the GAP-0539 Zig-test-decl straddle shape, a malformed missing-OWNER marker, the `STATUS=COMPLETE` reject case, plus .md-scanned/.txt-skipped extension checks) run through the REAL pipeline (`find_canary_markers` + `generate_status_csv` strict) and compared against an exact expected CSV row list. The reject case asserts `STATUS_GEN_WARN`/`bad_status='COMPLETE'`/`STATUS_GEN_SUMMARY accepted=8 rejected=1` on stderr. Fixture lines are assembled from string fragments so the test file itself can never be scanned as real markers.
+  - Wired into `make status-generate-test` (runs `test_status_generate.py` + `test_canary_lint.py`; 7 + 21 tests) and a new `status-generate-selftest` pre-commit hook (fires on changes to `tools/(status_generate|test_status_generate|canary_lint|test_canary_lint).py`, pre-commit + pre-push stages, next to the existing `status-csv-check` hook).
+  - GitLab issue [#730](https://gitlab.com/devnw/codepros/geode/geode/-/issues/730) ready to close.
+
+### #733: Hot-path inline test backfill (parser / tenant filter / execution error path) (Resolved 2026-06-11, GAP-0886c)
+
+- **Original Gap:** Parser, match, and execution hot paths lacked inline/unit tests — and the three existing inline tests in `src/gql/parser.zig` were DORMANT (they used `try std.heap.ArenaAllocator.init(...)`, a compile error in Zig 0.16, and were never analyzed by any test root) — #733 (Medium, Tests).
+- **Resolved date:** 2026-06-11
+- **Resolution evidence:**
+  - `src/gql/parser.zig`: fixed the 3 dormant tests; added `"#733 parser - 8-level nested map/list literal builds the exact AST shape"` (walks every level of `{l1:{l2:{l3:{l4:[1,{l5:{l6:[{l7:{l8:42}}]}}]}}}}` asserting Map/ArrayLit/Int structure) and `"#733 parser - unterminated nested map literal is a clean parse error"` (`error.UnexpectedToken`).
+  - `src/execution/match_operations.zig`: first inline tests in the file — `"#733 passesTenantFilter - admin pass-through and exact-match isolation"` (null filter passes, exact match passes, cross-tenant fail-closed) and `"#733 passesTenantFilter - hierarchy grants ancestor access, denies sibling and upward"` (constructs a REAL `rls.RLSEngine` with a parent/child/sibling `HierarchyManager`, installs it via `setGlobalExprRLSEngine` with save/restore, asserts the GAP-0846 contract for both node and edge variants).
+  - `src/execution.zig`: `"#733 validateGroupBy - rejects mixed aggregation without GROUP BY, accepts valid forms"` — pins the `error.GroupingError` branch plus three accept paths (explicit GROUP BY, aggregation-only, non-aggregation-only) on directly-constructed AST.
+  - New focused runner `zig build test-quality733` (6/6 PASS): the three files cannot be module roots (`../` imports escape their directories), so the step reuses the geode lib module (`root_mod`) with a `"#733"` filter, fed by a named test-reference block in `src/lib.zig` (Zig 0.16 does not discover tests through plain runtime imports — same rationale as the `src/eval.zig` ts_call_handlers block).
+  - Adjacent regressions green: `test-gap0509-tenant-isolation` 4/4.
+  - GitLab issue [#733](https://gitlab.com/devnw/codepros/geode/geode/-/issues/733) ready to close.
+
 ### F-04: Buffered stdin reader for LSP transport (Resolved 2026-05-06)
 
 - **Original Gap:** LSP transport read loop made one syscall per byte; F-04 (PerfScore 100, P0).
