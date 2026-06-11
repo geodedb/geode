@@ -2622,18 +2622,23 @@ pub const Parser = struct {
         // CANARY: REQ=REQ-GQL-PATH-MODES-003; FEATURE="GQL Path Mode Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
         // Check for path mode specifier (WALK, TRAIL, ACYCLIC, SIMPLE) before the pattern
         var path_mode: ast.PathMode = .walk;
+        var path_mode_explicit = false;
         if (self.cur.kind == .WALK) {
             self.advance();
             path_mode = .walk;
+            path_mode_explicit = true;
         } else if (self.cur.kind == .TRAIL) {
             self.advance();
             path_mode = .trail;
+            path_mode_explicit = true;
         } else if (self.cur.kind == .ACYCLIC) {
             self.advance();
             path_mode = .acyclic;
+            path_mode_explicit = true;
         } else if (self.cur.kind == .SIMPLE) {
             self.advance();
             path_mode = .simple;
+            path_mode_explicit = true;
         }
 
         while (true) {
@@ -2669,6 +2674,7 @@ pub const Parser = struct {
                             modified_chain.name = chain_name;
                             modified_chain.is_shortest = true;
                             modified_chain.path_mode = path_mode;
+                            modified_chain.path_mode_explicit = path_mode_explicit;
                             try chains.append(self.arena.allocator(), modified_chain);
                         }
 
@@ -2774,7 +2780,7 @@ pub const Parser = struct {
             if (owned_hops.len == 0) {
                 head = left;
             }
-            try chains.append(self.arena.allocator(), .{ .name = chain_name, .hops = owned_hops, .head = head, .path_mode = path_mode });
+            try chains.append(self.arena.allocator(), .{ .name = chain_name, .hops = owned_hops, .head = head, .path_mode = path_mode, .path_mode_explicit = path_mode_explicit });
             // comma-separated chains
             if (self.cur.kind != .comma) break;
             self.advance();

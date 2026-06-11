@@ -651,3 +651,49 @@ test "GAP-0883 usage-guide fixture: unionFind reports a single connected compone
     try testing.expectEqual(@as(usize, 8), comp.count());
     try testing.expectEqual(@as(usize, 1), try countDistinct(testing.allocator, &comp));
 }
+
+// GAP-0514 P3 (REQ-GQL-GRAPH-STATS-001): the graph-statistics procedures
+// (density / diameter / mean distance / triangle count / global clustering)
+// dispatch through CALL and return real values for the two-triangle fixture.
+test "GAP-0514 P3: graph statistics procedures return real values through CALL" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+    _ = try seedTwoTriangles(&h);
+
+    // Density: 7 directed edges over 6*(6-1) ordered pairs = 7/30.
+    var dres = try h.runQuery("CALL algo.density()");
+    defer dres.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), dres.rows.len);
+    const density = try valToF64(dres.rows[0][0]);
+    try testing.expectApproxEqAbs(@as(f64, 7.0 / 30.0), density, 0.001);
+
+    // Diameter: longest shortest path is finite and at least the bridge span.
+    var dia = try h.runQuery("CALL algo.diameter()");
+    defer dia.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), dia.rows.len);
+    const diameter = try valToF64(dia.rows[0][0]);
+    try testing.expect(std.math.isFinite(diameter));
+    try testing.expect(diameter >= 1);
+
+    // Mean distance: positive and no larger than the diameter.
+    var md = try h.runQuery("CALL algo.meandistance()");
+    defer md.deinit(aa);
+    const mean = try valToF64(md.rows[0][0]);
+    try testing.expect(std.math.isFinite(mean));
+    try testing.expect(mean >= 1);
+    try testing.expect(mean <= diameter);
+
+    // Triangle count: at least the two seeded 3-cycles register as triangles.
+    var tc = try h.runQuery("CALL algo.trianglecount()");
+    defer tc.deinit(aa);
+    const triangles = try valToF64(tc.rows[0][0]);
+    try testing.expect(triangles >= 1);
+
+    // Global clustering coefficient: a valid ratio in [0, 1].
+    var gc = try h.runQuery("CALL algo.globalclustering()");
+    defer gc.deinit(aa);
+    const coeff = try valToF64(gc.rows[0][0]);
+    try testing.expect(std.math.isFinite(coeff));
+    try testing.expect(coeff >= 0 and coeff <= 1);
+}

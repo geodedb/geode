@@ -201,3 +201,83 @@ test "GAP-0514 PERF-P1-001: BFS zero-length plus single hop" {
         else => return error.UnexpectedReturnType,
     }
 }
+
+/// Build a directed triangle a->b->c->a of `Tri` nodes. Returns ids.
+fn buildTriangle(allocator: std.mem.Allocator) ![3]u64 {
+    const store = graph_store.getGlobalStore(allocator);
+    const labels = [_][]const u8{"Tri"};
+    var ids: [3]u64 = undefined;
+    for (0..3) |i| {
+        ids[i] = try store.createNode(&labels);
+        try store.setNodeProperty(ids[i], "idx", .{ .Int = @intCast(i) });
+    }
+    _ = try store.createEdge(ids[0], ids[1], "E");
+    _ = try store.createEdge(ids[1], ids[2], "E");
+    _ = try store.createEdge(ids[2], ids[0], "E");
+    return ids;
+}
+
+fn countQuery(h: *Harness, query: []const u8) !i64 {
+    var res = try h.runQuery(query);
+    defer res.deinit(h.arena.allocator());
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    return switch (res.rows[0][0]) {
+        .Int => |c| c,
+        else => error.UnexpectedValueType,
+    };
+}
+
+// GAP-0514 P3 (REQ-GQL-PATH-MODES-004): WALK / TRAIL / ACYCLIC filtering on a
+// directed 3-cycle, where the three modes produce three DIFFERENT path counts:
+//   each start node has exactly one outgoing edge, so per start node:
+//   WALK *1..4    -> lengths 1,2,3,4 all valid            = 4 paths (12 total)
+//   TRAIL *1..4   -> length 4 reuses the first edge        = 3 paths (9 total)
+//   ACYCLIC *1..4 -> length 3 revisits the start node      = 2 paths (6 total)
+test "GAP-0514 P3: WALK vs TRAIL vs ACYCLIC path modes filter a directed cycle" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+    _ = try buildTriangle(allocator);
+
+    const walk = try countQuery(&h, "MATCH WALK (a:Tri)-[:E*1..4]->(b:Tri) RETURN count(*) AS c");
+    const trail = try countQuery(&h, "MATCH TRAIL (a:Tri)-[:E*1..4]->(b:Tri) RETURN count(*) AS c");
+    const acyclic = try countQuery(&h, "MATCH ACYCLIC (a:Tri)-[:E*1..4]->(b:Tri) RETURN count(*) AS c");
+
+    try std.testing.expectEqual(@as(i64, 12), walk);
+    try std.testing.expectEqual(@as(i64, 9), trail);
+    try std.testing.expectEqual(@as(i64, 6), acyclic);
+}
+
+// GAP-0514 P3 (REQ-GQL-VARLEN-REVERSE-001): reverse (<-) variable-length
+// traversal honors edge direction. In a chain 0->1->...->9, nothing points
+// INTO node 0, while node 3 is reachable backwards from exactly 3 nodes.
+test "GAP-0514 P3: reverse variable-length traversal honors direction" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+    _ = try buildChain(allocator, 10);
+
+    const into_head = try countQuery(&h, "MATCH (a:Chain {idx: 0})<-[:NEXT*1..3]-(b:Chain) RETURN count(*) AS c");
+    try std.testing.expectEqual(@as(i64, 0), into_head);
+
+    const into_three = try countQuery(&h, "MATCH (a:Chain {idx: 3})<-[:NEXT*1..3]-(b:Chain) RETURN count(*) AS c");
+    try std.testing.expectEqual(@as(i64, 3), into_three);
+
+    // Forward sanity from the same anchor: 0 outgoing... idx 3 -> 4,5,6.
+    const out_of_three = try countQuery(&h, "MATCH (a:Chain {idx: 3})-[:NEXT*1..3]->(b:Chain) RETURN count(*) AS c");
+    try std.testing.expectEqual(@as(i64, 3), out_of_three);
+}
+
+// GAP-0514 P3 (REQ-PERF-CATALOG-FASTPATH-001): repeated ensureCatalogInstance
+// calls return the SAME instance — the second call takes the atomic-load fast
+// path (the harness already initialized the singleton in init()).
+test "GAP-0514 P3: ensureCatalogInstance fast path returns the same singleton" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const first = try execution.ensureCatalogInstance(allocator);
+    const second = try execution.ensureCatalogInstance(allocator);
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(h.ctx.catalog, first);
+}

@@ -5035,6 +5035,21 @@ fn applyFinalOrderAndDistinct(
     }
 }
 
+/// GAP-0514 P3: resolve the runtime path mode for variable-length traversal.
+/// Explicit WALK/TRAIL/ACYCLIC/SIMPLE keywords are honored (previously the
+/// parsed mode was DROPPED — both PathIterator call sites hardcoded .acyclic,
+/// so MATCH TRAIL/WALK silently executed with acyclic semantics). A bare
+/// pattern keeps the engine's historical ACYCLIC default: ISO GQL's default
+/// WALK semantics cannot terminate on cyclic graphs with unbounded
+/// quantifiers, and the existing query corpus depends on the acyclic
+/// default's result shape.
+fn effectivePathMode(q: ast.Query) ast.PathMode {
+    if (q.match.chains.len == 0) return .acyclic;
+    const chain = q.match.chains[0];
+    if (!chain.path_mode_explicit) return .acyclic;
+    return chain.path_mode;
+}
+
 /// Execute variable-length path traversal for a given left node.
 /// Expands BFS paths from the left node and applies right-node filters,
 /// WHERE/FILTER clauses, and row building for each valid path.
@@ -5061,13 +5076,14 @@ fn executeVariableLengthPathTraversal(
     has_with: bool,
     items: []const ast.ReturnItem,
     limit: ?usize,
+    path_mode: ast.PathMode,
 ) !void {
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
     // Stream paths via PathIterator instead of materializing all paths upfront
     const min_len = var_len_min orelse 0;
     const max_len = var_len_max;
 
-    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, .acyclic);
+    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, path_mode);
     defer path_iter.deinit();
 
     // Process each path found
@@ -7012,7 +7028,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Stream variable-length paths from this starting node via PathIterator
-                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, .acyclic);
+                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, effectivePathMode(q));
                     defer path_iter.deinit();
 
                     // Collect all target nodes from paths (deduplicated by node ID)
@@ -8033,7 +8049,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
                     else
                         null;
-                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint);
+                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
                     try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);

@@ -138,7 +138,7 @@ pub const executeLeidenCommunities = centrality_algorithms.executeLeidenCommunit
 pub const executeArticulationPoints = centrality_algorithms.executeArticulationPoints;
 pub const executeBridges = centrality_algorithms.executeBridges;
 pub const executeBiconnectedComponents = centrality_algorithms.executeBiconnectedComponents;
-// CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=ReExport; STATUS=IMPL; OWNER=execution; UPDATED=2026-04-01
+// CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=ReExport; STATUS=TESTED; TEST="GAP-0514 P3: graph statistics procedures return real values through CALL"; OWNER=execution; UPDATED=2026-06-11
 pub const executeGraphDensity = centrality_algorithms.executeGraphDensity;
 pub const executeGraphDiameter = centrality_algorithms.executeGraphDiameter;
 pub const executeMeanDistance = centrality_algorithms.executeMeanDistance;
@@ -282,7 +282,7 @@ var catalog_instance_mutex = std.Io.Mutex.init;
 /// All execution code accesses catalog via context.catalog, not by calling this function
 pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
     // GAP-0203: Fast path - atomic load avoids mutex lock when already initialized (99.99% of calls)
-    // CANARY: REQ=REQ-PERF-CATALOG-FASTPATH-001; FEATURE="CatalogFastPath"; ASPECT=AtomicLoad; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-PERF-CATALOG-FASTPATH-001; FEATURE="CatalogFastPath"; ASPECT=AtomicLoad; STATUS=TESTED; TEST="GAP-0514 P3: ensureCatalogInstance fast path returns the same singleton"; OWNER=execution; UPDATED=2026-06-11
     if (@atomicLoad(?*catalog_mod.Catalog, &global_catalog_instance, .acquire)) |instance| {
         return instance;
     }
@@ -483,7 +483,7 @@ pub const ExecutionContext = struct {
     // CANARY: REQ=REQ-PERF-PLAN-LIFECYCLE-004; FEATURE="PlanCacheLifecycle"; ASPECT=ExecutionHints; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
     // Issue #452: Optimizer hints from shared plan cache for advisory index/scan selection
     optimizer_hints: ?*const @import("server/query_plan_cache.zig").OptimizerHints = null,
-    // CANARY: REQ=REQ-DSN-GRAPH-BIND-001; FEATURE="DSNGraphBinding"; ASPECT=ContextFlag; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-25
+    // CANARY: REQ=REQ-DSN-GRAPH-BIND-001; FEATURE="DSNGraphBinding"; ASPECT=ContextFlag; STATUS=TESTED; TEST=geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=engine; UPDATED=2026-06-11
     // When true, the session is bound to a specific graph via the DSN graph name field;
     // USE GRAPH commands must be rejected to preserve connection-level graph isolation.
     graph_bound: bool = false,
@@ -1887,7 +1887,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
-            // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-31
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=TESTED; TEST=geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=engine; UPDATED=2026-06-11
             // When session is bound via DSN, allow USE GRAPH if it matches the
             // bound graph (idempotent no-op). Reject only if switching to a
             // different graph.
@@ -2459,7 +2459,7 @@ pub const PathIterator = struct {
         return self.pending_results.items.len - self.pending_front;
     }
 
-    // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathModeFilter; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathModeFilter; STATUS=TESTED; TEST="GAP-0514 P3: WALK vs TRAIL vs ACYCLIC path modes filter a directed cycle"; OWNER=engine; UPDATED=2026-06-11
     // PERF-P2-001: O(1) hash set lookups instead of O(d) linear scans.
     fn shouldSkipByPathMode(self: *const PathIterator, current_path: *const VariableLengthPath, edge_id: u64, next_node_id: u64) bool {
         switch (self.path_mode) {
@@ -2519,7 +2519,7 @@ pub const PathIterator = struct {
     /// Advance BFS until a qualifying path is found, return it.
     /// Caller owns the returned VariableLengthPath. Returns null when exhausted.
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
-    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST="GAP-0514 P3: reverse variable-length traversal honors direction"; OWNER=engine; UPDATED=2026-06-11
     pub fn next(self: *PathIterator) !?VariableLengthPath {
         if (self.done) return null;
 

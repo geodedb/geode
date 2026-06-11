@@ -6577,6 +6577,11 @@ pub fn build(b: *std.Build) void {
     const gap0514_bfs_tests = b.addTest(.{ .root_module = gap0514_bfs_test_mod });
     const run_gap0514_bfs_tests = b.addRunArtifact(gap0514_bfs_tests);
     shardDep(test_step, &run_gap0514_bfs_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: named step — also carries the path-mode
+    // (WALK/TRAIL/ACYCLIC), reverse variable-length traversal, and catalog
+    // fast-path tests added in P3.
+    const path_iterator_step = b.step("test-path-iterator", "Run PathIterator regression tests (BFS dequeue, path modes, reverse traversal, catalog fast path)");
+    path_iterator_step.dependOn(&run_gap0514_bfs_tests.step);
 
     // GAP-0514 Phase 1A: graph_store.zig regression tests
     const gap0514_gs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_graph_store_regression.zig"), .target = target, .optimize = optimize });
