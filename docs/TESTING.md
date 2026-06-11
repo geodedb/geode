@@ -10,14 +10,8 @@ Geode maintains comprehensive test coverage across multiple testing frameworks a
 
 ### geodetestlab Integration Tests
 
-- **Status**: See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
-- **Coverage by Category**:
-  - Authentication & Authorization: 100%
-  - User Management: 100%
-  - Role & Policy Management: 100%
-  - Query Execution: 100%
-  - Server Operations: 100%
-  - CLI Commands: 99%
+- **Status**: See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the current canonical test baseline. A fresh `../geode-test-harness` integration run is owed; the last dated snapshot (~97%, 1644/1688) is historical.
+- **Historical per-category pass rates** (from that dated snapshot — pass rate of the specs in each category at that time, not code coverage, and not a current claim): authentication/authorization, user management, role/policy management, query execution, and server operations passed all specs in their categories; CLI commands passed ~99%. Re-run the harness for current numbers.
 
 ### Regression Test Suites
 

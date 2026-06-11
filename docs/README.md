@@ -4,7 +4,7 @@
 
 ## Overview
 
-Geode is a feature-complete single-tenant graph database with 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use.
+Geode is a single-tenant graph database with strong ISO/IEC 39075:2024 GQL alignment — 96/96 named cases in its ISO conformance suite (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
 
 ## Directory Structure
 
@@ -84,18 +84,14 @@ docs/
 
 ### Quality Metrics
 
-- **97.4% Test Pass Rate** (1644/1688 tests passing)
-- **100% GQL Compliance** (70/70 ISO tests)
-- **1,735 CANARY Markers** tracking 2,190+ requirements
+- **Local test baseline**: see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical; expected ~175/179 named `zig build test-*` steps pass)
+- **Integration (geodetestlab)**: fresh harness run owed; last dated snapshot ~97% (1644/1688, historical)
+- **ISO conformance suite**: 96/96 named cases (`zig build test-iso-conformance`; parse-only scope); executed-query `gql_conformance` suite 20/20 (`zig build test-gql-conformance`)
+- **5,094 CANARY Markers** (223 IMPL / 4.4%; run `make status-generate`)
 
 ### Known Issues
 
-See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
-
-- Setup data persistence (34 tests affected)
-- WITH + aggregation + WHERE (server hang)
-- CASE expressions in MATCH context
-- 67 remaining test failures
+See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the current canonical test baseline and per-step failure evidence, and [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for open gaps.
 
 ## Reference Documents
 

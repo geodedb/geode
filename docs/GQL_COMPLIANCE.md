@@ -1,13 +1,13 @@
 # GQL ISO/IEC 39075:2024 Compliance Guide
 
-Geode passes **70/70 cases of its ISO/IEC 39075:2024 GQL conformance suite** (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
+Geode passes **96/96 cases of its ISO/IEC 39075:2024 GQL conformance suite** (parse-only scope) (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
 
 ## 📊 Compliance Overview
 
-- **Conformance suite**: 70/70 cases pass (the named `tests/gql_iso_conformance.zig` suite)
+- **Conformance suite**: 96/96 cases pass (the named `tests/gql_iso_conformance.zig` suite; parse-only scope — it asserts the parser accepts/rejects each form, not executed-query results)
 - **Standard**: ISO/IEC 39075:2024 Graph Query Language
 - **Scope**: this is the curated conformance suite, not exhaustive ISO coverage; see residual limits in this guide
-- **How to run**: reachable via the sharded `zig build test` aggregate; note that the monolithic aggregate is currently blocked by a protobuf union-submessage limitation (see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md)) — re-run after that unblocks to refresh this number
+- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 96/96 verified 2026-06-11). The executed-query `gql_conformance` harness suite is 20/20 after GAP-0892 (`zig build test-gql-conformance`)
 - **Last Updated**: 2026-06-10 (GAP-0861 claim rebaseline)
 
 ## ✅ Fully Supported Features
@@ -458,18 +458,17 @@ The compliance suite tests these areas:
 ✅ MATCH keyword
 ✅ WHERE keyword
 ✅ CREATE keyword
-... (70 passing tests)
+... (96 passing tests)
 
 ==================================================
 COMPLIANCE SUMMARY
 ==================================================
-✅ Passed: 70
+✅ Passed: 96
 ❌ Failed: 0
-📊 Total:  70
-📈 Success Rate: 100%
+📊 Total:  96
 
-🟢 FULL COMPLIANCE
-Geode implements all core GQL features per ISO/IEC 39075:2024
+🟢 Named conformance suite green (parse-only scope)
+See residual limits in this guide — not a blanket full-ISO claim
 ```
 
 ## 📚 Additional Resources
@@ -516,4 +515,4 @@ All core GQL features are now fully implemented. Future work focuses on:
 3. **Extended Compliance**: Support for future GQL standard extensions
 4. **GPU Acceleration**: Hardware-accelerated graph traversal operations
 
-Geode's 70/70 ISO conformance-suite pass rate and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.
+Geode's 96/96 ISO conformance-suite pass rate (parse-only scope) and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.

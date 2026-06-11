@@ -2,12 +2,12 @@
 
 ## Overview
 
-Geode is a feature-complete single-tenant graph database server with industry-leading GQL compliance. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
+Geode is a single-tenant graph database server with strong ISO GQL alignment. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
 
-**Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production.
-**GQL Compliance**: 100% (70/70 ISO/IEC 39075:2024 tests)
-**Test Coverage**: 97.4% (1644/1688 geodetestlab tests)
-**CANARY Markers**: 2,200+ governance markers tracking 2,190+ requirements
+**Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
+**ISO Conformance Suite**: 96/96 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+**Test Baseline**: local per-step baseline in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical); a fresh geodetestlab harness run is owed — the prior ~97% (1644/1688) is a dated historical snapshot
+**CANARY Markers**: 5,094 governance markers (223 IMPL / 4.4%; run `make status-generate`)
 
 ---
 
@@ -491,7 +491,7 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 
 **Planning Phases**:
 
-1. **Parse**: GQL → AST (100% ISO compliance)
+1. **Parse**: GQL → AST (96/96 named ISO conformance-suite cases; parse-only scope)
 2. **Validate**: Type checking, schema validation
 3. **Rewrite**: Predicate pushdown, constant folding
 4. **Enumerate**: Generate alternative plans
@@ -1405,7 +1405,7 @@ key_name = "geode-master-key"
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: October 2025
+**Document Version**: 1.1
+**Last Updated**: 2026-06-11 (GAP-0864 claim rebaseline)
 **Maintainer**: Geode Core Team
-**Status**: Production Ready
+**Status**: Development Ready (single-tenant) — see [Known Limitations](../CLAUDE.md#known-limitations) and [GAP_ANALYSIS.md](GAP_ANALYSIS.md)

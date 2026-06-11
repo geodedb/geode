@@ -276,7 +276,7 @@ pub const MaterializedViewManager = struct {
 - ✅ **Error Handling**: Graceful error handling for all failure scenarios with specific error types
 - ✅ **Performance**: Optimized for large-scale view management (10,000+ views)
 - ✅ **Integration**: Seamless integration with existing distributed infrastructure
-- ✅ **Test Coverage**: 23 total tests (15 unit + 8 integration) with 100% coverage
+- ✅ **Tests**: 23 total tests (15 unit + 8 integration); see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the current baseline
 - ✅ **Scalability**: Tested with up to 50 concurrent views and rapid operations
 
 ## Performance Characteristics

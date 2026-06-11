@@ -1,6 +1,6 @@
 # TDE File-Level Encryption
 
-**Status**: Production Ready
+**Status**: Implemented (single-tenant scope) — see [GAP_ANALYSIS.md](GAP_ANALYSIS.md) and [CLAUDE.md Known Limitations](../CLAUDE.md#known-limitations)
 **Requirement**: REQ-TDE-FILELEVEL-001
 **Last Updated**: January 28, 2026
 

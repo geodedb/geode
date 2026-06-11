@@ -155,9 +155,18 @@ create/revoke) are wired at startup in `server_init`.
    returns an acknowledgement noting the assignment is not yet structurally
    tracked on the user record.
 
-3. **RLS policy persistence is not yet implemented.** `CREATE POLICY` grammar and
-   `g_policies` persistence are tracked separately — use `CALL geode.fle.*` for
-   FLE management and the RLS engine API for row-level security until that lands.
+3. **Policy DDL persistence is implemented (GAP-0858, closed 2026-06-09).**
+   `CREATE POLICY` / `ALTER POLICY ... SET ENABLED true|false` /
+   `ALTER POLICY ... RENAME TO ...` / `DROP POLICY` write through to the
+   HMAC-chained `__geode_security` graph (`AuthGraphManager.upsertPolicyNode`;
+   hooks wired in `server_init.wireGpsPolicyHooks`) and survive restart — the
+   `PolicyCatalog` (`src/security/policy_catalog.zig`) is re-hydrated from the
+   store at startup. Restart regression:
+   `tests/test_gap0858_alter_policy_persist.zig` (`zig build test-gap0858`)
+   asserts enable/disable and rename survive re-hydration with the HMAC chain
+   green. Residual: the GQL → bytecode pipeline for *expression* RLS policy
+   compilation is still manual (pre-compiled `CompiledExpression` pinning) —
+   see the RLS notes in [`../CLAUDE.md`](../CLAUDE.md) Known Limitations.
 
 4. **The BIND-time per-graph grant check is additive (permissive in default
    config).** In the default single-tenant configuration every authenticated user

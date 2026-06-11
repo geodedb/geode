@@ -1,7 +1,7 @@
 # Advanced Security Features - October 2025
 
 **Last Updated**: January 2026 (GAP-0111 fix)
-**Status**: Production Ready
+**Status**: Implemented (single-tenant scope) — see [GAP_ANALYSIS.md](GAP_ANALYSIS.md) and [CLAUDE.md Known Limitations](../CLAUDE.md#known-limitations)
 
 ## Overview
 

@@ -15,7 +15,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 ### **Standards Compliance**
 
-- **ISO/IEC 39075:2024 GQL Conformance Suite** - 70/70 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
+- **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
 - **ACID Transactions** - Full MVCC with Serializable Snapshot Isolation (SSI)
 - **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
 
@@ -183,7 +183,7 @@ COMMIT;
 
 ### **Core Components**
 
-- **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 70/70 named conformance suite (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
+- **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 96/96 named conformance suite (parse-only scope) (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
 - **Query Planner** - Cost-based optimization with real-time statistics integration
 - **Storage Engine** - MVCC with WAL, TDE encryption, and memory-mapped I/O
 - **Index System** - 6 index types: B-tree, Hash, Full-text, Spatial, Vector (HNSW), Interval

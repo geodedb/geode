@@ -2,7 +2,7 @@
 
 ## 🏆 Enterprise Graph Database Platform
 
-Geode is a feature-complete **single-tenant** graph database with enterprise-grade features, passing 70/70 cases of its ISO/IEC 39075:2024 GQL conformance suite (`tests/gql_iso_conformance.zig` — scoped to that suite; see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) for residual limits). **DEVELOPMENT READY (single-tenant);** multi-tenant, distributed, and backup deployments require additional operator review — see Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
+Geode is a feature-complete **single-tenant** graph database with enterprise-grade features, passing 96/96 cases of its ISO/IEC 39075:2024 GQL conformance suite (parse-only scope) (`tests/gql_iso_conformance.zig` — scoped to that suite; see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) for residual limits). **DEVELOPMENT READY (single-tenant);** multi-tenant, distributed, and backup deployments require additional operator review — see Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
 
 ### ✅ **All Planned Features Complete** (October 16, 2025)
 
@@ -22,7 +22,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 
 ### **Graph Query Language (GQL)**
 
-- **ISO Conformance Suite**: 70/70 cases pass in the named conformance suite (scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+- **ISO Conformance Suite**: 96/96 cases pass in the named conformance suite (`zig build test-iso-conformance`; parse-only scope) (scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 - **Advanced Pattern Matching**: Complex graph traversal patterns
 - **Aggregation & Analytics**: Built-in statistical functions
 - **Transaction Support**: ACID compliance with MVCC
@@ -214,7 +214,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Standards Compliance**
 
-- **ISO/IEC 39075:2024**: Graph Query Language standard (70/70 named conformance-suite cases pass; scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+- **ISO/IEC 39075:2024**: Graph Query Language standard (96/96 named conformance-suite cases pass, parse-only scope; scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 - **GDPR**: Audit logging and encryption at rest support GDPR compliance workflows (customer-side controls required for full compliance)
 - **SOX**: Tamper-protected audit trails and retention policies support SOX audit requirements (customer-side controls required for full compliance)
 - **HIPAA**: Encryption at rest (TDE) and audit logging support HIPAA technical safeguards (customer-side BAA and access controls required)
