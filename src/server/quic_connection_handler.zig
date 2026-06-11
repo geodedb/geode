@@ -5446,6 +5446,13 @@ fn handleClientMessage(
             if (needs_store_lock and !is_mutation) count_fast_path_blk: {
                 const target = analysis.target orelse break :count_fast_path_blk;
                 if (target.* != .Query) break :count_fast_path_blk;
+                // GAP-0892: a multi-statement program (e.g. `SESSION SET
+                // PROPERTY GRAPH "G1"; MATCH (n) RETURN count(*)`) must run
+                // through the full executor — the count fast path executes
+                // ONLY `target`, so it would count against the request-start
+                // session graph and silently drop the preamble's side
+                // effects (gql_conformance T11/T12/T14 returned 0).
+                if (analysis.has_effectful_preamble) break :count_fast_path_blk;
 
                 // GAP-0840: route the count fast-path tenant scope through the
                 // shared strict-tenancy decision rather than the inline
@@ -5951,7 +5958,9 @@ fn handleClientMessage(
                 },
                 .rows => {
                     const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
-                    if (!rls_active) {
+                    // GAP-0892: node-scan streaming executes only `analysis.target`;
+                    // bail when other statements (SESSION SET, DDL, ...) must run.
+                    if (!rls_active and !analysis.has_effectful_preamble) {
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;

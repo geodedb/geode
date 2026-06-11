@@ -2035,6 +2035,16 @@ pub fn build(b: *std.Build) void {
     const graph_store_unit_step = b.step("test-graph-store", "Run graph_store.zig inline unit tests (label index, tenant isolation, refcounts, adapter reload)");
     graph_store_unit_step.dependOn(&run_graph_store_unit_tests.step);
 
+    // ----- GAP-0892: count-pushdown effectful-preamble gate unit tests -----
+    // src/query/query_traits.zig uses relative imports, so it cannot root its
+    // own test module; the regression tests live in tests/ and reach the
+    // classifier through the geode lib module.
+    const gap0892_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_gap0892_count_pushdown_preamble.zig"), .target = target, .optimize = optimize }) });
+    gap0892_tests.root_module.addImport("geode", root_mod);
+    const run_gap0892_tests = b.addRunArtifact(gap0892_tests);
+    const gap0892_step = b.step("test-gap0892", "GAP-0892 regression: count-pushdown fast path bails on effectful preamble (SESSION SET ...; MATCH count(*))");
+    gap0892_step.dependOn(&run_gap0892_tests.step);
+
     // ----- EVAL CALL-HANDLER UNIT TESTS (GAP-0888 review follow-up) -----
     // The inline unit tests in src/eval/ts_call_handlers.zig and
     // src/eval/quantifier_call_handlers.zig are not discovered by any other
@@ -3355,6 +3365,10 @@ pub fn build(b: *std.Build) void {
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
     test_e2e_step.dependOn(&run_gql_conformance_tests.step);
+    // GAP-0892: named step so the conformance suite (incl. the T11/T12/T14
+    // count-pushdown regressions) can run without the rest of test-e2e.
+    const gql_conformance_step = b.step("test-gql-conformance", "Run GQL conformance e2e suite (spawns QUIC servers; GAP-0892 T11/T12/T14 acceptance)");
+    gql_conformance_step.dependOn(&run_gql_conformance_tests.step);
 
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
