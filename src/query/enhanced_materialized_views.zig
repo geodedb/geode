@@ -1,6 +1,18 @@
-// CANARY: REQ=REQ-MATVIEW-REFRESH-001; FEATURE="Materialized View Refresh"; ASPECT=RefreshLogic; STATUS=TESTED; TEST=TestCANARY_REQ_MATVIEW_REFRESH_001_RefreshLogic; OWNER=query; UPDATED=2025-10-05
-// CANARY: REQ=REQ-MATVIEW-REFRESH-002; FEATURE="Incremental Refresh"; ASPECT=IncrementalRefresh; STATUS=TESTED; TEST=TestCANARY_REQ_MATVIEW_REFRESH_002_IncrementalRefresh; OWNER=query; UPDATED=2025-10-05
-// CANARY: REQ=REQ-MATVIEW-REFRESH-003; FEATURE="Query Rewriting"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=TestCANARY_REQ_MATVIEW_REFRESH_003_QueryRewrite; OWNER=query; UPDATED=2025-10-05
+// CANARY: REQ=REQ-MATVIEW-REFRESH-001; FEATURE="Materialized View Refresh"; ASPECT=RefreshLogic; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
+// CANARY: REQ=REQ-MATVIEW-REFRESH-002; FEATURE="Incremental Refresh"; ASPECT=IncrementalRefresh; STATUS=IMPL; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
+// CANARY: REQ=REQ-MATVIEW-REFRESH-003; FEATURE="Query Rewriting"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
+//
+// GAP-0876 (2026-06-11): the query-rewrite path implements EXACT-MATCH
+// rewrite only — an incoming query that is structurally identical to a
+// view's definition (same MATCH pattern, same WHERE, same RETURN
+// projection, same ORDER BY/LIMIT/OFFSET) is answered from the view's
+// materialized snapshot. The previous label-overlap scoring heuristic was
+// removed: it claimed `complete_replacement` for queries that merely
+// shared a node label with a view (e.g. `RETURN n.age` against a view
+// projecting `n.name`), which is a wrong answer, not an optimization.
+// Cost-based partial rewrite and automatic executor integration are
+// future work; this manager is NOT yet consulted by the execution path
+// (see docs/MATERIALIZED_VIEWS.md).
 
 const std = @import("std");
 
@@ -16,38 +28,25 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
-fn compat_timestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec);
-}
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
+
 const Allocator = std.mem.Allocator;
 const ast = @import("../gql/ast.zig");
-const exec = @import("../server/graph/exec.zig");
-const graph_storage = @import("../types/graph_common.zig");
-const mvcc = @import("../server/txn/mvcc.zig");
 const Parser = @import("../gql/parser.zig").Parser;
 const Lexer = @import("../gql/lexer.zig").Lexer;
 // GAP-0810: optional shared AST cache surface (mirrors Task 1.3 wiring in
 // `src/query/materialized_views.zig`). See `setAstCache()` below.
 const lib = @import("../lib.zig");
+
+/// Pluggable base-data source for view materialization. The enhanced
+/// manager is a standalone subsystem (not wired into the executor), so the
+/// owner supplies the function that evaluates a view's defining query
+/// against real base data. `fetchFn` must return a slice of rows, each
+/// allocated with `allocator`; the caller takes ownership of both the
+/// slice and the rows.
+pub const RowSource = struct {
+    ctx: *anyopaque,
+    fetchFn: *const fn (ctx: *anyopaque, view_query: []const u8, allocator: Allocator) anyerror![]Row,
+};
 
 /// Complete materialized view management system with refresh logic
 pub const MaterializedViewManager = struct {
@@ -57,14 +56,17 @@ pub const MaterializedViewManager = struct {
     refresh_scheduler: RefreshScheduler,
     query_rewriter: QueryRewriter,
     metrics: ViewMetrics,
+    // GAP-0876: base-data seam used by refresh to materialize rows into
+    // view storage. Null means refreshes materialize zero rows (the
+    // manager has no executor wiring of its own).
+    row_source: ?RowSource = null,
     // GAP-0810: optional shared AST cache. When wired by the server via
     // `setAstCache()`, scope-bounded parses (currently the query-rewrite
     // path in `QueryRewriter.findApplicableViews`) route through
     // `lib.parseGqlCached` so identical incoming-query shapes amortize the
     // parser cost. Null means "no cache -- fall back to the direct
     // Parser/Lexer path", which preserves every existing standalone caller
-    // (tests, shell, benches). See also the long-lifetime caveat on
-    // `parseAndValidateQuery` below.
+    // (tests, shell, benches).
     // CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="SharedAstCache"; ASPECT=EnhancedViewWiring; STATUS=IMPL; TEST=tests/test_gap0810_cross_subsystem_cache.zig; OWNER=performance; UPDATED=2026-04-20
     ast_cache: ?*lib.SharedAstCache = null,
 
@@ -76,6 +78,7 @@ pub const MaterializedViewManager = struct {
             .refresh_scheduler = try RefreshScheduler.init(allocator),
             .query_rewriter = try QueryRewriter.init(allocator),
             .metrics = ViewMetrics.init(),
+            .row_source = null,
             .ast_cache = null,
         };
     }
@@ -99,6 +102,12 @@ pub const MaterializedViewManager = struct {
         self.query_rewriter.ast_cache = cache;
     }
 
+    /// GAP-0876: wire the base-data source used by refresh to materialize
+    /// rows into view storage. Source lifetime must outlive the manager.
+    pub fn setRowSource(self: *MaterializedViewManager, source: ?RowSource) void {
+        self.row_source = source;
+    }
+
     pub fn deinit(self: *MaterializedViewManager) void {
         self.view_catalog.deinit();
         self.dependency_tracker.deinit();
@@ -113,13 +122,18 @@ pub const MaterializedViewManager = struct {
         query: []const u8,
         refresh_strategy: RefreshStrategy,
     ) !u64 {
-        // Parse and validate query
-        const parsed_query = try self.parseAndValidateQuery(query);
-        defer self.allocator.destroy(parsed_query);
+        // Parse and validate the defining query in a scope-bounded arena.
+        // The AST is only needed here for validation + dependency
+        // extraction (which deep-copies what it keeps); nothing retains
+        // arena-backed references past this function.
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const parsed_query = try parseViewDefinition(&arena, query);
 
-        // Extract dependencies from query
-        const dependencies = try self.extractDependencies(parsed_query);
-        defer self.allocator.free(dependencies);
+        // Extract dependencies from query (names are duped into
+        // self.allocator; ownership transfers to the view below).
+        const dependencies = try self.extractDependencies(&parsed_query);
+        errdefer freeDependencies(self.allocator, dependencies);
 
         // Create materialized view definition
         const view_id = self.view_catalog.next_view_id;
@@ -129,8 +143,7 @@ pub const MaterializedViewManager = struct {
             .id = view_id,
             .name = try self.allocator.dupe(u8, name),
             .query = try self.allocator.dupe(u8, query),
-            .parsed_query = try self.cloneParsedQuery(parsed_query),
-            .dependencies = try self.allocator.dupe(Dependency, dependencies),
+            .dependencies = dependencies,
             .refresh_strategy = refresh_strategy,
             .statistics = ViewStatistics.init(),
             .created_at = compat_milliTimestamp(),
@@ -138,6 +151,10 @@ pub const MaterializedViewManager = struct {
             .is_valid = true,
             .storage_name = undefined, // Will be set by createViewStorage
         };
+        errdefer {
+            self.allocator.free(view.name);
+            self.allocator.free(view.query);
+        }
 
         // Create physical storage for the view
         try self.createViewStorage(&view);
@@ -145,7 +162,8 @@ pub const MaterializedViewManager = struct {
         // Register dependencies for change tracking
         try self.dependency_tracker.registerView(view_id, dependencies);
 
-        // Store view in catalog
+        // Store view in catalog (catalog takes ownership of all view
+        // allocations from here on).
         try self.view_catalog.addView(view);
 
         // Schedule initial refresh
@@ -158,12 +176,20 @@ pub const MaterializedViewManager = struct {
 
     /// Drop a materialized view
     pub fn dropMaterializedView(self: *MaterializedViewManager, view_id: u64) !void {
-        if (self.view_catalog.getView(view_id)) |view| {
+        if (self.view_catalog.getView(view_id)) |_| {
             // Remove from dependency tracker
             self.dependency_tracker.unregisterView(view_id);
 
             // Cancel any pending refreshes
             try self.refresh_scheduler.cancelRefresh(view_id);
+
+            // Drop the materialized snapshot (must happen before
+            // removeView frees view.storage_name, which the storage entry
+            // borrows).
+            if (self.view_catalog.storage_map.fetchRemove(view_id)) |kv| {
+                kv.value.deinit();
+                self.allocator.destroy(kv.value);
+            }
 
             // Remove from catalog (handles memory cleanup)
             try self.view_catalog.removeView(view_id);
@@ -216,12 +242,36 @@ pub const MaterializedViewManager = struct {
         return result;
     }
 
-    /// Get query rewrite recommendations
+    /// Get query rewrite recommendations. Returns non-null ONLY when a
+    /// valid view's definition is structurally identical to the incoming
+    /// query (GAP-0876 exact-match rewrite). Caller owns the returned
+    /// QueryRewrite and must call `deinit` on it.
     pub fn getQueryRewrite(
         self: *MaterializedViewManager,
         query: []const u8,
     ) !?QueryRewrite {
         return self.query_rewriter.findApplicableViews(query, &self.view_catalog);
+    }
+
+    /// GAP-0876: serve the materialized snapshot for an exact-match
+    /// rewrite. Returns the view's rows (borrowed; valid until the next
+    /// refresh or drop of that view), or null when the rewrite does not
+    /// name a populated complete-replacement view.
+    pub fn fetchRewriteRows(self: *MaterializedViewManager, rewrite: *const QueryRewrite) ?[]const Row {
+        for (rewrite.applicable_views) |usage| {
+            if (usage.usage_type == .complete_replacement) {
+                if (self.getViewRows(usage.view_id)) |rows| return rows;
+            }
+        }
+        return null;
+    }
+
+    /// Borrowed view snapshot rows (valid until next refresh/drop), or
+    /// null when the view does not exist or has never been populated.
+    pub fn getViewRows(self: *MaterializedViewManager, view_id: u64) ?[]const Row {
+        const storage = self.view_catalog.storage_map.get(view_id) orelse return null;
+        if (!storage.is_populated) return null;
+        return storage.rows.items;
     }
 
     /// Handle base table changes for incremental refresh
@@ -259,84 +309,45 @@ pub const MaterializedViewManager = struct {
 
     // Private implementation methods
 
-    // CANARY: REQ=REQ-MATVIEW-PARSE-001; FEATURE="Materialized View Query Parsing"; ASPECT=QueryParsing; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
-    fn parseAndValidateQuery(self: *MaterializedViewManager, query: []const u8) !*ast.Query {
-        // Create arena allocator for parser
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        errdefer arena.deinit();
-
-        // Initialize lexer and parser
+    // CANARY: REQ=REQ-MATVIEW-PARSE-001; FEATURE="Materialized View Query Parsing"; ASPECT=QueryParsing; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
+    /// Parse + validate a view definition inside the caller's arena. The
+    /// returned Query references arena memory and must not outlive it.
+    fn parseViewDefinition(arena: *std.heap.ArenaAllocator, query: []const u8) !ast.Query {
         var lexer = Lexer{ .src = query };
         var parser = Parser{
             .lx = &lexer,
-            .arena = &arena,
+            .arena = arena,
             .cur = lexer.next(),
         };
 
-        // Parse the query program
-        const program = parser.parseProgram() catch |err| {
-            arena.deinit();
-            return switch (err) {
-                error.SyntaxError => error.InvalidQuery,
-                else => error.InvalidQuery,
-            };
+        const program = parser.parseProgram() catch {
+            return error.InvalidQuery;
         };
 
-        // Validate we have at least one statement that is a Query
-        if (program.statements.len == 0) {
-            arena.deinit();
+        if (program.statements.len == 0) return error.InvalidQuery;
+
+        const query_ref = switch (program.statements[0]) {
+            .Query => |q| q,
+            .Union => |u| u.first,
+            else => return error.InvalidQuery,
+        };
+
+        // A materialized view definition must be read-only.
+        if (query_ref.set_clauses.len != 0 or
+            query_ref.remove_clauses.len != 0 or
+            query_ref.delete_items.len != 0 or
+            query_ref.create_pattern != null or
+            query_ref.merge_statement != null)
+        {
             return error.InvalidQuery;
         }
 
-        // Extract the first query statement
-        const first_stmt = program.statements[0];
-        const query_ref = switch (first_stmt) {
-            .Query => |q| q,
-            .Union => |u| u.first,
-            else => {
-                arena.deinit();
-                return error.InvalidQuery;
-            },
-        };
-
-        // Clone the query into our allocator (not the arena)
-        var parsed = try self.allocator.create(ast.Query);
-        parsed.* = ast.Query{
-            .let_bindings = &.{},
-            .inline_let_bindings = &.{},
-            .optional_match = query_ref.optional_match,
-            .match = query_ref.match,
-            .where_clause = query_ref.where_clause,
-            .filter_clause = query_ref.filter_clause,
-            .with_clause = query_ref.with_clause,
-            .set_clauses = &.{},
-            .remove_clauses = &.{},
-            .delete_items = &.{},
-            .group_by = query_ref.group_by,
-            .having = query_ref.having,
-            .ret = query_ref.ret,
-            .order_by = query_ref.order_by,
-            .limit = query_ref.limit,
-            .offset = query_ref.offset,
-            .path_variable = query_ref.path_variable,
-            .has_recursive_cte = query_ref.has_recursive_cte,
-            .call_clause = query_ref.call_clause,
-            .next_query = null,
-            .for_statement = null,
-            .initial_call_subquery = null,
-        };
-
-        // Note: arena is deliberately NOT deinited here as the parsed query
-        // references strings allocated in the arena. The caller is responsible
-        // for managing the lifetime of the query and its referenced data.
-        // In a production system, we would deep-copy all string data.
-
-        return parsed;
+        return query_ref;
     }
 
-    // CANARY: REQ=REQ-MATVIEW-DEPS-001; FEATURE="Materialized View Dependency Extraction"; ASPECT=DependencyTracking; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
-    fn extractDependencies(self: *MaterializedViewManager, query: *ast.Query) ![]Dependency {
-        var dependencies = std.ArrayList(Dependency).init(self.allocator);
+    // CANARY: REQ=REQ-MATVIEW-DEPS-001; FEATURE="Materialized View Dependency Extraction"; ASPECT=DependencyTracking; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
+    fn extractDependencies(self: *MaterializedViewManager, query: *const ast.Query) ![]Dependency {
+        var dependencies: std.ArrayList(Dependency) = .empty;
         errdefer {
             for (dependencies.items) |dep| {
                 self.allocator.free(dep.name);
@@ -345,7 +356,7 @@ pub const MaterializedViewManager = struct {
                 }
                 self.allocator.free(dep.columns);
             }
-            dependencies.deinit();
+            dependencies.deinit(self.allocator);
         }
 
         // Track seen labels/types to avoid duplicates
@@ -359,7 +370,7 @@ pub const MaterializedViewManager = struct {
                 for (head.labels) |label| {
                     if (!seen.contains(label)) {
                         try seen.put(label, {});
-                        try dependencies.append(Dependency{
+                        try dependencies.append(self.allocator, Dependency{
                             .type = .node_label,
                             .name = try self.allocator.dupe(u8, label),
                             .columns = try self.allocator.alloc([]const u8, 0),
@@ -374,7 +385,7 @@ pub const MaterializedViewManager = struct {
                 for (hop.left.labels) |label| {
                     if (!seen.contains(label)) {
                         try seen.put(label, {});
-                        try dependencies.append(Dependency{
+                        try dependencies.append(self.allocator, Dependency{
                             .type = .node_label,
                             .name = try self.allocator.dupe(u8, label),
                             .columns = try self.allocator.alloc([]const u8, 0),
@@ -386,7 +397,7 @@ pub const MaterializedViewManager = struct {
                 for (hop.rel.types) |rel_type| {
                     if (!seen.contains(rel_type)) {
                         try seen.put(rel_type, {});
-                        try dependencies.append(Dependency{
+                        try dependencies.append(self.allocator, Dependency{
                             .type = .relationship_type,
                             .name = try self.allocator.dupe(u8, rel_type),
                             .columns = try self.allocator.alloc([]const u8, 0),
@@ -398,7 +409,7 @@ pub const MaterializedViewManager = struct {
                 for (hop.right.labels) |label| {
                     if (!seen.contains(label)) {
                         try seen.put(label, {});
-                        try dependencies.append(Dependency{
+                        try dependencies.append(self.allocator, Dependency{
                             .type = .node_label,
                             .name = try self.allocator.dupe(u8, label),
                             .columns = try self.allocator.alloc([]const u8, 0),
@@ -410,42 +421,43 @@ pub const MaterializedViewManager = struct {
 
         // If no explicit labels/types found, add a generic graph dependency
         if (dependencies.items.len == 0) {
-            try dependencies.append(Dependency{
+            try dependencies.append(self.allocator, Dependency{
                 .type = .table,
                 .name = try self.allocator.dupe(u8, "_graph"),
                 .columns = try self.allocator.alloc([]const u8, 0),
             });
         }
 
-        return try dependencies.toOwnedSlice();
+        return try dependencies.toOwnedSlice(self.allocator);
     }
 
-    fn cloneParsedQuery(self: *MaterializedViewManager, query: *ast.Query) !*ast.Query {
-        var cloned = try self.allocator.create(ast.Query);
-        cloned.* = ast.Query{
-            .query_type = query.query_type,
-            .clauses = std.ArrayList(ast.Clause).init(self.allocator),
-        };
-
-        // Deep clone clauses
-        try cloned.clauses.appendSlice(query.clauses.items);
-
-        return cloned;
+    fn freeDependencies(allocator: Allocator, dependencies: []Dependency) void {
+        for (dependencies) |dep| {
+            allocator.free(dep.name);
+            for (dep.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(dep.columns);
+        }
+        allocator.free(dependencies);
     }
 
-    // CANARY: REQ=REQ-MATVIEW-STORAGE-001; FEATURE="Materialized View Storage Creation"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-MATVIEW-STORAGE-001; FEATURE="Materialized View Storage Creation"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
     fn createViewStorage(self: *MaterializedViewManager, view: *MaterializedView) !void {
         // Generate unique storage identifier with timestamp for uniqueness
         const timestamp = compat_milliTimestamp();
         view.storage_name = try std.fmt.allocPrint(self.allocator, "mv_{s}_{d}_{d}", .{ view.name, view.id, timestamp });
+        errdefer self.allocator.free(view.storage_name);
 
         // Initialize storage entry in view catalog's storage map
-        var storage_entry = try self.allocator.create(ViewStorageEntry);
+        const storage_entry = try self.allocator.create(ViewStorageEntry);
+        errdefer self.allocator.destroy(storage_entry);
         storage_entry.* = ViewStorageEntry{
+            .allocator = self.allocator,
             .view_id = view.id,
             .storage_name = view.storage_name,
             .created_at = timestamp,
-            .rows = std.ArrayList(Row).init(self.allocator),
+            .rows = .empty,
             .row_index = std.AutoHashMap(u64, usize).init(self.allocator),
             .is_populated = false,
         };
@@ -485,14 +497,22 @@ pub const MaterializedViewManager = struct {
         _ = options;
 
         // Execute the defining query completely
-        const query_result = try self.executeViewQuery(view);
+        var query_result = try self.executeViewQuery(view);
         defer query_result.deinit();
 
-        // Count processed rows
+        // GAP-0876: materialize the result into the view's storage so the
+        // snapshot can serve exact-match rewrites.
+        const storage = self.view_catalog.storage_map.get(view.id) orelse return error.ViewStorageMissing;
+        storage.clear();
+
         var rows_processed: u64 = 0;
-        while (try query_result.next()) |_| {
+        while (try query_result.next()) |row| {
+            // addRow dupes; we own the popped row and must free it.
+            defer self.allocator.free(row);
+            try storage.addRow(rows_processed, row);
             rows_processed += 1;
         }
+        storage.is_populated = true;
 
         // Update view row count
         view.statistics.row_count = rows_processed;
@@ -551,6 +571,7 @@ pub const MaterializedViewManager = struct {
         view: *MaterializedView,
         options: RefreshOptions,
     ) !RefreshResult {
+        _ = self;
         _ = view;
         _ = options;
 
@@ -566,11 +587,28 @@ pub const MaterializedViewManager = struct {
     }
 
     fn executeViewQuery(self: *MaterializedViewManager, view: *MaterializedView) !QueryResult {
-        // Execute the view's defining query
-        // For now, return empty result
+        // GAP-0876: evaluate the defining query through the wired base-data
+        // source. Without a source the manager has no executor of its own,
+        // so the result is empty (documented limitation).
+        if (self.row_source) |source| {
+            const fetched = try source.fetchFn(source.ctx, view.query, self.allocator);
+            defer self.allocator.free(fetched);
+            var rows: std.ArrayList(Row) = .empty;
+            errdefer {
+                for (rows.items) |r| self.allocator.free(r);
+                rows.deinit(self.allocator);
+            }
+            try rows.appendSlice(self.allocator, fetched);
+            return QueryResult{
+                .allocator = self.allocator,
+                .rows = rows,
+                .finished = false,
+            };
+        }
+
         return QueryResult{
             .allocator = self.allocator,
-            .rows = std.ArrayList(Row).init(self.allocator),
+            .rows = .empty,
             .finished = false,
         };
     }
@@ -636,7 +674,7 @@ pub const MaterializedViewManager = struct {
     fn scheduleNextRefresh(self: *MaterializedViewManager, view_id: u64) !void {
         if (self.view_catalog.getView(view_id)) |view| {
             if (view.refresh_strategy.timing == .scheduled) {
-                const next_time = view.last_refresh + (view.refresh_strategy.interval_seconds * 1000);
+                const next_time = view.last_refresh + @as(i64, @intCast(view.refresh_strategy.interval_seconds * 1000));
                 try self.refresh_scheduler.scheduleRefreshAt(view_id, next_time);
             }
         }
@@ -672,13 +710,13 @@ pub const MaterializedViewManager = struct {
 
     /// List all materialized views
     pub fn listViews(self: *MaterializedViewManager) ![]ViewInfo {
-        var views = std.ArrayList(ViewInfo).init(self.allocator);
-        defer views.deinit();
+        var views: std.ArrayList(ViewInfo) = .empty;
+        defer views.deinit(self.allocator);
 
         var iter = self.view_catalog.views.iterator();
         while (iter.next()) |entry| {
             const view = entry.value_ptr.*;
-            try views.append(ViewInfo{
+            try views.append(self.allocator, ViewInfo{
                 .id = view.id,
                 .name = view.name,
                 .query = view.query,
@@ -688,7 +726,7 @@ pub const MaterializedViewManager = struct {
             });
         }
 
-        return try views.toOwnedSlice();
+        return try views.toOwnedSlice(self.allocator);
     }
 };
 
@@ -698,7 +736,6 @@ pub const MaterializedView = struct {
     id: u64,
     name: []const u8,
     query: []const u8,
-    parsed_query: *ast.Query,
     dependencies: []Dependency,
     refresh_strategy: RefreshStrategy,
     storage_name: []const u8,
@@ -710,7 +747,6 @@ pub const MaterializedView = struct {
     pub fn deinit(self: *MaterializedView, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.query);
-        allocator.destroy(self.parsed_query);
         for (self.dependencies) |dep| {
             allocator.free(dep.name);
             for (dep.columns) |col| {
@@ -724,24 +760,28 @@ pub const MaterializedView = struct {
 };
 
 pub const RefreshStrategy = struct {
-    timing: RefreshTiming,
-    method: RefreshMethod = .complete,
+    timing: Timing,
+    method: Method = .complete,
     supports_incremental: bool = false,
     interval_seconds: u64 = 3600, // 1 hour default
     max_staleness_seconds: u64 = 86400, // 24 hours
 
-    pub const RefreshTiming = enum {
+    pub const Timing = enum {
         manual, // Manual refresh only
         auto_immediate, // Refresh immediately on base table changes
         auto_scheduled, // Mark stale on changes, refresh on schedule
         scheduled, // Periodic refresh on schedule
     };
+    // Back-compat alias; the unqualified name would be ambiguous with the
+    // file-level scheduler RefreshTiming inside this namespace.
+    pub const RefreshTiming = Timing;
 
-    pub const RefreshMethod = enum {
+    pub const Method = enum {
         complete, // Full refresh
         incremental, // Apply changes only
         differential, // Use delta tables
     };
+    pub const RefreshMethod = Method;
 };
 
 pub const RefreshOptions = struct {
@@ -855,13 +895,14 @@ pub const QueryResult = struct {
         for (self.rows.items) |row| {
             self.allocator.free(row);
         }
-        self.rows.deinit();
+        self.rows.deinit(self.allocator);
     }
 };
 
-// CANARY: REQ=REQ-MATVIEW-STORAGE-002; FEATURE="Materialized View Storage Entry"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
+// CANARY: REQ=REQ-MATVIEW-STORAGE-002; FEATURE="Materialized View Storage Entry"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
 /// Storage entry for materialized view data
 pub const ViewStorageEntry = struct {
+    allocator: Allocator,
     view_id: u64,
     storage_name: []const u8,
     created_at: i64,
@@ -871,16 +912,17 @@ pub const ViewStorageEntry = struct {
 
     pub fn deinit(self: *ViewStorageEntry) void {
         for (self.rows.items) |row| {
-            self.rows.allocator.free(row);
+            self.allocator.free(row);
         }
-        self.rows.deinit();
+        self.rows.deinit(self.allocator);
         self.row_index.deinit();
     }
 
     pub fn addRow(self: *ViewStorageEntry, row_id: u64, data: []const u8) !void {
         const idx = self.rows.items.len;
-        const duped = try self.rows.allocator.dupe(u8, data);
-        try self.rows.append(duped);
+        const duped = try self.allocator.dupe(u8, data);
+        errdefer self.allocator.free(duped);
+        try self.rows.append(self.allocator, duped);
         try self.row_index.put(row_id, idx);
     }
 
@@ -897,7 +939,7 @@ pub const ViewStorageEntry = struct {
         if (self.row_index.fetchRemove(row_id)) |entry| {
             const idx = entry.value;
             if (idx < self.rows.items.len) {
-                self.rows.allocator.free(self.rows.items[idx]);
+                self.allocator.free(self.rows.items[idx]);
                 _ = self.rows.orderedRemove(idx);
                 // Update indices for all rows after the removed one
                 var iter = self.row_index.iterator();
@@ -918,7 +960,7 @@ pub const ViewStorageEntry = struct {
 
     pub fn clear(self: *ViewStorageEntry) void {
         for (self.rows.items) |row| {
-            self.rows.allocator.free(row);
+            self.allocator.free(row);
         }
         self.rows.clearRetainingCapacity();
         self.row_index.clearRetainingCapacity();
@@ -932,11 +974,22 @@ pub const QueryRewrite = struct {
     applicable_views: []ViewUsage,
     estimated_speedup: f64,
 
+    pub const UsageType = enum { complete_replacement, partial_replacement, join_optimization };
+
     pub const ViewUsage = struct {
         view_id: u64,
         view_name: []const u8,
-        usage_type: enum { complete_replacement, partial_replacement, join_optimization },
+        usage_type: UsageType,
     };
+
+    pub fn deinit(self: *QueryRewrite, allocator: Allocator) void {
+        allocator.free(self.original_query);
+        allocator.free(self.rewritten_query);
+        for (self.applicable_views) |usage| {
+            allocator.free(usage.view_name);
+        }
+        allocator.free(self.applicable_views);
+    }
 };
 
 pub const RefreshTiming = enum {
@@ -948,14 +1001,14 @@ pub const RefreshTiming = enum {
 pub const RefreshMethod = RefreshStrategy.RefreshMethod;
 
 // Catalog management
-const ViewCatalog = struct {
+pub const ViewCatalog = struct {
     allocator: Allocator,
     views: std.AutoHashMap(u64, *MaterializedView),
     views_by_name: std.StringHashMap(u64),
     storage_map: std.AutoHashMap(u64, *ViewStorageEntry),
     next_view_id: u64 = 1,
 
-    fn init(allocator: Allocator) !ViewCatalog {
+    pub fn init(allocator: Allocator) !ViewCatalog {
         return ViewCatalog{
             .allocator = allocator,
             .views = std.AutoHashMap(u64, *MaterializedView).init(allocator),
@@ -964,7 +1017,7 @@ const ViewCatalog = struct {
         };
     }
 
-    fn deinit(self: *ViewCatalog) void {
+    pub fn deinit(self: *ViewCatalog) void {
         // Clean up storage entries
         var storage_iter = self.storage_map.iterator();
         while (storage_iter.next()) |entry| {
@@ -982,15 +1035,15 @@ const ViewCatalog = struct {
         self.views_by_name.deinit();
     }
 
-    fn addView(self: *ViewCatalog, view: MaterializedView) !void {
-        var heap_view = try self.allocator.create(MaterializedView);
+    pub fn addView(self: *ViewCatalog, view: MaterializedView) !void {
+        const heap_view = try self.allocator.create(MaterializedView);
         heap_view.* = view;
 
         try self.views.put(view.id, heap_view);
-        try self.views_by_name.put(view.name, view.id);
+        try self.views_by_name.put(heap_view.name, view.id);
     }
 
-    fn removeView(self: *ViewCatalog, view_id: u64) !void {
+    pub fn removeView(self: *ViewCatalog, view_id: u64) !void {
         if (self.views.get(view_id)) |view| {
             _ = self.views_by_name.remove(view.name);
             _ = self.views.remove(view_id);
@@ -999,11 +1052,11 @@ const ViewCatalog = struct {
         }
     }
 
-    fn getView(self: *ViewCatalog, view_id: u64) ?*MaterializedView {
+    pub fn getView(self: *ViewCatalog, view_id: u64) ?*MaterializedView {
         return self.views.get(view_id);
     }
 
-    fn getViewByName(self: *ViewCatalog, name: []const u8) ?*MaterializedView {
+    pub fn getViewByName(self: *ViewCatalog, name: []const u8) ?*MaterializedView {
         if (self.views_by_name.get(name)) |view_id| {
             return self.views.get(view_id);
         }
@@ -1012,38 +1065,40 @@ const ViewCatalog = struct {
 };
 
 // Dependency tracking
-const DependencyTracker = struct {
+pub const DependencyTracker = struct {
     allocator: Allocator,
+    // Keys are owned (duped) so they cannot dangle after a view (and its
+    // dependency names) is dropped.
     dependencies: std.StringHashMap(std.ArrayList(u64)),
 
-    fn init(allocator: Allocator) !DependencyTracker {
+    pub fn init(allocator: Allocator) !DependencyTracker {
         return DependencyTracker{
             .allocator = allocator,
             .dependencies = std.StringHashMap(std.ArrayList(u64)).init(allocator),
         };
     }
 
-    fn deinit(self: *DependencyTracker) void {
+    pub fn deinit(self: *DependencyTracker) void {
         var iter = self.dependencies.iterator();
         while (iter.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.dependencies.deinit();
     }
 
-    fn registerView(self: *DependencyTracker, view_id: u64, dependencies: []Dependency) !void {
+    pub fn registerView(self: *DependencyTracker, view_id: u64, dependencies: []const Dependency) !void {
         for (dependencies) |dep| {
-            var view_list = self.dependencies.get(dep.name) orelse blk: {
-                var list = std.ArrayList(u64).init(self.allocator);
-                try self.dependencies.put(dep.name, list);
-                break :blk self.dependencies.getPtr(dep.name).?;
-            };
-
-            try view_list.append(view_id);
+            const gop = try self.dependencies.getOrPut(dep.name);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try self.allocator.dupe(u8, dep.name);
+                gop.value_ptr.* = .empty;
+            }
+            try gop.value_ptr.append(self.allocator, view_id);
         }
     }
 
-    fn unregisterView(self: *DependencyTracker, view_id: u64) void {
+    pub fn unregisterView(self: *DependencyTracker, view_id: u64) void {
         var iter = self.dependencies.iterator();
         while (iter.next()) |entry| {
             var i: usize = 0;
@@ -1057,7 +1112,7 @@ const DependencyTracker = struct {
         }
     }
 
-    fn getDependentViews(self: *DependencyTracker, table_name: []const u8) ![]u64 {
+    pub fn getDependentViews(self: *DependencyTracker, table_name: []const u8) ![]u64 {
         if (self.dependencies.get(table_name)) |view_list| {
             return try self.allocator.dupe(u64, view_list.items);
         }
@@ -1066,11 +1121,11 @@ const DependencyTracker = struct {
 };
 
 // Refresh scheduling
-const RefreshScheduler = struct {
+pub const RefreshScheduler = struct {
     allocator: Allocator,
     scheduled_refreshes: std.PriorityQueue(ScheduledRefresh, void, compareRefreshTimes),
 
-    const ScheduledRefresh = struct {
+    pub const ScheduledRefresh = struct {
         view_id: u64,
         scheduled_time: i64,
         timing: RefreshTiming,
@@ -1081,87 +1136,93 @@ const RefreshScheduler = struct {
         return std.math.order(a.scheduled_time, b.scheduled_time);
     }
 
-    fn init(allocator: Allocator) !RefreshScheduler {
+    pub fn init(allocator: Allocator) !RefreshScheduler {
         return RefreshScheduler{
             .allocator = allocator,
-            .scheduled_refreshes = std.PriorityQueue(ScheduledRefresh, void, compareRefreshTimes).init(allocator, {}),
+            .scheduled_refreshes = std.PriorityQueue(ScheduledRefresh, void, compareRefreshTimes).initContext({}),
         };
     }
 
-    fn deinit(self: *RefreshScheduler) void {
-        self.scheduled_refreshes.deinit();
+    pub fn deinit(self: *RefreshScheduler) void {
+        self.scheduled_refreshes.deinit(self.allocator);
     }
 
-    fn scheduleRefresh(self: *RefreshScheduler, view_id: u64, timing: RefreshTiming) !void {
+    pub fn scheduleRefresh(self: *RefreshScheduler, view_id: u64, timing: RefreshTiming) !void {
         const scheduled_time = switch (timing) {
             .immediate => compat_milliTimestamp(),
             .incremental => compat_milliTimestamp() + 1000, // 1 second delay
             .scheduled => compat_milliTimestamp() + 60000, // 1 minute delay
         };
 
-        try self.scheduled_refreshes.add(ScheduledRefresh{
+        try self.scheduled_refreshes.push(self.allocator, ScheduledRefresh{
             .view_id = view_id,
             .scheduled_time = scheduled_time,
             .timing = timing,
         });
     }
 
-    fn scheduleRefreshAt(self: *RefreshScheduler, view_id: u64, time: i64) !void {
-        try self.scheduled_refreshes.add(ScheduledRefresh{
+    pub fn scheduleRefreshAt(self: *RefreshScheduler, view_id: u64, time: i64) !void {
+        try self.scheduled_refreshes.push(self.allocator, ScheduledRefresh{
             .view_id = view_id,
             .scheduled_time = time,
             .timing = .scheduled,
         });
     }
 
-    // CANARY: REQ=REQ-MV-CANCEL-001; FEATURE="MVRefreshCancellation"; ASPECT=Cancel; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=mv; UPDATED=2026-01-09
-    fn cancelRefresh(self: *RefreshScheduler, view_id: u64) !void {
+    // CANARY: REQ=REQ-MV-CANCEL-001; FEATURE="MVRefreshCancellation"; ASPECT=Cancel; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=mv; UPDATED=2026-06-11
+    pub fn cancelRefresh(self: *RefreshScheduler, view_id: u64) !void {
         // Rebuild the queue without entries for the target view_id
         // This is the standard approach for priority queues without direct removal support
 
         // Collect all items that should be kept
-        var items_to_keep = std.ArrayList(ScheduledRefresh).init(self.allocator);
-        defer items_to_keep.deinit();
+        var items_to_keep: std.ArrayList(ScheduledRefresh) = .empty;
+        defer items_to_keep.deinit(self.allocator);
 
         // Drain the queue and collect non-matching items
-        while (self.scheduled_refreshes.removeOrNull()) |refresh| {
+        while (self.scheduled_refreshes.pop()) |refresh| {
             if (refresh.view_id != view_id) {
-                try items_to_keep.append(refresh);
+                try items_to_keep.append(self.allocator, refresh);
             }
         }
 
         // Re-add all kept items to the queue
         for (items_to_keep.items) |refresh| {
-            try self.scheduled_refreshes.add(refresh);
+            try self.scheduled_refreshes.push(self.allocator, refresh);
         }
     }
 
-    fn getNextRefresh(self: *RefreshScheduler) ?ScheduledRefresh {
-        return self.scheduled_refreshes.removeOrNull();
+    pub fn getNextRefresh(self: *RefreshScheduler) ?ScheduledRefresh {
+        return self.scheduled_refreshes.pop();
     }
 };
 
 // Query rewriting for optimization
-// CANARY: REQ=REQ-MATVIEW-REWRITE-001; FEATURE="Query Rewriting for Materialized Views"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
-const QueryRewriter = struct {
+// CANARY: REQ=REQ-MATVIEW-REWRITE-001; FEATURE="Query Rewriting for Materialized Views"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=tests/test_materialized_views_enhanced.zig; OWNER=query; UPDATED=2026-06-11
+/// GAP-0876: exact-match query rewriter. A rewrite is produced ONLY when
+/// the incoming query is structurally identical to a valid view's
+/// definition (same MATCH pattern, WHERE, RETURN projection, ORDER
+/// BY/LIMIT/OFFSET). Anything else returns null — no label-overlap
+/// heuristics, no partial rewrites. Cost-based partial rewrite is future
+/// work.
+pub const QueryRewriter = struct {
     allocator: Allocator,
     // GAP-0810: same optional cache surface as `MaterializedViewManager`;
     // wired via `MaterializedViewManager.setAstCache()`. Null preserves
     // the existing arena-backed parse path.
     ast_cache: ?*lib.SharedAstCache = null,
 
-    fn init(allocator: Allocator) !QueryRewriter {
+    pub fn init(allocator: Allocator) !QueryRewriter {
         return QueryRewriter{
             .allocator = allocator,
             .ast_cache = null,
         };
     }
 
-    fn deinit(self: *QueryRewriter) void {
+    pub fn deinit(self: *QueryRewriter) void {
         _ = self;
     }
 
-    fn findApplicableViews(
+    pub fn findApplicableViews(
         self: *QueryRewriter,
         query: []const u8,
         catalog: *ViewCatalog,
@@ -1171,10 +1232,8 @@ const QueryRewriter = struct {
         // parser cost. This parse site is scope-bounded -- both branches
         // read `incoming_query` only within this function, which is why
         // it's safe to release the cache handle (or deinit the arena) at
-        // end of scope. Long-lifetime parse sites in this file (see
-        // `parseAndValidateQuery` above) are deliberately NOT cached
-        // because they leak arena-backed string slices into the view
-        // catalog.
+        // end of scope. The returned `QueryRewrite` deep-copies everything
+        // it retains.
         if (self.ast_cache) |cache| {
             const outcome = lib.parseGqlCached(cache, query, .{}) catch {
                 return null;
@@ -1192,7 +1251,7 @@ const QueryRewriter = struct {
                 .Union => |u| u.first,
                 else => return null,
             };
-            return try self.buildRewriteForQuery(query, incoming_query, catalog);
+            return try self.buildRewriteForQuery(query, &incoming_query, catalog);
         }
 
         // Fallback: arena-backed direct parse (preserves behavior for
@@ -1220,132 +1279,246 @@ const QueryRewriter = struct {
             else => return null,
         };
 
-        return try self.buildRewriteForQuery(query, incoming_query, catalog);
+        return try self.buildRewriteForQuery(query, &incoming_query, catalog);
     }
 
-    // GAP-0810: shared body used by both the cached and uncached parse
-    // branches above. Both branches release their parse result at end of
-    // scope AFTER this helper returns, so the `incoming_query` argument
-    // and `query` byte slice remain valid for the full duration. The
-    // `QueryRewrite` returned deep-copies `rewritten_query` and
-    // `original_query` via allocator -- it does NOT retain references
-    // into the parse result.
+    // Shared body used by both the cached and uncached parse branches
+    // above. Both branches release their parse result at end of scope
+    // AFTER this helper returns, so the `incoming_query` argument and
+    // `query` byte slice remain valid for the full duration. The
+    // `QueryRewrite` returned deep-copies everything it retains -- it does
+    // NOT keep references into the parse result or the catalog.
     fn buildRewriteForQuery(
         self: *QueryRewriter,
         query: []const u8,
-        incoming_query: ast.Query,
+        incoming_query: *const ast.Query,
         catalog: *ViewCatalog,
     ) !?QueryRewrite {
-        // Extract labels and relationship types from incoming query
-        var incoming_labels = std.StringHashMap(void).init(self.allocator);
-        defer incoming_labels.deinit();
-        var incoming_rels = std.StringHashMap(void).init(self.allocator);
-        defer incoming_rels.deinit();
-
-        for (incoming_query.match.chains) |chain| {
-            if (chain.head) |head| {
-                for (head.labels) |label| {
-                    try incoming_labels.put(label, {});
-                }
-            }
-            for (chain.hops) |hop| {
-                for (hop.left.labels) |label| {
-                    try incoming_labels.put(label, {});
-                }
-                for (hop.rel.types) |rel_type| {
-                    try incoming_rels.put(rel_type, {});
-                }
-                for (hop.right.labels) |label| {
-                    try incoming_labels.put(label, {});
-                }
-            }
-        }
-
-        // Find matching materialized views
-        var applicable_views = std.ArrayList(QueryRewrite.ViewUsage).init(self.allocator);
-        defer applicable_views.deinit();
-
-        var best_match_score: f64 = 0;
-        var best_view: ?*MaterializedView = null;
-
         var view_iter = catalog.views.iterator();
         while (view_iter.next()) |entry| {
             const view = entry.value_ptr.*;
             if (!view.is_valid) continue;
 
-            // Calculate match score based on dependency overlap
-            var match_score: f64 = 0;
-            var total_deps: f64 = 0;
-            var matched_deps: f64 = 0;
+            // Parse the view's definition in a scope-bounded arena and
+            // compare structurally against the incoming query.
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
 
-            for (view.dependencies) |dep| {
-                total_deps += 1;
-                switch (dep.type) {
-                    .node_label => {
-                        if (incoming_labels.contains(dep.name)) {
-                            matched_deps += 1;
-                        }
-                    },
-                    .relationship_type => {
-                        if (incoming_rels.contains(dep.name)) {
-                            matched_deps += 1;
-                        }
-                    },
-                    else => {},
-                }
-            }
+            var lexer = Lexer{ .src = view.query };
+            var parser = Parser{
+                .lx = &lexer,
+                .arena = &arena,
+                .cur = lexer.next(),
+            };
+            const program = parser.parseProgram() catch continue;
+            if (program.statements.len == 0) continue;
+            const view_query = switch (program.statements[0]) {
+                .Query => |q| q,
+                else => continue,
+            };
 
-            if (total_deps > 0) {
-                match_score = matched_deps / total_deps;
-            }
+            if (!queriesStructurallyEqual(incoming_query, &view_query)) continue;
 
-            // Check if this view is a good candidate
-            if (match_score >= 0.5) { // At least 50% overlap
-                const usage_type = if (match_score >= 0.9)
-                    @as(@TypeOf((QueryRewrite.ViewUsage{}).usage_type), .complete_replacement)
-                else if (match_score >= 0.7)
-                    .partial_replacement
-                else
-                    .join_optimization;
+            // Exact match: the view answers this query completely.
+            var usages = try self.allocator.alloc(QueryRewrite.ViewUsage, 1);
+            errdefer self.allocator.free(usages);
+            usages[0] = QueryRewrite.ViewUsage{
+                .view_id = view.id,
+                .view_name = try self.allocator.dupe(u8, view.name),
+                .usage_type = .complete_replacement,
+            };
+            errdefer self.allocator.free(usages[0].view_name);
 
-                try applicable_views.append(QueryRewrite.ViewUsage{
-                    .view_id = view.id,
-                    .view_name = view.name,
-                    .usage_type = usage_type,
-                });
+            const original = try self.allocator.dupe(u8, query);
+            errdefer self.allocator.free(original);
+            const rewritten = try std.fmt.allocPrint(
+                self.allocator,
+                "/* exact-match materialized view rewrite */ SCAN VIEW {s}",
+                .{view.storage_name},
+            );
 
-                if (match_score > best_match_score) {
-                    best_match_score = match_score;
-                    best_view = view;
-                }
-            }
+            // Heuristic speedup estimate: serving precomputed rows skips
+            // re-execution entirely (nominal 5x), with a bounded bonus
+            // factor for larger snapshots where re-execution would cost
+            // proportionally more.
+            const row_factor: f64 = @max(1.0, @min(2.0, @as(f64, @floatFromInt(view.statistics.row_count)) / 1000.0));
+            const estimated_speedup: f64 = 5.0 * row_factor;
+
+            return QueryRewrite{
+                .original_query = original,
+                .rewritten_query = rewritten,
+                .applicable_views = usages,
+                .estimated_speedup = estimated_speedup,
+            };
         }
 
-        if (applicable_views.items.len == 0) {
-            return null;
-        }
-
-        // Generate rewritten query using best matching view
-        const rewritten = if (best_view) |view|
-            try std.fmt.allocPrint(self.allocator, "SELECT * FROM {s} /* materialized view substitution */", .{view.storage_name})
-        else
-            try self.allocator.dupe(u8, query);
-
-        // Estimate speedup based on match score and view statistics
-        const estimated_speedup = if (best_view) |view| blk: {
-            const base_speedup = best_match_score * 5.0; // Up to 5x for perfect match
-            const row_factor = if (view.statistics.row_count > 0)
-                @min(2.0, @as(f64, @floatFromInt(view.statistics.row_count)) / 1000.0)
-            else
-                1.0;
-            break :blk base_speedup * row_factor;
-        } else 1.0;
-
-        return QueryRewrite{
-            .original_query = try self.allocator.dupe(u8, query),
-            .rewritten_query = rewritten,
-            .applicable_views = try applicable_views.toOwnedSlice(),
-            .estimated_speedup = estimated_speedup,
-        };
+        return null;
     }
 };
+
+// GAP-0876 structural comparison helpers. Conservative by construction:
+// any AST construct outside the supported whitelist makes the comparison
+// return false (no rewrite) rather than guessing.
+
+fn queriesStructurallyEqual(a: *const ast.Query, b: *const ast.Query) bool {
+    if (!queryIsSimpleShape(a) or !queryIsSimpleShape(b)) return false;
+    if (a.optional_match != b.optional_match) return false;
+    if (!graphPatternsEqual(&a.match, &b.match)) return false;
+    if (!optionalExprsEqual(a.where_clause, b.where_clause)) return false;
+    if (a.ret.distinct != b.ret.distinct) return false;
+    if (a.ret.items.len != b.ret.items.len) return false;
+    for (a.ret.items, b.ret.items) |ia, ib| {
+        if (!optionalStringsEqual(ia.alias, ib.alias)) return false;
+        if (!exprsEqual(&ia.expr, &ib.expr)) return false;
+    }
+    if (!orderBysEqual(a.order_by, b.order_by)) return false;
+    if (a.limit != b.limit) return false;
+    if (a.offset != b.offset) return false;
+    return true;
+}
+
+/// Whitelist: only plain MATCH/WHERE/RETURN/ORDER BY/LIMIT/OFFSET queries
+/// participate in exact-match rewrite. Everything else (WITH, CTEs,
+/// UNWIND, CALL, chaining, grouping, parameters, ...) is out of scope.
+fn queryIsSimpleShape(q: *const ast.Query) bool {
+    return q.let_bindings.len == 0 and
+        q.inline_let_bindings.len == 0 and
+        q.unwind_clause == null and
+        q.create_pattern == null and
+        q.filter_clause == null and
+        q.with_clause == null and
+        q.cte_list == null and
+        q.set_clauses.len == 0 and
+        q.remove_clauses.len == 0 and
+        q.delete_items.len == 0 and
+        q.group_by == null and
+        q.having == null and
+        q.limit_param == null and
+        q.offset_param == null and
+        q.path_variable == null and
+        !q.has_recursive_cte and
+        q.call_clause == null and
+        q.next_query == null and
+        q.for_statement == null and
+        q.initial_call_subquery == null and
+        q.merge_statement == null;
+}
+
+fn graphPatternsEqual(a: *const ast.GraphPattern, b: *const ast.GraphPattern) bool {
+    if (a.chains.len != b.chains.len) return false;
+    for (a.chains, b.chains) |ca, cb| {
+        if (!chainsEqual(&ca, &cb)) return false;
+    }
+    return true;
+}
+
+fn chainsEqual(a: *const ast.Chain, b: *const ast.Chain) bool {
+    if (!optionalStringsEqual(a.name, b.name)) return false;
+    if (a.is_shortest != b.is_shortest) return false;
+    if (a.is_optional != b.is_optional) return false;
+    if (a.path_mode != b.path_mode) return false;
+    if ((a.head == null) != (b.head == null)) return false;
+    if (a.head != null and !nodePatternsEqual(&a.head.?, &b.head.?)) return false;
+    if (a.hops.len != b.hops.len) return false;
+    for (a.hops, b.hops) |ha, hb| {
+        if (!nodePatternsEqual(&ha.left, &hb.left)) return false;
+        if (!relPatternsEqual(&ha.rel, &hb.rel)) return false;
+        if (!nodePatternsEqual(&ha.right, &hb.right)) return false;
+    }
+    return true;
+}
+
+fn nodePatternsEqual(a: *const ast.NodePattern, b: *const ast.NodePattern) bool {
+    if (!optionalStringsEqual(a.name, b.name)) return false;
+    if (a.labels.len != b.labels.len) return false;
+    for (a.labels, b.labels) |la, lb| {
+        if (!std.mem.eql(u8, la, lb)) return false;
+    }
+    return propertiesEqual(a.props, b.props);
+}
+
+fn relPatternsEqual(a: *const ast.RelPattern, b: *const ast.RelPattern) bool {
+    if (!optionalStringsEqual(a.name, b.name)) return false;
+    if (a.dir != b.dir) return false;
+    if (a.min_len != b.min_len) return false;
+    if (a.max_len != b.max_len) return false;
+    if (a.types.len != b.types.len) return false;
+    for (a.types, b.types) |ta, tb| {
+        if (!std.mem.eql(u8, ta, tb)) return false;
+    }
+    return propertiesEqual(a.props, b.props);
+}
+
+fn propertiesEqual(a: ?[]ast.Property, b: ?[]ast.Property) bool {
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
+    if (a.?.len != b.?.len) return false;
+    for (a.?, b.?) |pa, pb| {
+        if (!std.mem.eql(u8, pa.key, pb.key)) return false;
+        if (!exprsEqual(pa.value, pb.value)) return false;
+    }
+    return true;
+}
+
+fn orderBysEqual(a: ?ast.OrderBy, b: ?ast.OrderBy) bool {
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
+    const oa = a.?;
+    const ob = b.?;
+    if (oa.keys.len != ob.keys.len) return false;
+    for (oa.keys, ob.keys) |ka, kb| {
+        if (ka.desc != kb.desc) return false;
+        if (ka.nulls != kb.nulls) return false;
+        if (!exprsEqual(&ka.expr, &kb.expr)) return false;
+    }
+    return true;
+}
+
+fn optionalExprsEqual(a: ?ast.Expr, b: ?ast.Expr) bool {
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
+    return exprsEqual(&a.?, &b.?);
+}
+
+fn optionalStringsEqual(a: ?[]const u8, b: ?[]const u8) bool {
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+/// Conservative expression equality over a whitelist of node kinds that
+/// covers the simple-projection shape (identifiers, property accesses,
+/// literals, unary/binary operators, function calls). Unsupported kinds
+/// compare unequal so they can never produce a false rewrite.
+fn exprsEqual(a: *const ast.Expr, b: *const ast.Expr) bool {
+    if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) return false;
+    return switch (a.*) {
+        .Ident => |ia| std.mem.eql(u8, ia.orig, b.Ident.orig),
+        .PropertyAccess => |pa| std.mem.eql(u8, pa.object, b.PropertyAccess.object) and
+            std.mem.eql(u8, pa.property, b.PropertyAccess.property),
+        .Member => |m| std.mem.eql(u8, m.field, b.Member.field) and
+            exprsEqual(m.target, b.Member.target),
+        .String => |s| std.mem.eql(u8, s, b.String),
+        .Int => |i| i == b.Int,
+        .Bool => |v| v == b.Bool,
+        .Null => true,
+        .DoubleLit => |d| d == b.DoubleLit,
+        .Unary => |u| u.op == b.Unary.op and exprsEqual(u.expr, b.Unary.expr),
+        .Binary => |bin| bin.op == b.Binary.op and
+            exprsEqual(bin.left, b.Binary.left) and
+            exprsEqual(bin.right, b.Binary.right),
+        .Call => |c| blk: {
+            const bc = b.Call;
+            if (c.args.len != bc.args.len) break :blk false;
+            if (!exprsEqual(c.callee, bc.callee)) break :blk false;
+            for (c.args, bc.args) |arg_a, arg_b| {
+                if (!exprsEqual(arg_a, arg_b)) break :blk false;
+            }
+            break :blk true;
+        },
+        .IsNull => |n| n.negated == b.IsNull.negated and exprsEqual(n.target, b.IsNull.target),
+        .HasLabel => |h| std.mem.eql(u8, h.node, b.HasLabel.node) and
+            std.mem.eql(u8, h.label, b.HasLabel.label),
+        else => false, // Unsupported expression kinds never exact-match.
+    };
+}

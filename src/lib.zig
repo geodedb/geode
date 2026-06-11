@@ -214,6 +214,11 @@ pub const types = struct {
 pub const graph_common = @import("types/graph_common.zig");
 // Re-export materialized views
 pub const materialized_views = @import("query/materialized_views.zig");
+// GAP-0876: enhanced materialized view manager (exact-match query rewrite,
+// API level). Standalone subsystem — not yet consulted by the execution
+// path; exported so the named regression test
+// (tests/test_materialized_views_enhanced.zig) reaches it via `geode`.
+pub const enhanced_materialized_views = @import("query/enhanced_materialized_views.zig");
 
 // Test harness is not exported from production modules; tests import it directly.
 

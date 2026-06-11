@@ -12,7 +12,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - ✅ **Phase 3**: Set Operations (UNION/INTERSECT/EXCEPT)
 - ✅ **Phase 4**: Transaction Isolation (Phantom read prevention, SSI)
 - ✅ **Phase 5**: Distributed Coordination (10,451 lines)
-- ✅ **Phase 6**: Materialized Views (3 refresh strategies)
+- ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
 - ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
 
 **Total**: ~13,554+ lines of production code | See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
@@ -141,7 +141,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 - **Cost-Based Planner**: Statistics-driven query optimization
 - **IndexOptimizer**: Automatic index selection
 - **Distributed Queries**: Federation-aware optimization
-- **Materialized Views**: Auto-refresh strategies
+- **Materialized Views**: Auto-refresh strategies; exact-match query rewrite (API level — not yet consulted by the executor; cost-based partial rewrite future, GAP-0876)
 
 ### **Storage Engine**
 

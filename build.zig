@@ -5393,6 +5393,25 @@ pub fn build(b: *std.Build) void {
     const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
     gap0884_step.dependOn(&run_gap0884_tests.step);
 
+    // GAP-0876: exact-match materialized view rewrite (API level). Pins the
+    // enhanced view manager's rewrite path: a query structurally identical
+    // to a view definition rewrites to the view (complete_replacement) and
+    // the served rows come from the materialized snapshot — proven by
+    // mutating base data without refreshing and asserting the snapshot is
+    // returned. Also pins the negatives: same-label/different-projection,
+    // different literal/limit/order-by, and unparseable input never rewrite
+    // (the old label-overlap heuristic that claimed complete_replacement is
+    // gone). The manager is reached through the public `geode` module
+    // (lib.zig re-export); it is NOT yet consulted by the execution path.
+    const gap0876_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_materialized_views_enhanced.zig"), .target = target, .optimize = optimize });
+    gap0876_test_mod.addImport("geode", root_mod);
+    gap0876_test_mod.link_libc = true;
+    const gap0876_tests = b.addTest(.{ .root_module = gap0876_test_mod });
+    const run_gap0876_tests = b.addRunArtifact(gap0876_tests);
+    shardDep(test_step, &run_gap0876_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0876_step = b.step("test-gap0876", "GAP-0876: exact-match materialized view rewrite served from the view snapshot");
+    gap0876_step.dependOn(&run_gap0876_tests.step);
+
     // GAP-0867: real statistics into the CBO + truthful EXPLAIN estimates.
     // Pins (a) StatsRegistry.analyzeTable collecting live row counts from the
     // graph store (was error.FeatureDisabled), (b) explainEstimateJSON

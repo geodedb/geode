@@ -35,7 +35,7 @@ This document provides the authoritative implementation status for Geode as of O
 |---------|--------|----------|
 | Vector Search | Complete | HNSW indexing, 6 distance metrics |
 | Cloud Backup | Complete | S3/Digital Ocean Spaces |
-| Materialized Views | Complete | 3 refresh strategies |
+| Materialized Views | Lifecycle/refresh complete; rewrite exact-match only (API level) | 3 refresh strategies; `zig build test-gap0876`; executor integration future (GAP-0876) |
 | Distributed Queries | Complete | Federation-aware optimization |
 | Real-time Analytics | Complete | Streaming with ML integration |
 
