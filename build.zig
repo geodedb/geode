@@ -1151,6 +1151,20 @@ pub fn build(b: *std.Build) void {
     const gap0855_kafka_step = b.step("test-gap0855-kafka", "Run GAP-0855b Kafka CDC sink produce-only delivery regression");
     gap0855_kafka_step.dependOn(&run_gap0855_kafka_tests.step);
 
+    // GAP-0872: CDC cloud sinks (Kinesis/PubSub) must fail LOUD at construction
+    // (error.SinkNotImplemented) instead of silently discarding events. Also
+    // guards that real sinks (memory/webhook/file) still construct and that a
+    // FileSink round-trip persists events to disk.
+    const gap0872_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0872_cdc_sinks.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0872_tests.root_module.addImport("geode", root_mod);
+    const run_gap0872_tests = b.addRunArtifact(gap0872_tests);
+    const gap0872_step = b.step("test-gap0872", "Run GAP-0872 CDC Kinesis/PubSub fail-loud regression");
+    gap0872_step.dependOn(&run_gap0872_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)

@@ -1944,6 +1944,8 @@ REQ-GQL-042,CDC Engine,ChangeStreamMalformedLogBufferWrap,TESTED,,,streaming,202
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedPayloadHash,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedSnapshotInterval,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedSnapshotIntervalEnv,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
+REQ-GQL-042,CDC Engine,CloudSinkFailLoud,TESTED,,,streaming,2026-06-11,src/streaming/cdc_enhanced.zig
+REQ-GQL-042,CDC Engine,CloudSinkFailLoud,TESTED,,,streaming,2026-06-11,tests/test_gap0872_cdc_sinks.zig
 REQ-GQL-042,CDC Engine,DiagnosticsExport,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,DiagnosticsExport,TESTED,,,streaming,2025-09-20,tests/canary_cdc_diagnostics_export.zig
 REQ-GQL-042,CDC Engine,EventCapture,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig

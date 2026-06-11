@@ -695,7 +695,7 @@ struct PathCacheEntry {
 **Core Features**:
 
 - Real-time change event streaming
-- Multiple sink support: Kafka, Kinesis, PubSub, Webhook, File
+- Multiple sink support: Kafka, Webhook, File (plus an in-memory sink for testing). Kinesis and Pub/Sub are **planned, not implemented** — configuring them fails loud at startup with `error.SinkNotImplemented` (GAP-0872)
 - Adaptive batching and backpressure
 - Guaranteed ordering per entity
 - Resume token support for fault tolerance
@@ -808,24 +808,14 @@ pub const KafkaConfig = struct {
 - Delivery guarantees: at-least-once (acks=all)
 - Idempotent producer support
 
-### 5.3 Kinesis Integration
+### 5.3 Kinesis / Pub/Sub (planned — fail-loud)
 
-**Configuration**:
-
-```zig
-pub const KinesisConfig = struct {
-    stream_name: []const u8,
-    region: []const u8,
-    partition_key: []const u8,
-    endpoint: ?[]const u8 = null,
-};
-```
-
-**Features**:
-
-- AWS SDK integration
-- Automatic retry with exponential backoff
-- Shard-level ordering by partition key
+AWS Kinesis and Google Pub/Sub sinks are **not implemented**. A `KinesisConfig`
+type exists for the planned surface, but there is no authenticated client
+behind it. As of GAP-0872, configuring a `kinesis` or `pubsub` CDC sink fails
+at engine construction with `error.SinkNotImplemented` (previously these sinks
+accepted events and silently discarded them). Regression:
+`tests/test_gap0872_cdc_sinks.zig` (`zig build test-gap0872`).
 
 ### 5.4 Webhook Sink
 
