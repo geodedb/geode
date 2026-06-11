@@ -1704,6 +1704,36 @@ pub const GraphStore = struct {
         return self.createNodeWithGraphAndTenant(labels, graph_name, tenant);
     }
 
+    // GAP-0891 (RC-1 seam — SKELETON, intentionally incomplete):
+    // Bulk / group-commit writes execute on shard-worker threads that never
+    // call `fle_integration.setCurrentTenantId`, so the no-tenant
+    // `createNodeWithGraph` above resolves the per-thread tenant map to
+    // "default" and mis-tags every bulk-written node for a non-default request
+    // tenant (the GAP-0891 fingerprint: a t_DEMO `MATCH (n) RETURN count(n)`
+    // sees only the single handler-thread node).
+    //
+    // The real fix threads the request's tenant — captured on the HANDLER
+    // thread at submit time — through `group_commit.ApplyOp` and the
+    // `graph_storage_adapter` bulk helpers down to a worker-side entry point.
+    // This function is the seam the worker path will call with that captured
+    // tenant.
+    //
+    // SKELETON: it currently IGNORES `request_tenant` and delegates to the
+    // broken per-thread-resolving path, so on a worker thread it still tags
+    // "default" and the GAP-0891 red tests fail. The fixer must change the body
+    // to honor the captured tenant:
+    //     return self.createNodeWithGraphAndTenant(labels, graph_name, request_tenant);
+    // and wire the ApplyOp/adapter-bulk plumbing that supplies `request_tenant`.
+    pub fn createNodeForRequestTenant(
+        self: *GraphStore,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        request_tenant: []const u8,
+    ) !u64 {
+        _ = request_tenant; // GAP-0891 FIXME: honor the captured request tenant.
+        return self.createNodeWithGraph(labels, graph_name);
+    }
+
     /// Phase 2 of the graph-sharding plan: pre-allocate a node id
     /// for use by the `ShardedCoordinator`.  Returns a fresh UUIDv7-
     /// truncated-to-u64 id without touching any graph state.  The
@@ -3743,6 +3773,31 @@ pub const GraphStore = struct {
         return count;
     }
 
+    // GAP-0891 (defense-in-depth seam — SKELETON, intentionally incomplete):
+    // Edge visibility for a tenant-filtered edge read should ALSO be derivable
+    // from ENDPOINT visibility — an edge is visible to a tenant iff BOTH of its
+    // endpoint nodes pass that tenant's filter — to match the GPS path and to
+    // tolerate legacy edges that were mis-tagged "default" while their endpoints
+    // carry the correct tenant.
+    //
+    // SKELETON: it currently performs ONLY the exact-tag match (the same check
+    // `match_operations.passesTenantFilterEdge` does today), so a legacy
+    // "default"-tagged edge whose endpoints are both visible to the tenant is
+    // wrongly hidden and the GAP-0891 red test fails. The fixer must change the
+    // body to fall back to endpoint visibility, e.g.:
+    //     const tid = filter_tenant orelse return true;
+    //     if (std.mem.eql(u8, edge.tenant_id, tid)) return true;
+    //     const from = self.nodes.get(edge.from_id) orelse return false;
+    //     const to = self.nodes.get(edge.to_id) orelse return false;
+    //     return std.mem.eql(u8, from.tenant_id, tid) and std.mem.eql(u8, to.tenant_id, tid);
+    // and route the match-loop edge gate (`passesTenantFilterEdge`) through the
+    // equivalent hierarchy-aware endpoint check.
+    pub fn edgeVisibleForTenant(self: *const GraphStore, edge: Edge, filter_tenant: ?[]const u8) bool {
+        _ = self;
+        const tid = filter_tenant orelse return true;
+        return std.mem.eql(u8, edge.tenant_id, tid);
+    }
+
     // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelIndexCardinality; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
     // GAP-0811: Label-scoped O(1) cardinality for the count fast-path.
     //
@@ -4293,6 +4348,26 @@ pub const GraphStore = struct {
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
         const tenant = fle_integration.getCurrentTenantId();
         return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, tenant);
+    }
+
+    // GAP-0891 (RC-1 seam — SKELETON, intentionally incomplete). The edge analog
+    // of `createNodeForRequestTenant`: the worker-side bulk/group-commit edge
+    // path will call this with the request tenant captured on the handler thread
+    // at submit time. SKELETON: it currently IGNORES `request_tenant` and
+    // delegates to the broken per-thread-resolving `createEdgeWithGraph`, so on a
+    // worker thread it tags "default" and the GAP-0891 red tests fail. The fixer
+    // must change the body to:
+    //     return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, request_tenant);
+    pub fn createEdgeForRequestTenant(
+        self: *GraphStore,
+        from_id: u64,
+        to_id: u64,
+        edge_type: []const u8,
+        graph_name: []const u8,
+        request_tenant: []const u8,
+    ) !u64 {
+        _ = request_tenant; // GAP-0891 FIXME: honor the captured request tenant.
+        return self.createEdgeWithGraph(from_id, to_id, edge_type, graph_name);
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01

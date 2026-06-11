@@ -4732,6 +4732,14 @@ pub fn build(b: *std.Build) void {
     const gap0509_step = b.step("test-gap0509-tenant-isolation", "GAP-0509 regression (tenant isolation for MATCH and SHOW TABLES)");
     gap0509_step.dependOn(&run_gap0509_tests.step);
 
+    // GAP-0891 regression suite (native-tenant write tagging + edge reads).
+    const gap0891_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0891_repro.zig"), .target = target, .optimize = optimize });
+    gap0891_test_mod.addImport("geode", root_mod);
+    const gap0891_tests = b.addTest(.{ .root_module = gap0891_test_mod });
+    const run_gap0891_tests = b.addRunArtifact(gap0891_tests);
+    const gap0891_step = b.step("test-gap0891-repro", "GAP-0891 regression (native-tenant write tenant tagging + edge reads)");
+    gap0891_step.dependOn(&run_gap0891_tests.step);
+
     // GAP-0840 regression: opt-in strict-tenancy mode. The shared
     // tenancy.resolveTenantFilter decision (delegated to by both
     // crud_operations.tenantFilterFromContext and
