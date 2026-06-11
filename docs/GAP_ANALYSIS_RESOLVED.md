@@ -4869,3 +4869,18 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
 - 3 security findings closed in parallel (#817, #818, #819) — see `docs/SECURITY_GAP_ANALYSIS.md`.
 - Build / format / canary: PASS / PASS / PASS (all acceptance criteria verified).
 - No regressions detected.
+
+## 2026-06-11 — GAP-0891 (CaaST native-tenancy edge-read defect)
+
+### GAP-0891: Native tenant_id HELLO connection reads zero edges; bulk writes mis-tagged "default"; tenant tag not persisted (Resolved 2026-06-11)
+
+- **Original Gap:** A native-tenancy connection (`HelloRequest.tenant_id`, field 3) read tenant nodes only via an explicit `tenant_path` predicate and ZERO edges in every query shape; an edge MERGE'd through the same connection was immediately unreadable. GPS principal forwarding read the same data correctly. Reported downstream by CaaST (`docs/CAAST_TENANCY_EDGE_READ_FINDING_2026-06-11.md`).
+- **Severity:** High / tenancy isolation. Mirror risk: bulk-written tenant rows (tagged `default`) were visible to unscoped readers.
+- **Root causes (triage corrected the finding's hypothesis — the read filter was correct; writes were mis-tagged):** RC-1 per-thread tenant resolution on shard-worker (group-commit) threads → bulk rows tagged `default`; RC-2 tenant tag never persisted, restart hydration hardcoded `DEFAULT_TENANT_ID`; RC-3 internal-id create paths hardcoded `DEFAULT_TENANT_ID`.
+- **Resolved date:** 2026-06-11.
+- **Resolution evidence:**
+  - Commit `f4bf3a13` — red reproduction tests (`zig build test-gap0891-repro`; 4 red + leak-direction invariant green).
+  - Commit `666c92c9` — fix: request tenant captured at group-commit submit and threaded through `ApplyOp`; write resolvers use `tenantPreferringActiveContext()`; internal-id paths honor active tenant; tenant persisted as reserved internal property `__geode_tenant_id` (absent→default back-compat) and recovered in hydration; endpoint-derived edge-visibility bridge for legacy mis-tagged edges (fail-closed: both endpoints must pass).
+  - Verification: `test-gap0891-repro` 5/5; tenancy suites 53/53; storage/bulk/restart/FTS 36/36; cluster/raft/tenant-lifecycle 47/47; match/edge 17/17.
+  - GitLab issue [#847](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/847) closed.
+- **Residuals (tracked in #847):** raft-apply/follower tenant replication (codecs carry no tenant); legacy mis-tagged corpora need node re-seed/backfill (edge bridge already restores edge visibility).

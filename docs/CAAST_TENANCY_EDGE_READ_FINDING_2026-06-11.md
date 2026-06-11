@@ -12,7 +12,7 @@
 
 | ID | Area | Title | Severity | Status | One-line recommendation |
 |----|------|-------|----------|--------|--------------------------|
-| GAP-0891 | Tenancy | A native `tenant_id` (HELLO field 3) connection returns tenant-scoped **nodes** but **ZERO edges** for every read — edge traversal fails-closed under native tenancy | **High** | Open | Tag edges with `tenant_id` on write under native tenancy (or derive edge visibility from endpoint visibility) so a native-tenant connection can read its own edges, as the GPS principal path already does. |
+| GAP-0891 | Tenancy | A native `tenant_id` (HELLO field 3) connection returns tenant-scoped **nodes** but **ZERO edges** for every read — edge traversal fails-closed under native tenancy | **High** | **Fixed 2026-06-11** (issue [#847](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/847), commits `f4bf3a13` tests + `666c92c9` fix — see Resolution below) | Tag edges with `tenant_id` on write under native tenancy (or derive edge visibility from endpoint visibility) so a native-tenant connection can read its own edges, as the GPS principal path already does. |
 
 A Geode connection that authenticates with native tenancy (`HelloRequest.tenant_id`, proto field 3) can read its tenant's **nodes** but receives **zero edges** from any edge-bearing query — `MATCH ()-[r]->()`, a labelled `MATCH ()-[r:REL]->()`, a directed/undirected traversal from a known node, even an OPTIONAL MATCH. The same data, read either (a) without native tenancy or (b) via the **GPS principal-forwarding** path (`forward-principal user:tenant`), returns the edges correctly *and* with correct tenant isolation. So the data is present and correctly associated with the tenant; only the native-tenant **read path** drops edges.
 
@@ -83,3 +83,62 @@ Files most likely involved (native-tenant query filtering vs. GPS/RLS): `src/sec
 ## Downstream mitigation in CaaST (for traceability)
 
 CaaST's per-entity graph endpoints (`GET /api/v1/caast/<entity>/<id>/graph`) regressed to "anchor node only, zero edges" once data-plane reads were routed to per-tenant pools. CaaST's interim fix (ADR-018): keep the **anchor-visibility gate** on the per-tenant pool (node reads work, so a caller can only expand a neighbourhood anchored on an entity inside their own subtree — BOLA-safe) and run the one-hop **edge traversal** through the shared/default connection (`connDB`), the only driver-supported connection that returns edges. The neighbour set is not additionally tenant-filtered there (the `tenant_path` property is FLE-encrypted and reads as NULL off the non-tenant connection), an accepted limitation tracked in CaaST ADR-018 until GAP-0891 is fixed. CaaST entity ids are unique per tenant and the corpus is seeded per-tenant, so practical exposure is limited to genuinely cross-tenant shared/reference nodes.
+
+---
+
+## Resolution (2026-06-11) — fixed on `main` (issue #847; commits `f4bf3a13` tests, `666c92c9` fix)
+
+Triage **confirmed the symptoms but corrected the mechanism**: edges DO carry a
+storage `tenant_id` field, and the read filter
+(`passesTenantFilter`/`passesTenantFilterEdge`) was correct all along. The
+defect was **write-side mis-tagging** — three independent causes:
+
+- **RC-1 (dominant)**: write tagging resolved the **per-thread** tenant map
+  (`fle_integration.getCurrentTenantId()`); handler threads set it, but
+  bulk/group-commit writes execute on shard-worker threads that never do — so
+  every bulk-written node AND edge was tagged `default` for a `t_DEMO`
+  connection. This also explains §C (a MERGE'd edge unreadable on the same
+  connection: write tagged `default`, read filtered on `t_DEMO`) and the
+  `count(n)=1` fingerprint (the one serial handler-thread node was tagged
+  correctly; the 6 bulk nodes were not). Mirror risk fixed alongside: those
+  `default`-tagged tenant rows were visible to unscoped readers.
+- **RC-2**: the tenant tag was **never persisted** — restart hydration
+  hardcoded `DEFAULT_TENANT_ID` for every node and edge.
+- **RC-3**: internal-id create paths (WAL replay/reserved-id) hardcoded
+  `DEFAULT_TENANT_ID`.
+
+The GPS path worked because `--forward-principal` leaves `ctx.tenant_id` null
+(storage filter bypassed; isolation via RLS over `tenant_path`, which is
+node-only) — confirming the asymmetry, not a defect in GPS.
+
+**The fix** (`666c92c9`): the request tenant is captured at group-commit
+submit time on the handler thread (`tenantPreferringActiveContext()`) and
+threaded through `ApplyOp` → tenant-aware bulk helpers; per-thread write
+resolvers now prefer the active request context; internal-id paths honor the
+active tenant (introspection counters kept in the same bucket); the tenant is
+persisted as a reserved internal property (`__geode_tenant_id`, written only
+when non-default; absent ⇒ `default` on read, so legacy data is
+back-compatible) and recovered during hydration; and edge visibility gained an
+**endpoint-derived bridge** (an edge with a legacy `default` tag is visible iff
+BOTH endpoints pass the tenant filter) — matching GPS semantics and restoring
+edge reads over legacy corpora without weakening the filter (a genuine
+default↔default edge stays invisible to a tenant reader; pinned by test).
+
+**Recommendation disposition**: (1) implemented — both halves (edges tagged on
+write AND endpoint-derived visibility); (2) resolved by correct tagging — the
+filter was never wrong, the rows were; no fail-open change was made; (3) moot
+for new writes; see residuals for legacy data.
+
+**Verification**: `zig build test-gap0891-repro` 5/5 (4 red→green + the
+leak-direction invariant green throughout); tenancy suites
+(gap0509/0846/0848/0840/0852/0838-hierarchy) 53/53; storage/bulk/restart/FTS
+36/36; cluster/raft/tenant-lifecycle 47/47; match/edge 17/17.
+
+**Residuals** (tracked in issue #847):
+
+- Raft-apply/follower tenant replication: the GNC/GMRG/GUPD codecs carry no
+  tenant — cluster-mode multi-tenant tagging can diverge on followers.
+- Existing mis-tagged corpora: the edge bridge restores edge visibility, but
+  mis-tagged **nodes** still read as `default` until re-seeded/backfilled
+  (CaaST's `caast_data` seed predates the fix). CaaST ADR-018's interim
+  routing can be retired after a re-seed on a build carrying `666c92c9`.
