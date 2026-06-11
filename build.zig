@@ -2030,6 +2030,10 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
+    // GAP-0514 Phase 6: named step so the graph_store.zig inline tests are
+    // runnable outside the (blocked) monolithic `zig build test` shard sweep.
+    const graph_store_unit_step = b.step("test-graph-store", "Run graph_store.zig inline unit tests (label index, tenant isolation, refcounts, adapter reload)");
+    graph_store_unit_step.dependOn(&run_graph_store_unit_tests.step);
 
     // ----- EVAL CALL-HANDLER UNIT TESTS (GAP-0888 review follow-up) -----
     // The inline unit tests in src/eval/ts_call_handlers.zig and
@@ -6549,6 +6553,9 @@ pub fn build(b: *std.Build) void {
     const gap0514_gs_tests = b.addTest(.{ .root_module = gap0514_gs_test_mod });
     const run_gap0514_gs_tests = b.addRunArtifact(gap0514_gs_tests);
     shardDep(test_step, &run_gap0514_gs_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6: named step for the Phase 1A graph_store regression suite.
+    const gap0514_gs_step = b.step("test-gap0514-graph-store", "Run GAP-0514 graph_store regression tests (dirty tracking, saveToFile, adjacency, multi-graph)");
+    gap0514_gs_step.dependOn(&run_gap0514_gs_tests.step);
 
     // GAP-0516: MCP server handler behaviour tests are colocated with
     // the source in `src/mcp/server.zig`. Wiring them into `zig build

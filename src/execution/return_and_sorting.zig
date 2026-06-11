@@ -582,9 +582,9 @@ fn executeSessionSet(allocator: std.mem.Allocator, ss: ast.SessionSetStatement) 
 // ============================================================================
 
 test "D05: exprsEqual - Ident expressions" {
-    const id1 = ast.Expr{ .Ident = .{ .orig = "name", .lower = "name" } };
-    const id2 = ast.Expr{ .Ident = .{ .orig = "name", .lower = "name" } };
-    const id3 = ast.Expr{ .Ident = .{ .orig = "other", .lower = "other" } };
+    const id1 = ast.Expr{ .Ident = .{ .orig = "name", .cnf = "name" } };
+    const id2 = ast.Expr{ .Ident = .{ .orig = "name", .cnf = "name" } };
+    const id3 = ast.Expr{ .Ident = .{ .orig = "other", .cnf = "other" } };
 
     try std.testing.expect(exprsEqual(id1, id2));
     try std.testing.expect(!exprsEqual(id1, id3));
@@ -595,21 +595,21 @@ test "D05: exprsEqual - Member expressions" {
 
     // Create n.name Member expression
     const target1 = try allocator.create(ast.Expr);
-    target1.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    target1.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(target1);
 
     const member1 = ast.Expr{ .Member = .{ .target = target1, .field = "name" } };
 
     // Create identical n.name
     const target2 = try allocator.create(ast.Expr);
-    target2.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    target2.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(target2);
 
     const member2 = ast.Expr{ .Member = .{ .target = target2, .field = "name" } };
 
     // Create different n.age
     const target3 = try allocator.create(ast.Expr);
-    target3.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    target3.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(target3);
 
     const member3 = ast.Expr{ .Member = .{ .target = target3, .field = "age" } };
@@ -629,7 +629,7 @@ test "D05: exprsEqual - Int expressions" {
 
 test "D05: exprsEqual - different types" {
     const int_expr = ast.Expr{ .Int = 42 };
-    const id_expr = ast.Expr{ .Ident = .{ .orig = "x", .lower = "x" } };
+    const id_expr = ast.Expr{ .Ident = .{ .orig = "x", .cnf = "x" } };
 
     try std.testing.expect(!exprsEqual(int_expr, id_expr));
 }
@@ -639,18 +639,18 @@ test "D05: findColumnIndexByExpression - finds matching expression" {
 
     // Create ORDER BY expression: n.name
     const order_target = try allocator.create(ast.Expr);
-    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(order_target);
 
     const order_expr = ast.Expr{ .Member = .{ .target = order_target, .field = "name" } };
 
     // Create RETURN items: [n.name AS persons, n.age AS age]
     const return_target1 = try allocator.create(ast.Expr);
-    return_target1.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    return_target1.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(return_target1);
 
     const return_target2 = try allocator.create(ast.Expr);
-    return_target2.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    return_target2.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(return_target2);
 
     const return_items = [_]ast.ReturnItem{
@@ -669,14 +669,14 @@ test "D05: findColumnIndexByExpression - returns null for non-matching" {
 
     // Create ORDER BY expression: n.unknown
     const order_target = try allocator.create(ast.Expr);
-    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(order_target);
 
     const order_expr = ast.Expr{ .Member = .{ .target = order_target, .field = "unknown" } };
 
     // Create RETURN items: [n.name AS persons]
     const return_target = try allocator.create(ast.Expr);
-    return_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    return_target.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(return_target);
 
     const return_items = [_]ast.ReturnItem{
@@ -752,15 +752,15 @@ test "F01: sortRowsEx - DESC NULLS LAST puts nulls at end" {
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .row_count = 4,
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // ORDER BY salary DESC NULLS LAST
-    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .cnf = "salary" } };
     var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .last };
-    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+    const order = ast.OrderBy{ .keys = order_keys };
 
     try sortRowsEx(allocator, &result, order, null);
 
@@ -799,15 +799,15 @@ test "F01: sortRowsEx - ASC NULLS LAST also puts nulls at end" {
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .row_count = 3,
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // ORDER BY salary ASC NULLS LAST
-    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .cnf = "salary" } };
     var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = false, .nulls = .last };
-    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+    const order = ast.OrderBy{ .keys = order_keys };
 
     try sortRowsEx(allocator, &result, order, null);
 
@@ -845,15 +845,15 @@ test "F01: sortRowsEx - DESC NULLS FIRST puts nulls at beginning" {
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .row_count = 3,
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // ORDER BY salary DESC NULLS FIRST
-    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .cnf = "salary" } };
     var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .first };
-    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+    const order = ast.OrderBy{ .keys = order_keys };
 
     try sortRowsEx(allocator, &result, order, null);
 

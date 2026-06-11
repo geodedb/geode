@@ -40,7 +40,7 @@ const LabelCountValue = std.atomic.Value(usize);
 // duplicated across four modules and is now consolidated as
 // `fle_integration.rolePreferringActiveContext`.
 
-// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-001; FEATURE="EngineBackedPersistence"; ASPECT=LegacyRemoval; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
+// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-001; FEATURE="EngineBackedPersistence"; ASPECT=LegacyRemoval; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
 // Phase 2: Legacy graph_store.dat persistence removed — adapter is the primary store.
 
 pub fn lastLoadHadChecksumError() bool {
@@ -80,7 +80,7 @@ fn realtimeMillis() u64 {
     }
 }
 
-// CANARY: REQ=REQ-QUIC-HC-015; FEATURE="High-Concurrency Mutations"; ASPECT=AtomicNodeIdReservation; STATUS=IMPL; OWNER=storage; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-015; FEATURE="High-Concurrency Mutations"; ASPECT=AtomicNodeIdReservation; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
 /// Generate a time-based unique 64-bit ID without taking the UUIDv7 global
 /// mutex or issuing a randomness syscall. GraphStore historically called
 /// generateUuidV7() and then discarded the lower random 64 bits; under
@@ -217,7 +217,7 @@ pub const PropertyValue = union(enum) {
     Decimal: struct { coeff: i128, scale: u8 },
 };
 
-// CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=IMPL; TEST=tests/integration/test_variable_paths.zig; OWNER=engine; UPDATED=2026-02-03
+// CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=TESTED; TEST=test-iso-conformance; OWNER=engine; UPDATED=2026-06-11
 pub const PathOptions = struct {
     min_length: ?u32 = null,
     max_length: ?u32 = null,
@@ -539,7 +539,7 @@ const MergePropertyIndexShard = struct {
     }
 };
 
-// CANARY: REQ=REQ-QUIC-HC-127; FEATURE="High-Concurrency Mutations"; ASPECT=ShardedMergePropertyIndex; STATUS=IMPL; TEST=test-merge-prop-index-concurrent; OWNER=storage; UPDATED=2026-05-28
+// CANARY: REQ=REQ-QUIC-HC-127; FEATURE="High-Concurrency Mutations"; ASPECT=ShardedMergePropertyIndex; STATUS=TESTED; TEST=test-merge-prop-index-concurrent; OWNER=storage; UPDATED=2026-06-11
 /// Striped `(graph, label, property_key, property_value) -> node_id` index.
 ///
 /// The pre-sharded implementation protected one process-wide `StringHashMap`
@@ -704,7 +704,7 @@ pub const GraphStore = struct {
     // — so the strict ordering is `labels_rwlock` → `perf_c_refcount_mutex`.
     // Tier 1 per CLAUDE.md (alongside merge_prop_index shard mutexes).
     perf_c_refcount_mutex: std.Io.Mutex = std.Io.Mutex.init,
-    // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-06-11
     //
     // Group-commit shard writers mutate `label_index` while holding the
     // whole-graph rwlock in SHARED mode. The legacy label-index contract
@@ -713,7 +713,7 @@ pub const GraphStore = struct {
     // posting-list insert. This mutex guards the outer map and is held while
     // a posting's leaf mutex is held, so rehash cannot move a locked posting.
     label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
-    // CANARY: REQ=REQ-QUIC-HC-163; FEATURE="High-Concurrency Label Counts"; ASPECT=AtomicLabelCountRefcounts; STATUS=IMPL; TEST=test_graph_store_label_count_refcounts; OWNER=storage; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-163; FEATURE="High-Concurrency Label Counts"; ASPECT=AtomicLabelCountRefcounts; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
     //
     // Existing graph+label refcount entries are mutated atomically while this
     // rwlock is held SHARED for map pointer stability. New labels still take it
@@ -1772,7 +1772,7 @@ pub const GraphStore = struct {
         try self.insertReservedNodeInMemory(reserved_id, labels, graph_name, tenant);
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-016; FEATURE="High-Concurrency Mutations"; ASPECT=ShardAlignedBulkNodeCreate; STATUS=IMPL; OWNER=storage; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-016; FEATURE="High-Concurrency Mutations"; ASPECT=ShardAlignedBulkNodeCreate; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-06-11
     /// Register an already-persisted storage-engine slot for a reserved public
     /// node id, then populate the in-memory compatibility store. This is used
     /// by the group-commit write path after it allocates the engine slot on the
@@ -3765,7 +3765,7 @@ pub const GraphStore = struct {
         label: []const u8,
         tenant: ?[]const u8,
     ) usize {
-        // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-032; FEATURE="High-Concurrency Label Counts"; ASPECT=LabelPostingLocking; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-06-11
         //
         // Group-commit writers update label postings while sharing the
         // whole-graph rwlock with readers. Count must therefore take the same
@@ -5937,7 +5937,7 @@ pub const GraphStore = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-004; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromAdapter; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-004; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromAdapter; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
     /// Load graph data from the storage adapter into the in-memory cache.
     /// Scans all nodes and edges from the adapter, rebuilding Node/Edge
     /// structs, label index, adjacency index, and IdMaps.
@@ -6417,7 +6417,7 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
     // Load from per-graph storage engine instead of legacy graph_store.dat.
     pub fn loadFromFile(self: *GraphStore) !void {
         // Reload semantics replace the in-memory compatibility cache with the
@@ -7228,7 +7228,7 @@ pub fn deinitGlobalAdapter() void {
     const group_commit = @import("storage/group_commit.zig");
     group_commit.shutdownAllCoordinators();
 
-    // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=AdapterShutdownCheckpoint; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=AdapterShutdownCheckpoint; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-06-11
     //
     // Group-commit mutation fast paths write through the engine-backed adapter
     // and may not mark the legacy compatibility GraphStore dirty. A clean
@@ -7305,7 +7305,7 @@ var g_init_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// GAP-0259/0260: RwLock replaces Mutex so query threads (shared readers) don't
 /// block each other — only the persistence thread takes an exclusive write lock.
-/// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
+/// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=storage; UPDATED=2026-06-11
 var g_store_rwlock: std.Io.RwLock = std.Io.RwLock.init;
 
 /// Mutation epoch counter for ReadView invalidation.
