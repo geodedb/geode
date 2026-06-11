@@ -1056,5 +1056,8 @@ test "AdvancedIndexManager integration" {
     const spatial_results = try manager.searchWithinRadius("locations", point, 10.0, allocator);
     defer allocator.free(spatial_results);
 
-    try testing.expect(spatial_results.len >= 0); // May be 0 due to placeholder implementation
+    // GAP-0877: searchWithinRadius is a real implementation (R-tree bounding
+    // box + haversine refinement, GAP-0205); the inserted point MUST be found.
+    try testing.expectEqual(@as(usize, 1), spatial_results.len);
+    try testing.expectEqual(@as(u64, 1), spatial_results[0].node_id);
 }

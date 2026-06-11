@@ -5412,6 +5412,24 @@ pub fn build(b: *std.Build) void {
     const gap0876_step = b.step("test-gap0876", "GAP-0876: exact-match materialized view rewrite served from the view snapshot");
     gap0876_step.dependOn(&run_gap0876_tests.step);
 
+    // GAP-0877: advanced-type semantics. Pins (a) canonical ISO-8601 /
+    // actual-value stringify for Date/Time/TimeTZ/Timestamp/TimestampTZ/
+    // Interval/Url/Domain/Bytea (previously placeholder strings like "date"),
+    // (b) stable error.UnsupportedGeometryRelation for unimplemented geometry
+    // relation combinations (previously silent false) plus real LineString-
+    // LineString and polygon edge-crossing intersection, (c) domain_root
+    // eTLD+1 via the bundled public-suffix snapshot (exact + wildcard +
+    // exception rules, last-2-labels fallback for unknown TLDs), and (d)
+    // GeometryFromText producing real WKB instead of raw WKT bytes.
+    const gap0877_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0877_advanced_types.zig"), .target = target, .optimize = optimize });
+    gap0877_test_mod.addImport("geode", root_mod);
+    gap0877_test_mod.link_libc = true;
+    const gap0877_tests = b.addTest(.{ .root_module = gap0877_test_mod });
+    const run_gap0877_tests = b.addRunArtifact(gap0877_tests);
+    shardDep(test_step, &run_gap0877_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0877_step = b.step("test-gap0877", "GAP-0877: canonical advanced-type serialization, eTLD+1 domain_root, honest geometry errors");
+    gap0877_step.dependOn(&run_gap0877_tests.step);
+
     // GAP-0867: real statistics into the CBO + truthful EXPLAIN estimates.
     // Pins (a) StatsRegistry.analyzeTable collecting live row counts from the
     // graph store (was error.FeatureDisabled), (b) explainEstimateJSON

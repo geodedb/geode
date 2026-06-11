@@ -1185,12 +1185,13 @@ REQ-GAP-0850-INSECURE-GUARD-001,InsecureAllowAllProductionGuard,StartupGuard,TES
 REQ-GAP-0850-INSECURE-GUARD-001,InsecureAllowAllProductionGuard,StartupGuard,TESTED,,,security,2026-06-09,tests/test_gap0850_insecure_guard.zig
 REQ-GAP-0856-DIST-EXPLAIN,DistributedExplainScope,Regression,TESTED,,,distributed,2026-06-10,tests/test_gap0856_distributed_explain.zig
 REQ-GAP-0857-EMBEDDED-SERVER,EmbeddedServerGate,Regression,TESTED,,,library,2026-06-10,tests/test_gap0857_lib_api.zig
+REQ-GAP-0877,AdvancedTypeSemantics,Regression,TESTED,,,types,2026-06-11,tests/test_gap0877_advanced_types.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig
-REQ-GEO-MULTI-001,MultiGeometry,SpatialTypes,TESTED,,,types,2026-01-10,src/eval_extended.zig
-REQ-GEO-MULTI-002,MultiGeometry,SpatialTypes,TESTED,,,types,2026-01-10,src/eval_extended.zig
-REQ-GEO-MULTI-003,MultiGeometry,SpatialTypes,TESTED,,,types,2026-01-10,src/eval_extended.zig
+REQ-GEO-MULTI-001,MultiGeometry,SpatialTypes,TESTED,,,types,2026-01-10,src/types/wkt.zig
+REQ-GEO-MULTI-002,MultiGeometry,SpatialTypes,TESTED,,,types,2026-01-10,src/types/wkt.zig
+REQ-GEO-MULTI-003,MultiGeometry,SpatialTypes,TESTED,,,types,2026-01-10,src/types/wkt.zig
 REQ-GEODETESTLAB-001,GeodeTestlab,TestExecution,TESTED,,,test,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-GEODETESTLAB-ASSERT-001,GeodeTestlab,Assertions,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GEODETESTLAB-SPEC-001,GeodeTestlab,SpecExecution,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
@@ -2419,6 +2420,7 @@ REQ-GQL-DELETE,DELETE in Query,ParserCreateStatement,TESTED,,,parser,2025-10-14,
 REQ-GQL-DISTINCT-001,DISTINCT,DEDUPLICATION,TESTED,,,execution,2025-12-22,src/execution/result_utils.zig
 REQ-GQL-DISTINCT-OPTIONAL-001,DistinctOptionalMatch,NullDedup,TESTED,,,execution,2025-12-28,src/execution/match_operations.zig
 REQ-GQL-DISTINCT-OPTIONAL-001,GQLOptionalMatch,DistinctOptional,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
+REQ-GQL-DOMAIN-ROOT-001,DomainRoot,PublicSuffix,TESTED,,,types,2026-06-11,src/types/public_suffix.zig
 REQ-GQL-EMPTY-MATCH-WITH-001,EmptyMatchWithClause,NullOnNoRows,TESTED,,,execution,2025-12-27,src/execution.zig
 REQ-GQL-EMPTY-MATCH-WITH-001,GQLMatching,EmptyMatchWith,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-GQL-EXISTS-001,ExistsSubquery,Evaluation,TESTED,,,eval,2025-12-27,src/eval.zig
@@ -2800,6 +2802,8 @@ REQ-GQL-SLICE-001,ListSlicing,ASTNode,TESTED,,,parser,2025-12-24,src/gql/ast.zig
 REQ-GQL-SLICE-002,ListSlicing,ParserSupport,TESTED,,,parser,2025-12-24,src/gql/parser.zig
 REQ-GQL-SLICE-003,ListSlicing,Evaluation,TESTED,,,eval,2025-12-24,src/eval.zig
 REQ-GQL-SPATIAL-001,Spatial Index,CoordinateStorage,TESTED,,,index,2026-01-16,src/index/advanced_types_index.zig
+REQ-GQL-SPATIAL-002,WktToWkb,Constructor,TESTED,,,types,2026-06-11,src/types/evaluator_functions.zig
+REQ-GQL-SPATIAL-002,WktToWkb,Parser,TESTED,,,types,2026-06-11,src/types/wkt.zig
 REQ-GQL-SPATIAL-FUNC-001,SpatialFunctions,PostGISStyle,TESTED,,,types,2025-10-19,src/types/geographic.zig
 REQ-GQL-SPATIAL-INDEX,SpatialIndex,Core,TESTED,,,team,2025-10-02,tests/integration/test_spatial_index.zig
 REQ-GQL-SPATIAL-INDEX-001,Spatial Index Integration,Index,TESTED,,,index,2025-01-03,src/index/spatial_index.zig
@@ -3302,7 +3306,7 @@ REQ-M5.2-VALUE-TYPES-007,Value Helpers,Truthiness,EXEMPT,,,value_types,2025-11-1
 REQ-M5.2-VALUE-TYPES-008,Decimal Helpers,DecimalConversion,TESTED,,,value_types,2025-11-13,src/value_types.zig
 REQ-M5.2-VALUE-TYPES-009,Value Helpers,Equality,EXEMPT,,,value_types,2025-11-13,src/value_types.zig
 REQ-M5.2-VALUE-TYPES-010,Decimal Helpers,Power10,TESTED,,,value_types,2025-11-13,src/value_types.zig
-REQ-M5.2-VALUE-TYPES-011,Value Helpers,Stringify,EXEMPT,,,value_types,2025-11-13,src/value_types.zig
+REQ-M5.2-VALUE-TYPES-011,Value Helpers,Stringify,TESTED,,,value_types,2026-06-11,src/value_types.zig
 REQ-M5.3-ADAPTER-DOC-001,Documentation,UsageExamples,EXEMPT,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
 REQ-M5.3-ADAPTER-INIT-001,Adapter Initialization,FactoryFunction,EXEMPT,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
 REQ-M5.3-CALLBACK-WRAPPER-001,Callback Wrappers,ConvenienceMethods,TESTED,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
@@ -4590,7 +4594,7 @@ REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,,,spatial,2026-0
 REQ-SPATIAL-CONTAINS-001,SpatialContains,GeometryRelation,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-DISTANCE-001,SpatialDistance,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-GEO-001,SpatialTypes,GeoOperations,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-SPATIAL-INTERSECTS-001,SpatialIntersects,GeometryRelation,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-INTERSECTS-001,SpatialIntersects,GeometryRelation,TESTED,,,spatial,2026-06-11,src/eval_extended.zig
 REQ-SPATIAL-POINT-001,SpatialPoint,PointCreation,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-POINT-001,SpatialTypes,Point,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-SPATIAL-POINT-001,SpatialTypes,PointType,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
