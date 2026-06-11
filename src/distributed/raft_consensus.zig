@@ -948,22 +948,26 @@ pub const Transport = struct {
     /// k8s root cause #5 (stalled-stream liveness): the budget, in ms, after
     /// which a peer we are actively sending to but have observed NO forward
     /// progress from is judged stalled and its cached connection evicted +
-    /// rebuilt (the same recovery the IP-change reaper performs). Sized as
-    /// several `clientPollLoop` reaper passes (peer_reresolve_ms = 3000) and
-    /// kept at or below the raft election timeout ceiling (5000 ms default —
-    /// `cluster.zig:2403`) so recovery is prompt yet never trips on a merely
-    /// quiet-but-healthy link. At the steady-state 50 ms heartbeat/response
-    /// cadence this budget gives a 60x margin, so a healthy link is never
-    /// judged stalled.
+    /// rebuilt (the same recovery the IP-change reaper performs).
     ///
-    /// SKELETON NOTE (election-livelock fix, 2026-06-11): the real budget MUST be
-    /// raised to 15000 — well above the worst-case election-convergence round
-    /// (`2 * election_tick * tick_ms ≈ 2000 ms`, randomized/multi-round under
-    /// churn) AND strictly above the reaper interval (`peer_reresolve_ms`), so a
-    /// leaderless election never trips the stall detector. The skeleton leaves it
-    /// at the buggy 3000 ms so the "budget exceeds election convergence" test
-    /// FAILS until the fixer raises it.
-    pub const peer_stall_budget_ms: i64 = 3000;
+    /// SIZING (election-livelock fix, 2026-06-11). The earlier 3000 ms value was
+    /// derived from a wrong "≤ 5000 ms election-timeout ceiling" rationale and
+    /// caused a total-cluster election livelock: it was BELOW the real election
+    /// convergence and EQUAL to the reaper interval. The correct derivation of the
+    /// worst-case election round is `2 * election_tick * tick_ms`:
+    ///   - `election_tick = max(2, election_timeout_ms / 50) = 100` ticks for the
+    ///     default 5000 ms timeout (see `RaftNode.initWithClock` election_tick),
+    ///   - the raft loop ticks every 10 ms (`cluster.zig` 10 ms tick),
+    ///   - the election timeout randomizes up to 2x,
+    /// → `2 * 100 * 10 = 2000 ms` per round (multi-round under churn). The budget
+    /// must give wide headroom so a leaderless election never trips the detector
+    /// AND must be decoupled from — strictly greater than — the reaper interval.
+    /// 15000 ms is ≥ 7x the 2000 ms worst-case round and 5x the 3000 ms reaper
+    /// interval (`peer_reresolve_ms`), while still recovering a genuinely wedged
+    /// leader stream within seconds. At the steady-state 50 ms heartbeat/response
+    /// cadence this budget gives a 300x margin, so a healthy link is never judged
+    /// stalled.
+    pub const peer_stall_budget_ms: i64 = 15000;
 
     /// The `clientPollLoop` stalled-stream reaper cadence (mirror of the local
     /// `peer_reresolve_ms` const inside `clientPollLoop`). Exposed `pub` so the
@@ -1004,11 +1008,19 @@ pub const Transport = struct {
     /// `peer_stall_strikes_required` consecutive such passes — see
     /// `recordStallPass`.
     ///
-    /// SKELETON NOTE: the skeleton IGNORES `is_leader` (so the "suppressed when
-    /// not leader" test FAILS) and uses the buggy 3000 ms budget. The fixer must
-    /// wire the `is_leader` guard.
+    /// Pure / side-effect-free: it only reads atomics and never mutates `pc`, so
+    /// it is safe to call from the reaper and from unit tests with an injected
+    /// clock + leader flag.
     pub fn shouldEvictOnStall(pc: *PeerConnection, now_ms: i64, is_leader: bool) bool {
-        _ = is_leader; // SKELETON: leader guard not yet wired — fixer adds it.
+        // election-livelock guard: a stalled outbound stream is only meaningful
+        // to detect when THIS node is the leader expecting AppendEntriesResponse
+        // flow. Off-leader (candidate/follower) there is legitimately no
+        // AppendEntries traffic, so every peer would read as stalled and the
+        // detector would evict the connections votes/responses ride — the
+        // livelock. The IP-change reaper (`maybeReconnectOnIpChange`) still covers
+        // a moved peer regardless of role, so suppressing this off-leader loses no
+        // recovery coverage.
+        if (!is_leader) return false;
         if (pc.frames_sent.load(.acquire) == 0) return false;
         const last = pc.last_progress_ms.load(.acquire);
         return (now_ms - last) > peer_stall_budget_ms;
@@ -1023,13 +1035,25 @@ pub const Transport = struct {
     ///     reaches `peer_stall_strikes_required`.
     /// A progress stamp (`notePeerProgress`) independently resets strikes.
     ///
-    /// SKELETON NOTE: this skeleton NEVER touches `stall_strikes`; it just
-    /// forwards the single-pass decision, so the FIRST stalled pass evicts
-    /// immediately. The "one pass must NOT evict; M consecutive do" and "progress
-    /// resets strikes" tests therefore FAIL until the fixer implements the strike
-    /// state machine here (and the reset in `notePeerProgress`).
+    /// Atomicity discipline: `stall_strikes` is an atomic, but `recordStallPass`
+    /// is driven exclusively by the single-threaded `clientPollLoop` reaper (one
+    /// pass at a time), so its load-then-store sequence is never racing another
+    /// `recordStallPass`. The only concurrent writer is `notePeerProgress` (the
+    /// inbound path), which only ever resets the counter to 0 — strictly the safe
+    /// direction: a lost-update race can at worst under-count strikes and DELAY an
+    /// eviction by one reaper pass, never cause a spurious one. We therefore use a
+    /// plain atomic load/store (not a CAS loop): the simplest discipline that
+    /// preserves the "fail-safe toward NOT evicting" invariant.
     pub fn recordStallPass(pc: *PeerConnection, now_ms: i64, is_leader: bool) bool {
-        return shouldEvictOnStall(pc, now_ms, is_leader);
+        if (!shouldEvictOnStall(pc, now_ms, is_leader)) {
+            // Healthy / not-leader / idle / progress observed on this pass: the
+            // stall run is broken, so clear any accrued strikes and do not evict.
+            pc.stall_strikes.store(0, .release);
+            return false;
+        }
+        const strikes = pc.stall_strikes.load(.acquire) + 1;
+        pc.stall_strikes.store(strikes, .release);
+        return strikes >= peer_stall_strikes_required;
     }
 
     /// Refresh the forward-progress timestamp for the peer identified by
@@ -1055,11 +1079,10 @@ pub const Transport = struct {
             pc.last_progress_ms.store(now_ms, .release);
             // election-livelock fix (2026-06-11): observed progress clears any
             // accumulated stall strikes so a peer that resumes responding is not
-            // evicted on a later isolated stalled-looking pass.
-            //
-            // SKELETON NOTE: the fixer must reset `stall_strikes` here. The
-            // skeleton leaves it untouched, so the "progress stamp resets
-            // strikes" test FAILS.
+            // evicted on a later isolated stalled-looking pass. This is the only
+            // off-reaper writer of `stall_strikes`, and it only ever resets to 0
+            // (the safe direction — see `recordStallPass`).
+            pc.stall_strikes.store(0, .release);
         }
     }
 
@@ -1088,12 +1111,17 @@ pub const Transport = struct {
         // the node as non-leader so the standalone path never evicts.
         const is_leader = if (self.is_leader_fn) |f| f(self.is_leader_ctx) else false;
         // recordStallPass tracks M consecutive stalled passes; only the Mth pass
-        // returns true. (SKELETON: returns true on the first pass — fixer wires
-        // the strike state machine.)
+        // returns true, so a single quiet pass (or anything observed off-leader)
+        // never evicts.
         if (recordStallPass(pc, now_ms, is_leader)) {
+            const last = pc.last_progress_ms.load(.acquire);
             log.warn("raft transport peer stalled (no progress within budget); evicting stale connection", &.{
                 Attr.string("endpoint", pc.endpoint),
                 Attr.uint("peer", pc.peer_id),
+                Attr.uint("strikes", pc.stall_strikes.load(.acquire)),
+                Attr.uint("strikes_required", peer_stall_strikes_required),
+                Attr.int("budget_ms", peer_stall_budget_ms),
+                Attr.int("stall_ms", now_ms - last),
             });
             self.evictPeerConnection(pc.peer_id);
         }

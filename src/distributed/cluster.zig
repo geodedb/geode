@@ -904,6 +904,25 @@ pub const ClusterCoordinator = struct {
         // election can't progress.
         self.raft.setTransport(&self.raft_transport);
 
+        // election-livelock fix (2026-06-11): wire the live leader-role source the
+        // transport's stalled-stream reaper (`maybeReconnectOnStall`) arms its
+        // eviction decision on. The stall detector must fire ONLY while THIS node
+        // is the raft leader (a stalled outbound stream is only meaningful when we
+        // are the leader expecting AppendEntriesResponse flow); off-leader every
+        // peer reads as stalled during a leaderless election and evicting them all
+        // livelocks the cluster. `ctx` is `self` (the coordinator owns
+        // `raft_transport` and outlives it, so the closure's ctx lifetime is
+        // sound), and the closure reads `coordinator.role() == .leader`. Wire it
+        // before the poll loop starts so the first reaper pass already sees a
+        // truthful role. Left unset (standalone) the transport defaults to
+        // non-leader and never evicts on stall.
+        self.raft_transport.setLeaderSource(@ptrCast(self), struct {
+            fn isLeader(ctx: ?*anyopaque) bool {
+                const coord: *ClusterCoordinator = @ptrCast(@alignCast(ctx.?));
+                return coord.role() == .leader;
+            }
+        }.isLeader);
+
         self.shutdown.store(false, .release);
 
         // Task A6 (2026-05-25 plan): bring up the QUIC listener BEFORE any
