@@ -241,6 +241,15 @@ fn workUnderHandlerLock(ctx: *ConcurrencyCtx) void {
 }
 
 test "concurrent MATCH-by-property scales across threads" {
+    // Timing-ratio assertion: meaningless on a contended host. The pre-push
+    // gate runs 4 `zig build test` shards in parallel under CI=1 precisely so
+    // perf-ratio tests self-skip (see the zig-test hook in
+    // .pre-commit-config.yaml); this test was missing the conventional guard
+    // and flaked the gate under oversubscription (4 worker threads vs a
+    // saturated box). Functional lock-correctness coverage in this file is
+    // unaffected.
+    if (std.c.getenv("CI") != null) return error.SkipZigTest;
+
     // Seed a small in-process store so the seam's lock calls operate
     // against the real global lock surface.  We are testing the lock
     // itself, not the storage engine, so a mini graph is plenty.
