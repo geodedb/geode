@@ -34,47 +34,45 @@
 //      peer (no map entry), destroying the progress evidence that would clear
 //      the stall, so a lone quiet pass re-evicts even with a healthy leader.
 //
-// CORRECTED behavior these tests encode (and that FAILS against the skeleton):
+// CORRECTED behavior these tests encode (all now on the role-armed API; the
+// legacy `is_leader: bool` form `shouldEvictOnStall`/`recordStallPass` was
+// removed in the owed-item-(4) fix):
 //
-//   A. Leader-only arming: `shouldEvictOnStall(pc, now_ms, is_leader)` must
-//      return false whenever this node is NOT the leader (the IP-change reaper
-//      covers moved peers regardless of role; the detector's target is the
-//      LEADER's silent outbound stream). SKELETON ignores `is_leader`.
+//   A. Role arming (`StallArm`): suppress ONLY a FOLLOWER; arm the LEADER AND
+//      the CANDIDATE. A follower's outbound health is the leader's detector's
+//      job (and the IP-change reaper covers moved peers regardless of role); a
+//      candidate must get its RequestVote frames through a possibly-wedged
+//      stream at restart, so it is armed.
 //
 //   B. Budget ≫ election convergence and decoupled from the reaper interval:
 //      `peer_stall_budget_ms` ≥ 3 × the worst-case election round (so ≥ 6000;
 //      the real fix raises it to 15000) AND strictly greater than
-//      `peer_reresolve_ms`. SKELETON budget is 3000.
+//      `peer_reresolve_ms`.
 //
 //   C. M consecutive stalled passes required (`peer_stall_strikes_required` ≥ 2):
-//      one stalled observation does NOT evict; `recordStallPass` evicts only on
-//      the Mth consecutive stalled pass. SKELETON evicts on the first pass.
+//      one stalled observation does NOT evict; `recordStallPassArmed` evicts only
+//      on the Mth consecutive stalled pass.
 //
-//   D. A progress stamp resets the strike counter. SKELETON `notePeerProgress`
-//      leaves `stall_strikes` untouched.
+//   D. A progress stamp resets the strike counter (`notePeerProgress`).
 //
 // These tests use NO real QUIC/TLS (the in-test QUIC stubs make
 // `QuicClient.init` a no-op), so they are deterministic and fast and inject the
-// clock + leader flag directly.
+// clock + arm directly.
 //
-// OWED ITEM (4) EXTENSION (2026-06-11, RED): the leader-only arming above fixed
-// the livelock but over-corrected for the divergent-durable-state RESTART wedge
-// — at restart, vote frames are silently undelivered over a stale/half-open QUIC
-// stream while the stall detector is LEADER-ONLY gated, so during the leaderless
-// window NOTHING detects/recovers the stall and the node sits as a silent
-// candidate forever; and `pre_vote=true` freezes the term (term only increments
-// after a WON pre-vote), making the wedge silent. The two new sections at the
-// bottom of this file encode the corrected behavior and FAIL against the
-// skeleton:
+// OWED ITEM (4) (2026-06-11): the original leader-only arming fixed the livelock
+// but over-corrected for the divergent-durable-state RESTART wedge — at restart,
+// vote frames are silently undelivered over a stale/half-open QUIC stream while a
+// leader-only-gated stall detector means that during the leaderless window
+// NOTHING detects/recovers the stall and the node sits as a silent candidate
+// forever; and `pre_vote=true` freezes the term (term only increments after a WON
+// pre-vote), making the wedge silent. The two sections at the bottom of this file
+// encode the corrected behavior:
 //   (A) role-arming widens to leader-OR-candidate; only FOLLOWERS suppressed
 //       (`shouldEvictOnStallArmed` / `recordStallPassArmed` / `StallArm` /
-//       `setRoleSource`). SKELETON keeps leader-only -> candidate tests RED.
+//       `setRoleSource`).
 //   (B) frozen-term pre-vote VISIBILITY: `FrozenCandidateTracker.update` fires a
 //       rate-limited warn when a node is a candidate at an unchanging term past
-//       ~3x the election timeout. SKELETON never warns -> "due" tests RED.
-// The legacy `shouldEvictOnStall(.., is_leader: bool)` tests above stay green
-// (that API is unchanged during red phase; the fixer migrates callers to the
-// armed API and removes the bool form).
+//       ~3x the election timeout.
 
 const std = @import("std");
 const geode = @import("geode");
@@ -140,26 +138,26 @@ test "stall: budget exceeds worst-case election convergence and reaper interval"
 }
 
 // ---------------------------------------------------------------------------
-// (A) Leader-only arming
+// (A) Role arming (migrated to the armed API)
 // ---------------------------------------------------------------------------
 // During a leaderless election this exact shape (ancient progress, frames sent)
-// is present on every peer; if the detector is armed it evicts them all and
-// livelocks the cluster. A non-leader MUST stand down. SKELETON ignores the flag
-// and returns true -> FAILS.
-test "stall: eviction is suppressed when not leader" {
+// is present on every peer; if a FOLLOWER were armed it would evict them all and
+// livelock the cluster. A follower MUST stand down (its outbound health is the
+// leader's detector's job). This is the migrated form of the old "not leader"
+// suppression test.
+test "stall: eviction is suppressed for a follower" {
     const allocator = std.testing.allocator;
     const now_ms: i64 = 1_000_000;
     const stale = now_ms - (Transport.peer_stall_budget_ms + 500);
     const pc = try makePeerConn(allocator, 7, 12, stale);
     defer freePeerConn(allocator, pc);
 
-    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms, false));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .follower));
 }
 
 // (A, positive) As the leader, a stalled outbound stream IS the wedge and reads
 // as stalled on a single pass. (Eviction additionally requires M consecutive
-// passes — see the strike test.) Passes once is_leader is wired; the skeleton
-// already returns true here.
+// passes — see the strike test.)
 test "stall: leader sees a stalled outbound peer as stalled (single pass)" {
     const allocator = std.testing.allocator;
     const now_ms: i64 = 1_000_000;
@@ -167,7 +165,7 @@ test "stall: leader sees a stalled outbound peer as stalled (single pass)" {
     const pc = try makePeerConn(allocator, 7, 12, stale);
     defer freePeerConn(allocator, pc);
 
-    try std.testing.expect(Transport.shouldEvictOnStall(pc, now_ms, true));
+    try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
 }
 
 test "stall: healthy peer (recent progress) -> no eviction" {
@@ -177,7 +175,7 @@ test "stall: healthy peer (recent progress) -> no eviction" {
     const pc = try makePeerConn(allocator, 7, 12, recent);
     defer freePeerConn(allocator, pc);
 
-    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms, true));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
 }
 
 test "stall: idle peer (no frames sent) -> no eviction even with an ancient timestamp" {
@@ -187,7 +185,7 @@ test "stall: idle peer (no frames sent) -> no eviction even with an ancient time
     const pc = try makePeerConn(allocator, 9, 0, 0);
     defer freePeerConn(allocator, pc);
 
-    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms, true));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
 }
 
 // ---------------------------------------------------------------------------
@@ -195,8 +193,7 @@ test "stall: idle peer (no frames sent) -> no eviction even with an ancient time
 // ---------------------------------------------------------------------------
 // The first stalled observation must NOT evict (it would evict every peer during
 // a leaderless election / a single transient quiet pass). Only the Mth
-// consecutive pass evicts. SKELETON recordStallPass evicts on the FIRST pass ->
-// the "first pass must NOT evict" assertion FAILS.
+// consecutive pass evicts (`recordStallPassArmed`).
 test "stall: one stalled pass does not evict; M consecutive passes do" {
     const allocator = std.testing.allocator;
     const now_ms: i64 = 1_000_000;
@@ -207,7 +204,7 @@ test "stall: one stalled pass does not evict; M consecutive passes do" {
     try std.testing.expect(Transport.peer_stall_strikes_required >= 2);
 
     // First stalled pass: record a strike, do NOT evict.
-    try std.testing.expect(!Transport.recordStallPass(pc, now_ms, true));
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, now_ms, .leader));
     try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
 
     // Drive to the required number of consecutive stalled passes; only the last
@@ -215,7 +212,7 @@ test "stall: one stalled pass does not evict; M consecutive passes do" {
     var pass: u32 = 1;
     while (pass < Transport.peer_stall_strikes_required) : (pass += 1) {
         const is_last = (pass + 1) == Transport.peer_stall_strikes_required;
-        const evict = Transport.recordStallPass(pc, now_ms, true);
+        const evict = Transport.recordStallPassArmed(pc, now_ms, .leader);
         try std.testing.expectEqual(is_last, evict);
     }
 }
@@ -242,7 +239,7 @@ test "stall: progress stamp resets strikes" {
     // transport.deinit frees the entry.
 
     // First stalled pass accrues strike 1 (no evict).
-    try std.testing.expect(!Transport.recordStallPass(pc, now_ms, true));
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, now_ms, .leader));
     try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
 
     // Inbound progress arrives -> strikes reset to 0 (and clock refreshed).
@@ -251,7 +248,7 @@ test "stall: progress stamp resets strikes" {
 
     // A later stalled-looking pass is therefore strike 1 again, NOT an eviction.
     const later = now_ms + Transport.peer_stall_budget_ms + 1;
-    try std.testing.expect(!Transport.recordStallPass(pc, later, true));
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, later, .leader));
     try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
 }
 
@@ -276,10 +273,10 @@ test "stall: notePeerProgress refreshes the right PeerConnection via the peer-id
     transport.notePeerProgress(1, now_ms);
 
     // DESIRED: peer 1's stamp is refreshed; peer 2's is untouched. Evaluated as
-    // the leader (is_leader=true) so the single-pass look is meaningful.
+    // the leader (arm = .leader) so the single-pass look is meaningful.
     try std.testing.expectEqual(now_ms, pc1.last_progress_ms.load(.acquire));
-    try std.testing.expect(!Transport.shouldEvictOnStall(pc1, now_ms, true));
-    try std.testing.expect(Transport.shouldEvictOnStall(pc2, now_ms, true));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc1, now_ms, .leader));
+    try std.testing.expect(Transport.shouldEvictOnStallArmed(pc2, now_ms, .leader));
 }
 
 test "stall: progress refresh clears the stall (reconnected peer is not immediately re-evicted)" {
@@ -290,10 +287,10 @@ test "stall: progress refresh clears the stall (reconnected peer is not immediat
     const pc = try makePeerConn(allocator, 3, 1, now_ms);
     defer freePeerConn(allocator, pc);
 
-    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms, true));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
     // And a later observation keeps it healthy across the full budget window.
     pc.last_progress_ms.store(now_ms + Transport.peer_stall_budget_ms, .release);
-    try std.testing.expect(!Transport.shouldEvictOnStall(pc, now_ms + Transport.peer_stall_budget_ms, true));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms + Transport.peer_stall_budget_ms, .leader));
 }
 
 // ===========================================================================
@@ -318,15 +315,15 @@ test "stall: progress refresh clears the stall (reconnected peer is not immediat
 //     2 consecutive strikes (≥ ~18-30 s to evict, vs 1-2 s healthy election
 //     rounds) cannot recreate the old 3 s-budget livelock.
 //
-// API the fixer will land (see raft_consensus.zig skeleton):
+// API (see raft_consensus.zig):
 //   * `StallArm = enum { leader, candidate, follower }`
 //   * `shouldEvictOnStallArmed(pc, now_ms, arm)` — suppress ONLY `.follower`
 //   * `recordStallPassArmed(pc, now_ms, arm)` — strike machine over the above
-//   * `setRoleSource(ctx, fn(ctx) StallArm)` — role injection (mirrors
-//     `setLeaderSource`); `maybeReconnectOnStall` rewired to read it.
-// SKELETON keeps the OLD leader-only body (`if (arm != .leader) return false`),
-// so the CANDIDATE-arming assertions below FAIL (red) while the follower /
-// leader assertions already match.
+//   * `setRoleSource(ctx, fn(ctx) StallArm)` — role injection;
+//     `maybeReconnectOnStall` reads it (null source -> `.follower`, never armed).
+// The fix arms `.candidate` (suppress ONLY `.follower`); the candidate-arming
+// assertions below pin that, the follower assertions pin the suppression, and
+// the leader assertions pin no leader-path regression.
 
 const StallArm = Transport.StallArm;
 
@@ -404,20 +401,16 @@ test "stall(armed): follower with a stalled outbound stream is suppressed" {
 // ---------------------------------------------------------------------------
 // (A.4) Leader behavior is unchanged under the armed API
 // ---------------------------------------------------------------------------
-// The leader is still armed (it always was). This pins parity between the legacy
-// `shouldEvictOnStall(.., is_leader=true)` and the new `shouldEvictOnStallArmed(.., .leader)`
-// so the fixer's rewrite does not regress the leader path. Passes now and after.
-test "stall(armed): leader arming matches the legacy leader-only decision" {
+// The leader is still armed (it always was). This pins the leader path so the
+// rewrite to the armed API does not regress it: a stalled outbound stream
+// observed as the leader reads as stalled (the original target wedge).
+test "stall(armed): leader arming still detects a stalled outbound stream" {
     const allocator = std.testing.allocator;
     const now_ms: i64 = 1_000_000;
     const stale = now_ms - (Transport.peer_stall_budget_ms + 500);
     const pc = try makePeerConn(allocator, 7, 12, stale);
     defer freePeerConn(allocator, pc);
 
-    try std.testing.expectEqual(
-        Transport.shouldEvictOnStall(pc, now_ms, true),
-        Transport.shouldEvictOnStallArmed(pc, now_ms, .leader),
-    );
     try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
 }
 

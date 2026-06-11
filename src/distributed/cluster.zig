@@ -545,6 +545,15 @@ pub const ClusterCoordinator = struct {
     /// ever elected" that Task A6 (2026-05-25 plan) is closing.
     raft_transport: raft_consensus.Transport,
 
+    /// owed item (4) — frozen-term pre-vote VISIBILITY: tracks whether this node
+    /// has been wedged as a CANDIDATE at an UNCHANGING term past the warn
+    /// threshold. `pre_vote = true` freezes the term while a node is wedged as a
+    /// candidate (the term only increments after a WON pre-vote), so the
+    /// all-candidate divergent-durable-state wedge is otherwise SILENT — zero
+    /// transport errors, zero term churn. `raftLoop` polls this each tick and
+    /// emits a rate-limited operator warn when it returns true. Owns no I/O.
+    frozen_candidate_tracker: raft_consensus.FrozenCandidateTracker = .{},
+
     // QUAL-D004: Shutdown signal and pool handles for graceful stop.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     raft_pool: ?*pooled.ThreadPool = null,
@@ -904,24 +913,31 @@ pub const ClusterCoordinator = struct {
         // election can't progress.
         self.raft.setTransport(&self.raft_transport);
 
-        // election-livelock fix (2026-06-11): wire the live leader-role source the
-        // transport's stalled-stream reaper (`maybeReconnectOnStall`) arms its
-        // eviction decision on. The stall detector must fire ONLY while THIS node
-        // is the raft leader (a stalled outbound stream is only meaningful when we
-        // are the leader expecting AppendEntriesResponse flow); off-leader every
-        // peer reads as stalled during a leaderless election and evicting them all
-        // livelocks the cluster. `ctx` is `self` (the coordinator owns
+        // election-livelock fix (2026-06-11) + owed item (4): wire the live
+        // `StallArm` role source the transport's stalled-stream reaper
+        // (`maybeReconnectOnStall`) arms its eviction decision on. The detector
+        // fires while THIS node is the raft LEADER or a CANDIDATE, and suppresses
+        // a FOLLOWER. Off-arm (follower) every peer reads as stalled during a
+        // leaderless election and evicting them all would livelock the cluster;
+        // but a CANDIDATE must get its RequestVote frames through a possibly-
+        // wedged stream at restart, so it MUST be armed (owed item (4) divergent-
+        // durable-state wedge). `ctx` is `self` (the coordinator owns
         // `raft_transport` and outlives it, so the closure's ctx lifetime is
-        // sound), and the closure reads `coordinator.role() == .leader`. Wire it
-        // before the poll loop starts so the first reaper pass already sees a
-        // truthful role. Left unset (standalone) the transport defaults to
-        // non-leader and never evicts on stall.
-        self.raft_transport.setLeaderSource(@ptrCast(self), struct {
-            fn isLeader(ctx: ?*anyopaque) bool {
+        // sound), and the closure maps `coordinator.role()` onto `StallArm` (any
+        // shutdown/other state -> `.follower`, never armed). Wire it before the
+        // poll loop starts so the first reaper pass already sees a truthful role.
+        // Left unset (standalone) the transport defaults to `.follower` and never
+        // evicts on stall.
+        self.raft_transport.setRoleSource(@ptrCast(self), struct {
+            fn armOf(ctx: ?*anyopaque) raft_consensus.Transport.StallArm {
                 const coord: *ClusterCoordinator = @ptrCast(@alignCast(ctx.?));
-                return coord.role() == .leader;
+                return switch (coord.role()) {
+                    .leader => .leader,
+                    .candidate => .candidate,
+                    .follower, .shutdown => .follower,
+                };
             }
-        }.isLeader);
+        }.armOf);
 
         self.shutdown.store(false, .release);
 
@@ -1081,6 +1097,28 @@ pub const ClusterCoordinator = struct {
             iter += 1;
             if (iter % 100 == 0) {
                 std.debug.print("[raft] node {d} state={s} term={d} iter={d}\n", .{ self.node_id, @tagName(self.raft.state), self.raft.current_term, iter });
+
+                // owed item (4) — frozen-term pre-vote VISIBILITY: sample the
+                // live (role, term) on this ~1 s cadence (NOT every 10 ms tick —
+                // cheap, no per-tick inner-mutex lock, no per-tick allocation) and
+                // feed the frozen-candidate tracker. When a node has been wedged
+                // as a candidate at an UNCHANGING term past the warn threshold
+                // (`pre_vote=true` freezes the term, so the divergent-durable-state
+                // wedge would otherwise be SILENT), emit a rate-limited operator
+                // warn naming the condition. The tracker resets on any term advance
+                // or role transition, so a healthy (progressing) election is never
+                // flagged.
+                const cur_role = self.raft.role();
+                const term = self.raft.currentTerm();
+                const now_ms = compat_milliTimestamp();
+                if (self.frozen_candidate_tracker.update(cur_role, term, now_ms)) {
+                    const frozen_for_ms = now_ms - self.frozen_candidate_tracker.candidate_since_ms;
+                    log.warn("raft candidate frozen at term — possible vote-delivery stall or divergent durable state; check peer connectivity", &.{
+                        Attr.uint("node", self.node_id),
+                        Attr.uint("term", term),
+                        Attr.int("frozen_for_ms", frozen_for_ms),
+                    });
+                }
             }
             compat_sleepNs(10 * std.time.ns_per_ms);
         }
