@@ -151,7 +151,16 @@ test "quantifier_call_handlers: non-matching names are not handled" {
 }
 
 test "quantifier_call_handlers: all(list) truthiness fallback" {
-    const allocator = std.testing.allocator;
+    // GAP-0888 review follow-up: this test had never actually run (the file
+    // was not rooted by any step) and bit-rotted in two ways:
+    //  - the parser emits list literals as `.ArrayLit`, not the (parser-dead)
+    //    `.List` AST variant — evalExpr only evaluates `.ArrayLit`;
+    //  - evaluating the list allocates a temporary the handler does not free
+    //    (its documented contract is the per-request arena, GAP-0755), so
+    //    evaluate under an arena here.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
     var t = ast.Expr{ .Bool = true };
@@ -159,19 +168,23 @@ test "quantifier_call_handlers: all(list) truthiness fallback" {
     var all_true_elems = [_]*ast.Expr{ &t, &t };
     var mixed_elems = [_]*ast.Expr{ &t, &f };
 
-    var all_true_list = ast.Expr{ .List = all_true_elems[0..] };
+    var all_true_list = ast.Expr{ .ArrayLit = all_true_elems[0..] };
     var args1 = [_]*ast.Expr{&all_true_list};
     const r1 = try evalQuantifierFunction(allocator, "all", args1[0..], env);
     try std.testing.expect(r1 != null and r1.? == .Bool and r1.?.Bool);
 
-    var mixed_list = ast.Expr{ .List = mixed_elems[0..] };
+    var mixed_list = ast.Expr{ .ArrayLit = mixed_elems[0..] };
     var args2 = [_]*ast.Expr{&mixed_list};
     const r2 = try evalQuantifierFunction(allocator, "ALL", args2[0..], env);
     try std.testing.expect(r2 != null and r2.? == .Bool and !r2.?.Bool);
 }
 
 test "quantifier_call_handlers: any(list) truthiness fallback" {
-    const allocator = std.testing.allocator;
+    // GAP-0888 review follow-up: same rebuild as the all(list) test above
+    // (.ArrayLit + arena).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
     var t = ast.Expr{ .Bool = true };
@@ -179,12 +192,12 @@ test "quantifier_call_handlers: any(list) truthiness fallback" {
     var mixed_elems = [_]*ast.Expr{ &f, &t };
     var all_false_elems = [_]*ast.Expr{ &f, &f };
 
-    var mixed_list = ast.Expr{ .List = mixed_elems[0..] };
+    var mixed_list = ast.Expr{ .ArrayLit = mixed_elems[0..] };
     var args1 = [_]*ast.Expr{&mixed_list};
     const r1 = try evalQuantifierFunction(allocator, "any", args1[0..], env);
     try std.testing.expect(r1 != null and r1.? == .Bool and r1.?.Bool);
 
-    var all_false_list = ast.Expr{ .List = all_false_elems[0..] };
+    var all_false_list = ast.Expr{ .ArrayLit = all_false_elems[0..] };
     var args2 = [_]*ast.Expr{&all_false_list};
     const r2 = try evalQuantifierFunction(allocator, "ANY", args2[0..], env);
     try std.testing.expect(r2 != null and r2.? == .Bool and !r2.?.Bool);

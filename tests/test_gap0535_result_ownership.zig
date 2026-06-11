@@ -138,3 +138,133 @@ test "GAP-0535: INTERSECT (union-tail) keeps matching owned rows leak-free" {
     try testing.expectEqual(@as(usize, 1), result.rows.len);
     try expectStrCell(result, 0, 0, "A");
 }
+
+// ---------------------------------------------------------------------------
+// GAP-0535 review follow-up: the ALL-variant combiners (INTERSECT ALL /
+// EXCEPT ALL) re-scan the original rows array for occurrence counting on
+// every iteration. The original fix freed dropped-row values MID-LOOP, so
+// later scans read freed memory — silent under std.testing.allocator (freed
+// bytes are poisoned to 0xaa, which never compares equal), but a recycling
+// allocator can rewrite those bytes and corrupt the occurrence counts.
+// The tests below assert correct RESULT VALUES on the ALL-variant repros,
+// and the PoisonAllocator test makes the read-after-free deterministically
+// observable: freed bytes are rewritten to 'A' (kept alive in quarantine),
+// so a mid-loop free of the dropped "B" row inflates `count_in_result` for
+// the later "A" rows and EXCEPT ALL keeps one row too many.
+// ---------------------------------------------------------------------------
+
+test "GAP-0535 review: INTERSECT ALL (union-tail) keeps min-occurrence count with correct values" {
+    // left = [A, A, B], right = [A] → INTERSECT ALL keeps min(2,1) = 1 "A".
+    var result = try runQuery(
+        testing.allocator,
+        "(RETURN UPPER('a') AS x UNION ALL RETURN UPPER('a') AS x UNION ALL RETURN UPPER('b') AS x) INTERSECT ALL RETURN UPPER('a') AS x",
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    try expectStrCell(result, 0, 0, "A");
+}
+
+test "GAP-0535 review: EXCEPT ALL (union-tail) removes one occurrence with correct values" {
+    // left = [A, A, B], right = [A] → EXCEPT ALL keeps [A, B] (2-1 A's, 1-0 B's).
+    var result = try runQuery(
+        testing.allocator,
+        "(RETURN UPPER('a') AS x UNION ALL RETURN UPPER('a') AS x UNION ALL RETURN UPPER('b') AS x) EXCEPT ALL RETURN UPPER('a') AS x",
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.rows.len);
+    try expectStrCell(result, 0, 0, "A");
+    try expectStrCell(result, 1, 0, "B");
+}
+
+const QuarantineEntry = struct {
+    memory: []u8,
+    alignment: std.mem.Alignment,
+};
+
+/// Read-after-free detector: freed memory is NOT returned to the parent
+/// allocator until `deinit`; instead its bytes are overwritten with 'A' and
+/// the allocation is quarantined. Any later read of freed value bytes (the
+/// mid-loop dropped-row free bug) deterministically sees "A" instead of the
+/// 0xaa poison the testing allocator would apply — turning the silent UAF
+/// read into an observable wrong-results failure (a freed "B" row counts as
+/// an extra "A" occurrence in the EXCEPT ALL re-scan).
+const PoisonAllocator = struct {
+    parent: std.mem.Allocator,
+    quarantine: std.ArrayList(QuarantineEntry) = .empty,
+
+    fn allocator(self: *PoisonAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn deinit(self: *PoisonAllocator) void {
+        for (self.quarantine.items) |entry| {
+            self.parent.rawFree(entry.memory, entry.alignment, @returnAddress());
+        }
+        self.quarantine.deinit(self.parent);
+    }
+
+    fn allocFn(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resizeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remapFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn freeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        _ = ret_addr;
+        const self: *PoisonAllocator = @ptrCast(@alignCast(ctx));
+        @memset(memory, 'A');
+        self.quarantine.append(self.parent, .{ .memory = memory, .alignment = alignment }) catch {
+            // Bookkeeping OOM: fall back to a real free (loses the poison for
+            // this one allocation; the test stays sound).
+            self.parent.rawFree(memory, alignment, @returnAddress());
+        };
+    }
+
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = allocFn,
+        .resize = resizeFn,
+        .remap = remapFn,
+        .free = freeFn,
+    };
+};
+
+test "GAP-0535 review: EXCEPT ALL occurrence re-scan must not read freed dropped-row values" {
+    // left = [B, A, A], right = [A, B] → EXCEPT ALL keeps exactly one "A".
+    // Pre-fix, the dropped "B" row (excluded by the right side) was freed on
+    // iteration 0; the quarantining allocator rewrites its bytes to "A", so
+    // the `count_in_result` re-scan on iterations 1-2 counted THREE "A"
+    // occurrences instead of two and the combiner kept [A, A] — wrong.
+    //
+    // The multi-row right arm needs UNWIND, whose evaluated list intermediate
+    // is a documented GAP-0535 residual leak (non-whitelisted allocating
+    // expression; absorbed by the per-request arena, GAP-0755, in
+    // production). Parent on an arena — exactly the production posture — so
+    // this test asserts VALUE CORRECTNESS (the UAF symptom) without
+    // re-asserting the leak-freedom that residual already excludes. The
+    // poison wrapper still rewrites freed bytes, so the UAF stays observable.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var poison = PoisonAllocator{ .parent = arena.allocator() };
+    defer poison.deinit();
+    const alloc = poison.allocator();
+
+    var result = try runQuery(
+        alloc,
+        "(RETURN UPPER('b') AS x UNION ALL RETURN UPPER('a') AS x UNION ALL RETURN UPPER('a') AS x) EXCEPT ALL UNWIND ['A', 'B'] AS v RETURN v AS x",
+    );
+    defer result.deinit(alloc);
+
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    try expectStrCell(result, 0, 0, "A");
+}

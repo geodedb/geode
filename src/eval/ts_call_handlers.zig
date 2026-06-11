@@ -530,7 +530,18 @@ test "ts_call_handlers: value lookup against a real store" {
 }
 
 test "ts_call_handlers: last_value through evalTimeseriesFunction with env store" {
-    const allocator = std.testing.allocator;
+    // GAP-0888 review follow-up: this test had never actually run (the file
+    // was not rooted by any step) and bit-rotted in two ways:
+    //  - last_value returns a point object ({ts, value} Map), not a bare
+    //    Int — the Map contract matches the integration test
+    //    (tests/test_gap0866_ts_scalar_eval.zig: `.value AS v`);
+    //  - the handler's value conversion allocates intermediates it does not
+    //    free — its documented contract is the per-request arena (GAP-0755),
+    //    so evaluate under an arena here.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     var store = TimeseriesStore.init(allocator);
     defer store.deinit();
     const key = ts_module.SeriesKey{ .device_id = 7, .metric = "temp" };
@@ -546,13 +557,14 @@ test "ts_call_handlers: last_value through evalTimeseriesFunction with env store
 
     const result = try evalTimeseriesFunction(allocator, "timeseries.last_value", args[0..], env);
     try std.testing.expect(result != null);
-    try std.testing.expect(result.? == .Int);
-    try std.testing.expectEqual(@as(i64, 22), result.?.Int);
+    try std.testing.expect(result.? == .Map);
+    try std.testing.expectEqual(@as(i64, 200), result.?.Map.get("ts").?.Int);
+    try std.testing.expectEqual(@as(i64, 22), result.?.Map.get("value").?.Int);
 
     // GAP-0536: per ISO/IEC 39075:2024 RQ-0022 the whole function name is
     // case-insensitive — mixed-case suffix must dispatch identically.
     const mixed = try evalTimeseriesFunction(allocator, "TiMeSeRiEs.LaSt_VaLuE", args[0..], env);
     try std.testing.expect(mixed != null);
-    try std.testing.expect(mixed.? == .Int);
-    try std.testing.expectEqual(@as(i64, 22), mixed.?.Int);
+    try std.testing.expect(mixed.? == .Map);
+    try std.testing.expectEqual(@as(i64, 22), mixed.?.Map.get("value").?.Int);
 }

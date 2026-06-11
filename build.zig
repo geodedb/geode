@@ -2015,6 +2015,47 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
+    // ----- EVAL CALL-HANDLER UNIT TESTS (GAP-0888 review follow-up) -----
+    // The inline unit tests in src/eval/ts_call_handlers.zig and
+    // src/eval/quantifier_call_handlers.zig are not discovered by any other
+    // named step (Zig 0.16 only collects tests reachable from the test ROOT
+    // file, and the handler files cannot themselves be module roots — their
+    // `../` imports escape src/eval/). Root src/eval.zig, whose trailing
+    // `test { _ = ts_call_handlers; ... }` block pulls both handler files
+    // (plus eval.zig's own inline tests) into the reference graph, and hang
+    // it off `test-gap0866` alongside the scalar timeseries.* eval
+    // integration tests.
+    const eval_handler_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/eval.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    const eval_handler_mod = eval_handler_tests.root_module;
+    eval_handler_mod.addImport("logging", logging_mod);
+    eval_handler_mod.addImport("json", json_mod);
+    eval_handler_mod.addImport("graph_storage", graph_storage_mod);
+    eval_handler_mod.addImport("fle_aead", fle_aead_mod);
+    eval_handler_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    eval_handler_mod.addImport("fle_key_types", fle_key_types_mod);
+    eval_handler_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    eval_handler_mod.addImport("uuid", uuid_ext_mod);
+    eval_handler_mod.addImport("wal", wal_ext_mod);
+    eval_handler_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
+    eval_handler_mod.addImport("timeseries_lib", timeseries_ext_mod);
+    eval_handler_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    eval_handler_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+    eval_handler_mod.addImport("schema", schema_mod);
+    eval_handler_mod.addImport("rtree_lib", rtree_ext_mod);
+    eval_handler_mod.addImport("hnsw_lib", hnsw_ext_mod);
+    eval_handler_mod.addImport("transport/thread_pool", thread_pool_mod);
+    eval_handler_mod.addImport("thread_pool", thread_pool_ext_mod);
+    eval_handler_mod.addImport("otel", otel_mod);
+    eval_handler_mod.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
+    eval_handler_mod.addImport("runtime_metrics", runtime_metrics_module);
+    const run_eval_handler_tests = b.addRunArtifact(eval_handler_tests);
+    ts_scalar_eval_step.dependOn(&run_eval_handler_tests.step);
+
     // Graph algorithm unit tests for centrality_algorithms.zig and graph_algorithms.zig helpers
     const algo_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_algo_unit.zig"), .target = target, .optimize = optimize }) });
     algo_unit_tests.root_module.addImport("geode", root_mod);
@@ -3981,6 +4022,16 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("distributed_schema", distributed_schema_mod);
     graph_store_unit_tests.root_module.addImport("protobuf", protobuf_mod);
     graph_store_unit_tests.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    // GAP-0888 review follow-up: the eval call-handler test root (rooted at
+    // src/eval.zig, declared near graph_store_unit_tests) reaches the same
+    // execution.zig → raft_consensus.zig / user_management.zig closure, so it
+    // needs the identical late-wired module set.
+    eval_handler_mod.addImport("raft", raft_ext_mod);
+    eval_handler_mod.addImport("geode_auth", auth_mod);
+    eval_handler_mod.addImport("raft_schema", raft_schema_mod);
+    eval_handler_mod.addImport("distributed_schema", distributed_schema_mod);
+    eval_handler_mod.addImport("protobuf", protobuf_mod);
+    eval_handler_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);

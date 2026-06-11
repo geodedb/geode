@@ -3876,14 +3876,24 @@ test "eval: CASE 3VL searched and simple with NULLs" {
 }
 
 test "eval: icontains case-insensitive string matching" {
-    const allocator = std.testing.allocator;
+    // GAP-0888 review follow-up: icontains allocates case-folding
+    // temporaries it does not free (per-request arena contract, GAP-0755),
+    // so evaluate under an arena.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape
+    // ({ callee, args }); the old { name, distinct, namespace } form
+    // bit-rotted while these inline tests were not rooted by any step.
+    var icontains_callee = ast.Expr{ .Ident = .{ .orig = "icontains", .cnf = "ICONTAINS" } };
 
     // icontains('Hello World', 'hello') -> true
     var arg1 = ast.Expr{ .String = "Hello World" };
     var arg2 = ast.Expr{ .String = "hello" };
     var args1 = [_]*ast.Expr{ &arg1, &arg2 };
-    const call1 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args1, .distinct = false, .namespace = null } };
+    const call1 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args1 } };
     const v1 = try evalExpr(allocator, call1, env);
     try std.testing.expect(v1 == .Bool and v1.Bool == true);
 
@@ -3891,7 +3901,7 @@ test "eval: icontains case-insensitive string matching" {
     var arg3 = ast.Expr{ .String = "Hello World" };
     var arg4 = ast.Expr{ .String = "WORLD" };
     var args2 = [_]*ast.Expr{ &arg3, &arg4 };
-    const call2 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args2, .distinct = false, .namespace = null } };
+    const call2 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args2 } };
     const v2 = try evalExpr(allocator, call2, env);
     try std.testing.expect(v2 == .Bool and v2.Bool == true);
 
@@ -3899,7 +3909,7 @@ test "eval: icontains case-insensitive string matching" {
     var arg5 = ast.Expr{ .String = "Hello World" };
     var arg6 = ast.Expr{ .String = "xyz" };
     var args3 = [_]*ast.Expr{ &arg5, &arg6 };
-    const call3 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args3, .distinct = false, .namespace = null } };
+    const call3 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args3 } };
     const v3 = try evalExpr(allocator, call3, env);
     try std.testing.expect(v3 == .Bool and v3.Bool == false);
 
@@ -3907,7 +3917,7 @@ test "eval: icontains case-insensitive string matching" {
     var arg7 = ast.Expr{ .String = "Hello World" };
     var arg8 = ast.Expr{ .String = "" };
     var args4 = [_]*ast.Expr{ &arg7, &arg8 };
-    const call4 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args4, .distinct = false, .namespace = null } };
+    const call4 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args4 } };
     const v4 = try evalExpr(allocator, call4, env);
     try std.testing.expect(v4 == .Bool and v4.Bool == true);
 }
@@ -3916,18 +3926,25 @@ test "eval: tolower and toupper aliases" {
     const allocator = std.testing.allocator;
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape;
+    // tolower/toupper return freshly-allocated strings, so free them.
+    var tolower_callee = ast.Expr{ .Ident = .{ .orig = "tolower", .cnf = "TOLOWER" } };
+    var toupper_callee = ast.Expr{ .Ident = .{ .orig = "toupper", .cnf = "TOUPPER" } };
+
     // tolower('HELLO') -> 'hello'
     var arg1 = ast.Expr{ .String = "HELLO" };
     var args1 = [_]*ast.Expr{&arg1};
-    const call1 = ast.Expr{ .Call = .{ .name = "tolower", .args = &args1, .distinct = false, .namespace = null } };
+    const call1 = ast.Expr{ .Call = .{ .callee = &tolower_callee, .args = &args1 } };
     const v1 = try evalExpr(allocator, call1, env);
+    defer if (v1 == .Str) allocator.free(v1.Str);
     try std.testing.expect(v1 == .Str and std.mem.eql(u8, v1.Str, "hello"));
 
     // toupper('hello') -> 'HELLO'
     var arg2 = ast.Expr{ .String = "hello" };
     var args2 = [_]*ast.Expr{&arg2};
-    const call2 = ast.Expr{ .Call = .{ .name = "toupper", .args = &args2, .distinct = false, .namespace = null } };
+    const call2 = ast.Expr{ .Call = .{ .callee = &toupper_callee, .args = &args2 } };
     const v2 = try evalExpr(allocator, call2, env);
+    defer if (v2 == .Str) allocator.free(v2.Str);
     try std.testing.expect(v2 == .Str and std.mem.eql(u8, v2.Str, "HELLO"));
 }
 
@@ -3958,12 +3975,9 @@ test "eval: timeseries.value uses global store fallback" {
     var arg_metric = ast.Expr{ .String = "temperature" };
     var arg_ts = ast.Expr{ .Int = 1000 };
     var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
-    const call_expr = ast.Expr{ .Call = .{
-        .name = "timeseries.value",
-        .args = &args,
-        .distinct = false,
-        .namespace = null,
-    } };
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape.
+    var ts_value_callee = ast.Expr{ .Ident = .{ .orig = "timeseries.value", .cnf = "TIMESERIES.VALUE" } };
+    const call_expr = ast.Expr{ .Call = .{ .callee = &ts_value_callee, .args = &args } };
 
     const result = try evalExpr(allocator, call_expr, env);
     // Must return 72, NOT Null.
@@ -3984,12 +3998,9 @@ test "eval: timeseries.value returns null without store" {
     var arg_metric = ast.Expr{ .String = "cpu" };
     var arg_ts = ast.Expr{ .Int = 100 };
     var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
-    const call_expr = ast.Expr{ .Call = .{
-        .name = "timeseries.value",
-        .args = &args,
-        .distinct = false,
-        .namespace = null,
-    } };
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape.
+    var ts_value_callee = ast.Expr{ .Ident = .{ .orig = "timeseries.value", .cnf = "TIMESERIES.VALUE" } };
+    const call_expr = ast.Expr{ .Call = .{ .callee = &ts_value_callee, .args = &args } };
 
     const result = try evalExpr(allocator, call_expr, env);
     try std.testing.expect(result == .Null);
@@ -4019,15 +4030,22 @@ test "eval: timeseries.value prefers env store over global" {
     var arg_metric = ast.Expr{ .String = "x" };
     var arg_ts = ast.Expr{ .Int = 10 };
     var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
-    const call_expr = ast.Expr{ .Call = .{
-        .name = "timeseries.value",
-        .args = &args,
-        .distinct = false,
-        .namespace = null,
-    } };
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape.
+    var ts_value_callee = ast.Expr{ .Ident = .{ .orig = "timeseries.value", .cnf = "TIMESERIES.VALUE" } };
+    const call_expr = ast.Expr{ .Call = .{ .callee = &ts_value_callee, .args = &args } };
 
     const result = try evalExpr(allocator, call_expr, env);
     // Must return 999 from env store, not 100 from global.
     try std.testing.expect(result == .Int);
     try std.testing.expectEqual(@as(i64, 999), result.Int);
+}
+
+test {
+    // GAP-0888 review follow-up: pull the extracted call-handler modules'
+    // inline unit tests into this file's test reference graph — Zig 0.16
+    // only discovers tests reachable from the test ROOT file, and no other
+    // named step roots src/eval/*.zig. `zig build test-gap0866` roots this
+    // file (see build.zig "EVAL CALL-HANDLER UNIT TESTS").
+    _ = ts_call_handlers;
+    _ = quantifier_call_handlers;
 }

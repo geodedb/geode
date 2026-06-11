@@ -786,8 +786,12 @@ test "ts_functions: last_value" {
     const result = try executeFunction(&store, call, ally);
     switch (result) {
         .Map => |obj| {
-            const ts = obj.get("ts").?.Int;
-            const val = obj.get("value").?.Int;
+            // GAP-0888 review follow-up: free the point object (the map keys
+            // are string literals; only the bucket storage is allocated).
+            var map = obj;
+            defer map.deinit();
+            const ts = map.get("ts").?.Int;
+            const val = map.get("value").?.Int;
             try std.testing.expect(ts == 3000);
             try std.testing.expect(val == 30);
         },
@@ -819,8 +823,12 @@ test "ts_functions: interpolate linear" {
     const result = try executeFunction(&store, call, ally);
     switch (result) {
         .Map => |obj| {
-            const ts = obj.get("ts").?.Int;
-            const val = obj.get("value").?.Int;
+            // GAP-0888 review follow-up: free the point object (the map keys
+            // are string literals; only the bucket storage is allocated).
+            var map = obj;
+            defer map.deinit();
+            const ts = map.get("ts").?.Int;
+            const val = map.get("value").?.Int;
             try std.testing.expect(ts == 2000);
             try std.testing.expect(val == 20); // Linear interpolation
         },
@@ -1082,7 +1090,10 @@ test "ts_functions: interpolate exact match returns point for all methods" {
     });
 
     // All three methods should return the exact point when timestamp matches
-    const Method = @FieldType(@FieldType(TSFunctionParams, .interpolate), .method);
+    // GAP-0888 review follow-up: @FieldType takes string field names
+    // (the enum-literal form bit-rotted while this inline test was not
+    // rooted by any step).
+    const Method = @FieldType(@FieldType(TSFunctionParams, "interpolate"), "method");
     const methods = [_]Method{ .linear, .step, .nearest };
 
     for (methods) |method| {
