@@ -281,9 +281,9 @@ make verify-fast
 ./run_gpu_benchmarks.sh
 ```
 
-### **GPU Acceleration Testing**
+### **GPU Build Foundation Testing**
 
-Geode includes GPU-accelerated graph algorithms (BFS, PageRank, Set Operations). Test with Docker:
+Geode ships a GPU build foundation (Vulkan backend scaffold + dlopen-based CUDA device detection). Graph algorithms (BFS, PageRank, Set Operations) currently run on the CPU path; GPU-accelerated execution is planned but not implemented (see GAP-0878 in `docs/GAP_ANALYSIS_RESOLVED.md`). Test the foundation with Docker:
 
 ```bash
 # Build GPU-enabled Docker image
@@ -314,14 +314,13 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
 - **CANARY Governance** - ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility
-- **GPU Acceleration** - Optional Vulkan/CUDA-based graph algorithm acceleration
+- **GPU Build Foundation** - Vulkan backend scaffold with honest device detection (`zig build test-gpu` self-skips hardware dispatch); algorithms run the CPU path, GPU acceleration planned
 
 ### **Quality Assurance**
 
 - **Memory Safety** - Zero memory leaks in test runs
 - **Performance Regression** - Automated benchmark validation
 - **Standards Compliance** - Continuous ISO/IEC 39075:2024 verification
-- **GPU Performance** - Target speedups: BFS ≥5x, PageRank ≥3x, Set Ops ≥3-4x
 
 ## 📚 Documentation
 

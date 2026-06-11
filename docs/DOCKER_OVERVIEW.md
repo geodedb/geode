@@ -47,28 +47,30 @@ docker run -d \
 - **Use Case**: Minimal footprint, resource-constrained environments
 - **Tags**: `alpine`, `0.18.0-alpine`
 
-### GPU-Accelerated Image (`geodedb/geode:gpu`)
+### CUDA-Toolchain-Ready Image (`geodedb/geode:gpu`)
 
 - **Base**: NVIDIA CUDA 12.3.2 Runtime (Ubuntu 22.04)
 - **Size**: ~2GB
-- **Use Case**: GPU-accelerated graph algorithms, vector operations, ML embeddings
+- **Use Case**: environments that want the CUDA runtime available for future GPU acceleration; today all graph algorithms run the same CPU path as the standard image
 - **Tags**: `gpu`, `0.18.0-gpu`
 - **Requirements**: NVIDIA Container Toolkit, CUDA-capable GPU
+- **Honest status (GAP-0878)**: this image is CUDA-toolchain-ready, NOT CUDA-accelerated. Geode's GPU support is a build foundation (Vulkan backend scaffold + dlopen-based CUDA device detection); no graph algorithm currently executes on the GPU. When no GPU is present, Geode reports zero devices (it never fabricates a mock device).
 
 ## GPU vs Non-GPU Builds
 
-| Feature | Standard | GPU |
-|---------|----------|-----|
-| Graph traversal | CPU | CUDA-accelerated |
-| PageRank | CPU | CUDA-accelerated |
-| Shortest path | CPU | CUDA-accelerated |
-| Set operations | CPU | CUDA-accelerated |
-| Vector similarity | SIMD | CUDA + SIMD |
-| BFS/DFS | CPU | CUDA-accelerated |
+| Feature | Standard | GPU image |
+|---------|----------|-----------|
+| Graph traversal | CPU | CPU (GPU planned) |
+| PageRank | CPU | CPU (GPU planned) |
+| Shortest path | CPU | CPU (GPU planned) |
+| Set operations | CPU | CPU (GPU planned) |
+| Vector similarity | SIMD | SIMD |
+| BFS/DFS | CPU | CPU (GPU planned) |
+| CUDA runtime present | No | Yes (for future acceleration) |
 | Image size | ~150MB | ~2GB |
 | Base image | Debian Slim | NVIDIA CUDA |
 
-### Running GPU-Accelerated Container
+### Running the CUDA-Toolchain-Ready Container
 
 ```bash
 # Requires NVIDIA Container Toolkit
@@ -78,11 +80,14 @@ docker run -d \
   -p 3141:3141/udp \
   -p 9091:9091/tcp \
   -v geode-data:/data \
-  -e GPU_ENABLED=true \
   -e CUDA_VISIBLE_DEVICES=0 \
-  geodedb/geode:gpu \
-  --gpu-acceleration
+  geodedb/geode:gpu
 ```
+
+Note: there is no `--gpu-acceleration` server flag and no `GPU_ENABLED`
+environment variable -- the server runs the CPU path regardless. The
+`--gpus`/`CUDA_VISIBLE_DEVICES` settings only make the GPU visible inside
+the container for future use (GAP-0878).
 
 ## Exposed Ports
 
@@ -194,12 +199,15 @@ docker run -d \
 
 ### GPU Configuration (GPU image only)
 
+These are standard NVIDIA container-runtime variables; they control GPU
+visibility inside the container only. Geode itself reads none of them and
+currently executes all algorithms on the CPU path (GAP-0878).
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GPU_ENABLED` | `false` | Enable GPU acceleration |
-| `CUDA_VISIBLE_DEVICES` | - | GPU device selection |
-| `NVIDIA_VISIBLE_DEVICES` | `all` | NVIDIA device visibility |
-| `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility` | NVIDIA capabilities |
+| `CUDA_VISIBLE_DEVICES` | - | GPU device selection (container runtime) |
+| `NVIDIA_VISIBLE_DEVICES` | `all` | NVIDIA device visibility (container runtime) |
+| `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility` | NVIDIA capabilities (container runtime) |
 
 ### QUIC Performance
 

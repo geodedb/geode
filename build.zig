@@ -4476,11 +4476,20 @@ pub fn build(b: *std.Build) void {
     });
     gpu_module_loader_test.root_module.link_libc = true;
 
-    // GPU tests (optional, requires Vulkan - not run by default)
+    // GPU acceleration (device detection/status) test -- GAP-0878: honest
+    // device reporting; dlopen-based, compiles and self-skips on GPU-less hosts
+    const gpu_accel_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize }),
+    });
+    gpu_accel_test.root_module.link_libc = true;
+
+    // GPU tests (optional; CUDA paths self-skip without a driver, Vulkan
+    // tests self-skip without a Vulkan loader)
     // Run with: zig build test-gpu
     // Note: On macOS, requires MoltenVK (brew install molten-vk)
-    const test_gpu_step = b.step("test-gpu", "Run GPU/Vulkan tests (requires Vulkan)");
+    const test_gpu_step = b.step("test-gpu", "Run GPU/Vulkan tests (self-skip without GPU toolchain/hardware)");
     test_gpu_step.dependOn(&run_vulkan_tests.step);
+    test_gpu_step.dependOn(&gpu_accel_test.step);
     test_gpu_step.dependOn(&gpu_test.step);
     test_gpu_step.dependOn(&gpu_phase1_test.step);
     test_gpu_step.dependOn(&gpu_phase2_test.step);
@@ -5392,6 +5401,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0884_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
     gap0884_step.dependOn(&run_gap0884_tests.step);
+
+    // GAP-0878: honest GPU device reporting. Pins that GPUAccelerator never
+    // fabricates a device: backend .none (and any backend without a working
+    // driver) reports zero devices and available=false -- no "Mock GPU
+    // Device". CUDA detection is dlopen-based (cuda_loader.zig), so this
+    // compiles and self-skips cleanly on GPU-less hosts.
+    const gap0878_accel_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize });
+    gap0878_accel_mod.link_libc = true;
+    const gap0878_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0878_gpu_truth.zig"), .target = target, .optimize = optimize });
+    gap0878_test_mod.addImport("gpu_acceleration", gap0878_accel_mod);
+    gap0878_test_mod.link_libc = true;
+    const gap0878_tests = b.addTest(.{ .root_module = gap0878_test_mod });
+    const run_gap0878_tests = b.addRunArtifact(gap0878_tests);
+    shardDep(test_step, &run_gap0878_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0878_step = b.step("test-gap0878", "GAP-0878: honest GPU device reporting (backend .none => zero devices, available=false)");
+    gap0878_step.dependOn(&run_gap0878_tests.step);
 
     // GAP-0876: exact-match materialized view rewrite (API level). Pins the
     // enhanced view manager's rewrite path: a query structurally identical

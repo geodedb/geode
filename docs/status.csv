@@ -1999,7 +1999,7 @@ REQ-GQL-050,Multi-Tenancy,TenantRegistryVarianceEnvelope,BENCHED,,,dist,2025-09-
 REQ-GQL-051,GPU Acceleration,Benchmarks,EXEMPT,,,engine,2025-10-26,scripts/test/run_gpu_benchmarks.sh
 REQ-GQL-051,GPU Acceleration,CostModel,TESTED,,,engine,2025-10-26,src/planner/gpu_cost_model.zig
 REQ-GQL-051,GPU Acceleration,CudaDynamicLoader,TESTED,,,engine,2025-10-26,src/gpu/cuda_loader.zig
-REQ-GQL-051,GPU Acceleration,DeviceMemory,TESTED,,,engine,2025-10-25,src/gpu/acceleration.zig
+REQ-GQL-051,GPU Acceleration,DeviceDetection,TESTED,,,engine,2026-06-11,src/gpu/acceleration.zig
 REQ-GQL-051,GPU Acceleration,GPUFlagger,TESTED,,,engine,2025-09-21,src/gpu/flagger.zig
 REQ-GQL-051,GPU Acceleration,GPUFlaggerEnumerationVarianceEnvelope,BENCHED,,,exec,2025-09-21,tests/benchmark_gpu_flagger_enumeration_variance.zig
 REQ-GQL-051,GPU Acceleration,GPUFlaggerUnsupported,TESTED,,,engine,2025-09-21,tests/canary_gpu_flagger_unsupported.zig
@@ -2021,9 +2021,9 @@ REQ-GQL-051,GPU Acceleration,Phase4ShortestPath,TESTED,,,engine,2025-10-26,src/g
 REQ-GQL-051,GPU Acceleration,Phase5Telemetry,TESTED,,,engine,2025-10-26,src/gpu/telemetry.zig
 REQ-GQL-051,GPU Acceleration,PlannerOps,TESTED,,,engine,2025-10-25,src/planner/gpu_ops.zig
 REQ-GQL-051,GPU Acceleration,SmartKernelLoader,TESTED,,,engine,2025-10-26,src/gpu/smart_kernel_loader.zig
+REQ-GQL-051,GPU Acceleration,TruthfulDeviceReporting,TESTED,,,engine,2026-06-11,tests/test_gap0878_gpu_truth.zig
 REQ-GQL-051,GPU Acceleration,UnifiedModule,EXEMPT,,,engine,2025-10-26,src/gpu.zig
 REQ-GQL-051,GPU Acceleration,Validation,EXEMPT,,,engine,2025-10-26,scripts/test/validate_gpu_implementation.sh
-REQ-GQL-051,GPU Operator Kernels,Bench,BENCHED,,,accel,2025-09-23,tests/benchmark_gpu_operator_kernel_foundations.zig
 REQ-GQL-052,Federation,FederationRouter,TESTED,,,dist,2025-09-21,src/federation/router.zig
 REQ-GQL-052,Federation,FederationRouterUnsupported,TESTED,,,dist,2025-09-21,tests/canary_federation_router_unsupported.zig
 REQ-GQL-052,FederationNullsOrdering,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
