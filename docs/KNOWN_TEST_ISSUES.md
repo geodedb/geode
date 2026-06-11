@@ -24,6 +24,23 @@ below — under GAP-0860.
 
 **Result (historical, at `faac1f3e`): 175 named `test-*` steps — 167 PASS, 6 FAIL, 2 TIMEOUT, 0 not-run (count-pushdown reclassified PASS after a 15-min re-run; the original 300 s sweep scored it TIMEOUT).** For the current expected baseline after the GAP-0863 fixes, see the refresh block below.
 
+### Round-end full sweep (2026-06-11, post Task 42) — 237/240 runnable PASS, 0 FAIL
+
+Full per-step sweep of all 240 named `test-*` steps at the end of the
+`gap-closure-2026-06-10` round (300 s per-step timeout, parallel-load
+conditions):
+
+| Field | Value |
+|---|---|
+| Result | **236 PASS, 0 FAIL, 1 TIMEOUT, 3 SKIP** |
+| TIMEOUT | `test-count-pushdown` — contention only: passes 2/2 solo (29/29 steps) immediately after the sweep |
+| SKIP (intentional) | `test-cluster-3node-subprocess` (known hang, GAP-0838 family), `test-cluster-replicable-mutations` (intentionally-red TDD repro), `test-all` (aggregate) |
+| Effective | **237/240 runnable steps pass; the only non-running steps are the 3 documented skips** |
+
+The step count grew 179 → 240 this round (new named steps for GAP-0514
+Phase 6 promotions, GAP-086x/088x regressions, test-wal, test-iso-conformance,
+test-gql-conformance, distributed/sharding/KMS suites, etc.).
+
 ### GAP-0863 refresh (2026-06-10, commit `0eefbb9a`) — expected baseline 174/179
 
 The GAP-0863 test-gate fixes landed on `gap-closure-2026-06-10`
