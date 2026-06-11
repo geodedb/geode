@@ -6,7 +6,45 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: June 11, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: 31 open/partial actionable gaps (2 Critical, 8 High, 19 Medium, 2 Low). See docs/GAP_ANALYSIS.md.
+**Current Status**: 10 open/partial actionable gaps (2 Critical, 5 High, 3 Medium, 0 Low). See docs/GAP_ANALYSIS.md.
+
+## 2026-06-11 — GAP-0886: quality / maintainability backlog roll-up (Closed, residuals tracked)
+
+**Resolution**: Closed with residuals tracked. The row's acceptance was "turn the quality
+tracker into issue-backed execution batches with clear owners; close or explicitly defer
+each item and archive completed rows" — that contract is now met:
+
+- **Closed and archived this round**: #813 (FLE enforcement TODOs), #812 (dead WAL replay
+  block), #728 (gitleaks allowlist) via commit `fa6ba9ac` (GAP-0886a); the
+  #721/#556/#809/#810 **high-risk error-handling tier** (security/storage/WAL/execution-write)
+  via commit `e7ae1fed` (GAP-0886b — [ERROR_HANDLING_POLICY.md](ERROR_HANDLING_POLICY.md)
+  written, every site classified A–D, 9 C/B violations fixed); #806 (LSP `features.zig`
+  split), #730 (CANARY golden tests), #733 (hot-path inline test backfill) via commit
+  `3cd54fd3` (GAP-0886c). Detail entries below/under their own headings.
+- **Stale row reconciled (GAP-0886d)**: the tracker listed migration residuals
+  Q9/Q13/Q15/Q17/Q18/Q19 as Open, but all six (plus #621/#624) were closed 2026-04-05 /
+  2026-04-10 and recorded here. The only live residual is the Q9-shaped regrowth of
+  `src/migration/mod.zig` (1,682 lines after the signing implementation at `:1411-1680`)
+  — now its own Low row in the tracker.
+- **Cross-checked partial progress recorded**: #409 `evalExpr` downgraded High→Medium
+  (GAP-0532 deleted 947 dead dispatch lines; GAP-0537/commit `18f9fff0` extracted 591 more
+  into `src/eval/ts_call_handlers.zig` + `quantifier_call_handlers.zig`; the fallback
+  `.Call` branch is dispatch-only and the remaining work is incremental, not design-gated).
+  #515 gRPC parity notes the GAP-0880 backup-upload slice (commits `4e615e46` +
+  `d9210dc1` — both QUIC and gRPC handlers now do real ingestion). #719/#804 notes the
+  stage-1 decomposition helpers and the #733 inline-test de-risking.
+- **Every remaining item is explicitly deferred with a named unblock condition** in the
+  open-only `docs/QUALITY_GAP_ANALYSIS.md` (#474 extraction sprint via the #806 facade
+  pattern; #520 singleton inventory + context-threading design; #515 parity matrix; #462
+  extraction plan via the adapter precedent; #405 blocked behind #520; #521 folded into
+  #474; #719/#804 stage-2 plan; #725 suppression ratchet; #736/#815 `OrderedMutex(tier)`
+  wrapper; remaining error-handling tiers in the quantified per-tree burn-down table).
+
+**Why Closed rather than Partial**: the roll-up gap was about tracker discipline
+(batching, ownership, archival), not about completing every multi-week architecture
+refactor it pointed at. Those refactors remain open as individual issue-backed rows in
+`docs/QUALITY_GAP_ANALYSIS.md`, which is the source of truth for quality work; re-opening
+a register row is warranted only if that tracker stops being maintained open-only.
 
 ## 2026-06-11 — GAP-0886b: error-handling policy + high-risk catch audit (quality #721 / #556 / #809 / #810, high-risk tier)
 
