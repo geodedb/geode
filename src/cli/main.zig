@@ -115,7 +115,7 @@ const QueryDeadlineState = query_deadline.QueryDeadlineState;
 const startDeadlineWatchdogTask = query_deadline.startDeadlineWatchdogTask;
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
-// CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+// CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=EXEMPT; OWNER=perf; UPDATED=2026-06-11
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
 const default_stream_page_size: u32 = query_runner.default_page_size;
@@ -161,7 +161,7 @@ const cli_dispatcher = @import("cli_dispatcher.zig");
 const fle_cli = @import("fle_cli.zig");
 const cmdFLE = fle_cli.cmdFLE;
 
-// CANARY: REQ=REQ-AUTH-INIT-CLI-002; FEATURE="AuthInitCLI"; ASPECT=DispatcherIntegration; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+// CANARY: REQ=REQ-AUTH-INIT-CLI-002; FEATURE="AuthInitCLI"; ASPECT=DispatcherIntegration; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
 // Auth chain management CLI module (init, reseal, verify)
 const auth_init_cli = @import("auth_init_cli.zig");
 
@@ -862,7 +862,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
     _ = allocator;
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=cli; UPDATED=2026-06-11
     // Direct call to server main - no subprocess spawning, unified binary
     try server_main.main();
 }
@@ -1003,7 +1003,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var source_file: ?[]const u8 = null;
     // GAP-0271: FLE role for field-level access control
     var role: ?[]const u8 = null;
-    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliForwardPrincipalFlag; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliForwardPrincipalFlag; STATUS=TESTED; TEST=geodetestlab/specs/2pc_principal_propagation.yml; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-5: --forward-principal <username>[:<tenant>] builds a
     // principal_envelope (GPSP wire blob) and emits it as ExecuteRequest field 4.
     // This mirrors what a distributed coordinator attaches to a shard RPC: the
@@ -1599,7 +1599,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         return;
     }
 
-    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliEnvelopeBuild; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliEnvelopeBuild; STATUS=TESTED; TEST=geodetestlab/specs/2pc_principal_propagation.yml; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-5: build the principal_envelope blob from
     // --forward-principal / --forward-principal-envelope. The bytes are emitted
     // as ExecuteRequest field 4; the server deserialises them and evaluates
@@ -1822,7 +1822,7 @@ const QuicQueryOptions = struct {
     page_size: u32 = default_stream_page_size,
     params: std.ArrayList(schema.Param),
     role: ?[]const u8 = null, // GAP-0271: FLE role for field-level access control
-    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliForwardPrincipal; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliForwardPrincipal; STATUS=TESTED; TEST=geodetestlab/specs/2pc_principal_propagation.yml; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-5: serialised principal_envelope blob built from
     // --forward-principal. When non-null the CLI emits ExecuteRequest field 4
     // and the server reconstructs the forwarded Principal for GPS/RLS.
@@ -3076,7 +3076,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
     var client_key_path: ?[]const u8 = null;
-    // CANARY: REQ=REQ-SHELL-AUTH-004; FEATURE="ShellAuthOptions"; ASPECT=CLIParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-SHELL-AUTH-004; FEATURE="ShellAuthOptions"; ASPECT=CLIParsing; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
     // Issue #387: Authentication credentials for shell command
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
@@ -3283,7 +3283,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .client_key_path = client_key_path,
     });
 
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=SignalInstall; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=SignalInstall; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
     // Install signal handlers for Ctrl+C detection before starting REPL
     geode.repl.platform.installSignalHandlers();
     defer geode.repl.platform.restoreSignalHandlers();
@@ -3336,13 +3336,13 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
         try cmdAuthToken(allocator);
     } else if (std.mem.eql(u8, subcmd, "init")) {
-        // CANARY: REQ=REQ-AUTH-INIT-CLI-003; FEATURE="AuthInitCLI"; ASPECT=Bootstrap; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-INIT-CLI-003; FEATURE="AuthInitCLI"; ASPECT=Bootstrap; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthInit(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "reseal")) {
-        // CANARY: REQ=REQ-AUTH-INIT-CLI-004; FEATURE="AuthInitCLI"; ASPECT=Reseal; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-INIT-CLI-004; FEATURE="AuthInitCLI"; ASPECT=Reseal; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthReseal(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "verify")) {
-        // CANARY: REQ=REQ-AUTH-INIT-CLI-005; FEATURE="AuthInitCLI"; ASPECT=Verify; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-INIT-CLI-005; FEATURE="AuthInitCLI"; ASPECT=Verify; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthVerify(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();
