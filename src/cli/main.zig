@@ -359,6 +359,7 @@ fn printShellUsage() void {
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
         "  --no-history           Disable command history\n" ++
+        "  --plain                Plain-mode REPL (no terminal control; for piped/automated use)\n" ++
         "  --format <fmt>         Default output format: json|table|csv (default: table)\n" ++
         "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
         "  -h, --help             Show this help\n" ++
@@ -3067,6 +3068,10 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var verbose = false;
     var insecure = false;
     var non_interactive = false;
+    // GAP-0514 Phase 6: plain-mode REPL lane (no raw terminal control,
+    // line-based stdin) — previously implemented in repl_loop.runPlainMode
+    // but unreachable from the CLI.
+    var plain_mode = false;
     // GAP-0113: TLS certificate verification options
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
@@ -3185,6 +3190,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             verbose = true;
         } else if (std.mem.eql(u8, argv[i], "--non-interactive")) {
             non_interactive = true;
+        } else if (std.mem.eql(u8, argv[i], "--plain")) {
+            plain_mode = true;
         } else if (std.mem.eql(u8, argv[i], "--log-level")) {
             // Handle --log-level flag (ignored for shell command but must consume its argument)
             if (i + 1 >= argv.len) {
@@ -3238,7 +3245,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    if (non_interactive) {
+    if (non_interactive and !plain_mode) {
         const stderr_file = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
         stderr_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.usage_error));
@@ -3295,6 +3302,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .username = username,
         .password = password,
         .graph = graph,
+        .plain_mode = plain_mode,
     };
 
     repl_loop.ReplLoop.run(options) catch |err| {
