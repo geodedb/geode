@@ -67,14 +67,20 @@ fn multiResult(columns: [][]const u8, rows: [][]Value) ExecutionResult {
 
 // GAP-0273: Global parallel pool for graph algorithm parallelism.
 // Initialized lazily on first use, shared across all algorithm calls.
+// GAP-0883: the pool is process-lifetime, so it MUST own a process-lifetime
+// allocator. It previously captured the first caller's allocator — which on
+// the server is the per-request arena (GAP-0755): the pool's threads and
+// chunk buffers would race a non-thread-safe arena and dangle after the
+// request completed. smp_allocator is the governance-approved global
+// allocator for process-lifetime registries (see schema_change_notifier.zig).
 var g_parallel_pool: ?ParallelPool = null;
 var g_parallel_pool_mu: std.Io.Mutex = std.Io.Mutex.init;
 
-fn getParallelPool(allocator: std.mem.Allocator) *ParallelPool {
+fn getParallelPool() *ParallelPool {
     g_parallel_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_parallel_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     if (g_parallel_pool == null) {
-        g_parallel_pool = ParallelPool.init(allocator, null);
+        g_parallel_pool = ParallelPool.init(std.heap.smp_allocator, null);
         g_parallel_pool.?.start();
     }
     return &g_parallel_pool.?;
@@ -196,7 +202,7 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
     };
 
     // GAP-0273: Parallel degree computation — each node's degree is independent
-    const pool = getParallelPool(allocator);
+    const pool = getParallelPool();
     parallel_wrapper.parallelForEach(
         pool,
         0,

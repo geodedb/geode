@@ -4386,10 +4386,10 @@ pub fn build(b: *std.Build) void {
     tde_file_encryption_test.root_module.addImport("logging", logging_mod);
     shardDep(test_step, &tde_file_encryption_test.step, 1, test_shard_loads, test_shard_index);
 
-    const ml_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration.zig"), .target = target, .optimize = optimize }),
-    });
-    shardDep(test_step, &ml_test.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
+    // and an embedding-sign "community detection" hack) was dead code — no
+    // production importer; superseded by src/ml/integration_enhanced.zig.
+    // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize }),
@@ -5421,6 +5421,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0884_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
     gap0884_step.dependOn(&run_gap0884_tests.step);
+
+    // GAP-0883: server-level coverage for the documented `CALL algo.*` graph
+    // algorithm procedures through the real parse → dispatch → executor path
+    // over a real GraphStore (two directed triangles + bridge, plus the
+    // usage-guide social-network fixture). Pins non-degenerate community
+    // detection (two communities for two triangles — NOT one-per-node) and
+    // verifies every output table published in
+    // docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md.
+    const gap0883_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0883_algo_procedures.zig"), .target = target, .optimize = optimize });
+    gap0883_test_mod.addImport("geode", root_mod);
+    gap0883_test_mod.link_libc = true;
+    const gap0883_tests = b.addTest(.{ .root_module = gap0883_test_mod });
+    const run_gap0883_tests = b.addRunArtifact(gap0883_tests);
+    shardDep(test_step, &run_gap0883_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0883_step = b.step("test-gap0883", "GAP-0883: CALL algo.* procedures over real fixture graphs (non-degenerate community detection)");
+    gap0883_step.dependOn(&run_gap0883_tests.step);
 
     // GAP-0878: honest GPU device reporting. Pins that GPUAccelerator never
     // fabricates a device: backend .none (and any backend without a working

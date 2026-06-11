@@ -7,9 +7,20 @@ const kms = @import("security/kms_remote");
 const quic = @import("transport/quic");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+// GAP-0883 review fix: getrandom failure previously left the buffer
+// undefined; fall back to a monotonic-clock-seeded PRNG fill instead.
 fn compat_fillRandom(buf: []u8) void {
     if (comptime builtin.os.tag == .linux) {
-        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+        var filled: usize = 0;
+        while (filled < buf.len) {
+            const rc = std.os.linux.getrandom(buf.ptr + filled, buf.len - filled, 0);
+            if (@as(isize, @bitCast(rc)) <= 0) {
+                var prng = std.Random.DefaultPrng.init(nowNs());
+                prng.random().bytes(buf[filled..]);
+                return;
+            }
+            filled += rc;
+        }
     } else {
         std.c.arc4random_buf(buf.ptr, buf.len);
     }

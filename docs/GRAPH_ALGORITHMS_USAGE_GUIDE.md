@@ -67,6 +67,20 @@ Alice --- Bob
 Charlie
 ```
 
+> **Verified outputs.** Every "Expected Results" table below is verified
+> against the real `CALL algo.*` executors by
+> `tests/test_gap0883_algo_procedures.zig` (`zig build test-gap0883`) over this
+> exact fixture. Two things to know when reading them:
+>
+> 1. **Node ids are store-assigned 64-bit ids**, not small sequential
+>    integers — the tables below therefore show the person's *name*; join
+>    `nodeId` back to nodes with `MATCH (p:Person) WHERE id(p) = nodeId` to
+>    reproduce them.
+> 2. **Relationships are directed.** Algorithms that traverse both directions
+>    (degree, betweenness, closeness, eigenvector, louvain, labelPropagation,
+>    unionFind) see this network as drawn; `algo.scc.stream` follows outgoing
+>    edges only (see §8).
+
 ---
 
 ## Algorithm Usage Examples
@@ -77,24 +91,25 @@ Charlie
 
 ```gql
 CALL algo.degree.stream()
-YIELD nodeId, centrality
-RETURN nodeId, centrality
-ORDER BY centrality DESC
+YIELD nodeId, degree
+RETURN nodeId, degree
+ORDER BY degree DESC
 LIMIT 5
 ```
 
-**Expected Results:**
+**Expected Results** (verified; columns are `nodeId, degree` — names shown for readability):
 
 ```
-┌────────┬────────────┐
-│ nodeId │ centrality │
-├────────┼────────────┤
-│ 4      │ 4          │  -- Diana (connected to Alice, Bob, Charlie, Eve)
-│ 1      │ 3          │  -- Alice (connected to Bob, Charlie, Diana)
-│ 2      │ 2          │  -- Bob (connected to Alice, Diana)
-│ 3      │ 2          │  -- Charlie (connected to Alice, Diana)
-│ 5      │ 2          │  -- Eve (connected to Diana, Frank)
-└────────┴────────────┘
+┌─────────┬────────┐
+│ person  │ degree │
+├─────────┼────────┤
+│ Diana   │ 4      │  -- connected to Alice, Bob, Charlie, Eve
+│ Alice   │ 3      │  -- connected to Bob, Charlie, Diana
+│ Bob     │ 2      │  -- connected to Alice, Diana
+│ Charlie │ 2      │  -- connected to Alice, Diana
+│ Eve     │ 2      │  -- connected to Diana, Frank
+└─────────┴────────┘
+(remaining: Frank 2, Grace 2, Henry 1)
 ```
 
 **Interpretation**: Diana is the most connected person with 4 friends, making her a key hub in the network.
@@ -107,24 +122,26 @@ LIMIT 5
 
 ```gql
 CALL algo.betweenness.stream()
-YIELD nodeId, centrality
-RETURN nodeId, centrality
-ORDER BY centrality DESC
+YIELD nodeId, betweenness
+RETURN nodeId, betweenness
+ORDER BY betweenness DESC
 LIMIT 5
 ```
 
-**Expected Results:**
+**Expected Results** (verified; the executor returns **raw, unnormalized Brandes
+pair counts**, not [0,1]-normalized scores):
 
 ```
-┌────────┬────────────┐
-│ nodeId │ centrality │
-├────────┼────────────┤
-│ 4      │ 0.428571   │  -- Diana (bridges Alice/Bob/Charlie to Eve/Frank/Grace/Henry)
-│ 5      │ 0.214286   │  -- Eve (bridges Diana to Frank/Grace/Henry)
-│ 6      │ 0.142857   │  -- Frank (bridges Eve to Grace/Henry)
-│ 1      │ 0.071429   │  -- Alice
-│ 2      │ 0.000000   │  -- Bob (leaf node)
-└────────┴────────────┘
+┌─────────┬─────────────┐
+│ person  │ betweenness │
+├─────────┼─────────────┤
+│ Diana   │ 25          │  -- bridges Alice/Bob/Charlie to Eve/Frank/Grace/Henry
+│ Eve     │ 24          │  -- bridges Diana's cluster to Frank/Grace/Henry
+│ Frank   │ 20          │  -- bridges Eve to Grace/Henry
+│ Grace   │ 12          │  -- bridges Frank to Henry
+│ Alice   │ 1           │
+└─────────┴─────────────┘
+(Bob, Charlie, Henry: 0 — no shortest path passes through them)
 ```
 
 **Interpretation**: Diana has the highest betweenness centrality because she lies on the shortest path between many node pairs. Removing Diana would fragment the network.
@@ -139,27 +156,28 @@ LIMIT 5
 
 ```gql
 CALL algo.closeness.stream()
-YIELD nodeId, centrality
-RETURN nodeId, centrality
-ORDER BY centrality DESC
+YIELD nodeId, closeness
+RETURN nodeId, closeness
+ORDER BY closeness DESC
 LIMIT 5
 ```
 
-**Expected Results:**
+**Expected Results** (verified):
 
 ```
-┌────────┬────────────┐
-│ nodeId │ centrality │
-├────────┼────────────┤
-│ 4      │ 0.538462   │  -- Diana (average distance to others: ~1.86)
-│ 1      │ 0.466667   │  -- Alice (average distance to others: ~2.14)
-│ 5      │ 0.466667   │  -- Eve (average distance to others: ~2.14)
-│ 3      │ 0.411765   │  -- Charlie
-│ 2      │ 0.388889   │  -- Bob
-└────────┴────────────┘
+┌─────────┬───────────┐
+│ person  │ closeness │
+├─────────┼───────────┤
+│ Diana   │ 0.538461  │  -- total distance to the other 7 people: 13
+│ Eve     │ 0.538461  │  -- joint-highest: Eve is equally central on this chain
+│ Frank   │ 0.466666  │
+│ Alice   │ 0.411764  │
+│ Bob     │ 0.388888  │  -- tied with Charlie
+└─────────┴───────────┘
+(remaining: Charlie 0.388888, Grace 0.368421, Henry 0.280000)
 ```
 
-**Interpretation**: Diana can reach all other people in the fewest hops on average, making her ideally positioned for information dissemination.
+**Interpretation**: Diana and Eve tie for shortest average distance to everyone else; both are ideally positioned for information dissemination.
 
 **Use Case**: In emergency response, this identifies locations for resource distribution centers.
 
@@ -171,24 +189,25 @@ LIMIT 5
 
 ```gql
 CALL algo.eigenvector.stream()
-YIELD nodeId, centrality
-RETURN nodeId, centrality
-ORDER BY centrality DESC
+YIELD nodeId, eigenvector
+RETURN nodeId, eigenvector
+ORDER BY eigenvector DESC
 LIMIT 5
 ```
 
-**Expected Results:**
+**Expected Results** (verified):
 
 ```
-┌────────┬────────────┐
-│ nodeId │ centrality │
-├────────┼────────────┤
-│ 4      │ 0.485071   │  -- Diana (connected to Alice who is well-connected)
-│ 1      │ 0.408248   │  -- Alice (connected to Diana and Charlie)
-│ 3      │ 0.353553   │  -- Charlie (connected to Alice and Diana)
-│ 5      │ 0.301511   │  -- Eve
-│ 2      │ 0.288675   │  -- Bob
-└────────┴────────────┘
+┌─────────┬─────────────┐
+│ person  │ eigenvector │
+├─────────┼─────────────┤
+│ Diana   │ 0.579313    │  -- connected to the other three well-connected people
+│ Alice   │ 0.510612    │
+│ Bob     │ 0.402221    │  -- Bob and Charlie are structurally symmetric
+│ Charlie │ 0.402221    │
+│ Eve     │ 0.255037    │  -- scores decay down the Eve→Frank→Grace→Henry chain
+└─────────┴─────────────┘
+(remaining: Frank 0.111684, Grace 0.047739, Henry 0.017601)
 ```
 
 **Interpretation**: Diana and Alice have high eigenvector centrality because they're connected to other influential nodes, not just many nodes.
@@ -209,21 +228,26 @@ GROUP BY community
 ORDER BY size DESC
 ```
 
-**Expected Results:**
+**Expected Results** (verified — community ids are store-assigned node ids, so
+the table shows membership; typical run):
 
 ```
-┌───────────┬─────────────────────────┬──────┐
-│ community │ members                 │ size │
-├───────────┼─────────────────────────┼──────┤
-│ 1         │ [1, 2, 3, 4, 5]        │ 5    │  -- Main cluster (Alice's group)
-│ 6         │ [6, 7, 8]              │ 3    │  -- Secondary cluster (Frank's group)
-└───────────┴─────────────────────────┴──────┘
+┌───────────┬──────────────────────────────┬──────┐
+│ community │ members                      │ size │
+├───────────┼──────────────────────────────┼──────┤
+│ A         │ Alice, Bob, Charlie, Diana   │ 4    │  -- densely connected core
+│ B         │ Eve, Frank                   │ 2    │  -- chain pair
+│ C         │ Grace, Henry                 │ 2    │  -- chain pair
+└───────────┴──────────────────────────────┴──────┘
 ```
 
-**Interpretation**: The algorithm detected two main friend groups:
-
-- Alice's cluster: Alice, Bob, Charlie, Diana, Eve
-- Frank's cluster: Frank, Grace, Henry
+**Interpretation**: The densely connected core (Alice, Bob, Charlie, Diana)
+always forms one community. The Eve→Frank→Grace→Henry **chain** has no dense
+sub-structure, so its grouping sits on near-tied modularity optima: the
+typical outcome is the two pairs shown above, but the chain split can vary
+between runs (2-3 communities total). What never happens — and what the
+regression test pins — is the degenerate one-community-per-node output or the
+chain tail merging into the core.
 
 **Use Case**: In social media, this identifies communities for targeted content or ads.
 
@@ -241,18 +265,17 @@ GROUP BY label
 ORDER BY size DESC
 ```
 
-**Expected Results:**
+**Expected Results** (verified properties — the exact split is
+**tie-break-order dependent** and varies between runs on a graph this small;
+do not pin exact labels):
 
-```
-┌───────┬─────────────────────────┬──────┐
-│ label │ members                 │ size │
-├───────┼─────────────────────────┼──────┤
-│ 1     │ [1, 2, 3, 4]           │ 4    │  -- Alice's influence spreads
-│ 5     │ [5, 6, 7, 8]           │ 4    │  -- Eve's influence spreads
-└───────┴─────────────────────────┴──────┘
-```
+- Strictly fewer labels than nodes — propagation always merges somebody.
+- Every node ends with the same label as at least one of its neighbors
+  (local consistency at convergence).
+- Observed outcomes on this fixture range from a single community to a few;
+  on graphs with dense, well-separated clusters the partition is stable.
 
-**Interpretation**: Through iterative label spreading, nodes adopt the most common label among their neighbors. This simulates how opinions or behaviors spread through social influence.
+**Interpretation**: Through iterative label spreading, nodes adopt the most common label among their neighbors. This simulates how opinions or behaviors spread through social influence. Ties (equally common neighbor labels) are broken by iteration order, which is why small, chain-like graphs do not produce one canonical split.
 
 **Use Case**: Modeling how trends, opinions, or diseases spread through a network.
 
@@ -270,14 +293,15 @@ GROUP BY setId
 ORDER BY size DESC
 ```
 
-**Expected Results:**
+**Expected Results** (verified — `setId` is a store-assigned representative
+node id, not a small integer):
 
 ```
-┌───────────┬─────────────────────────────────┬──────┐
-│ component │ members                         │ size │
-├───────────┼─────────────────────────────────┼──────┤
-│ 1         │ [1, 2, 3, 4, 5, 6, 7, 8]       │ 8    │  -- All connected
-└───────────┴─────────────────────────────────┴──────┘
+┌───────────┬──────────────────────────────────────────────────────────┬──────┐
+│ component │ members                                                  │ size │
+├───────────┼──────────────────────────────────────────────────────────┼──────┤
+│ <setId>   │ Alice, Bob, Charlie, Diana, Eve, Frank, Grace, Henry     │ 8    │
+└───────────┴──────────────────────────────────────────────────────────┴──────┘
 ```
 
 **Interpretation**: Everyone is in one connected component - there are no isolated groups.
@@ -299,15 +323,15 @@ GROUP BY setId
 ORDER BY size DESC
 ```
 
-**Results with Isolation:**
+**Results with Isolation** (verified — exactly two distinct `setId` values):
 
 ```
-┌───────┬─────────────────────────────────┬──────┐
-│ setId │ members                         │ size │
-├───────┼─────────────────────────────────┼──────┤
-│ 1     │ [1, 2, 3, 4, 5, 6, 7, 8]       │ 8    │  -- Main network
-│ 9     │ [9, 10]                        │ 2    │  -- Isolated pair
-└───────┴─────────────────────────────────┴──────┘
+┌──────────┬──────────────────────────────────────────────────────────┬──────┐
+│ setId    │ members                                                  │ size │
+├──────────┼──────────────────────────────────────────────────────────┼──────┤
+│ <setId1> │ Alice, Bob, Charlie, Diana, Eve, Frank, Grace, Henry     │ 8    │
+│ <setId2> │ Ian, Jane                                                │ 2    │
+└──────────┴──────────────────────────────────────────────────────────┴──────┘
 ```
 
 **Use Case**: Network diagnostics - finding disconnected parts of infrastructure or isolated user groups.
@@ -320,21 +344,26 @@ ORDER BY size DESC
 
 ```gql
 CALL algo.scc.stream()
-YIELD nodeId, partition
-RETURN partition, collect(nodeId) AS members, count(*) AS size
-GROUP BY partition
+YIELD nodeId, componentId
+RETURN componentId, collect(nodeId) AS members, count(*) AS size
+GROUP BY componentId
 ORDER BY size DESC
 ```
 
-**Expected Results (treating as undirected):**
+**Expected Results** (verified — SCC is a **directed** algorithm and follows
+outgoing edges only; it does NOT treat the graph as undirected):
 
 ```
-┌───────────┬─────────────────────────────────┬──────┐
-│ partition │ members                         │ size │
-├───────────┼─────────────────────────────────┼──────┤
-│ 0         │ [1, 2, 3, 4, 5, 6, 7, 8]       │ 8    │  -- All mutually reachable
-└───────────┴─────────────────────────────────┴──────┘
+┌─────────────┬──────────┬──────┐
+│ componentId │ members  │ size │
+├─────────────┼──────────┼──────┤
+│ 0..7        │ each     │ 1    │  -- 8 singleton SCCs
+└─────────────┴──────────┴──────┘
 ```
+
+The friendship fixture has no **directed cycle** (every `FRIENDS_WITH` edge
+points one way), so every node is its own strongly connected component. To see
+multi-node SCCs you need directed cycles — like the citation network below.
 
 **Directed Graph Example:**
 
@@ -359,6 +388,12 @@ MATCH (p1:Paper {title: 'Foundation'}), (p2:Paper {title: 'Applications'})
 CREATE (p1)-[:CITES]->(p2)
 ```
 
+The four `CITES` edges form a directed cycle (Foundation → Applications →
+Advanced Topics → Building Blocks → Foundation), so `algo.scc.stream` reports
+all four papers in **one** strongly connected component. (The directed-cycle
+behavior is pinned by the two-directed-triangles test in
+`tests/test_gap0883_algo_procedures.zig`.)
+
 **Use Case**: In web page ranking, identifying sets of pages that all link to each other (link farms).
 
 ---
@@ -372,10 +407,10 @@ CREATE (p1)-[:CITES]->(p2)
 ```gql
 -- Find key connectors in the organization
 CALL algo.betweenness.stream()
-YIELD nodeId, centrality
+YIELD nodeId, betweenness
 MATCH (e:Employee) WHERE id(e) = nodeId
-RETURN e.name, e.department, centrality
-ORDER BY centrality DESC
+RETURN e.name, e.department, betweenness
+ORDER BY betweenness DESC
 LIMIT 10
 ```
 
@@ -446,14 +481,14 @@ LIMIT 20
 ```gql
 -- Identify critical nodes in supply chain
 CALL algo.betweenness.stream()
-YIELD nodeId, centrality
+YIELD nodeId, betweenness
 MATCH (s:Supplier) WHERE id(s) = nodeId
-WHERE centrality > 0.3  -- High betweenness indicates criticality
+WHERE betweenness > 100  -- High raw pair count indicates criticality (scores are unnormalized)
 RETURN s.name,
        s.location,
-       centrality,
+       betweenness,
        'CRITICAL - Find backup suppliers' AS risk_assessment
-ORDER BY centrality DESC
+ORDER BY betweenness DESC
 ```
 
 **Business Value**:
@@ -471,14 +506,14 @@ ORDER BY centrality DESC
 ```gql
 -- Find influencers (high eigenvector centrality) who shared content
 CALL algo.eigenvector.stream()
-YIELD nodeId, centrality
+YIELD nodeId, eigenvector
 MATCH (u:User) WHERE id(u) = nodeId
 MATCH (u)-[:SHARED]->(c:Content {id: 'viral-video-123'})
-RETURN sum(centrality) AS viralPotential,
+RETURN sum(eigenvector) AS viralPotential,
        count(u) AS influencerCount,
        CASE
-         WHEN sum(centrality) > 5.0 THEN 'HIGH - Likely to go viral'
-         WHEN sum(centrality) > 2.0 THEN 'MEDIUM - Good engagement expected'
+         WHEN sum(eigenvector) > 5.0 THEN 'HIGH - Likely to go viral'
+         WHEN sum(eigenvector) > 2.0 THEN 'MEDIUM - Good engagement expected'
          ELSE 'LOW - Limited reach'
        END AS prediction
 ```
@@ -510,14 +545,14 @@ RETURN sum(centrality) AS viralPotential,
 ```gql
 -- Bad: Process all nodes
 CALL algo.betweenness.stream()
-YIELD nodeId, centrality
+YIELD nodeId, betweenness
 RETURN *
 
 -- Good: Limit to top results
 CALL algo.betweenness.stream()
-YIELD nodeId, centrality
-RETURN nodeId, centrality
-ORDER BY centrality DESC
+YIELD nodeId, betweenness
+RETURN nodeId, betweenness
+ORDER BY betweenness DESC
 LIMIT 100
 ```
 
@@ -526,9 +561,9 @@ LIMIT 100
 ```gql
 -- Bad: Run algorithm on entire graph
 CALL algo.degree.stream()
-YIELD nodeId, centrality
+YIELD nodeId, degree
 MATCH (p:Person) WHERE id(p) = nodeId AND p.active = true
-RETURN p.name, centrality
+RETURN p.name, degree
 
 -- Better: Use subgraph (when supported)
 -- First filter, then analyze
@@ -558,13 +593,13 @@ WITH collect(id(p)) AS recentUsers
 ```gql
 -- Combine multiple centrality measures for comprehensive influence score
 CALL algo.degree.stream()
-YIELD nodeId AS degreeNode, centrality AS degree
+YIELD nodeId AS degreeNode, degree
 
 CALL algo.betweenness.stream()
-YIELD nodeId AS betweenNode, centrality AS betweenness
+YIELD nodeId AS betweenNode, betweenness
 
 CALL algo.eigenvector.stream()
-YIELD nodeId AS eigenNode, centrality AS eigenvector
+YIELD nodeId AS eigenNode, eigenvector
 
 MATCH (p:Person)
 WHERE id(p) = degreeNode AND id(p) = betweenNode AND id(p) = eigenNode
@@ -589,8 +624,8 @@ MATCH (n)
 WITH count(n) AS nodeCount
 WHERE nodeCount > 0
 CALL algo.betweenness.stream()
-YIELD nodeId, centrality
-RETURN nodeId, centrality
+YIELD nodeId, betweenness
+RETURN nodeId, betweenness
 ```
 
 ### Disconnected Components
@@ -611,16 +646,21 @@ UNWIND componentNodes AS nodeId
 
 All 8 implemented algorithms provide powerful graph analytics capabilities:
 
-| Algorithm | Best For | Complexity | Output Type |
-|-----------|----------|------------|-------------|
-| Degree | Quick connectivity measure | O(V*E) | Integer |
-| Betweenness | Finding bridges | O(V*E) | Decimal |
-| Closeness | Measuring reachability | O(V*(V+E)) | Decimal |
-| Eigenvector | Influence through connections | O(k*(V+E)) | Decimal |
-| Louvain | Community structure | O(V+E) | Community ID |
-| Label Propagation | Fast community detection | O(k*E) | Label ID |
-| Union-Find | Connected components | O(E*α(V)) | Component ID |
-| SCC | Directed connectivity | O(V+E) | Partition ID |
+| Algorithm | Procedure | YIELD columns | Best For | Complexity |
+|-----------|-----------|---------------|----------|------------|
+| Degree | `algo.degree.stream` | `nodeId, degree` | Quick connectivity measure | O(V+E) |
+| Betweenness | `algo.betweenness.stream` | `nodeId, betweenness` (raw, unnormalized) | Finding bridges | O(V*E) |
+| Closeness | `algo.closeness.stream` | `nodeId, closeness` | Measuring reachability | O(V*(V+E)) |
+| Eigenvector | `algo.eigenvector.stream` | `nodeId, eigenvector` | Influence through connections | O(k*(V+E)) |
+| Louvain | `algo.louvain.stream` | `nodeId, community` | Community structure | O(k*(V+E)) |
+| Label Propagation | `algo.labelPropagation.stream` | `nodeId, label` | Fast community detection | O(k*E) |
+| Union-Find | `algo.unionFind.stream` | `nodeId, setId` | Connected components | O(E*α(V)) |
+| SCC | `algo.scc.stream` | `nodeId, componentId` (directed) | Directed connectivity | O(V+E) |
+
+All eight procedures are server-side `CALL` procedures dispatched through
+`src/execution/algo_dispatch.zig`; the expected results in this guide are
+verified end-to-end by `tests/test_gap0883_algo_procedures.zig`
+(`zig build test-gap0883`).
 
 **Choose based on**:
 

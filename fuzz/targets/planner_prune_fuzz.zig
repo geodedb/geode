@@ -9,7 +9,10 @@ fn rnd(b: []const u8, idx: *usize) u8 {
     return v;
 }
 
-fn gen_tree(b: []const u8, idx: *usize, depth: u8) enumz.LogicalPlan {
+// GAP-0883 review fix: children must be heap-allocated. The previous version
+// returned a slice of a stack-local `children_buf`, so every non-leaf plan's
+// children dangled once gen_tree returned.
+fn gen_tree(allocator: std.mem.Allocator, b: []const u8, idx: *usize, depth: u8) std.mem.Allocator.Error!enumz.LogicalPlan {
     if (depth == 0) return .{ .op = .scan, .children = &.{} };
     const op_tag: u8 = rnd(b, idx) % 7;
     const op: enumz.LogicalOp = switch (op_tag) {
@@ -22,10 +25,8 @@ fn gen_tree(b: []const u8, idx: *usize, depth: u8) enumz.LogicalPlan {
         else => .limit,
     };
     const nchild: usize = if (op == .join) 2 else (rnd(b, idx) % 2);
-    var children_buf: [2]enumz.LogicalPlan = undefined;
-    var children = children_buf[0..nchild];
-    var i: usize = 0;
-    while (i < nchild) : (i += 1) children[i] = gen_tree(b, idx, if (depth > 0) depth - 1 else 0);
+    const children = try allocator.alloc(enumz.LogicalPlan, nchild);
+    for (children) |*child| child.* = try gen_tree(allocator, b, idx, depth - 1);
     return .{ .op = op, .children = children };
 }
 
@@ -41,7 +42,9 @@ fn fuzz_planner(context: Context, smith: *std.testing.Smith) anyerror!void {
 fn fuzz_planner_bytes(context: Context, data: []const u8) anyerror!void {
     _ = context;
     var idx: usize = 0;
-    const root = gen_tree(data, &idx, 3);
+    var tree_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer tree_arena.deinit();
+    const root = try gen_tree(tree_arena.allocator(), data, &idx, 3);
     var enum_full = enumz.PlanEnumerator.init(std.testing.allocator, .{ .enable_prune = false });
     defer enum_full.deinit();
     var list_full: std.ArrayListUnmanaged(enumz.CandidatePlan) = .empty;
