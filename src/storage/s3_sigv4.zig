@@ -76,13 +76,18 @@ pub fn signingKey(
     region: []const u8,
     service: []const u8,
 ) [32]u8 {
-    std.debug.assert(secret_access_key.len <= 256);
+    // Runtime-checked (not just debug-asserted): a >256-byte secret in a
+    // ReleaseFast build must not overflow the stack buffer. Real AWS
+    // secrets are 40 bytes; truncate-and-sign would produce a wrong
+    // (rejected) signature rather than UB.
     var prefixed: [4 + 256]u8 = undefined;
     prefixed[0..4].* = "AWS4".*;
-    @memcpy(prefixed[4..][0..secret_access_key.len], secret_access_key);
+    const key_len = @min(secret_access_key.len, 256);
+    std.debug.assert(secret_access_key.len == key_len); // surface misconfig in safe builds
+    @memcpy(prefixed[4..][0..key_len], secret_access_key[0..key_len]);
 
     var k_date: [32]u8 = undefined;
-    HmacSha256.create(&k_date, date_yyyymmdd, prefixed[0 .. 4 + secret_access_key.len]);
+    HmacSha256.create(&k_date, date_yyyymmdd, prefixed[0 .. 4 + key_len]);
     var k_region: [32]u8 = undefined;
     HmacSha256.create(&k_region, region, &k_date);
     var k_service: [32]u8 = undefined;
