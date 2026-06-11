@@ -106,6 +106,15 @@ pub const EnumType = struct {
     }
 };
 
+/// GAP-0875: pluggable unique-property index consulted by `validateNode`.
+/// `lookup` returns the id of an EXISTING entity that already holds `value`
+/// for `property` under `label_or_type`, or null when the value is absent.
+/// The storage layer (or a test) supplies the concrete index.
+pub const UniqueIndexLookup = struct {
+    ctx: ?*anyopaque = null,
+    lookup: *const fn (ctx: ?*anyopaque, label_or_type: []const u8, property: []const u8, value: Value) ?u64,
+};
+
 pub const ConstraintManager = struct {
     allocator: Allocator,
     node_constraints: std.ArrayList(NodeConstraint),
@@ -116,6 +125,11 @@ pub const ConstraintManager = struct {
     key_constraints: std.ArrayList(KeyConstraint),
     cardinality_constraints: std.ArrayList(CardinalityConstraint),
     enum_types: std.StringHashMap(EnumType),
+    /// GAP-0875: when attached, unique-constraint validation consults this
+    /// index. When null, validateNode cannot verify uniqueness (no full-scan
+    /// fallback by design — write-path enforcement lives in
+    /// src/storage/constraints.zig SchemaConstraints).
+    unique_index: ?UniqueIndexLookup = null,
 
     pub const NodeConstraint = struct {
         name: []const u8,
@@ -184,122 +198,43 @@ pub const ConstraintManager = struct {
         direction: Direction,
     };
 
-    pub const EntityType = enum {
-        node,
-        relationship,
-    };
-
-    pub const DataType = enum {
-        boolean,
-        integer,
-        smallint,
-        bigint,
-        real,
-        double,
-        decimal128,
-        float,
-        string,
-        char,
-        varchar,
-        text,
-        date,
-        time,
-        timetz,
-        timestamp,
-        timestamptz,
-        interval,
-        datetime,
-        duration,
-        bytea,
-        json,
-        jsonb,
-        xml,
-        url,
-        domain,
-        uuid,
-        enum_type,
-        array,
-        bitstring,
-        varbit,
-        range,
-        list,
-        map,
-        any,
-    };
-
-    pub const Direction = enum {
-        outgoing,
-        incoming,
-        both,
-    };
-
-    pub const Value = union(enum) {
-        null,
-        boolean: bool,
-        integer: i64,
-        float: f64,
-        string: []const u8,
-        date: []const u8,
-        datetime: []const u8,
-        list: []Value,
-        map: std.StringHashMap(Value),
-    };
-
-    pub const ValidationError = struct {
-        constraint_name: []const u8,
-        constraint_type: ConstraintType,
-        entity_id: u64,
-        property: ?[]const u8,
-        message: []const u8,
-        severity: Severity,
-
-        pub const Severity = enum {
-            err,
-            warning,
-            info,
-        };
-    };
-
-    // Enum catalog management
-    // enum_types moved into struct fields above; remove duplicate
-
-    pub const EnumType = struct {
-        id: u32,
-        name: []const u8,
-        values: [][]const u8,
-
-        pub fn getOrdinal(self: EnumType, value: []const u8) ?u32 {
-            for (self.values, 0..) |enum_value, i| {
-                if (std.mem.eql(u8, enum_value, value)) {
-                    return @intCast(i);
-                }
-            }
-            return null;
-        }
-    };
+    // GAP-0875: the struct previously re-declared EntityType, DataType,
+    // Direction, Value, ValidationError, and EnumType, shadowing the
+    // file-scope definitions and making `enum_types`/`validateNode`
+    // ambiguous (the module never compiled). The file-scope types are the
+    // single source of truth now.
 
     pub fn init(allocator: Allocator) ConstraintManager {
         return .{
             .allocator = allocator,
-            .node_constraints = std.ArrayList(NodeConstraint).init(allocator),
-            .relationship_constraints = std.ArrayList(RelationshipConstraint).init(allocator),
+            .node_constraints = .empty,
+            .relationship_constraints = .empty,
             .property_constraints = std.StringHashMap(PropertyConstraint).init(allocator),
-            .unique_constraints = std.ArrayList(UniqueConstraint).init(allocator),
+            .unique_constraints = .empty,
             .enum_types = std.StringHashMap(EnumType).init(allocator),
-            .existence_constraints = std.ArrayList(ExistenceConstraint).init(allocator),
-            .key_constraints = std.ArrayList(KeyConstraint).init(allocator),
-            .cardinality_constraints = std.ArrayList(CardinalityConstraint).init(allocator),
+            .existence_constraints = .empty,
+            .key_constraints = .empty,
+            .cardinality_constraints = .empty,
         };
     }
 
     pub fn deinit(self: *ConstraintManager) void {
-        self.node_constraints.deinit();
-        self.relationship_constraints.deinit();
+        // Unique constraints own their duped name/label/properties. The
+        // node_constraints entries created by createUniqueConstraint SHARE
+        // those slices, so they are freed exactly once here.
+        for (self.unique_constraints.items) |uc| {
+            self.allocator.free(uc.name);
+            self.allocator.free(uc.label_or_type);
+            for (uc.properties) |p| self.allocator.free(p);
+            self.allocator.free(uc.properties);
+        }
+        self.node_constraints.deinit(self.allocator);
+        self.relationship_constraints.deinit(self.allocator);
         self.property_constraints.deinit();
-        self.unique_constraints.deinit();
-        self.existence_constraints.deinit();
-        self.key_constraints.deinit();
-        self.cardinality_constraints.deinit();
+        self.unique_constraints.deinit(self.allocator);
+        self.existence_constraints.deinit(self.allocator);
+        self.key_constraints.deinit(self.allocator);
+        self.cardinality_constraints.deinit(self.allocator);
 
         var enum_iter = self.enum_types.iterator();
         while (enum_iter.next()) |entry| {
@@ -377,11 +312,11 @@ pub const ConstraintManager = struct {
             .index_name = null,
         };
 
-        try self.unique_constraints.append(constraint);
+        try self.unique_constraints.append(self.allocator, constraint);
 
         // Also create as node/relationship constraint
         if (entity_type == .node) {
-            try self.node_constraints.append(.{
+            try self.node_constraints.append(self.allocator, .{
                 .name = constraint.name,
                 .label = constraint.label_or_type,
                 .type = .unique,
@@ -392,14 +327,20 @@ pub const ConstraintManager = struct {
         }
     }
 
-    // Validate a node against constraints
+    /// GAP-0875: attach the unique-property index consulted by validateNode.
+    pub fn attachUniqueIndex(self: *ConstraintManager, index: UniqueIndexLookup) void {
+        self.unique_index = index;
+    }
+
+    // Validate a node against constraints. Caller frees the returned slice
+    // and each entry's `message`.
     pub fn validateNode(
         self: *ConstraintManager,
         node_id: u64,
         label: []const u8,
         properties: std.StringHashMap(Value),
     ) ![]ValidationError {
-        var errors = std.ArrayList(ValidationError){};
+        var errors: std.ArrayList(ValidationError) = .empty;
 
         // Check node constraints
         for (self.node_constraints.items) |constraint| {
@@ -407,20 +348,40 @@ pub const ConstraintManager = struct {
 
             switch (constraint.type) {
                 .unique => {
-                    // Check uniqueness (would need index lookup)
-                    // This is a placeholder - actual implementation would check index
+                    // GAP-0875: consult the attached property index. An
+                    // existing DIFFERENT entity holding the same value is a
+                    // uniqueness violation. With no index attached the check
+                    // is skipped (see `unique_index` field doc).
+                    const ui = self.unique_index orelse continue;
+                    for (constraint.properties) |prop| {
+                        const val = properties.get(prop) orelse continue;
+                        const existing_id = ui.lookup(ui.ctx, label, prop, val) orelse continue;
+                        if (existing_id == node_id) continue;
+                        try errors.append(self.allocator, .{
+                            .constraint_name = constraint.name,
+                            .constraint_type = constraint.type,
+                            .entity_id = node_id,
+                            .property = prop,
+                            .message = try std.fmt.allocPrint(
+                                self.allocator,
+                                "Unique constraint '{s}' violated: property '{s}' value already exists on entity {d} with label '{s}'",
+                                .{ constraint.name, prop, existing_id, label },
+                            ),
+                            .severity = .err,
+                        });
+                    }
                 },
                 .exists, .node_property_existence => {
                     for (constraint.properties) |prop| {
                         if (!properties.contains(prop)) {
-                            try errors.append(.{
+                            try errors.append(self.allocator, .{
                                 .constraint_name = constraint.name,
                                 .constraint_type = constraint.type,
                                 .entity_id = node_id,
                                 .property = prop,
                                 .message = try std.fmt.allocPrint(
                                     self.allocator,
-                                    "Property '{}' must exist on nodes with label '{}'",
+                                    "Property '{s}' must exist on nodes with label '{s}'",
                                     .{ prop, label },
                                 ),
                                 .severity = .err,
@@ -432,6 +393,6 @@ pub const ConstraintManager = struct {
             }
         }
 
-        return errors.toOwnedSlice();
+        return errors.toOwnedSlice(self.allocator);
     }
 };

@@ -132,6 +132,9 @@ pub const recommendations = @import("gql/recommendations.zig");
 
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
+// GAP-0875: exported for the residual-stubs regression suite (test-gap0875)
+pub const constraint_manager = @import("schema/constraint_manager.zig");
+pub const memory_mapped_io = @import("performance/memory_mapped_io.zig");
 // Re-export conformance profile helpers for CLI/tools
 pub const conformance = @import("conformance.zig");
 // Re-export selected runtime helpers so binaries can import via the geode package

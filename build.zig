@@ -5407,6 +5407,42 @@ pub fn build(b: *std.Build) void {
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
 
+    // GAP-0875: residual local stubs batch. Two test modules under one step:
+    //  - tests/test_gap0875_stubs.zig (via the `geode` module; lib.zig exports
+    //    constraint_manager + memory_mapped_io for it): unique-constraint
+    //    index consultation, printer IN/NOT IN subquery round-trip +
+    //    temporal-walker descent, measured mmap write benchmark.
+    //  - tests/test_gap0875_stubs_mcp.zig (rooted module at src/mcp/tools.zig
+    //    exposed as `mcp_tools`, mirroring the gap0516 import set): MCP
+    //    cancellation-token propagation in tools.callTool.
+    const gap0875_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0875_stubs.zig"), .target = target, .optimize = optimize });
+    gap0875_test_mod.addImport("geode", root_mod);
+    gap0875_test_mod.link_libc = true;
+    const gap0875_tests = b.addTest(.{ .root_module = gap0875_test_mod });
+    const run_gap0875_tests = b.addRunArtifact(gap0875_tests);
+    const gap0875_tools_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/tools.zig"), .target = target, .optimize = optimize });
+    gap0875_tools_mod.addImport("mcp", mcp_mod);
+    gap0875_tools_mod.addImport("geode", root_mod);
+    gap0875_tools_mod.addImport("json", json_mod);
+    gap0875_tools_mod.addImport("schema", schema_mod);
+    gap0875_tools_mod.addImport("protobuf", protobuf_mod);
+    gap0875_tools_mod.addImport("transport/quic", transport_quic_mod);
+    gap0875_tools_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    gap0875_tools_mod.addImport("build_options", build_options_mod);
+    gap0875_tools_mod.link_libc = true;
+    const gap0875_mcp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0875_stubs_mcp.zig"), .target = target, .optimize = optimize });
+    gap0875_mcp_test_mod.addImport("mcp", mcp_mod);
+    gap0875_mcp_test_mod.addImport("mcp_tools", gap0875_tools_mod);
+    gap0875_mcp_test_mod.addImport("geode", root_mod);
+    gap0875_mcp_test_mod.link_libc = true;
+    const gap0875_mcp_tests = b.addTest(.{ .root_module = gap0875_mcp_test_mod });
+    const run_gap0875_mcp_tests = b.addRunArtifact(gap0875_mcp_tests);
+    shardDep(test_step, &run_gap0875_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_gap0875_mcp_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0875_step = b.step("test-gap0875", "GAP-0875: residual stubs batch (unique-index check, printer subqueries, MCP cancellation, measured write bench)");
+    gap0875_step.dependOn(&run_gap0875_tests.step);
+    gap0875_step.dependOn(&run_gap0875_mcp_tests.step);
+
     // GAP-0884: MFA step-up operation classification. Pins the explicit
     // OperationClass mapping (read/write/admin/security_admin) inside
     // requireStepUp(), replacing the substring "admin"/"write" heuristic:

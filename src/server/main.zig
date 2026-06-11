@@ -732,7 +732,6 @@ const F_UNION_PHASES = server_flags.F_UNION_PHASES;
 const F_ADAPT_EST = server_flags.F_ADAPT_EST;
 const F_HEUR_INDEX = server_flags.F_HEUR_INDEX;
 const nullsFlag = server_flags.nullsFlag;
-const paginationStreamScaffold = server_flags.paginationStreamScaffold;
 const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
@@ -776,8 +775,9 @@ const DEBUG_PROFILE = false; // default off; enable locally when investigating P
 
 // Removed: Implementation-defined flag cache and related functions now in server_flags module
 // Original: g_impl_defined_codes, g_impl_defined_inited variables (~2 lines)
-// Original: paginationStreamScaffold() function (~6 lines)
 // Original: initImplDefinedFlags() function (~14 lines)
+// (paginationStreamScaffold was extracted too, then deleted as a dead
+// intent-stub in GAP-0875 — streaming pagination is NOT implemented.)
 // Total extracted: ~22 lines to server_flags.zig module
 
 // Removed: server_utilities.getOrCreateMVCCManager() function (~10 lines) now in server_utilities module (M3.3 Phase 3 server utilities extraction)

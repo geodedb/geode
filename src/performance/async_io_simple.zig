@@ -1,8 +1,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsyncIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_SimpleAsyncIO; OWNER=performance; UPDATED=2026-01-16
+// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsyncIO"; ASPECT=Performance; STATUS=EXEMPT; OWNER=performance; UPDATED=2026-06-11
+// GAP-0875: STATUS downgraded TESTED->EXEMPT — the previously claimed test
+// (TestCANARY_SimpleAsyncIO) does not exist anywhere in the tree, and this
+// module is a NON-GA synchronous mock by design (see below). Only an unwired
+// test file (tests/test_performance_integration.zig) references it.
 
+/// NON-GA — SYNCHRONOUS MOCK. Not part of the shipping server.
 /// GAP-0223: MOCK IMPLEMENTATION - This is a simplified/mock async I/O for testing only
 ///
 /// This module provides a **synchronous** implementation with an async-like API.

@@ -8,6 +8,8 @@ GAP-0436,JsonbDepthGuard,SECURITY,TESTED,,,security,2026-02-18,src/types/jsonb.z
 GAP-0514-PHASE1A,GraphStoreRegressionCoverage,Scaffold,TESTED,,,engine,2026-04-11,tests/test_gap0514_graph_store_regression.zig
 GAP-0531,DB/DBMS Introspection Procedures,Dispatch,TESTED,,,execution,2026-04-10,src/execution/meta_dispatch.zig
 GAP-0868,PROFILE runtime telemetry,WallClockTiming,TESTED,,,execution,2026-06-10,src/execution/statement_handlers.zig
+GAP-0875,ResidualStubsBatch,McpCancellation,TESTED,,,mcp,2026-06-11,tests/test_gap0875_stubs_mcp.zig
+GAP-0875,ResidualStubsBatch,Regression,TESTED,,,core,2026-06-11,tests/test_gap0875_stubs.zig
 GAP-D005,Federation Union Distinct Dedup,Correctness,TESTED,,,dist,2026-04-05,src/distributed/federation.zig
 GAP-D006,Federation Hash Aggregate Accumulation,Correctness,TESTED,,,dist,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 GQL-39075-CK-001,GQLConformance/AllRQs,UnitTestCoverage,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
@@ -1572,7 +1574,6 @@ REQ-GQL-004,Pagination Legality (US001),Planner,TESTED,,,planner,2025-09-26,src/
 REQ-GQL-004,Pagination Policy Override,Planner,TESTED,,,planner,2025-09-20,src/canary.zig
 REQ-GQL-004,Pagination Policy Override,Planner,TESTED,,,planner,2025-09-20,tests/canary_pagination_policy_toggle.zig
 REQ-GQL-004,PaginationExecutionStreaming,OrderedEmission,TESTED,,,planner,2025-09-23,tests/e2e_protocol_more.zig
-REQ-GQL-004,PaginationExecutionStreaming,Scaffold,TESTED,,,planner,2025-09-23,src/server/server_flags.zig
 REQ-GQL-004,PaginationVarianceAutoCalibration,AutoCalibrationLogic,TESTED,,,planner,2025-09-27,src/monitoring/variance_calibration.zig
 REQ-GQL-004,PaginationVarianceAutoCalibration,Test,TESTED,,,planner,2025-09-27,tests/canary_variance_autocalibration.zig
 REQ-GQL-005,Set Operations,Engine,TESTED,,,engine,2025-09-20,src/canary.zig
@@ -3793,7 +3794,7 @@ REQ-PERF-AST-CACHE-001,QueryASTCache,ParseHotPath,TESTED,,,engine,2026-02-17,src
 REQ-PERF-AST-CACHE-003,SharedASTCache,ConnectionState,TESTED,,,engine,2026-02-17,src/server/quic_connection_handler.zig
 REQ-PERF-AST-CACHE-004,SharedASTCache,ParseHotPathWiring,TESTED,,,engine,2026-02-17,src/server/quic_connection_handler.zig
 REQ-PERF-ASYNC-001,AsynchronousIO,Performance,TESTED,,,performance,2025-10-04,src/performance/async_io.zig
-REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,TESTED,,,performance,2026-01-16,src/performance/async_io_simple.zig
+REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,EXEMPT,,,performance,2026-06-11,src/performance/async_io_simple.zig
 REQ-PERF-ASYNC-001,SimpleAsynchronousIO,Performance,TESTED,,,performance,2025-10-04,src/performance/simple_async_io.zig
 REQ-PERF-ASYNC-CONN-001,AsyncConnectionHandling,ThreadPool,IMPL,,,server,2026-01-27,src/server/main.zig
 REQ-PERF-ASYNC-CONN-002,AsyncConnectionHandling,ThreadPoolInit,IMPL,,,server,2026-05-25,src/server/main.zig
@@ -3857,7 +3858,6 @@ REQ-PERF-INDEX-OPT-001,Performance,IndexOptimization,TESTED,,,perf,2026-01-16,te
 REQ-PERF-INLINE-PULL-001,InlineRunPull,HotPath,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig
 REQ-PERF-INT-001,PerformanceIntegration,Testing,EXEMPT,,,performance,2025-10-04,tests/test_performance_integration.zig
 REQ-PERF-INT-002,PerformanceIntegrationSimple,Testing,EXEMPT,,,performance,2025-10-04,tests/test_performance_integration_simple.zig
-REQ-PERF-IO-001,OptimizedFileIO,Performance,TESTED,,,performance,2025-10-04,src/performance/io_optimized.zig
 REQ-PERF-JSON-001,JSONPerformanceImprovement,Benchmarking,EXEMPT,,,performance,2025-10-04,tests/benchmark_json_improvement.zig
 REQ-PERF-JSON-001,JSONPerformanceImprovement,Integration,TESTED,,,performance,2025-10-04,tests/benchmark_json_improvement.zig
 REQ-PERF-JSON-001,JSONPerformanceValidation,Integration,TESTED,,,performance,2025-10-04,tests/json_perf_validation.zig
@@ -3894,7 +3894,7 @@ REQ-PERF-MERGE-007,Execution,RelationshipMergeAdjacencyEnvelope,BENCHED,,,engine
 REQ-PERF-MERGE-007,IndexRebuild,RebuildMutex,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig
 REQ-PERF-MERGE-008,IndexRebuild,CommitDeferRebuilds,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig
 REQ-PERF-METRICS-001,RuntimeMetrics,RegistryInit,IMPL,,,server,2026-04-25,src/server/main.zig
-REQ-PERF-MMAP-001,MemoryMappedIO,Performance,TESTED,,,performance,2025-10-04,src/performance/memory_mapped_io.zig
+REQ-PERF-MMAP-001,MemoryMappedIO,Performance,TESTED,,,performance,2026-06-11,src/performance/memory_mapped_io.zig
 REQ-PERF-OPT-GATE-001,OptimizerGating,HotPath,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig
 REQ-PERF-PARALLEL-001,Performance,ParallelExecution,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-PERF-PHASE1-001,PerfPhase1,Optimization,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
