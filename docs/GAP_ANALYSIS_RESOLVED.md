@@ -6,7 +6,56 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: June 11, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: 9 open/partial actionable gaps (2 Critical, 4 High, 3 Medium, 0 Low). See docs/GAP_ANALYSIS.md.
+**Current Status**: 8 open/partial actionable gaps (2 Critical, 4 High, 2 Medium, 0 Low). See docs/GAP_ANALYSIS.md.
+
+## 2026-06-11 — GAP-0882 + SEC-SUPPLY-01: migration CI guard + supply-chain CODEOWNERS (Closed; SEC-MIG-02 closed)
+
+**Resolution**: Closed both remaining supply-chain/CI rows from the security tracker.
+
+- **SEC-MIG-02 / migration CI guard** — new `migration-guard` job in `.gitlab-ci.yml`
+  (governance stage, extends `.governance-python`, `python:3.12-slim`). Rules: runs on
+  merge requests and default-branch pushes whose changes touch `migrations/**/*.gql` or
+  `scripts/ci/check_migrations.py` (the honest forward guard — activates whenever
+  migration files appear/change). Script runs `check_migrations.py --self-test` (11
+  built-in pass/fail fixtures in a temp dir) and then a FULL-tree scan of
+  `migrations/**/*.gql` so a policy regression anywhere in `migrations/` blocks the MR,
+  not just the diff (also immune to shallow-clone diff-base issues).
+- **Guard design** — `scripts/ci/check_migrations.py` is a standalone fail-closed
+  lexer-level lint; investigation confirmed the geode binary has NO offline parse-only
+  mode (`geode migrate run --dry-run` still requires a live QUIC server,
+  `src/cli/backup_cli.zig:cmdMigrateRun`), so the guard needs no build and no server.
+  Checks per file: (1) readable, valid UTF-8, no NUL bytes; (2) string/comment-aware
+  lexical sanity — `--`/`//` line comments, `/* */` block comments, `'`/`"` strings with
+  backslash + doubled-quote escapes; unterminated strings/block comments and unbalanced
+  `()`/`{}`/`[]` fail; (3) destructive-statement policy — `DROP`/`DELETE`/`TRUNCATE`
+  (word-boundary, outside strings/comments; covers `DETACH DELETE`) require an explicit
+  `-- destructive: acknowledged` (or `//` form) guard comment in the file. Keywords
+  inside strings (`action: 'DELETE'`), comments, or identifiers (`deleted_at`,
+  `DELEGATES_TO`) do NOT trigger.
+- **Tree brought green** — full-tree run is 18/18. Two pre-existing in-function DELETEs
+  were acknowledged with reasoned guard comments: `migrations/vdb/004_dns.gql`
+  (`set_nameservers()` replaces existing `DELEGATES_TO` relationships by design) and
+  `migrations/vdb/006_core.gql` (address-update function replaces the old `LOCATED_IN`
+  country relationship by design).
+- **SEC-SUPPLY-01 / supply-chain CODEOWNERS (#822 governance track)** — new
+  `.gitlab/CODEOWNERS` (GitLab syntax, sectioned): `[Supply chain]` covers
+  `/build.zig.zon`, `/.gitlab-ci.yml`, `/.goreleaser.yaml` (owner `@benjiv`);
+  `[Migrations]` covers `/migrations/` and the guard script (SEC-MIG-02 review surface).
+- **⚠ Operator action required (NOT enforceable from the repo)** — approval enforcement
+  is a GitLab project setting: (1) Settings → Repository → Protected branches → `main` →
+  enable **"Require approval from code owners"**; (2) Settings → Merge requests →
+  Approval rules → add a **"Supply chain" rule with approvals required = 2** covering the
+  `[Supply chain]` paths. Until both are set, CODEOWNERS is advisory only. The technical
+  track of SEC-SUPPLY-01 (cosign/sigstore lockfile signing) remains under GAP-0256
+  (Blocked on org signing infra).
+- **Stale-doc reconciliation** — the contradictory `SEC-MIG-01` open/closed lines cited
+  in the original GAP-0882 evidence no longer exist: `docs/SECURITY_GAP_ANALYSIS.md` was
+  rewritten open-only on 2026-06-10; this round removed its SEC-MIG-02 and SEC-SUPPLY-01
+  rows.
+
+**Verification**: `python3 scripts/ci/check_migrations.py --self-test` → 11/11 fixtures;
+`python3 scripts/ci/check_migrations.py` → 18/18 migration files pass;
+`.gitlab-ci.yml` validated with `yaml.safe_load` (job present, YAML OK).
 
 ## 2026-06-11 — LSP-F-02 / #770: per-document AST cache for LSP providers (Closed; GAP-0887b — GAP-0887 fully closed)
 

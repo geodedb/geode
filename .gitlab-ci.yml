@@ -477,6 +477,31 @@ governance-conformance-sync:
       cat /tmp/conformance_report.json
       echo "✓ Conformance scan complete"
 
+# GAP-0882 / SEC-MIG-02: migration CI guard. Lints every .gql migration
+# file (lexical sanity + destructive-statement policy: DROP/DELETE/TRUNCATE
+# require a "-- destructive: acknowledged" guard comment). The geode binary
+# has no offline parse-only mode (`migrate run --dry-run` still needs a QUIC
+# server), so this is a standalone, no-build, fail-closed lint. Runs only
+# when migration files (or the guard itself) change; scans the FULL tree so
+# a regression anywhere in migrations/ blocks the MR, not just the diff.
+migration-guard:
+  extends: .governance-python
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+      changes:
+        - "migrations/**/*.gql"
+        - "scripts/ci/check_migrations.py"
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - "migrations/**/*.gql"
+        - "scripts/ci/check_migrations.py"
+  script:
+    - |
+      echo "=== Running Migration Guard (GAP-0882 / SEC-MIG-02) ==="
+      python3 scripts/ci/check_migrations.py --self-test
+      python3 scripts/ci/check_migrations.py
+      echo "✓ Migration guard passed"
+
 # =============================================================================
 # Test Stage - Unit Tests
 # =============================================================================

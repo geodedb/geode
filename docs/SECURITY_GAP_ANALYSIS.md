@@ -1,6 +1,6 @@
 # Security Gap Analysis
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 This file now contains only open/deferred security gaps. Historical and not-a-gap security findings live in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
@@ -8,10 +8,8 @@ This file now contains only open/deferred security gaps. Historical and not-a-ga
 
 | ID | Severity | Risk | Finding | Component | Issue | Status |
 |---|---|---:|---|---|---|---|
-| SEC-SUPPLY-01 | Medium | 32 | Single-signer supply-chain for pinned `devnw/zig/*` modules; add 2-reviewer rule on `build.zig.zon`. | supply chain | #822 | Open |
 | SEC-MFA-FIPS-01 | Info | 4 | TOTP HMAC-SHA1 only; add SHA-256/SHA-512 for FIPS-mode customers. | `src/security/mfa_risk.zig` | #821 | Backlog |
 | SEC-MON-01 | Low | 6 | Metrics endpoint auth remains a timing-oracle concern when re-implemented/exposed. | `src/monitoring/metrics_server.zig` | #674 | Open / deferred |
 | SEC-INFRA-02 | Medium | 2 | nginx h2c residual on Grafana vhost. | `config/nginx/conf.d/geode.conf` | #740 | Open / deferred |
-| SEC-MIG-02 | Medium | 32 | No CI migration guard for `.gql` migration files. | `.gitlab-ci.yml` | n/a | Open; mirrored in GAP-0882 |
 | LSP-SEC-002 | Medium | 32 | Vendored `mcp` bearer compare (`checkAuth`, `std.mem.eql`) is not constant-time; no override hook in the pinned package, so the fix needs an upstream patch + fork pin. Mitigated at the geode boundary 2026-06-10 (commit `2b03d9ad`): geode-owned token compares audited constant-time (auth_lib api_keys SHA-256+`timing_safe.eql`; `src/security/authn.zig:526`), HTTP `http_bind` defaults to loopback and the CLI never exposes it (pinned by `zig build test-gap0885-lsp`), stdio never reaches `checkAuth`. | vendored MCP/LSP package | #785 | Open — mitigated/documented; fork-pin follow-up |
 | GAP-0818 enforcement gate | Critical-latent | n/a | MCP-LSP RLS pre-condition. **Enforcement gate LANDED 2026-06-10**: when auth provides no VERIFIED principal, LSP serves no tenant-scoped schema/RLS-filtered data — `Server.callerContext()` collapses an unverified `AuthState` to the anonymous stdio context (null tenant, which `LspContext.schemaTenantMatches` never matches against a tenant-scoped SchemaProvider), and `Server.publishVerifiedState()` refuses to build the tenant-carrying SchemaProvider/ExecutionContext for an unverified state (`InvalidToken`). Combined with the existing request gate (-32002 pre-verify) and provider tenant gate (prior GAP-0818 work, `tests/test_gap0818_lsp_context.zig`). MCP side needs no code gate: the 4 MCP-LSP bridge tools are static parser/metadata lookups (no SchemaProvider, no store) and the per-server MCP Principal is derived `tenant_id = null` always (`tests/test_gps_mcp_principal.zig`); data-bearing MCP tools proxy to the QUIC server whose own auth applies. Pinned by `zig build test-gap0818-gate` (verified RED pre-fix). **Residual (GAP-0818 stays Partial):** the LSP tenant for a VERIFIED principal is still client-asserted (`initializeOptions.geode.tenant`) — token verification establishes user/role but does not derive/validate the tenant against the principal. Until verified tenant derivation lands, do not attach tenant-aware RLS policies to MCP/LSP-reachable databases (see `docs/MCP_LSP_BRIDGE.md`). | `src/cli/lsp/server.zig` (`callerContext` / `publishVerifiedState`); `docs/MCP_LSP_BRIDGE.md` | #795 | Open — gate landed; residual: verified tenant derivation |

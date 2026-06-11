@@ -1,6 +1,7 @@
 // GQL Graph Migration: 006_core.gql
 // Converts VDB core schema to graph-based core entities
 // Based on ../../../vdb/migrations/006_core.sql
+// destructive: acknowledged -- DELETE inside update function replaces the old LOCATED_IN country relationship by design
 
 // --- Graph Schema Definition ---
 
