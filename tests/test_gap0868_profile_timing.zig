@@ -48,7 +48,6 @@ fn monoNanosNow() u64 {
 
 const Harness = struct {
     allocator: std.mem.Allocator,
-    arena: std.heap.ArenaAllocator,
     tmp: std.testing.TmpDir,
     data_dir: []u8,
     ctx: execution.ExecutionContext,
@@ -69,7 +68,6 @@ const Harness = struct {
         const catalog = try execution.ensureCatalogInstance(allocator);
         return .{
             .allocator = allocator,
-            .arena = std.heap.ArenaAllocator.init(allocator),
             .tmp = tmp,
             .data_dir = data_dir,
             .ctx = execution.ExecutionContext{ .catalog = catalog },
@@ -77,7 +75,6 @@ const Harness = struct {
     }
 
     pub fn deinit(self: *Harness) void {
-        self.arena.deinit();
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
         graph_store.setDataDirOverride(self.allocator, null);
@@ -86,16 +83,14 @@ const Harness = struct {
     }
 
     pub fn runQuery(self: *Harness, query: []const u8) !execution.ExecutionResult {
-        // Execute under the harness arena, mirroring the server's
-        // per-request arena (GAP-0755). ExecutionResult.deinit does not yet
-        // track all row-value ownership (GAP-0535, tracked separately), so a
-        // strict leak-checked allocator would report the PROFILE metric-name
-        // strings as leaks even though the server-side contract (arena freed
-        // per request) is leak-free.
-        const aa = self.arena.allocator();
-        var parsed = try geode.parseGql(query, aa);
+        // GAP-0535 closed the ExecutionResult row-value ownership gap, so this
+        // harness now runs strict (std.testing.allocator) end-to-end — the
+        // original arena workaround (which hid the PROFILE metric-name string
+        // leak) is gone, and the test runner's leak detection is part of the
+        // regression. Callers own the returned result (deinit it).
+        var parsed = try geode.parseGql(query, self.allocator);
         defer parsed.deinit();
-        return try execution.executeProgramWithContext(aa, &parsed.program, self.ctx);
+        return try execution.executeProgramWithContext(self.allocator, &parsed.program, self.ctx);
     }
 };
 
@@ -149,7 +144,8 @@ test "GAP-0868: PROFILE fallback reports time_ms bounded by real wall clock (non
     defer h.deinit();
 
     const start_ns = monoNanosNow();
-    const result = try h.runQuery("PROFILE SHOW TABLES");
+    var result = try h.runQuery("PROFILE SHOW TABLES");
+    defer result.deinit(testing.allocator);
     const external_ms: i64 = @intCast((monoNanosNow() - start_ns) / std.time.ns_per_ms);
 
     // Fallback profile shape: metric/value columns, query_profile type.
@@ -197,16 +193,17 @@ test "GAP-0868: PROFILE time_ms reflects elapsed time for a non-trivial tenant-s
         total_nodes += batch;
 
         const t0 = monoNanosNow();
-        const plain = try h.runQuery("MATCH (a:T) RETURN count(a)");
+        var plain = try h.runQuery("MATCH (a:T) RETURN count(a)");
         plain_ms = @intCast((monoNanosNow() - t0) / std.time.ns_per_ms);
-        _ = plain;
+        plain.deinit(testing.allocator);
 
         if (plain_ms >= 60) break;
         batch = total_nodes; // double total
     }
 
     const t0 = monoNanosNow();
-    const result = try h.runQuery("PROFILE MATCH (a:T) RETURN count(a)");
+    var result = try h.runQuery("PROFILE MATCH (a:T) RETURN count(a)");
+    defer result.deinit(testing.allocator);
     const external_ms: i64 = @intCast((monoNanosNow() - t0) / std.time.ns_per_ms);
 
     // Concrete tenant scope must have demoted to the fallback profile.

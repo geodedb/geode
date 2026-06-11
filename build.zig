@@ -1856,6 +1856,24 @@ pub fn build(b: *std.Build) void {
     const ts_scalar_eval_step = b.step("test-gap0866", "Run GAP-0866 scalar timeseries.* GQL function eval integration tests");
     ts_scalar_eval_step.dependOn(&run_ts_scalar_eval_tests.step);
 
+    // ----- EXECUTION RESULT OWNERSHIP (GAP-0535) -----
+    // Regression for ExecutionResult.deinit value-memory ownership: bare-RETURN
+    // projections fully own their row values (owns_value_memory = true), the
+    // UNION/INTERSECT/EXCEPT combiners deep-copy values out of owned part
+    // results, and dropped rows free their owned values. Runs the real parse →
+    // executeStatementWithContext path under std.testing.allocator — the zig
+    // test runner's leak detection is the assertion.
+    const gap0535_ownership_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0535_result_ownership.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0535_ownership_tests.root_module.addImport("geode", root_mod);
+    const run_gap0535_ownership_tests = b.addRunArtifact(gap0535_ownership_tests);
+    const gap0535_ownership_step = b.step("test-gap0535", "Run GAP-0535 ExecutionResult value-ownership regression (strict-allocator leak gate)");
+    gap0535_ownership_step.dependOn(&run_gap0535_ownership_tests.step);
+
     // ----- TS DURABILITY (GAP-0865) -----
     // Regression suite for the time-series durability contract: fail-closed
     // open on corrupt artefacts (with explicit best_effort opt-out),

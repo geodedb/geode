@@ -8000,10 +8000,18 @@ RQ-NNNN ISO requirement tracking, see the conformance file.
 
 ## Summary
 
-- **Total findings (this session):** 10
-- **Closed:** 7 (GAP-0527, GAP-0528, GAP-0529, GAP-0530, GAP-0531, GAP-0532, GAP-0533)
-- **Open / deferred:** 3 (GAP-0534, GAP-0535, GAP-0536)
-- **Open severity breakdown:** Medium 1, Low 2
+- **Total findings:** 11
+- **Closed:** 11 (GAP-0527 … GAP-0533 on 2026-04-10; GAP-0534, GAP-0535, GAP-0536, GAP-0537 on 2026-06-11 via the GAP-0888 batch)
+- **Open / deferred:** 0
+
+## Closed (2026-06-11 — GAP-0888 batch)
+
+| Gap ID | Severity | Title | Fix Summary |
+|---|---|---|---|
+| GAP-0534 | Medium | No geodetestlab integration specs cover mixed-case GQL syntax | New harness spec `../geode-test-harness/geodetestlab-cli/specs/gql_case_insensitivity_comprehensive.yml` (10 tests): mixed-case SELECT/MATCH/RETURN/CALL/CREATE/WHERE/AS/DISTINCT/UNION ALL keywords, mixed-case builtin function names (`uPpEr`), mixed-case procedure names (lowercased dispatch, REQ-GQL-CASE-INSENSITIVE-002), and string-literal case preservation. |
+| GAP-0535 | Low | `ExecutionResult` value-memory ownership not tracked by `deinit`; no E2E for `RETURN UPPER(...)` under a strict allocator | Bare-RETURN projections and the planned-read FINAL projection now fully OWN their row values (`owns_value_memory = true`): provably-allocating calls (upper/lower/toupper/tolower) are adopted, everything else is deep-duplicated (`value_utilities.ensureOwnedProjectionValue` / `adoptProjectionRowValues`); `executeProfile`/`buildPlannedProfileResult`/`buildPlannedExplainResult` mark their duped rows owned; UNION/INTERSECT/EXCEPT combiners deep-copy values out of owned part results (the old shallow copy would have dangled) and free dropped-row values; `applyDistinct`/union pagination free dropped owned values. Regression `tests/test_gap0535_result_ownership.zig` (`zig build test-gap0535`, 8/8 — real parse→execute under `std.testing.allocator`, leak detection as the assertion). The GAP-0868 test's arena workaround was removed (now strict end-to-end). Residual (documented in `value_utilities.zig`): a non-whitelisted expression that internally allocated (e.g. `CASE WHEN x THEN UPPER(y) END`) still leaks its intermediate under a strict allocator — same magnitude as before, absorbed by the per-request arena (GAP-0755) in production; intermediate WITH-stage results intentionally keep legacy borrowed semantics. |
+| GAP-0536 | Low | No E2E coverage for non-lowercase `TIMESERIES.*` calls with a real store-bound series | New harness spec `../geode-test-harness/geodetestlab-cli/specs/timeseries_case_insensitivity.yml` (8 tests): ingest via `CALL geode.ts.insert` (exact + mixed-case procedure/keyword), read back via mixed-case `geode.ts.range`/`last` and scalar `TIMESERIES.VALUE`/`TiMeSeRiEs.VaLuE`/`tImEsErIeS.LaSt_VaLuE`/`Timeseries.Value_At`. Along the way the scalar suffix matching (previously case-sensitive `std.mem.eql`, contradicting its own RQ-0022 comment) was made case-insensitive in the extracted module, with a unit test pinning `TiMeSeRiEs.LaSt_VaLuE`. |
+| GAP-0537 | Low | Exclusively-fallback function dispatch remained inline in `evalExpr` | Extracted into dedicated handler modules following the `call_handlers` pattern: `src/eval/ts_call_handlers.zig` (`evalTimeseriesValue`, `evalTimeseriesFunction`, `evalArrayBasedTsFunction`, `tsValueToCanonical`, `parseAggregation`, store resolution — plus 6 unit tests) and `src/eval/quantifier_call_handlers.zig` (`evalQuantifierFunction` for all()/any(), `evalCharFunction` for char(N) — plus 4 unit tests). The eval.zig fallback `.Call` branch shrank to dispatch-only calls. Regression gate: `zig build test-gap0866` (24/24 through the real parse→execute path) + the GAP-0280 AST-built tests retained in eval.zig. |
 
 ## Closed (2026-04-10)
 

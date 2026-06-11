@@ -7,6 +7,7 @@
 //! - Result set duplication
 
 const std = @import("std");
+const ast_mod = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
@@ -145,6 +146,73 @@ pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
         .Node, .Edge, .Path => value, // These contain pointers but we'll shallow copy for now
         else => value, // Fallback for any other types
     };
+}
+
+// GAP-0535: functions whose eval implementation provably returns FRESH
+// allocations on every .Str-producing path (verified against
+// src/eval/call_handlers.zig — upper/lower always `allocator.alloc` a new
+// buffer; non-Str inputs yield scalar Null). Projection adopts these results
+// directly instead of duplicating them, which is what makes
+// `RETURN UPPER('x')` leak-free under a strict allocator.
+pub fn callAlwaysAllocates(callee: ast_mod.Expr) bool {
+    const name = switch (callee) {
+        .Ident => |ident| ident.orig,
+        else => return false,
+    };
+    const owned_fns = [_][]const u8{ "upper", "toupper", "lower", "tolower" };
+    for (owned_fns) |f| {
+        if (std.ascii.eqlIgnoreCase(name, f)) return true;
+    }
+    return false;
+}
+
+/// GAP-0535: produce a row value the ExecutionResult fully OWNS.
+///
+/// eval.evalExpr has mixed ownership: string literals borrow AST memory,
+/// identifiers borrow Env memory, and store-derived values borrow store
+/// memory — while most function results are fresh allocations. A projection
+/// result that sets `owns_value_memory = true` must never hold a borrowed
+/// pointer, so:
+///   - top-level calls to provably-allocating functions are adopted as-is;
+///   - everything else is deep-duplicated (duplicateValue), leaving the
+///     original with its real owner.
+/// Residual (documented in docs/GQL_GAP_ANALYSIS.md): a non-whitelisted
+/// expression that internally allocated (e.g. `CASE WHEN x THEN UPPER(y)
+/// END`) leaks its intermediate under a strict allocator — same magnitude
+/// as the pre-GAP-0535 behavior, and absorbed by the per-request arena
+/// (GAP-0755) in production.
+pub fn ensureOwnedProjectionValue(allocator: std.mem.Allocator, expr: ast_mod.Expr, value: Value) !Value {
+    switch (expr) {
+        .Call => |call| if (callAlwaysAllocates(call.callee.*)) return value,
+        else => {},
+    }
+    return duplicateValue(allocator, value);
+}
+
+/// GAP-0535: convert a projected result into one that fully OWNS its row
+/// values, using the projection item expressions to decide adopt-vs-duplicate
+/// per column (see ensureOwnedProjectionValue). Cells without a matching item
+/// (defensive) are always duplicated. Sets `owns_value_memory = true`.
+pub fn adoptProjectionRowValues(
+    allocator: std.mem.Allocator,
+    result: *ExecutionResult,
+    items: []const ast_mod.ReturnItem,
+) !void {
+    if (result.owns_value_memory) return; // already owned
+    for (result.rows) |row| {
+        for (row, 0..) |val, i| {
+            const adopt = i < items.len and adoptable: {
+                switch (items[i].expr) {
+                    .Call => |call| break :adoptable callAlwaysAllocates(call.callee.*),
+                    else => break :adoptable false,
+                }
+            };
+            if (!adopt) {
+                row[i] = try duplicateValue(allocator, val);
+            }
+        }
+    }
+    result.owns_value_memory = true;
 }
 
 /// Helper function to free a Value's allocated memory

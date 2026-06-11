@@ -1164,6 +1164,11 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
         .columns = columns,
         .rows = try stats.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
+        // GAP-0535: every row value above is a fresh dupe (metric-name
+        // strings) or a scalar — the result fully owns its value memory, so
+        // deinit is leak-free under a strict allocator (this was the leak
+        // the GAP-0868 test originally had to hide behind an arena).
+        .owns_value_memory = true,
     };
 }
 
@@ -1285,6 +1290,8 @@ fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_ru
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        // GAP-0535: all row values are fresh dupes — fully owned.
+        .owns_value_memory = true,
     };
 }
 
@@ -1320,6 +1327,8 @@ fn buildPlannedProfileResult(allocator: std.mem.Allocator, planned: planned_read
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        // GAP-0535: all row values are fresh dupes or scalars — fully owned.
+        .owns_value_memory = true,
     };
 }
 

@@ -17,6 +17,38 @@ const sortRows = execution.sortRows;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// GAP-0535: value ownership helpers (deep duplicate / free)
+const value_utilities = @import("value_utilities.zig");
+
+/// GAP-0535: copy a value out of `part_result` into the combined result.
+/// When either side owns its value memory a deep duplicate is required:
+///  - part owns: its deinit frees the original — a shallow copy would dangle;
+///  - combined owns: its deinit frees the copy — a shallow borrow would be
+///    an invalid free.
+/// When neither owns, the legacy shallow copy is preserved (values are
+/// borrowed from stores/AST and freed by their real owners).
+fn copyPartValue(
+    allocator: std.mem.Allocator,
+    combined_owns: bool,
+    part_owns: bool,
+    val: Value,
+) !Value {
+    if (combined_owns or part_owns) {
+        return value_utilities.duplicateValue(allocator, val);
+    }
+    return val;
+}
+
+/// GAP-0535: free the values of a row being dropped from `result` (dedup /
+/// intersect / except / pagination) when the result owns its value memory.
+fn freeDroppedRowValues(allocator: std.mem.Allocator, result: *const ExecutionResult, row: []Value) void {
+    if (result.owns_value_memory) {
+        for (row) |val| {
+            value_utilities.freeValue(allocator, val);
+        }
+    }
+}
+
 /// GAP-0814 regression probe: counts successful entries into the parallel
 /// UNION fork-join fast path. Tests read this before/after a UNION query
 /// to verify the parallel arm-spawn decision fired, replacing prior wall-
@@ -79,6 +111,9 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
                     new_row[j] = val;
                 }
                 try new_rows.append(allocator, new_row);
+            } else {
+                // GAP-0535: dropped row — free its values when owned
+                freeDroppedRowValues(allocator, &left_result, row);
             }
         }
     } else {
@@ -107,7 +142,13 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
                         new_row[j] = val;
                     }
                     try new_rows.append(allocator, new_row);
+                } else {
+                    // GAP-0535: dropped duplicate — free values when owned
+                    freeDroppedRowValues(allocator, &left_result, row);
                 }
+            } else {
+                // GAP-0535: row not in both sets — free values when owned
+                freeDroppedRowValues(allocator, &left_result, row);
             }
         }
     }
@@ -163,6 +204,9 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet, 
                     new_row[j] = val;
                 }
                 try new_rows.append(allocator, new_row);
+            } else {
+                // GAP-0535: excluded row — free its values when owned
+                freeDroppedRowValues(allocator, &left_result, row);
             }
         }
     } else {
@@ -191,7 +235,13 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet, 
                         new_row[j] = val;
                     }
                     try new_rows.append(allocator, new_row);
+                } else {
+                    // GAP-0535: dropped duplicate — free values when owned
+                    freeDroppedRowValues(allocator, &left_result, row);
                 }
+            } else {
+                // GAP-0535: row appears in right side — free values when owned
+                freeDroppedRowValues(allocator, &left_result, row);
             }
         }
     }
@@ -267,10 +317,10 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
                 // Copy new rows (need to duplicate since part_result will be freed)
                 for (part_result.rows, 0..) |row, i| {
-                    // Need to duplicate the row data
+                    // Need to duplicate the row data (GAP-0535: deep when owned)
                     const new_row = try allocator.alloc(Value, row.len);
                     for (row, 0..) |val, j| {
-                        new_row[j] = val;
+                        new_row[j] = try copyPartValue(allocator, result.owns_value_memory, part_result.owns_value_memory, val);
                     }
                     result.rows[old_rows.len + i] = new_row;
                 }
@@ -312,6 +362,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                             new_row[j] = val;
                         }
                         try new_rows.append(allocator, new_row);
+                    } else {
+                        // GAP-0535: dropped duplicate — free its values when owned
+                        freeDroppedRowValues(allocator, &result, row);
                     }
                 }
 
@@ -329,9 +382,10 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
                     if (!is_duplicate) {
                         // Duplicate the row since part_result will be freed
+                        // (GAP-0535: deep when owned)
                         const new_row = try allocator.alloc(Value, row.len);
                         for (row, 0..) |val, j| {
-                            new_row[j] = val;
+                            new_row[j] = try copyPartValue(allocator, result.owns_value_memory, part_result.owns_value_memory, val);
                         }
                         try new_rows.append(allocator, new_row);
                     }
@@ -389,6 +443,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                             new_row[j] = val;
                         }
                         try new_rows.append(allocator, new_row);
+                    } else {
+                        // GAP-0535: dropped row — free its values when owned
+                        freeDroppedRowValues(allocator, &result, row);
                     }
                 }
             } else {
@@ -418,7 +475,13 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                                 new_row[j] = val;
                             }
                             try new_rows.append(allocator, new_row);
+                        } else {
+                            // GAP-0535: dropped duplicate — free values when owned
+                            freeDroppedRowValues(allocator, &result, row);
                         }
+                    } else {
+                        // GAP-0535: row not in both sets — free values when owned
+                        freeDroppedRowValues(allocator, &result, row);
                     }
                 }
             }
@@ -471,6 +534,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                             new_row[j] = val;
                         }
                         try new_rows.append(allocator, new_row);
+                    } else {
+                        // GAP-0535: excluded row — free its values when owned
+                        freeDroppedRowValues(allocator, &result, row);
                     }
                 }
             } else {
@@ -500,7 +566,13 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                                 new_row[j] = val;
                             }
                             try new_rows.append(allocator, new_row);
+                        } else {
+                            // GAP-0535: dropped duplicate — free values when owned
+                            freeDroppedRowValues(allocator, &result, row);
                         }
+                    } else {
+                        // GAP-0535: excluded row — free its values when owned
+                        freeDroppedRowValues(allocator, &result, row);
                     }
                 }
             }
@@ -548,8 +620,9 @@ fn applyUnionPagination(
             @as(usize, @intCast(skip_count));
         if (skip_usize < result.rows.len) {
             const new_rows = try allocator.alloc([]Value, result.rows.len - skip_usize);
-            // Free the skipped rows
+            // Free the skipped rows (GAP-0535: values too when owned)
             for (result.rows[0..skip_usize]) |row| {
+                freeDroppedRowValues(allocator, result, row);
                 allocator.free(row);
             }
             // Transfer ownership of remaining rows
@@ -561,6 +634,7 @@ fn applyUnionPagination(
         } else {
             // Free all rows since we're skipping everything
             for (result.rows) |row| {
+                freeDroppedRowValues(allocator, result, row);
                 allocator.free(row);
             }
             allocator.free(result.rows);
@@ -625,8 +699,9 @@ fn applyUnionPagination(
             for (result.rows[0..limit_count], 0..) |row, i| {
                 new_rows[i] = row;
             }
-            // Free the rows that are being cut off
+            // Free the rows that are being cut off (GAP-0535: values too when owned)
             for (result.rows[limit_count..]) |row| {
+                freeDroppedRowValues(allocator, result, row);
                 allocator.free(row);
             }
             allocator.free(result.rows);
@@ -925,14 +1000,14 @@ fn tryParallelUnion(
 
         if (tail.all) {
             // UNION ALL — append all rows, duplicating values since
-            // part_result will free them on deinit.
+            // part_result will free them on deinit (GAP-0535: deep when owned).
             const old_rows = result.rows;
             const new_total = old_rows.len + part_result.rows.len;
             result.rows = try allocator.alloc([]Value, new_total);
             for (old_rows, 0..) |row, i| result.rows[i] = row;
             for (part_result.rows, 0..) |row, i| {
                 const new_row = try allocator.alloc(Value, row.len);
-                for (row, 0..) |val, j| new_row[j] = val;
+                for (row, 0..) |val, j| new_row[j] = try copyPartValue(allocator, result.owns_value_memory, part_result.owns_value_memory, val);
                 result.rows[old_rows.len + i] = new_row;
             }
             allocator.free(old_rows);
@@ -955,6 +1030,9 @@ fn tryParallelUnion(
                     const new_row = try allocator.alloc(Value, row.len);
                     for (row, 0..) |val, j| new_row[j] = val;
                     try new_rows.append(allocator, new_row);
+                } else {
+                    // GAP-0535: dropped duplicate — free values when owned
+                    freeDroppedRowValues(allocator, &result, row);
                 }
             }
 
@@ -968,7 +1046,7 @@ fn tryParallelUnion(
                 }
                 if (!is_duplicate) {
                     const new_row = try allocator.alloc(Value, row.len);
-                    for (row, 0..) |val, j| new_row[j] = val;
+                    for (row, 0..) |val, j| new_row[j] = try copyPartValue(allocator, result.owns_value_memory, part_result.owns_value_memory, val);
                     try new_rows.append(allocator, new_row);
                 }
             }
