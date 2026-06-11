@@ -130,16 +130,16 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 
 // GAP-0258: Global mTLS provider for QUIC certificate authentication
-// CANARY: REQ=REQ-AUTH-MTLS-QUIC-004; FEATURE="mTLS over QUIC"; ASPECT=GlobalProvider; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+// CANARY: REQ=REQ-AUTH-MTLS-QUIC-004; FEATURE="mTLS over QUIC"; ASPECT=GlobalProvider; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
 var g_mtls_provider: ?*mtls_provider.MtlsProvider = null;
 
 // S6: Per-IP authentication rate limiter — prevents brute-force attacks on QUIC HELLO.
-// CANARY: REQ=REQ-SEC-RATE-LIMIT-003; FEATURE="AuthRateLimiting"; ASPECT=GlobalInstance; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+// CANARY: REQ=REQ-SEC-RATE-LIMIT-003; FEATURE="AuthRateLimiting"; ASPECT=GlobalInstance; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
 const auth_rate_limiter = @import("auth_rate_limiter.zig");
 var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
 
 // S1: Post-execution RLS filter — removes result rows containing denied labels.
-// CANARY: REQ=REQ-SEC-RLS-WIRE-002; FEATURE="RLS Query Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+// CANARY: REQ=REQ-SEC-RLS-WIRE-002; FEATURE="RLS Query Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=geodetestlab/specs/rls_injection_resistance.yml; OWNER=security; UPDATED=2026-06-11
 const rls_filter = @import("rls_filter.zig");
 const index_manager = geode.index_manager;
 
@@ -376,7 +376,7 @@ pub fn getMtlsProvider() ?*mtls_provider.MtlsProvider {
 }
 
 /// Set the global authentication rate limiter (called from server/main.zig during startup).
-/// CANARY: REQ=REQ-SEC-RATE-LIMIT-004; FEATURE="AuthRateLimiting"; ASPECT=GlobalSetter; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+/// CANARY: REQ=REQ-SEC-RATE-LIMIT-004; FEATURE="AuthRateLimiting"; ASPECT=GlobalSetter; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
 pub fn setAuthRateLimiter(limiter: ?*auth_rate_limiter.AuthRateLimiter) void {
     g_auth_rate_limiter = limiter;
 }
@@ -387,7 +387,7 @@ pub fn getAuthRateLimiter() ?*auth_rate_limiter.AuthRateLimiter {
 }
 
 // GAP-0283: Graph-scoped RBAC policy access — delegates to multi_graph_security global singleton.
-// CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-001; FEATURE="GraphRBACEnforcement"; ASPECT=GlobalInstance; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+// CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-001; FEATURE="GraphRBACEnforcement"; ASPECT=GlobalInstance; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=security; UPDATED=2026-06-11
 
 /// Set the global graph RBAC policy (called from server/main.zig during startup).
 pub fn setGraphRbacPolicy(policy: ?*multi_graph_security.GraphRBACPolicy) void {
@@ -1145,7 +1145,7 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
     _ = quic_response_metrics.response_messages_completed_total.fetchAdd(1, .monotonic);
 }
 
-// CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+// CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=wire; UPDATED=2026-06-11
 /// Buffered Protobuf reader that handles Length-Prefixed messages.
 const BufferedProtoReader = struct {
     allocator: std.mem.Allocator,
@@ -1626,7 +1626,7 @@ fn buildOrderKeys(
 const DEBUG_PROFILE = false;
 
 // ── Stream multiplexing support ──────────────────────────────────────────────
-// CANARY: REQ=REQ-QUIC-MUX-001; FEATURE="StreamMultiplexing"; ASPECT=SharedConnState; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+// CANARY: REQ=REQ-QUIC-MUX-001; FEATURE="StreamMultiplexing"; ASPECT=SharedConnState; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
 /// Shared connection state for QUIC stream multiplexing.
 /// After the HELLO handshake on the first stream, this holds the authenticated
 /// identity that is inherited by all additional streams on the connection.
@@ -3839,9 +3839,9 @@ pub fn handleQuicConnection(
     }
 
     // #683: Use cached env config instead of per-connection getEnvVarOwned syscalls.
-    // CANARY: REQ=REQ-PERF-OPT-GATE-001; FEATURE="OptimizerGating"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-PERF-OPT-GATE-001; FEATURE="OptimizerGating"; ASPECT=HotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=engine; UPDATED=2026-06-11
     state.query_optimizer_enabled = env_config.query_optimizer_enabled;
-    // CANARY: REQ=REQ-PERF-INLINE-PULL-001; FEATURE="InlineRunPull"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-PERF-INLINE-PULL-001; FEATURE="InlineRunPull"; ASPECT=HotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=engine; UPDATED=2026-06-11
     state.inline_results_enabled = env_config.inline_results_enabled;
     state.inline_results_max_rows = env_config.inline_results_max_rows;
 
@@ -3867,7 +3867,7 @@ pub fn handleQuicConnection(
     state.distributed_planner = &dist_planner;
 
     // GAP-0258: mTLS authentication over QUIC — extract peer certificate and authenticate
-    // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+    // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
     if (conn.getPeerCertificateDer()) |cert_der| {
         const identity = mtls_provider.extractIdentity(gpa, cert_der) catch |err| {
             log.warn("mTLS: Failed to extract certificate identity", &.{Attr.string("error", @errorName(err))});
@@ -3896,7 +3896,7 @@ pub fn handleQuicConnection(
     }
 
     // S6: Extract peer IP for rate limiting before the message loop.
-    // CANARY: REQ=REQ-SEC-RATE-LIMIT-005; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    // CANARY: REQ=REQ-SEC-RATE-LIMIT-005; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
     const peer_ip = conn.getPeerAddressString(gpa);
     const peer_ip_allocated = !std.mem.eql(u8, peer_ip, "unknown");
     var peer_ip_handed_off = false;
@@ -3999,7 +3999,7 @@ pub fn handleQuicConnection(
     }
 
     // ── Phase 2: Stream multiplexing ─────────────────────────────────────
-    // CANARY: REQ=REQ-QUIC-MUX-004; FEATURE="StreamMultiplexing"; ASPECT=AcceptorSpawn; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+    // CANARY: REQ=REQ-QUIC-MUX-004; FEATURE="StreamMultiplexing"; ASPECT=AcceptorSpawn; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
     // Start a stream acceptor thread that watches for additional client-initiated
     // streams on this connection. Each new stream gets its own handler thread
     // with per-stream transaction/result state but shared authentication.
@@ -4674,7 +4674,7 @@ fn handleClientMessage(
             try caps.append(gpa, try gpa.dupe(u8, "PROTOBUF"));
 
             // S6: Per-IP rate limiting — reject locked-out IPs before attempting authentication.
-            // CANARY: REQ=REQ-SEC-RATE-LIMIT-006; FEATURE="AuthRateLimiting"; ASPECT=HelloCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+            // CANARY: REQ=REQ-SEC-RATE-LIMIT-006; FEATURE="AuthRateLimiting"; ASPECT=HelloCheck; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
             if (g_auth_rate_limiter) |limiter| {
                 if (limiter.isLocked(peer_ip)) {
                     log.warn("Authentication rate limit exceeded", &.{
@@ -4804,7 +4804,7 @@ fn handleClientMessage(
                 fle_integration.setCurrentUserRole(null);
             }
 
-            // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             // Resolve graph from HELLO request — validate, auto-create, bind session
             var resolved_graph: ?[]const u8 = null;
             if (hello_req.graph) |requested_graph| {
@@ -4843,7 +4843,7 @@ fn handleClientMessage(
                         // Admin bypass: admins always have access to all graphs.
                         // If RBAC policy has graph-specific assignments, check them.
                         // Fall back to user's global role (backward compatible).
-                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=security; UPDATED=2026-06-11
                         const rbac_allowed = blk: {
                             if (!user_mgmt.isAuthEnabled()) break :blk true; // No auth = allow
                             const role_val = state.authenticated_role;
@@ -5336,7 +5336,7 @@ fn handleClientMessage(
                 .fle_role = state.fle_user_role,
                 .principal = &principal_for_request,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
-                // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+                // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
                 .pending_index_rebuilds = null,
             };
@@ -6439,7 +6439,7 @@ fn handleClientMessage(
             }
         },
         .savepoint => |sp_req| {
-            // CANARY: REQ=REQ-TXN-SAVEPOINT-004; FEATURE="TransactionSavepoints"; ASPECT=QuicSavepoint; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            // CANARY: REQ=REQ-TXN-SAVEPOINT-004; FEATURE="TransactionSavepoints"; ASPECT=QuicSavepoint; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             switch (try validateSessionAuth(gpa, state)) {
                 .ok => {},
                 else => {
@@ -6459,7 +6459,7 @@ fn handleClientMessage(
             }
         },
         .rollback_to => |rt_req| {
-            // CANARY: REQ=REQ-TXN-SAVEPOINT-005; FEATURE="TransactionSavepoints"; ASPECT=QuicRollbackTo; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            // CANARY: REQ=REQ-TXN-SAVEPOINT-005; FEATURE="TransactionSavepoints"; ASPECT=QuicRollbackTo; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             switch (try validateSessionAuth(gpa, state)) {
                 .ok => {},
                 else => {

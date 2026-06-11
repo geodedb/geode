@@ -339,8 +339,8 @@ REQ-AUTH-MTLS-003,CertificateAuthentication,SECURITY,TESTED,,,security,2026-01-2
 REQ-AUTH-MTLS-004,CertificateIdentityExtraction,SECURITY,TESTED,,,security,2026-03-13,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-QUIC-001,mTLS over QUIC,PeerCertExtraction,IMPL,,,transport,2026-02-13,src/transport/quic.zig
 REQ-AUTH-MTLS-QUIC-002,mTLS over QUIC,Config,IMPL,,,transport,2026-02-13,src/transport/quic.zig
-REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
-REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
+REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
+REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
 REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,TESTED,,,security,2026-06-11,src/server/main.zig
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
@@ -894,7 +894,7 @@ REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001,Documentation System Integration Tests,
 REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,ContextFlag,IMPL,,,engine,2026-03-25,src/execution.zig
 REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,SessionGraphBound,IMPL,,,engine,2026-03-25,src/server/server_state.zig
 REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-31,src/execution.zig
-REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,IMPL,,,transport,2026-03-25,src/server/quic_connection_handler.zig
+REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,TESTED,,,transport,2026-06-11,src/server/quic_connection_handler.zig
 REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,GrpcSessionGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig
 REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GraphBoundError,IMPL,,,transport,2026-03-25,src/server/proto_util.zig
 REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GrpcGraphResolution,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig
@@ -3670,8 +3670,8 @@ REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine
 REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-EDGE-ISOLATION,GraphIsolationEdgeScan,GetEdgesByType,TESTED,,,engine,2026-04-11,src/graph_store.zig
-REQ-MULTI-GRAPH-RBAC-WIRE-001,GraphRBACEnforcement,GlobalInstance,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig
-REQ-MULTI-GRAPH-RBAC-WIRE-002,GraphRBACEnforcement,QuicGraphAuth,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig
+REQ-MULTI-GRAPH-RBAC-WIRE-001,GraphRBACEnforcement,GlobalInstance,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
+REQ-MULTI-GRAPH-RBAC-WIRE-002,GraphRBACEnforcement,QuicGraphAuth,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-003,GraphRBACEnforcement,GrpcGraphAuth,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-005,GraphRBACEnforcement,GlobalSingleton,IMPL,,,security,2026-04-01,src/security/multi_graph_security.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig
@@ -3877,7 +3877,7 @@ REQ-PERF-HANDLER-LOCK-HOLD-001,HandlerLockHoldScope,SnapshotCapture,TESTED,,,tra
 REQ-PERF-INDEX-001,Performance,IndexPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-PERF-INDEX-001,Performance,IndexPerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-INDEX-OPT-001,Performance,IndexOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-PERF-INLINE-PULL-001,InlineRunPull,HotPath,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig
+REQ-PERF-INLINE-PULL-001,InlineRunPull,HotPath,TESTED,,,engine,2026-06-11,src/server/quic_connection_handler.zig
 REQ-PERF-INT-001,PerformanceIntegration,Testing,EXEMPT,,,performance,2025-10-04,tests/test_performance_integration.zig
 REQ-PERF-INT-002,PerformanceIntegrationSimple,Testing,EXEMPT,,,performance,2025-10-04,tests/test_performance_integration_simple.zig
 REQ-PERF-JSON-001,JSONPerformanceImprovement,Benchmarking,EXEMPT,,,performance,2025-10-04,tests/benchmark_json_improvement.zig
@@ -3917,7 +3917,7 @@ REQ-PERF-MERGE-007,IndexRebuild,RebuildMutex,TESTED,,,engine,2026-04-10,tests/te
 REQ-PERF-MERGE-008,IndexRebuild,CommitDeferRebuilds,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig
 REQ-PERF-METRICS-001,RuntimeMetrics,RegistryInit,TESTED,,,server,2026-06-11,src/server/main.zig
 REQ-PERF-MMAP-001,MemoryMappedIO,Performance,TESTED,,,performance,2026-06-11,src/performance/memory_mapped_io.zig
-REQ-PERF-OPT-GATE-001,OptimizerGating,HotPath,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig
+REQ-PERF-OPT-GATE-001,OptimizerGating,HotPath,TESTED,,,engine,2026-06-11,src/server/quic_connection_handler.zig
 REQ-PERF-PARALLEL-001,Performance,ParallelExecution,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-PERF-PHASE1-001,PerfPhase1,Optimization,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-PERF-PHASE1-001,PerformanceOptimization,Testing,EXEMPT,,,performance,2025-10-16,benchmarks/phase1_benchmarks.zig
@@ -3992,7 +3992,7 @@ REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,perf,2026-01-16,tests/t
 REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,Regression,TESTED,,,engine,2026-04-18,tests/test_query_arena_reuse.zig
 REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,ScratchAllocator,TESTED,,,engine,2026-04-18,src/server/query_arena.zig
 REQ-PERF-QUERY-OPT-001,Performance,QueryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-PERF-QUIC-READLINE-001,BufferedProtoReader,TransportHotPath,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
+REQ-PERF-QUIC-READLINE-001,BufferedProtoReader,TransportHotPath,TESTED,,,wire,2026-06-11,src/server/quic_connection_handler.zig
 REQ-PERF-RLS-DISPATCH-001,RLSAwareDispatch,PointReadReclassify,TESTED,,,performance,2026-05-29,src/execution/match_operations.zig
 REQ-PERF-RLS-ROW-BUILD-001,RLSRowBuildHotPath,PreSizeAndReuse,TESTED,,,performance,2026-04-26,tests/test_rls_row_build_hot_path.zig
 REQ-PERF-RLS-ROW-SKIP-001,RLSRowBuildSkip,NeedsRowFlag,TESTED,,,performance,2026-06-11,src/security/rls_core.zig
@@ -4272,11 +4272,11 @@ REQ-QUIC-HC-179,HighConcurrencyMutations,CoordinatorActiveShardTuning,TESTED,,,s
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
-REQ-QUIC-MUX-001,StreamMultiplexing,SharedConnState,IMPL,,,server,2026-03-27,src/server/quic_connection_handler.zig
+REQ-QUIC-MUX-001,StreamMultiplexing,SharedConnState,TESTED,,,server,2026-06-11,src/server/quic_connection_handler.zig
 REQ-QUIC-MUX-002,StreamMultiplexing,StreamHandler,IMPL,,,server,2026-03-27,src/server/quic_connection_handler.zig
 REQ-QUIC-MUX-003,StreamMultiplexing,StreamAcceptor,IMPL,,,server,2026-03-27,src/server/quic_connection_handler.zig
 REQ-QUIC-MUX-004,ActiveStreamRegistry,ConnectionStreamOwnership,IMPL,,,server,2026-04-08,src/server/active_stream_registry.zig
-REQ-QUIC-MUX-004,StreamMultiplexing,AcceptorSpawn,IMPL,,,server,2026-03-27,src/server/quic_connection_handler.zig
+REQ-QUIC-MUX-004,StreamMultiplexing,AcceptorSpawn,TESTED,,,server,2026-06-11,src/server/quic_connection_handler.zig
 REQ-QUIC-MUX-005,ActiveStreamRegistryTests,ParallelCorrectness,IMPL,,,test,2026-04-08,tests/test_quic_stream_registry.zig
 REQ-QUIC-MUX-007,ActiveStreamRegistryBenchmarks,ParallelThroughput,BENCHED,,,server,2026-04-08,benchmarks/benchmark_quic_stream_registry.zig
 REQ-QUIC-MUX-008,StreamRegistryBuildIntegration,ParallelRegression,IMPL,,,build,2026-04-08,build.zig
@@ -4402,10 +4402,10 @@ REQ-SEC-POLICY-EVAL-001,Security,PolicyEvaluation,TESTED,,,security,2026-01-16,t
 REQ-SEC-RAFT-ATOMIC-001,Atomic Raft State Persistence,TOCTOU,TESTED,,,security,2026-04-05,src/distributed/raft_consensus.zig
 REQ-SEC-RATE-LIMIT-001,AuthRateLimiting,PerIPRateLimit,TESTED,,,security,2026-03-26,src/server/auth_rate_limiter.zig
 REQ-SEC-RATE-LIMIT-002,AuthRateLimiting,PeerIPExtraction,IMPL,,,transport,2026-03-26,src/transport/quic.zig
-REQ-SEC-RATE-LIMIT-003,AuthRateLimiting,GlobalInstance,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
-REQ-SEC-RATE-LIMIT-004,AuthRateLimiting,GlobalSetter,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
-REQ-SEC-RATE-LIMIT-005,AuthRateLimiting,PeerIPExtraction,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
-REQ-SEC-RATE-LIMIT-006,AuthRateLimiting,HelloCheck,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-003,AuthRateLimiting,GlobalInstance,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-004,AuthRateLimiting,GlobalSetter,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-005,AuthRateLimiting,PeerIPExtraction,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-006,AuthRateLimiting,HelloCheck,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
 REQ-SEC-RATE-LIMIT-007,AuthRateLimiting,ServerInit,TESTED,,,security,2026-06-11,src/server/main.zig
 REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,PostResultFilter,IMPL,,,security,2026-04-01,src/server/rls_filter.zig
@@ -4416,7 +4416,7 @@ REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCRowsWire,IMPL,,,security,2026-0
 REQ-SEC-RLS-FEDERATION-001,RLS Federation Filter,PostMergeFilter,TESTED,,,security,2026-04-05,src/server/rls_filter.zig
 REQ-SEC-RLS-POLICY-001,Security,RLSPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,src/server/rls_filter.zig
-REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
+REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,TESTED,,,security,2026-04-01,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-004,RLS Query Enforcement,ServerInit,TESTED,,,security,2026-06-11,src/server/main.zig
 REQ-SEC-RLS-WIRE-005,RLS Query Enforcement,UnitTests,IMPL,,,security,2026-03-26,build.zig
@@ -4428,7 +4428,7 @@ REQ-SEC-RLS-WIRE-010,RLS Expression Wiring,ValueBridge,TESTED,,,security,2026-04
 REQ-SEC-RLS-WIRE-010,RLS Expression Wiring,ValueBridge,TESTED,,,security,2026-04-06,src/security/rls_value_bridge.zig
 REQ-SEC-RLS-WIRE-011,RLS Expression Wiring,ExprEngineGlobal,IMPL,,,security,2026-04-06,src/security/rls_types.zig
 REQ-SEC-RLS-WIRE-012,RLS Expression Wiring,ServerInitLabelEngine,TESTED,,,security,2026-06-11,src/server/main.zig
-REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,ExecContextWiring,IMPL,,,security,2026-04-06,src/server/quic_connection_handler.zig
+REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,ExecContextWiring,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,UsernameRowAccess,IMPL,,,security,2026-04-06,src/security/rls_core.zig
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,MatchLabelDeny,IMPL,,,security,2026-04-06,src/execution/match_operations.zig
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,ServerInitExprEngine,TESTED,,,security,2026-06-11,src/server/main.zig
@@ -4915,8 +4915,8 @@ REQ-TXN-PHANTOM-MVCC-003,Phantom Read MVCC Integration,ConflictDetection,TESTED,
 REQ-TXN-SAVEPOINT-001,TransactionSavepoints,UndoLogSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig
 REQ-TXN-SAVEPOINT-002,TransactionSavepoints,CreateSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig
 REQ-TXN-SAVEPOINT-003,TransactionSavepoints,RollbackToSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig
-REQ-TXN-SAVEPOINT-004,TransactionSavepoints,QuicSavepoint,IMPL,,,transport,2026-04-01,src/server/quic_connection_handler.zig
-REQ-TXN-SAVEPOINT-005,TransactionSavepoints,QuicRollbackTo,IMPL,,,transport,2026-04-01,src/server/quic_connection_handler.zig
+REQ-TXN-SAVEPOINT-004,TransactionSavepoints,QuicSavepoint,TESTED,,,transport,2026-06-11,src/server/quic_connection_handler.zig
+REQ-TXN-SAVEPOINT-005,TransactionSavepoints,QuicRollbackTo,TESTED,,,transport,2026-06-11,src/server/quic_connection_handler.zig
 REQ-TXN-SAVEPOINT-006,TransactionSavepoints,GrpcSavepoint,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig
 REQ-TXN-SAVEPOINT-007,TransactionSavepoints,GrpcRollbackTo,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoEntry,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
