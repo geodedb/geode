@@ -3433,7 +3433,6 @@ REQ-MATH-TRIG-002,TrigonometricFunctions,ATAN2,TESTED,,,math,2025-10-26,src/eval
 REQ-MATH-TRIG-003,TrigonometricFunctions,ASIN,TESTED,,,math,2025-10-26,src/eval/call_handlers.zig
 REQ-MATH-TRIG-004,TrigonometricFunctions,ACOS,TESTED,,,math,2025-10-26,src/eval/call_handlers.zig
 REQ-MATVIEW-DEPS-001,Materialized View Dependency Extraction,DependencyTracking,TESTED,,,query,2026-06-11,src/query/enhanced_materialized_views.zig
-REQ-MATVIEW-INTEGRATION-001,Materialized View Integration Tests,IntegrationTests,EXEMPT,,,query,2025-10-05,tests/test_materialized_views_enhanced_integration.zig
 REQ-MATVIEW-PARSE-001,Materialized View Query Parsing,QueryParsing,TESTED,,,query,2026-06-11,src/query/enhanced_materialized_views.zig
 REQ-MATVIEW-REFRESH-001,Materialized View Refresh,RefreshLogic,TESTED,,,query,2026-06-11,src/query/enhanced_materialized_views.zig
 REQ-MATVIEW-REFRESH-002,Incremental Refresh,IncrementalRefresh,IMPL,,,query,2026-06-11,src/query/enhanced_materialized_views.zig
