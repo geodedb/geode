@@ -5384,6 +5384,21 @@ pub fn build(b: *std.Build) void {
     const gap0867_step = b.step("test-gap0867", "GAP-0867: real CBO statistics + truthful EXPLAIN estimates + predicate-aware index choice");
     gap0867_step.dependOn(&run_gap0867_tests.step);
 
+    // GAP-0868: PROFILE runtime telemetry. The statement-level PROFILE
+    // fallback (non-Query statements and concrete-tenant demoted reads) now
+    // measures real CLOCK_MONOTONIC wall-clock around the wrapped statement
+    // and reports `time_ms`, replacing the hard-coded `time = 1` placeholder.
+    // Planned reads keep the richer planned_query_profile (per-operator
+    // time_ns via RuntimeTrace) — unchanged.
+    const gap0868_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0868_profile_timing.zig"), .target = target, .optimize = optimize });
+    gap0868_test_mod.addImport("geode", root_mod);
+    gap0868_test_mod.link_libc = true;
+    const gap0868_tests = b.addTest(.{ .root_module = gap0868_test_mod });
+    const run_gap0868_tests = b.addRunArtifact(gap0868_tests);
+    shardDep(test_step, &run_gap0868_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0868_step = b.step("test-gap0868", "GAP-0868: real wall-clock PROFILE timing (no placeholder)");
+    gap0868_step.dependOn(&run_gap0868_tests.step);
+
     // GAP-0885b: LSP/MCP hardening batch (LSP-SEC-002/005/008). Roots the
     // regression file through src/cli/lsp/server.zig (exposed as
     // `lsp_server`, same wiring rationale as gap0831/gap0832) for the URI

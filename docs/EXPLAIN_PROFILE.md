@@ -186,20 +186,42 @@ PROFILE MATCH (p:Person) RETURN p.name
 **Output:**
 
 ```
-| metric              | value |
-|---------------------|-------|
-| rows_returned       | 42    |
-| columns             | 1     |
-| execution_time_ms   | 1     |
+| metric   | value                 |
+|----------|-----------------------|
+| profile  | planned_query_profile |
+| rows     | 42                    |
+| columns  | 1                     |
+| time_ns  | 184213                |
+| operators| 2                     |
 ```
 
 ### Profiling Metrics
 
-PROFILE returns the following metrics:
+PROFILE has two result shapes, both real measurements (GAP-0868, 2026-06-10):
 
-1. **rows_returned**: Number of rows returned by the query
+**Planned reads** (`profile = planned_query_profile`) — storage-native read
+queries execute through the planned runtime, which carries a per-operator
+`RuntimeTrace` (each operator records `input_rows`, `rows`, and `time_ns`):
+
+1. **rows**: Number of rows returned by the query
 2. **columns**: Number of columns in the result set
-3. **execution_time_ms**: Execution time in milliseconds (placeholder value in current implementation)
+3. **time_ns**: Total measured execution time in nanoseconds (sum of the
+   per-operator trace)
+4. **operators**: Number of operators in the executed plan
+
+**Statement fallback** (`profile = query_profile`) — non-query statements
+under PROFILE (e.g. `PROFILE SHOW TABLES`) and reads demoted to the legacy
+tenant-aware executor by a concrete tenant scope (GAP-0846/GAP-0509):
+
+1. **rows**: Number of rows returned by the statement
+2. **columns**: Number of columns in the result set
+3. **time_ms**: Real wall-clock execution time in milliseconds, measured with
+   `CLOCK_MONOTONIC` around the wrapped statement's execution (parse time and
+   profile-row construction are excluded)
+
+The QUIC wire protocol additionally emits a richer per-operator profile
+payload (`profile_version`, per-op `time_ns`, `rows`, memory totals) for
+profiled queries — see `src/server/profile_payload.zig`.
 
 ### Examples by Query Type
 
@@ -232,11 +254,13 @@ PROFILE CREATE (p:Person {name: 'Bob', age: 35})
 **Output:**
 
 ```
-| metric              | value |
-|---------------------|-------|
-| rows_returned       | 0     |
-| columns             | 0     |
-| execution_time_ms   | 1     |
+| metric   | value                 |
+|----------|-----------------------|
+| profile  | planned_query_profile |
+| rows     | 0                     |
+| columns  | 0                     |
+| time_ns  | 91342                 |
+| operators| 1                     |
 ```
 
 **Profile Empty Result:**
@@ -248,12 +272,16 @@ PROFILE MATCH (p:NonExistent) RETURN p
 **Output:**
 
 ```
-| metric              | value |
-|---------------------|-------|
-| rows_returned       | 0     |
-| columns             | 1     |
-| execution_time_ms   | 1     |
+| metric   | value                 |
+|----------|-----------------------|
+| profile  | planned_query_profile |
+| rows     | 0                     |
+| columns  | 1                     |
+| time_ns  | 47012                 |
+| operators| 2                     |
 ```
+
+(`time_ns` values are real measurements and will vary run to run.)
 
 ### Performance Analysis Examples
 
@@ -472,16 +500,21 @@ Be precise about provenance when reading any cost or row number Geode reports:
 ## Current Limitations
 
 1. **Heuristic EXPLAIN costs**: the GQL `EXPLAIN` statement's per-operator costs are the fixed constants listed above, not statistics-derived estimates
-2. **Placeholder Timing**: PROFILE execution_time_ms is currently a placeholder (always returns 1)
-3. **No Operator Statistics**: PROFILE doesn't show per-operator metrics
-4. **No Memory Usage**: Memory consumption not tracked
-5. **No automatic ANALYZE**: `StatsRegistry.analyzeTable()` must be invoked by the caller; statistics are not refreshed automatically on write
+2. **Statement-fallback PROFILE has no per-operator breakdown**: real
+   per-operator timing exists for planned reads (`RuntimeTrace` per-op
+   `time_ns`/`rows`, surfaced in the QUIC profile payload), but the
+   statement-level fallback path (non-query statements under PROFILE, and
+   reads demoted by a concrete tenant scope) executes through the generic
+   dispatcher, which exposes no operator hooks — it reports real
+   statement-level wall-clock `time_ms` only (GAP-0868 residual)
+3. **No Memory Usage in statement-level PROFILE rows**: memory totals are
+   only available in the QUIC wire profile payload, not the metric/value rows
+4. **No automatic ANALYZE**: `StatsRegistry.analyzeTable()` must be invoked by the caller; statistics are not refreshed automatically on write
 
 ## Future Enhancements
 
 - **Cost-Based Plans**: Include estimated costs and row counts per operator
-- **Actual Timing**: Real execution time measurements in PROFILE
-- **Per-Operator Stats**: Detailed metrics for each operator (rows processed, time spent)
+- **Per-Operator Stats in the fallback path**: per-operator metrics for non-query statements and tenant-demoted reads (planned reads already have them)
 - **Memory Profiling**: Track memory allocation and usage
 - **Index Usage**: Show which indexes are being used in the plan
 - **Warnings**: Detect and warn about potential performance issues
