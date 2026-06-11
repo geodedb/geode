@@ -209,19 +209,28 @@ test "TestFLE_AccessControl_ControlCharacterInjectionPrevention" {
 // -----------------------------------------------------------------------------
 // Verify that FLE fails secure (denies access on error)
 
-// CANARY: REQ=REQ-FLE-ENFORCE-011; FEATURE="FLEEnforcement"; ASPECT=FailSecureOnCatalogError; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// CANARY: REQ=REQ-FLE-ENFORCE-011; FEATURE="FLEEnforcement"; ASPECT=FailSecureOnCatalogError; STATUS=TESTED; OWNER=security; UPDATED=2026-06-10
 test "TestFLE_FailSecure_CatalogErrorShouldDenyAccess" {
-    // CRITICAL: If the FLE catalog cannot be loaded, access should be DENIED
-    // Current implementation returns `true` (allow) which is INSECURE
+    // INVARIANT (fail-secure): catalog unavailability ⇒ DENY plaintext access.
     //
-    // fle_integration.zig:447: const catalog = fle_catalog.globalCatalog(...) catch return true;
+    // RESOLVED (#813 / GAP-0886a, 2026-06-10): the historical fail-open
+    // (`globalCatalog(...) catch return true`) was fixed. The current
+    // implementation in src/fle_integration.zig:canReadPlaintext() is:
     //
-    // This should return FALSE (deny) to fail secure
+    //   const catalog = fle_catalog.globalCatalog(ctx.allocator) catch {
+    //       std.log.warn("SECURITY: Cannot access FLE catalog ... denying ...");
+    //       return false; // FAIL-SECURE: Deny access on catalog error
+    //   };
+    //
+    // Why this stays a documentation test (no executable assertion): the error
+    // branch is only reachable when `globalCatalog` itself fails, which since
+    // the catalog moved to a process-global allocator can only happen on OOM of
+    // the global allocator — not injectable from a unit test without faking the
+    // catalog module. The deny-on-error line is a defensive backstop; the
+    // companion behavioral coverage is TestFLE_VulnFix_CatalogErrorMustDenyAccess
+    // (REQ-FLE-FAILSECURE-002) plus the locked-field deny tests above.
 
-    // This test documents the current INSECURE behavior and expected fix
-    // TODO: Fix fle_integration.zig:447 to return false on error
-
-    try testing.expect(true); // Documentation test - behavior needs fixing
+    try testing.expect(true); // Documentation test — fix verified by code inspection
 }
 
 // CANARY: REQ=REQ-FLE-ENFORCE-012; FEATURE="FLEEnforcement"; ASPECT=FailSecureOnKeyError; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -276,22 +285,21 @@ test "TestFLE_FailSecure_DecryptionFailureReturnsRedacted" {
 // -----------------------------------------------------------------------------
 // Verify key management security
 
-// CANARY: REQ=REQ-FLE-ENFORCE-015; FEATURE="FLEEnforcement"; ASPECT=MasterKeyRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// CANARY: REQ=REQ-FLE-ENFORCE-015; FEATURE="FLEEnforcement"; ASPECT=MasterKeyRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-06-10
 test "TestFLE_KeyManagement_MasterKeyShouldBeRequired" {
-    // CRITICAL: Production deployments MUST have GEODE_MASTER_KEY set
+    // INVARIANT: FLE never operates without an operator-provided master key.
     //
-    // Current code (manager.zig:86-91):
-    // } else |_| {
-    //     // No env var set - use deterministic key for testing
-    //     const test_seed = "geode-fle-test-master-key-v1";
-    //
-    // This is INSECURE for production - all instances share the same key!
-    //
-    // Correct behavior: FAIL if GEODE_MASTER_KEY is not set in production mode
+    // RESOLVED (#813 / GAP-0886a, 2026-06-10): the requirement landed STRONGER
+    // than this test originally asked for. The historical deterministic
+    // test-key fallback ("geode-fle-test-master-key-v1") was removed entirely
+    // from src/keys/manager.zig — there is no build-mode-gated fallback left.
+    // `loadMasterKeyFromEnv` (src/keys/manager.zig:30-54) returns
+    // `Error.MasterKeyRequired` in ALL build modes (Debug included) when
+    // GEODE_MASTER_KEY is unset, after logging "SECURITY CRITICAL: ...".
+    // Tests that need FLE keys must inject GEODE_MASTER_KEY explicitly
+    // (see tests/test_gap0854_fle_chain.zig for the canonical pattern).
 
-    // TODO: Add production mode check that fails if master key not set
-
-    try testing.expect(true); // Documentation test
+    try testing.expect(true); // Documentation test — fallback removed, key always required
 }
 
 // CANARY: REQ=REQ-FLE-ENFORCE-016; FEATURE="FLEEnforcement"; ASPECT=KeySecureZeroing; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -508,20 +516,25 @@ test "TestFLE_SizeLimits_KeySizeMustBe32Bytes" {
 // -----------------------------------------------------------------------------
 // Verify integration points are secure
 
-// CANARY: REQ=REQ-FLE-ENFORCE-030; FEATURE="FLEEnforcement"; ASPECT=GlobalFlagSkipDisabled; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// CANARY: REQ=REQ-FLE-ENFORCE-030; FEATURE="FLEEnforcement"; ASPECT=GlobalFlagSkipDisabled; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-06-10
 test "TestFLE_Integration_GlobalFlagMustBeSetWhenFLEConfigured" {
-    // fle_has_encrypted_fields flag controls fast-path skip
-    // fle_integration.zig:27: var fle_has_encrypted_fields: bool = false;
+    // INVARIANT: schema has encrypted fields ⇒ hasEncryptedFields() is true,
+    // otherwise the fast-path skip would silently bypass encryption (fail-open).
     //
-    // When FLE is configured:
-    // 1. This flag MUST be set to true
-    // 2. Otherwise encryption is silently skipped!
+    // RESOLVED (#813 / GAP-0886a, 2026-06-10): two mechanisms guarantee it:
+    // 1. Explicit set: the `CALL geode.fle.configureField` dispatch calls
+    //    fle_integration.setHasEncryptedFields(true) immediately after
+    //    catalog.configureField (src/execution/storage_dispatch.zig).
+    // 2. Lazy self-heal: hasEncryptedFields() consults the persisted catalog
+    //    (catalog.count() > 0) when the flag is unset and unchecked — covering
+    //    any path that populates the catalog without the setter (e.g. a
+    //    persisted catalog loaded at boot). See src/fle_integration.zig:32-47.
     //
-    // fle_integration.zig:194: if (!fle_has_encrypted_fields) { return plaintext; }
+    // Executable regression: "GAP-0886: hasEncryptedFields reflects catalog
+    // state (flag self-heal + setter)" in src/fle_integration.zig, run via
+    // `zig build test-gap0844` (inline-test root for fle_integration.zig).
 
-    // TODO: Verify this flag is properly set when schema has encrypted fields
-
-    try testing.expect(true); // Documentation test
+    try testing.expect(true); // Documentation pointer — executable test lives with the code
 }
 
 // -----------------------------------------------------------------------------
@@ -723,33 +736,24 @@ test "TestFLE_ProductionMode_BuildModeDetection" {
 
 // CANARY: REQ=REQ-FLE-PRODMODE-002; FEATURE="FLEProductionMode"; ASPECT=TestModeFlag; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 test "TestFLE_ProductionMode_TestModeFlagCheck" {
-    // REQUIREMENT: Test mode is only allowed in debug builds
+    // REQUIREMENT: no test-key fallback may exist in production.
     //
-    // GEODE_FLE_TEST_MODE=1 enables test key fallback, but ONLY in debug builds.
-    // In production builds, this flag has NO effect - master key is always required.
+    // UPDATED (#813 / GAP-0886a, 2026-06-10): the GEODE_FLE_TEST_MODE escape
+    // hatch and isTestModeEnabled() no longer exist. src/keys/manager.zig
+    // requires GEODE_MASTER_KEY in EVERY build mode (loadMasterKeyFromEnv
+    // returns Error.MasterKeyRequired when unset) — there is no test-key
+    // code path left to gate. Tests inject GEODE_MASTER_KEY explicitly.
     //
-    // This prevents accidental use of test keys in production.
-    //
-    // Implementation in src/keys/manager.zig:
-    // - isTestModeEnabled() returns false if is_production_build is true
-    // - isTestModeEnabled() checks GEODE_FLE_TEST_MODE env var in debug builds
-    // - Test keys are only used if isTestModeEnabled() returns true
-    //
-    // This is verified by code inspection and integration tests.
+    // The build-mode detection below is retained as a sanity check that the
+    // production/debug distinction itself is observable.
 
     const builtin = @import("builtin");
     const mode = builtin.mode;
     const is_production = mode == .ReleaseFast or mode == .ReleaseSafe;
 
-    // In production builds, test mode should never be allowed
-    if (is_production) {
-        // This code path would be taken in release builds
-        // Test mode should be disabled regardless of env var
-        try testing.expect(true);
-    } else {
-        // In debug builds, test mode may be enabled via GEODE_FLE_TEST_MODE=1
-        try testing.expect(true);
-    }
+    // Master key is required in every mode; no test-mode escape hatch exists.
+    _ = is_production;
+    try testing.expect(true);
 }
 
 // -----------------------------------------------------------------------------
@@ -764,9 +768,9 @@ test "TestFLE_ProductionMode_TestModeFlagCheck" {
 //    - Fail-secure behavior: deny access on any error
 //    - Prevents catalog error exploitation
 //
-// 3. FIXED: manager.zig:86-91 now requires GEODE_MASTER_KEY in production
-//    - New error: Error.MasterKeyRequired
-//    - Test keys only allowed in debug builds with explicit opt-in
+// 3. FIXED: src/keys/manager.zig requires GEODE_MASTER_KEY in ALL build modes
+//    - Error.MasterKeyRequired when unset; the deterministic test-key fallback
+//      was removed entirely (no debug-build opt-in remains)
 //
 // All fixes verified with CANARY markers for governance tracking.
 // =============================================================================

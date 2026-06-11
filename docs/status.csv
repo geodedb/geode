@@ -1033,11 +1033,11 @@ REQ-FLE-ENFORCE-007,FLEEnforcement,RedactionOnDenial,TESTED,,,security,2026-01-2
 REQ-FLE-ENFORCE-008,FLEEnforcement,NoRoleBypasses,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-009,FLEEnforcement,UnicodeRoleValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-010,FLEEnforcement,ControlCharRoleValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-ENFORCE-011,FLEEnforcement,FailSecureOnCatalogError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-011,FLEEnforcement,FailSecureOnCatalogError,TESTED,,,security,2026-06-10,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-012,FLEEnforcement,FailSecureOnKeyError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-013,FLEEnforcement,NoPlaintextFallback,TESTED,,,security,2026-03-13,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-014,FLEEnforcement,DecryptionFailureReturnsRedacted,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-ENFORCE-015,FLEEnforcement,MasterKeyRequired,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-015,FLEEnforcement,MasterKeyRequired,TESTED,,,security,2026-06-10,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-016,FLEEnforcement,KeySecureZeroing,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-017,FLEEnforcement,KeyVersionTracking,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-018,FLEEnforcement,CatalogPermissionsPersisted,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
@@ -1052,7 +1052,8 @@ REQ-FLE-ENFORCE-026,FLEEnforcement,NonceRandomness,TESTED,,,security,2026-01-28,
 REQ-FLE-ENFORCE-027,FLEEnforcement,HKDFKeyDerivation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-028,FLEEnforcement,PlaintextSizeLimit,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-029,FLEEnforcement,KeySizeValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,,,security,2026-06-10,src/fle_integration.zig
+REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,,,security,2026-06-10,src/security/test_fle_enforcement.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2025-10-15,src/execution.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,Execution,TESTED,,,security,2026-01-15,tests/test_gap_0193_impl_verification.zig

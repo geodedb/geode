@@ -44,7 +44,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 }
 
 const graph_store = @import("graph_store.zig");
-const property_codec = @import("property_value_codec.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
 const tde = @import("storage/tde_file_encryption.zig");
 const wal_lib = @import("wal");
@@ -291,62 +290,17 @@ pub const WriteAheadLog = struct {
     /// DEPRECATED: Crash recovery is now handled by the graph-storage engine's
     /// own WAL via engine.open(). This Geode WAL serves only as a logical change
     /// feed for CDC/audit. Replay is skipped; returns 0.
+    ///
+    /// #812 (GAP-0886a): the dead always-false-gated legacy-replay path and its
+    /// unreachable closure (legacy replay loop, record-apply switch, and the
+    /// deserialization helpers) were removed 2026-06-10. If a CDC consumer needs to
+    /// decode the logical feed, recover the implementation from git history
+    /// (pre-GAP-0886a) rather than re-enabling an unmaintained in-process path.
     pub fn replay(self: *WriteAheadLog, store: *graph_store.GraphStore) !u64 {
+        _ = self;
+        _ = store;
         log.info("WAL replay skipped — crash recovery delegated to graph-storage engine", &.{});
-
-        // Legacy replay logic retained for reference and potential CDC replay.
-        // Gate behind an unreachable condition to keep applyRecord reachable
-        // for the compiler while ensuring this path is never taken at runtime.
-        if (false) {
-            return self.replayLegacy(store);
-        }
         return 0;
-    }
-
-    /// Legacy replay implementation — retained for potential CDC replay use.
-    fn replayLegacy(self: *WriteAheadLog, store: *graph_store.GraphStore) !u64 {
-        graph_store.setMutationNotifyInhibit(true);
-        defer graph_store.setMutationNotifyInhibit(false);
-
-        var iter = try self.inner.iterator(self.checkpoint_lsn);
-        defer iter.deinit();
-
-        var last_lsn: u64 = 0;
-        var replayed: u64 = 0;
-
-        while (try iter.next()) |entry_val| {
-            var entry = entry_val;
-            defer entry.deinit();
-
-            if (entry.lsn <= self.checkpoint_lsn) continue;
-
-            const payload = entry.payload;
-            if (payload.len < 9) continue;
-
-            const op_type_byte = payload[8];
-            const record_payload = payload[9..];
-
-            const op_type: WalOpType = @enumFromInt(op_type_byte);
-            applyRecord(store, op_type, record_payload) catch |err| {
-                log.warn("WAL replay failed for record", &.{
-                    Attr.int("lsn", @intCast(entry.lsn)),
-                    Attr.string("error", @errorName(err)),
-                });
-                continue;
-            };
-
-            last_lsn = entry.lsn;
-            replayed += 1;
-        }
-
-        if (replayed > 0) {
-            log.info("WAL replay complete", &.{
-                Attr.int("records_replayed", @intCast(replayed)),
-                Attr.int("last_lsn", @intCast(last_lsn)),
-            });
-        }
-
-        return last_lsn;
     }
 
     /// Truncate WAL records up to the given LSN (after a successful checkpoint).
@@ -460,12 +414,6 @@ fn appendI64(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: i64) 
     try buf.appendSlice(allocator, &bytes);
 }
 
-fn appendI128(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: i128) !void {
-    var bytes: [16]u8 = undefined;
-    std.mem.writeInt(i128, &bytes, value, .little);
-    try buf.appendSlice(allocator, &bytes);
-}
-
 fn appendF64(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: f64) !void {
     const bits: u64 = @bitCast(value);
     try appendU64(buf, allocator, bits);
@@ -480,154 +428,6 @@ fn appendU32(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) 
 fn appendString(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, str: []const u8) !void {
     try appendU32(buf, allocator, @intCast(str.len));
     try buf.appendSlice(allocator, str);
-}
-
-// ---- Deserialization / replay helpers ----
-
-fn readU64(data: []const u8, offset: *usize) !u64 {
-    if (offset.* + 8 > data.len) return error.UnexpectedEndOfStream;
-    const value = std.mem.readInt(u64, data[offset.*..][0..8], .little);
-    offset.* += 8;
-    return value;
-}
-
-fn readI64(data: []const u8, offset: *usize) !i64 {
-    if (offset.* + 8 > data.len) return error.UnexpectedEndOfStream;
-    const value = std.mem.readInt(i64, data[offset.*..][0..8], .little);
-    offset.* += 8;
-    return value;
-}
-
-fn readI128(data: []const u8, offset: *usize) !i128 {
-    if (offset.* + 16 > data.len) return error.UnexpectedEndOfStream;
-    const value = std.mem.readInt(i128, data[offset.*..][0..16], .little);
-    offset.* += 16;
-    return value;
-}
-
-fn readF64(data: []const u8, offset: *usize) !f64 {
-    const bits = try readU64(data, offset);
-    return @bitCast(bits);
-}
-
-fn readU32(data: []const u8, offset: *usize) !u32 {
-    if (offset.* + 4 > data.len) return error.UnexpectedEndOfStream;
-    const value = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-    offset.* += 4;
-    return value;
-}
-
-fn readString(data: []const u8, offset: *usize) ![]const u8 {
-    const len = try readU32(data, offset);
-    if (offset.* + len > data.len) return error.UnexpectedEndOfStream;
-    const str = data[offset.* .. offset.* + len];
-    offset.* += len;
-    return str;
-}
-
-fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []const u8) !void {
-    var offset: usize = 0;
-    switch (op_type) {
-        .CreateNode => {
-            const node_id = try readU64(payload, &offset);
-            const graph_name = try readString(payload, &offset);
-            const label_count = try readU32(payload, &offset);
-            var labels = try store.allocator.alloc([]const u8, label_count);
-            defer store.allocator.free(labels);
-            for (0..label_count) |i| {
-                labels[i] = try readString(payload, &offset);
-            }
-            store.createNodeWithId(node_id, labels, graph_name) catch |err| {
-                log.warn("WAL replay: createNodeWithId failed", &.{Attr.string("error", @errorName(err))});
-            };
-        },
-        .CreateEdge => {
-            const edge_id = try readU64(payload, &offset);
-            const from_id = try readU64(payload, &offset);
-            const to_id = try readU64(payload, &offset);
-            const label = try readString(payload, &offset);
-            const graph_name = try readString(payload, &offset);
-            store.createEdgeWithId(edge_id, from_id, to_id, label, graph_name) catch |err| {
-                log.warn("WAL replay: createEdgeWithId failed", &.{Attr.string("error", @errorName(err))});
-            };
-        },
-        .SetNodeProperty => {
-            const node_id = try readU64(payload, &offset);
-            const key = try readString(payload, &offset);
-            const value_type = if (offset < payload.len) payload[offset] else return error.UnexpectedEndOfStream;
-            offset += 1;
-            const pv = deserializePropertyValue(store.allocator, payload, &offset, value_type) catch graph_store.PropertyValue.Null;
-            defer property_codec.freePropertyValue(store.allocator, pv);
-            store.setNodeProperty(node_id, key, pv) catch |err| {
-                log.warn("WAL replay: setNodeProperty failed", &.{Attr.string("error", @errorName(err))});
-            };
-        },
-        .RemoveNodeProperty => {
-            const node_id = try readU64(payload, &offset);
-            const key = try readString(payload, &offset);
-            store.removeNodeProperty(node_id, key);
-        },
-        .SetEdgeProperty => {
-            const edge_id = try readU64(payload, &offset);
-            const key = try readString(payload, &offset);
-            const value_type = if (offset < payload.len) payload[offset] else return error.UnexpectedEndOfStream;
-            offset += 1;
-            const pv = deserializePropertyValue(store.allocator, payload, &offset, value_type) catch graph_store.PropertyValue.Null;
-            defer property_codec.freePropertyValue(store.allocator, pv);
-            store.setEdgeProperty(edge_id, key, pv) catch |err| {
-                log.warn("WAL replay: setEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
-            };
-        },
-        .RemoveEdgeProperty => {
-            const edge_id = try readU64(payload, &offset);
-            const key = try readString(payload, &offset);
-            store.removeEdgeProperty(edge_id, key);
-        },
-        .DeleteNode => {
-            const node_id = try readU64(payload, &offset);
-            _ = try readString(payload, &offset); // graph_name
-            store.deleteNode(node_id);
-        },
-        .DeleteEdge => {
-            const edge_id = try readU64(payload, &offset);
-            _ = try readString(payload, &offset); // graph_name
-            store.deleteEdge(edge_id);
-        },
-        .AddNodeLabel => {
-            const node_id = try readU64(payload, &offset);
-            const label = try readString(payload, &offset);
-            store.addNodeLabel(node_id, label) catch |err| {
-                log.warn("WAL replay: addNodeLabel failed", &.{Attr.string("error", @errorName(err))});
-            };
-        },
-        .RemoveNodeLabel => {
-            const node_id = try readU64(payload, &offset);
-            const label = try readString(payload, &offset);
-            store.removeNodeLabel(node_id, label) catch |err| {
-                log.warn("WAL replay: removeNodeLabel failed", &.{Attr.string("error", @errorName(err))});
-            };
-        },
-    }
-}
-
-fn deserializePropertyValue(allocator: std.mem.Allocator, data: []const u8, offset: *usize, value_type: u8) !graph_store.PropertyValue {
-    return switch (value_type) {
-        0 => graph_store.PropertyValue.Null,
-        1 => graph_store.PropertyValue{ .String = try readString(data, offset) },
-        2 => graph_store.PropertyValue{ .Int = try readI64(data, offset) },
-        3 => graph_store.PropertyValue{ .Float = try readF64(data, offset) },
-        4 => blk: {
-            if (offset.* >= data.len) return error.UnexpectedEndOfStream;
-            const b = data[offset.*] != 0;
-            offset.* += 1;
-            break :blk graph_store.PropertyValue{ .Bool = b };
-        },
-        5 => blk: {
-            const bytes = try readString(data, offset);
-            break :blk try property_codec.decodePropertyValue(allocator, bytes);
-        },
-        else => graph_store.PropertyValue.Null,
-    };
 }
 
 // ---- Global WAL instance ----

@@ -3,35 +3,57 @@ title = "Geode gitleaks config"
 [extend]
 useDefault = true
 
+# #728 (GAP-0886a, 2026-06-10): allowlist tightened from directory-wide
+# patterns (^docs/, ^tests/, ^src/crypto/, ^.env$, dead cert paths) to the
+# specific fixture/false-positive files below. Policy: when a NEW test fixture
+# trips gitleaks, prefer an inline `gitleaks:allow` comment on the offending
+# line; only add a path here when the file is fixture-dense. Never allowlist
+# whole directories, `.env`, or production key paths.
 [allowlist]
-description = "Ignore generated caches, fixture keys, and non-production examples"
+description = "Generated caches, vendored packages, and reviewed test fixtures / false positives"
 paths = [
-  '''^certs/server\.key$''',
-  '''^data/server\.key$''',
+  # Generated / vendored — never hand-authored secrets.
   '''^\.zig-cache/''',
   '''^zig-cache/''',
   '''^test_logs/''',
   '''^docker/zig-packages/''',
-  '''^docs/''',
-  '''^tests/''',
+
+  # Security/TDE/FLE enforcement doc-tests: deliberately discuss key material
+  # and embed fake envelopes (reviewed 2026-06-10; no real secrets).
   '''^src/security/test_.*\.zig$''',
-  '''^src/tests/test_.*\.zig$''',
-  '''^src/audit_demo\.zig$''',
-  '''^\.env$''',
-  '''^source-test-.*''',
-  '''^src/crypto/''',
-  # Issue #818: historical test private keys in commit 1c47e463
-  # (clients/test-harness/certs/*.key.bak) -- superseded by re-keyed certs
-  # in the relocated harness repo (https://gitlab.com/devnw/geode-test-harness,
-  # moved out of this tree by commit 9530366b). Closed via #818.
-  # Do not re-add as production keys.
-  '''^clients/test-harness/certs/.*\.key(\.bak|\.ec|\.rsa\.bak)?$''',
+
+  # FLE re-export shims: `pub const wrapKey32 = fle_aead.wrapKey32;` style
+  # lines false-positive the generic-api-key rule (no values present).
+  '''^src/crypto/aead\.zig$''',
+  '''^src/crypto/hkdf\.zig$''',
+
+  # Docs with illustrative example keys (reviewed 2026-06-10; placeholders).
+  '''^docs/APT_REPOSITORY\.md$''',
+  '''^docs/DOCKER_OVERVIEW\.md$''',
+  '''^docs/TDE_FILE_LEVEL_ENCRYPTION\.md$''',
+  '''^docs/plans/2026-02-24-internal-auth-storage-implementation\.md$''',
+
+  # Test fixtures: deterministic test master keys, RFC/AWS documentation
+  # vectors (AKIAIOSFODNN7EXAMPLE...), and filter-pipeline fixtures
+  # (reviewed 2026-06-10; all synthetic).
+  '''^tests/bulk_ingest/test_simple_merge_fastpath\.zig$''',
+  '''^tests/canary_tde_multi_key_hierarchy\.zig$''',
+  '''^tests/test_filters\.zig$''',
+  '''^tests/test_gap0854_fle_chain\.zig$''',
+  '''^tests/test_gap_analysis_fixes\.zig$''',
+  '''^tests/test_perf_c_lsp_introspection_index\.zig$''',
+  '''^tests/test_quic_handshake_regression\.zig$''',
+  '''^tests/test_s3_backup\.zig$''',
+  '''^tests/test_s3_sigv4\.zig$''',
 ]
 
 # Targeted commit allowlist: only the specific historical SHAs that carried
-# the now-rotated test keys. Keeps full-repo scans clean without weakening
-# detection for any new commit. See issue #818 for the operator decision to
-# NOT rewrite history; the keys are treated as compromised and never reused.
+# the now-rotated test keys (clients/test-harness/certs/*.key.bak, removed
+# from the tree by commit 9530366b). Keeps full-history scans clean without
+# weakening detection for any new commit. See issue #818 for the operator
+# decision to NOT rewrite history; the keys are treated as compromised and
+# never reused. The former path allowlist for clients/test-harness/certs/
+# was removed so any RE-introduction of keys there is flagged.
 commits = [
   "1c47e463be64886fb8fbd42649461019494e8d44",
   "0c0f8a583171f97abec6d5bcf23037656d770a91",

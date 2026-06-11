@@ -1239,9 +1239,11 @@ pub fn build(b: *std.Build) void {
     gap0844_test_mod.addImport("fle_key_types", fle_key_types_mod);
     gap0844_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
     gap0844_test_mod.link_libc = true; // setenv/unsetenv + std.c.getenv
-    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{"GAP-0844"} });
+    // GAP-0886 (#813): the REQ-FLE-ENFORCE-030 flag-invariant regression also
+    // lives inline in fle_integration.zig; run it through this same step.
+    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{ "GAP-0844", "GAP-0886" } });
     const run_gap0844_tests = b.addRunArtifact(gap0844_tests);
-    const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role)");
+    const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role) + GAP-0886 FLE flag invariant");
     gap0844_step.dependOn(&run_gap0844_tests.step);
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
@@ -6467,6 +6469,11 @@ pub fn build(b: *std.Build) void {
     wal_tests.root_module.addImport("geode", root_mod);
     wal_tests.root_module.addImport("logging", logging_mod);
     shardDep(test_step, &wal_tests.step, 1, test_shard_loads, test_shard_index);
+    // #812 (GAP-0886a): named step so the WAL unit suite is runnable outside
+    // the blocked monolithic `test` step (per-step sweep is the canonical gate).
+    const run_wal_tests = b.addRunArtifact(wal_tests);
+    const wal_test_step = b.step("test-wal", "Run WAL unit tests (append, deprecated no-op replay, checkpoint, CRC)");
+    wal_test_step.dependOn(&run_wal_tests.step);
 
     // Issue #460: Shared cross-connection optimizer unit tests
     const shared_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_shared_optimizer.zig"), .target = target, .optimize = optimize }) });
