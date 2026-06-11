@@ -1039,6 +1039,87 @@ all three across an in-place restart.
 
 ---
 
+## ✅ RESOLVED — verified on real Kubernetes (2026-06-11, `dev` = `a25a6f5`) — MATCH…CREATE-edge now replicates; ❌ #5 transport wedge is the sole remaining blocker
+
+The MATCH…CREATE-edge silent-divergence hole documented immediately above is
+**fixed and verified on the real arda 3-pod cluster** — and better than the
+"fail-closed" floor I suggested: the common single-edge shape now **replicates**.
+
+Tested with **fresh, never-before-used labels** (the QA PVCs retain prior-session
+state — the first pass read stale `MTL=1`/`MTLF=1` divergent rows left over from the
+2026-06-10 run, which is itself a reminder that the pre-fix divergence is *durable*
+until the data is wiped):
+
+- ✅ **Leader `MATCH (a:Q11A {k:1}),(b:Q11B {k:2}) CREATE (a)-[:Q11M]->(b)`** → `00000`
+  success and the edge reads back **`Q11M=1` on all three** nodes. The match-bound
+  CREATE-edge path now routes through Raft.
+- ✅ **Follower** same query → `58000 ClusterNotLeader`, and **nothing is written
+  anywhere** (`Q11N=0/0/0`). Fail-closed on followers.
+- ✅ **Ambiguous multi-match** (`MATCH {id:1},{id:2}` matching several stale nodes →
+  cross-product of edges) → `58000 ClusterWriteNotReplicable`, fail-closed (this is
+  why the polluted first pass returned `ClusterWriteNotReplicable` — correct, not a
+  regression).
+- ✅ **Restart-no-dup holds**: after restarting a node, the match-created `Q11M` and
+  create-pattern `Q11L` edges read back **EXACTLY 1** on every reachable node — no
+  duplication, no loss.
+- ✅ **create-pattern edge unregressed**: `CREATE (x)-[:R]->(y)` and three repeats
+  all replicate `1/1/1` (one transient first-write `Timeout` *response* whose write
+  nonetheless committed + replicated — a commit-ack latency blip, not divergence).
+
+With this, **every graph-write shape exercised now either replicates to all three or
+fails closed** — the silent-divergence class of bugs (the through-line of this entire
+report, from the original MATCH…SET hole to this match-create-edge hole) is closed on
+real k8s.
+
+### ❌ Sole remaining blocker — root cause #5 (transport): a leader restart can strand the third node as a silent stuck-candidate
+
+On this same run, restarting the leader pod (`kubectl delete pod geode-1`; it came
+back with a **new pod IP** `10.244.1.231` and won re-election as leader at `term=12`)
+left the third node **geode-2 stuck as a candidate at `term=12` indefinitely** (iter
+climbed past 51 800 over ~5+ minutes, never stepping down to follower, never
+self-healing within the observation window):
+
+- The leader (geode-1) logs **no** send failures to peer=3, and considers itself a
+  healthy term-12 leader. geode-2 logs **no** transport errors in the post-restart
+  window either. The heartbeat path leader→geode-2 is **silently not delivered** —
+  geode-2 never receives (or never accepts) the same-term leader's AppendEntries, so
+  it never steps down. This is the **silent-stall** signature of #5 (a long-lived
+  multiplexed stream to a peer that wedges without surfacing an error), distinct from
+  the **noisy** signature (the `getOrCreatePeerConnection failed
+  error=InvalidAddress|HandshakeError peer=2` churn that geode-2 logged for ~15 s
+  during the *initial* boot at 14:29–14:30, before the restart — the FQDN/handshake
+  fragility while a peer's pod is first coming up).
+- **The cluster stays correct and available at 2/3 quorum throughout.** geode-0
+  (follower) + geode-1 (leader) commit and replicate new writes
+  (`CREATE (z)-[:QQL]->(w)` → `QQL=1` on geode-0 and geode-1); geode-2 simply lags
+  (it holds its last consistent state — `Q11M=1`, `Q11L=1` — and misses only writes
+  made while partitioned). geode-2's `:3141` client interface still answers
+  (`RETURN 1` → `00000`); only its raft membership is wedged. No data is lost or
+  duplicated.
+- **Not observed to self-heal.** Unlike the `c1a95a48` membership-re-resolution
+  result (where a leader restart cleanly re-elected and all three reconverged), here
+  the post-restart re-election left geode-2 permanently out. The difference: there
+  the re-resolution reaper fired on the IP change; here geode-2 never re-establishes
+  the leader's heartbeat stream and the reaper never logs a re-resolve for the new
+  leader's IP. A pod roll of geode-2 would rejoin it, but a healthy cluster must
+  survive a single leader restart without operator intervention.
+
+**Status:** the write-path correctness work is **complete and verified on real
+k8s** — this is the first build where every write shape replicates-or-fails-closed
+*and* survives restart without divergence. The **only** thing standing between this
+and a production-eligible 3-node cluster is the #5 transport wedge: a leader (or
+any peer) restart must reliably re-establish the heartbeat stream to every peer so
+no node is stranded as a silent candidate. Recommend prioritizing the leader→peer
+heartbeat-stream liveness/reconnect path (`getOrCreatePeerConnection` /
+`connectWithTLS` / the long-lived multiplexed send stream in
+`src/distributed/raft_consensus.zig` + `src/transport/quic.zig`): detect a stalled
+stream (no ack within N heartbeat intervals) and force a teardown + FQDN re-resolve
+
+- reconnect, exactly as the noisy-error path already does on a hard send failure.
+prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
 ## ✅ CLOSED (2026-06-10) — `MATCH … CREATE` silent divergence fixed; counter fix; fail-closed sweep + FTS apply symmetry as related hardening
 
 The `MATCH … CREATE (a)-[:R]->(b)` hole above is **fixed on `main`**:
