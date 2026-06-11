@@ -333,7 +333,7 @@ pub fn build(b: *std.Build) void {
     const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
 
     // QUIC v1/v2 protocol - RFC 9000
-    // CANARY: REQ=REQ-QUIC-HC-003; FEATURE="QUIC High-Concurrency Requests"; ASPECT=VendorParallelPoolGating; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+    // CANARY: REQ=REQ-QUIC-HC-003; FEATURE="QUIC High-Concurrency Requests"; ASPECT=VendorParallelPoolGating; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // Disable the QUIC package's hidden global thread pool for batch crypto
     // and recovery. Geode already owns bounded server/client worker pools, and
     // the package pool uses raw defaults plus page_allocator lifetime. QUIC
@@ -614,7 +614,7 @@ pub fn build(b: *std.Build) void {
 
     // Modules - Level 0 (No dependencies on other internal modules)
 
-    // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+    // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=EXEMPT; OWNER=core; UPDATED=2026-06-11
     // Centralized logging module using external slog library
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
     logging_mod.addImport("slog", slog_mod);
@@ -634,16 +634,16 @@ pub fn build(b: *std.Build) void {
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
-    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=build; UPDATED=2026-06-11
     const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
     thread_pool_mod.addImport("thread_pool", thread_pool_ext_mod);
     const query_work_item_mod = b.createModule(.{ .root_source_file = b.path("src/transport/query_work_item.zig"), .target = target, .optimize = optimize });
 
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
-    // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-perf-optimizations; OWNER=build; UPDATED=2026-06-11
     const stream_scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/transport/stream_scheduler.zig"), .target = target, .optimize = optimize });
 
-    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="ParallelWrapperModule"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="ParallelWrapperModule"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Shared parallel wrapper module backed by thread_pool.
     const parallel_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/parallel/thread_pool_parallel.zig"), .target = target, .optimize = optimize });
     parallel_wrapper_mod.addImport("transport/thread_pool", thread_pool_mod);
@@ -780,7 +780,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("geode_client_zig", zig_client_real_mod);
 
     // Main unified CLI binary with server and client capabilities
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=build; UPDATED=2026-06-11
     // Uses unified_entry.zig as root to allow both cli/main.zig and server/main.zig imports
     const geode_exe = b.addExecutable(.{
         .name = "geode",
@@ -3439,13 +3439,17 @@ pub fn build(b: *std.Build) void {
         // Legacy WAL fuzz target removed (GraphStore-only storage).
 
         // GAP-0201: Transport layer performance fuzz tests
-        // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+        // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-transport-fuzz; OWNER=build; UPDATED=2026-06-11
         const transport_perf_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/transport_perf_fuzz.zig"), .target = target, .optimize = .Debug }) });
         transport_perf_fuzz_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
         transport_perf_fuzz_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
         transport_perf_fuzz_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
         const run_transport_perf_fuzz = b.addRunArtifact(transport_perf_fuzz_tests);
         test_e2e_step.dependOn(&run_transport_perf_fuzz.step);
+        // GAP-0514 Phase 6: named step so the transport fuzz target is
+        // runnable on its own (test-e2e carries unrelated known failures).
+        const transport_fuzz_step = b.step("test-transport-fuzz", "Run transport layer performance fuzz tests (thread pool, work item, DRR scheduler)");
+        transport_fuzz_step.dependOn(&run_transport_perf_fuzz.step);
     }
 
     // Attach physiological redo canary tests after test_step defined
@@ -3557,14 +3561,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &tde_published_sync_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0201: Performance optimization tests (thread pool, DRR scheduler, adaptive backoff)
-    // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-perf-optimizations; OWNER=build; UPDATED=2026-06-11
     const perf_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_performance_optimizations.zig"), .target = target, .optimize = optimize }) });
     perf_opt_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     perf_opt_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
     perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
+    // GAP-0514 Phase 6: named step so the thread-pool/DRR/backoff suite is
+    // runnable outside the (blocked) monolithic `zig build test` shard sweep.
+    const run_perf_opt_tests = b.addRunArtifact(perf_opt_tests);
+    const perf_opt_test_step = b.step("test-perf-optimizations", "Run performance optimization unit tests (thread pool, DRR scheduler, adaptive backoff)");
+    perf_opt_test_step.dependOn(&run_perf_opt_tests.step);
     shardDep(test_step, &perf_opt_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperTests"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Dedicated tests for the thread-pool-backed parallel wrapper.
     const parallel_wrapper_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_thread_pool_parallel.zig"), .target = target, .optimize = optimize }) });
     parallel_wrapper_tests.root_module.addImport("geode", root_mod);
@@ -3577,7 +3586,7 @@ pub fn build(b: *std.Build) void {
     // Also add to main test step
     shardDep(test_step, &parallel_wrapper_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
+    // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=TESTED; TEST=test-quic-streams; OWNER=build; UPDATED=2026-06-11
     const quic_stream_registry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_stream_registry.zig"), .target = target, .optimize = optimize }) });
     quic_stream_registry_tests.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = optimize }));
     quic_stream_registry_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
@@ -3694,7 +3703,7 @@ pub fn build(b: *std.Build) void {
     // contract that `finish()` must join the watchdog thread before
     // returning, so callers (cmdQuery) are safe to free the state (e.g. by
     // popping a stack frame) immediately after `finish()`.
-    // CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=cli; UPDATED=2026-04-16
+    // CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=LifetimeRegressionBuild; STATUS=TESTED; TEST=test-deadline-watchdog; OWNER=cli; UPDATED=2026-06-11
     // Issue #746: the fix switched the watchdog off the shared CLI thread
     // pool and onto a direct `std.Thread.spawn`, so the module no longer
     // needs the `transport/thread_pool` import.  The test binary only needs
@@ -3713,7 +3722,7 @@ pub fn build(b: *std.Build) void {
     // N-way parallel across the default-lane workers, rather than
     // serialized behind the 1-wide blocking lane.  See
     // docs/audit/bugfix-session-contention-triage.md for the root cause.
-    // CANARY: REQ=REQ-PERF-SESSION-ADMISSION-003; FEATURE="ConnectionAdmissionLaneAPI"; ASPECT=LaneParallelismBuild; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-16
+    // CANARY: REQ=REQ-PERF-SESSION-ADMISSION-003; FEATURE="ConnectionAdmissionLaneAPI"; ASPECT=LaneParallelismBuild; STATUS=TESTED; TEST=test-thread-pool-lane-parallelism; OWNER=transport; UPDATED=2026-06-11
     const thread_pool_lane_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_thread_pool_lane_parallelism.zig"), .target = target, .optimize = optimize }) });
     thread_pool_lane_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_thread_pool_lane_tests = b.addRunArtifact(thread_pool_lane_tests);
@@ -3738,7 +3747,7 @@ pub fn build(b: *std.Build) void {
     // is idempotent across a re-start.  Build-wired identically to the
     // deadline-watchdog test above: its own module pair (no `geode` root),
     // its own `test-metrics-server` step, fold into the main test step.
-    // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-04-16
+    // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=LifetimeRegressionBuild; STATUS=TESTED; TEST=test-metrics-server; OWNER=monitoring; UPDATED=2026-06-11
     const prometheus_mod_for_metrics_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/prometheus.zig"), .target = target, .optimize = optimize });
     // otel_prometheus_responder is imported by metrics_server.serveMetrics.
     // All three monitoring modules use named imports and are wired as separate
@@ -3770,7 +3779,7 @@ pub fn build(b: *std.Build) void {
     metrics_server_lifetime_test_step.dependOn(&run_metrics_server_lifetime_tests.step);
     shardDep(test_step, &metrics_server_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=BENCHED; BENCH=bench-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Thread-pool parallel wrapper benchmarks.
     const parallel_wrapper_bench = b.addExecutable(.{ .name = "bench_thread_pool_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_thread_pool_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
     parallel_wrapper_bench.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
@@ -3779,7 +3788,7 @@ pub fn build(b: *std.Build) void {
     parallel_wrapper_bench_step.dependOn(&run_parallel_wrapper_bench.step);
 
     // GAP-0201: Transport throughput benchmark for performance optimization validation
-    // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=BENCHED; BENCH=bench-transport; OWNER=build; UPDATED=2026-06-11
     const transport_throughput_bench = b.addExecutable(.{ .name = "bench_transport_throughput", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_transport_throughput.zig"), .target = target, .optimize = optimize }) });
     transport_throughput_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
     transport_throughput_bench.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
@@ -3788,7 +3797,7 @@ pub fn build(b: *std.Build) void {
     const run_transport_bench = b.addRunArtifact(transport_throughput_bench);
     transport_bench_step.dependOn(&run_transport_bench.step);
 
-    // CANARY: REQ=REQ-QUIC-MUX-009; FEATURE="StreamRegistryBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
+    // CANARY: REQ=REQ-QUIC-MUX-009; FEATURE="StreamRegistryBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=BENCHED; BENCH=bench-quic-streams; OWNER=build; UPDATED=2026-06-11
     const quic_stream_registry_bench = b.addExecutable(.{ .name = "bench_quic_stream_registry", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_quic_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }) });
     quic_stream_registry_bench.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }));
     quic_stream_registry_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
@@ -3903,7 +3912,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
     geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=build; UPDATED=2026-06-11
     // Add server-required modules for unified binary (server/main.zig imports)
     geode_exe.root_module.addImport("txn", txn_mod);
     // Create and add index_selectivity module for server
@@ -4101,7 +4110,7 @@ pub fn build(b: *std.Build) void {
     eval_handler_mod.addImport("distributed_schema", distributed_schema_mod);
     eval_handler_mod.addImport("protobuf", protobuf_mod);
     eval_handler_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=build; UPDATED=2026-06-11
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
     geode_exe.root_module.addImport("feature_flags", runtime_flags_mod);
@@ -4146,7 +4155,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_rls_injection_tests.step, 1, test_shard_loads, test_shard_index);
 
     // S1: RLS filter engine unit tests (label-based post-execution row filtering)
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-005; FEATURE="RLS Query Enforcement"; ASPECT=UnitTests; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-005; FEATURE="RLS Query Enforcement"; ASPECT=UnitTests; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-06-11
     const rls_filter_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/server/rls_filter.zig"),
@@ -7044,6 +7053,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_persistence_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_policy_persistence_step = b.step("test-gps-policy-persistence", "Run GPS policy persistence round-trip tests (persist/drop/hydrate in __geode_security)");
     gps_policy_persistence_step.dependOn(&run_gps_policy_persistence_tests.step);
+
+    // GAP-0514 Phase 6 P2: AuthGraphManager unit tests (global accessor,
+    // periodic HMAC verification thread lifecycle, login-state persistence,
+    // coarse LSP graph-visibility gate).
+    const agm_unit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_graph_manager_unit.zig"), .target = target, .optimize = optimize });
+    agm_unit_test_mod.addImport("geode", root_mod);
+    agm_unit_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const agm_unit_tests = b.addTest(.{ .root_module = agm_unit_test_mod });
+    const run_agm_unit_tests = b.addRunArtifact(agm_unit_tests);
+    shardDep(test_step, &run_agm_unit_tests.step, 0, test_shard_loads, test_shard_index);
+    const agm_unit_step = b.step("test-auth-graph-manager", "Run AuthGraphManager unit tests (global accessor, HMAC verify thread, login state, graph visibility gate)");
+    agm_unit_step.dependOn(&run_agm_unit_tests.step);
 
     // GAP-0854: FLE configureField must not corrupt the __geode_security HMAC
     // chain. Needs auth_graph_manager (named module) like the GPS persistence
