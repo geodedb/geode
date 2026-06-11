@@ -20,7 +20,16 @@ pub fn getStdinHandle() std.Io.File {
     }
 }
 
+/// Test seam (GAP-0514): when set, REPL display output goes to this handle
+/// instead of the process stdout.  The zig build test runner multiplexes its
+/// control protocol over the test binary's stdout, so e2e tests that drive
+/// the real REPL display path (executeSourceFile / executeGql) MUST redirect
+/// it or raw display bytes corrupt the runner protocol and wedge the build.
+/// Production code never sets this.
+pub var stdout_override: ?std.Io.File = null;
+
 pub fn getStdoutHandle() std.Io.File {
+    if (stdout_override) |f| return f;
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch |err| {
             std.debug.print("Fatal: Cannot get stdout handle: {}\n", .{err});

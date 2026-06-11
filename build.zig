@@ -4155,6 +4155,24 @@ pub fn build(b: *std.Build) void {
     rls_filter_tests.root_module.addImport("rls_types", rls_types_mod);
     const run_rls_filter_tests = b.addRunArtifact(rls_filter_tests);
     shardDep(test_step, &run_rls_filter_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6: named step so the RLS label-filter unit tests are
+    // runnable as CANARY evidence outside the (blocked) monolithic test root.
+    const rls_filter_step = b.step("test-rls-filter", "Run RLS label-filter engine unit tests (deny policies, algorithm filter, global setter)");
+    rls_filter_step.dependOn(&run_rls_filter_tests.step);
+
+    // GAP-0514 Phase 6: per-IP auth rate limiter unit tests (lockout
+    // threshold, expiry, reset, eviction) — previously not wired to any step.
+    const auth_rate_limiter_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server/auth_rate_limiter.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_auth_rate_limiter_tests = b.addRunArtifact(auth_rate_limiter_tests);
+    shardDep(test_step, &run_auth_rate_limiter_tests.step, 1, test_shard_loads, test_shard_index);
+    const auth_rate_limiter_step = b.step("test-auth-rate-limiter", "Run per-IP auth rate limiter unit tests (S6 brute-force lockout)");
+    auth_rate_limiter_step.dependOn(&run_auth_rate_limiter_tests.step);
 
     // GAP-0510 Task 1: RLS value bridge — standalone module + unit tests
     // Converts execution Value / PropertyValue → rls_core.Value for checkRowAccess().
@@ -5641,6 +5659,39 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0884_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
     gap0884_step.dependOn(&run_gap0884_tests.step);
+
+    // GAP-0514 Phase 6 P1: real e2e regression coverage for the
+    // repl_dispatch.zig CANARY hotspot — drives the public ClientSession
+    // surface (hello/begin/commit/rollback/drain/pullAll interrupt + error
+    // lanes) and executeSourceFile (small-batch, chunked >32KB, re-source
+    // cache, batch error extraction) against a spawned real server.
+    const gap0514_repl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_repl_dispatch.zig"), .target = target, .optimize = optimize });
+    gap0514_repl_test_mod.addImport("geode", root_mod);
+    gap0514_repl_test_mod.addImport("protobuf", protobuf_mod);
+    gap0514_repl_test_mod.addImport("schema", schema_mod);
+    gap0514_repl_test_mod.addImport("transport/quic", transport_quic_mod);
+    gap0514_repl_test_mod.link_libc = true;
+    const gap0514_repl_tests = b.addTest(.{ .root_module = gap0514_repl_test_mod });
+    const run_gap0514_repl_tests = b.addRunArtifact(gap0514_repl_tests);
+    run_gap0514_repl_tests.step.dependOn(&install_geode_exe.step);
+    const gap0514_repl_step = b.step("test-gap0514-repl", "GAP-0514: repl_dispatch e2e CANARY regression (interrupt/txn-error/drain/source-chunked lanes)");
+    gap0514_repl_step.dependOn(&run_gap0514_repl_tests.step);
+
+    // GAP-0514 Phase 6 P1: quic_connection_handler hotspot lanes the repl e2e
+    // does not reach — QUIC savepoint/rollback_to dispatch, HELLO graph
+    // resolution (DSN binding), and the graph-RBAC bind check.  Spawns the
+    // real server binary; speaks the real protobuf protocol.
+    const gap0514_quic_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_quic_handler.zig"), .target = target, .optimize = optimize });
+    gap0514_quic_test_mod.addImport("geode", root_mod);
+    gap0514_quic_test_mod.addImport("protobuf", protobuf_mod);
+    gap0514_quic_test_mod.addImport("schema", schema_mod);
+    gap0514_quic_test_mod.addImport("transport/quic", transport_quic_mod);
+    gap0514_quic_test_mod.link_libc = true;
+    const gap0514_quic_tests = b.addTest(.{ .root_module = gap0514_quic_test_mod });
+    const run_gap0514_quic_tests = b.addRunArtifact(gap0514_quic_tests);
+    run_gap0514_quic_tests.step.dependOn(&install_geode_exe.step);
+    const gap0514_quic_step = b.step("test-gap0514-quic", "GAP-0514: quic_connection_handler e2e CANARY regression (savepoint/rollback_to, HELLO graph binding)");
+    gap0514_quic_step.dependOn(&run_gap0514_quic_tests.step);
 
     // GAP-0883: server-level coverage for the documented `CALL algo.*` graph
     // algorithm procedures through the real parse → dispatch → executor path

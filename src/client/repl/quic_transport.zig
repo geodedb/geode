@@ -137,6 +137,14 @@ fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !voi
     try impl.client.sendRawFramed(data);
 }
 
+/// Rolling idle timeout for quicReadLine, in milliseconds. Resets on every
+/// received frame, so it only fires on a genuinely quiet connection.
+/// `pub var` (not const) so the GAP-0514 repl e2e regression
+/// (tests/test_gap0514_repl_dispatch.zig) can shorten the quiet-connection
+/// WouldBlock lanes (drain timeouts) to test-scale values; production REPL
+/// keeps the 30 s default.
+pub var read_idle_timeout_ms: i64 = 30000;
+
 // Read length-prefixed protobuf responses and return raw message bytes.
 fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
     const ctx = self.context orelse return error.NotConnected;
@@ -146,7 +154,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     // This prevents aborting mid-message while still timing out when
     // no data arrives at all.
     var last_progress = compat_milliTimestamp();
-    const idle_timeout_ms: i64 = 30000; // 30 second idle timeout for REPL.
+    const idle_timeout_ms: i64 = read_idle_timeout_ms;
 
     // GAP-0276: Hold the lock for the entire receive loop to avoid
     // lock/unlock syscall overhead on every 50ms timeout iteration.
