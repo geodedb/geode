@@ -475,7 +475,7 @@ pub const SecurityManager = struct {
     audit_log: AuditLog,
     password_policy: PasswordPolicy,
     elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     // Opaque pointer to AuthGraphManager for runtime mutation persistence (set by server_init).
     // Uses anyopaque because geode_auth_lib cannot import auth_graph_manager (circular dep).
     auth_graph_mgr: ?*anyopaque = null,
@@ -527,7 +527,7 @@ pub const SecurityManager = struct {
         return sm;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-002; FEATURE="AuthGraphManager Integration"; ASPECT=InitEmpty; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-002; FEATURE="AuthGraphManager Integration"; ASPECT=InitEmpty; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     /// Create a SecurityManager with empty user/role maps.
     /// Does NOT call initializeDefaultUser — use when hydrating from AuthGraphManager.
     pub fn initEmpty(a: Allocator) !Self {
@@ -547,7 +547,7 @@ pub const SecurityManager = struct {
         };
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-003; FEATURE="AuthGraphManager Integration"; ASPECT=HydrateUser; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-003; FEATURE="AuthGraphManager Integration"; ASPECT=HydrateUser; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     /// Add a user to in-memory maps from external data (e.g. AuthGraphManager).
     /// The password_hash is already hashed; no policy validation is performed.
     pub fn hydrateUser(
@@ -1237,7 +1237,7 @@ pub const SecurityManager = struct {
         try self.users.put(id, user);
         try self.audit_log.logUserCreated(id, username);
 
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-001; FEATURE="Runtime Auth Graph Persistence"; ASPECT=UserCreate; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-001; FEATURE="Runtime Auth Graph Persistence"; ASPECT=UserCreate; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
         // Best-effort: persist new user to auth graph store for durability across restarts.
         self.persistUserCreateToGraph(username, email, hash, is_superuser);
 
@@ -1493,7 +1493,7 @@ pub const SecurityManager = struct {
         user.updated_at = compat_milliTimestamp();
         user.auth_version += 1;
 
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
         // Best-effort: persist new password hash to auth graph store for durability.
         if (self.persistPasswordToGraph(user_id, new_hash)) |version| {
             user.auth_version = version;
@@ -1558,7 +1558,7 @@ pub const SecurityManager = struct {
         if (user.lockout_until > 0 and now_ms >= user.lockout_until) {
             user.failed_login_attempts = 0;
             user.lockout_until = 0;
-            // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-002; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+            // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-002; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
             self.persistLoginStateToGraph(user.id, 0, 0);
         }
 
@@ -1580,7 +1580,7 @@ pub const SecurityManager = struct {
                 user.lockout_until = now_ms + 300_000;
                 try self.audit_log.append(.login_failed, user.id, "Account locked: 5 failed login attempts, locked for 5 minutes", .{});
             }
-            // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-003; FEATURE="Runtime Auth Graph Persistence"; ASPECT=FailedLogin; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+            // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-003; FEATURE="Runtime Auth Graph Persistence"; ASPECT=FailedLogin; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
             self.persistLoginStateToGraph(user.id, user.failed_login_attempts, user.lockout_until);
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
@@ -1608,7 +1608,7 @@ pub const SecurityManager = struct {
         // Successful login: reset failed attempt counter
         user.failed_login_attempts = 0;
         user.lockout_until = 0;
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-004; FEATURE="Runtime Auth Graph Persistence"; ASPECT=SuccessfulLogin; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-004; FEATURE="Runtime Auth Graph Persistence"; ASPECT=SuccessfulLogin; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
         self.persistLoginStateToGraph(user.id, 0, 0);
 
         // CANARY: REQ=REQ-AUTH-POLICY-007; FEATURE="Mandatory Password Policy Enforcement"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement; OWNER=security; UPDATED=2025-09-30
