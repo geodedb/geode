@@ -229,7 +229,7 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
 
     def test_golden_rows_exact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            rows, stderr_text = self._run_pipeline(tmp)
+            rows, _ = self._run_pipeline(tmp)
 
         got = [(r["REQ"], r["Feature"], r["Aspect"], r["Status"], r["File"]) for r in rows]
         expected = sorted(self.EXPECTED_ROWS, key=lambda t: (t[0], t[1], t[2], t[4]))
