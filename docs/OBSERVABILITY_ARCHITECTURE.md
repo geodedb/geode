@@ -54,9 +54,11 @@ these `OTEL_*` vars (see `reports/.otel-env`). A 2026-06-03 arda deployment used
   `geode.query.*` (count/active/execution.duration/parse.duration/rows.returned),
   `geode.transport.*` (connection/request.duration/inflight/bytes), `geode.storage.*`, `geode.wal.*`,
   `geode.index.*`, `geode.transaction.*`.
-- **Security** — `geode.security.authorization.check.*` (RBAC), `geode.security.rls.evaluation.*`
-  (when a compiled RLS policy is active), `geode.audit.*` (when an audit append routes through the
-  security graph).
+- **Security** — `geode.security.authentication.attempt.count` +
+  `geode.security.authentication.duration` (real histogram since GAP-0874; previously the duration
+  facade discarded its value), `geode.security.authorization.check.*` (RBAC),
+  `geode.security.rls.evaluation.*` (when a compiled RLS policy is active), `geode.audit.*` (when an
+  audit append routes through the security graph).
 - **Runtime bridge (`geode.runtime.*`)** — 76 observable gauges bridging the process-global
   `runtime_metrics.Registry`: QUIC RTT/cwnd/bytes-in-flight, 20 poll-phase timings, 13 stream-write
   counters, 24 first-stream phase metrics, proto-reader, leaked-conn reaper. These are the

@@ -6492,6 +6492,21 @@ pub fn build(b: *std.Build) void {
     const run_otel_prom_parity_tests = b.addRunArtifact(otel_prom_parity_tests);
     shardDep(test_step, &run_otel_prom_parity_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // GAP-0874: histogram sum regression — legacy registry query-latency
+    // `_sum` tracks real cumulative ms, and recordAuthDuration records into
+    // a real geode.security.authentication.duration histogram.
+    const gap0874_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0874_metrics_sums.zig"), .target = target, .optimize = optimize });
+    gap0874_test_mod.addImport("monitoring_registry", b.createModule(.{ .root_source_file = b.path("src/monitoring/registry.zig"), .target = target, .optimize = optimize }));
+    gap0874_test_mod.addImport("otel", otel_mod);
+    gap0874_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    gap0874_test_mod.addImport("otel_prometheus_responder", otel_prometheus_responder_mod);
+    const gap0874_tests = b.addTest(.{ .root_module = gap0874_test_mod });
+    gap0874_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_gap0874_tests = b.addRunArtifact(gap0874_tests);
+    shardDep(test_step, &run_gap0874_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0874_step = b.step("test-gap0874", "Run GAP-0874 metric histogram sum regression tests");
+    gap0874_step.dependOn(&run_gap0874_tests.step);
+
     // Task 7 (GQL auth DDL): parser unit tests for CREATE/ALTER/DROP USER,
     // CREATE/DROP ROLE, GRANT, REVOKE, SHOW auth variants.
     const auth_ddl_parser_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_ddl_parser.zig"), .target = target, .optimize = optimize });

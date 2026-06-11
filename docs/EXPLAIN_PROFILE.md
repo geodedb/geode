@@ -509,7 +509,18 @@ Be precise about provenance when reading any cost or row number Geode reports:
    statement-level wall-clock `time_ms` only (GAP-0868 residual)
 3. **No Memory Usage in statement-level PROFILE rows**: memory totals are
    only available in the QUIC wire profile payload, not the metric/value rows
-4. **No automatic ANALYZE**: `StatsRegistry.analyzeTable()` must be invoked by the caller; statistics are not refreshed automatically on write
+4. **QUIC wire profile memory numbers are a deterministic synthetic model,
+   not measured allocations** (GAP-0874 decision, 2026-06-10): the fallback
+   profile path (`src/server/profile_payload.zig:buildProfilePayload`) derives
+   per-op `bytes_alloc`, `peak_bytes`, `total_alloc_bytes`, `net_bytes`, and
+   the `mem_curve` from a fixed per-op model so the wire shape and its
+   internal invariants stay deterministic and testable (pinned by the
+   `e2e_protocol_profile_*` battery); the trace-backed v2 path reports
+   honest zeros for memory. Real per-op attribution would require
+   per-operator allocator threading — a PROFILE redesign, not planned. Real
+   process-level memory telemetry is available via the OTel
+   `process.runtime.zig.memory.resident_set` gauge (`/proc/self`-backed)
+5. **No automatic ANALYZE**: `StatsRegistry.analyzeTable()` must be invoked by the caller; statistics are not refreshed automatically on write
 
 ## Future Enhancements
 

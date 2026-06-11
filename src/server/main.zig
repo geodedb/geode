@@ -757,9 +757,6 @@ fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
 
 const DEBUG_PROFILE = false; // default off; enable locally when investigating PROFILE frame assembly
 
-// Tracking allocator (existing) provides basic net/peak metrics for PROFILE.
-const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
-
 // Removed: Flag constants and utilities now in server_flags module (M3.1 Phase 3 flag utilities extraction)
 // Original code was at lines 202-236 (~35 lines), now extracted to server_flags.zig
 // Includes: Flag constants (F_ILLEGAL, F_PROPERTY_ORDER, F_NULLS_FIRST, F_NULLS_LAST, F_TIEBREAK,
@@ -821,7 +818,17 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Removed: writeBindingsAdaptive() function (~30 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
 // Removed: StageTimings struct (~46 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
-// TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
+// GAP-0874 (2026-06-10) alloc-metrics decision: the deferred counting-allocator
+// integration was RESOLVED as "won't wire". The PROFILE fallback's per-op
+// bytes_alloc/memory block is a deterministic synthetic model pinned as a wire
+// contract by the e2e_protocol_profile_* test battery and documented as such in
+// docs/EXPLAIN_PROFILE.md and docs/BINARY_PROTOCOL.md; real per-op attribution
+// would require per-operator allocator threading (a PROFILE redesign, tracked
+// separately if ever needed). Real process-level memory telemetry exists via
+// the OTel `process.runtime.zig.memory.resident_set` gauge (otel_metrics.zig
+// registerRuntimeMetrics, /proc/self-backed). The bit-rotted dead wrappers
+// (src/util/counting_allocator.zig pre-0.14 vtable, src/util/tracking_alloc.zig)
+// were deleted — neither had a live caller.
 
 // Value-based canonical key: encodes row values directly to avoid JSON reparsing.
 // Removed: canonicalValuesKey() function (~34 lines) now in query_executor module (M3.3 Phase 3 second increment)
