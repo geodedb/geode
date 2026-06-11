@@ -1,6 +1,10 @@
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-004; FEATURE="Enhanced Query Transport Integration"; ASPECT=NetworkTransport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-005; FEATURE="Cross-Shard Query Coordination"; ASPECT=QueryCoordination; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-004; FEATURE="Enhanced Query Transport Integration"; ASPECT=NetworkTransport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-06-11
+// NOTE(GAP-0514 P3): stays IMPL — every test constructs the transport with an undefined
+// NetworkTransport pointer (dispatch/tracker/LB paths never dereference it), so the
+// real network-send integration is not executed by any green test. Promoting this
+// requires a loopback NetworkTransport harness.
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-005; FEATURE="Cross-Shard Query Coordination"; ASPECT=QueryCoordination; STATUS=TESTED; TEST="dispatch: FRAGMENT_RESULT routes to handleQueryResult (GAP-0870)"; OWNER=distributed; UPDATED=2026-06-11
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=TESTED; TEST="selectShardForQuery: load balancing strategies (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
 
 const std = @import("std");
 
@@ -70,7 +74,7 @@ pub const EnhancedQueryTransport = struct {
     statistics: TransportStatistics,
     stats_mutex: std.Io.Mutex = std.Io.Mutex.init, // PERF-D010: Thread-safe statistics access
     config: TransportConfig,
-    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=TESTED; TEST="query tracker lifecycle: track, lookup, remove (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     // GAP-0054: Added active_trackers map for query tracking
     active_trackers: std.AutoHashMap(u64, *QueryTracker),
 
@@ -577,7 +581,7 @@ pub const EnhancedQueryTransport = struct {
 
     // Helper functions for message handling and type conversion
     /// Serialize a QueryFragment to protobuf for distributed transport
-    // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=TESTED; TEST="serializeFragment produces protobuf payload"; OWNER=distributed; UPDATED=2026-06-11
     /// GAP-0162: Implements fragment serialization using protobuf encoding
     fn serializeFragment(allocator: Allocator, fragment: QueryFragment) ![]u8 {
         var deps: std.ArrayList(u64) = .empty;
@@ -601,7 +605,7 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Deserialize a QueryFragment from protobuf for distributed transport
-    // CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; ASPECT=Core; STATUS=TESTED; TEST="deserializeFragment recovers fragment data"; OWNER=distributed; UPDATED=2026-06-11
     /// GAP-0162: Implements fragment deserialization from protobuf
     fn deserializeFragment(allocator: Allocator, data: []const u8) !QueryFragment {
         var reader: std.Io.Reader = .fixed(data);
@@ -639,7 +643,7 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Track an active query for coordination and cancellation support
-    // CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; ASPECT=Query; STATUS=TESTED; TEST="query tracker lifecycle: track, lookup, remove (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     /// GAP-0054: Implements actual query tracking using HashMap storage
     fn trackActiveQuery(self: *EnhancedQueryTransport, query_id: u64, plan: *const ExecutionPlan, callback: QueryCompletionCallback) !void {
         // Allocate and initialize tracker
@@ -667,14 +671,14 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Get the tracker for an active query
-    // CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; ASPECT=Query; STATUS=TESTED; TEST="query tracker lifecycle: track, lookup, remove (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     /// GAP-0054: Implements actual tracker retrieval from HashMap
     fn getQueryTracker(self: *EnhancedQueryTransport, query_id: u64) ?*QueryTracker {
         return self.active_trackers.get(query_id);
     }
 
     /// Remove and clean up a query tracker after completion or cancellation
-    // CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; ASPECT=Query; STATUS=TESTED; TEST="query tracker lifecycle: track, lookup, remove (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     /// GAP-0054: Implements actual tracker cleanup with proper memory deallocation
     fn removeQueryTracker(self: *EnhancedQueryTransport, query_id: u64) void {
         if (self.active_trackers.fetchRemove(query_id)) |entry| {
@@ -720,7 +724,7 @@ pub const EnhancedQueryTransport = struct {
         return 1000; // Default estimate
     }
 
-    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=TESTED; TEST="selectShardForQuery: load balancing strategies (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     /// Select the best shard for a query using the configured load balancing strategy
     pub fn selectShardForQuery(self: *EnhancedQueryTransport, available_shards: []const u64, query_key: ?[]const u8) !u64 {
         if (available_shards.len == 0) return error.NoShardsAvailable;
@@ -1097,7 +1101,7 @@ fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const Qu
 }
 
 // Unit tests for fragment serialization
-// CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; ASPECT=Testing; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+// CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; ASPECT=Testing; STATUS=TESTED; TEST="serializeFragment round-trip preserves data"; OWNER=distributed; UPDATED=2026-06-11
 // GAP-0162: Tests for fragment serialization/deserialization
 
 test "serializeFragment produces protobuf payload" {
@@ -1348,4 +1352,101 @@ test "dispatch: SHARD_HEARTBEAT routes to recordShardHeartbeat (GAP-0870)" {
     try transport.dispatchQueryMessage(&hb);
     const shard = try transport.shard_registry.getShard(99);
     try std.testing.expect(shard.status == .online);
+}
+
+test "query tracker lifecycle: track, lookup, remove (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var transport = try makeTestTransport(allocator);
+    defer transport.deinit();
+
+    // Nothing tracked yet: lookup misses, removal of unknown id is a no-op.
+    try std.testing.expectEqual(@as(?*QueryTracker, null), transport.getQueryTracker(11));
+    transport.removeQueryTracker(11);
+
+    // Track a query against a minimal execution plan.
+    var fragments = [_]QueryFragment{.{
+        .fragment_id = 1,
+        .shard_id = 3,
+        .query_text = "MATCH (n) RETURN n",
+        .dependencies = &.{},
+        .estimated_rows = 10,
+        .result_schema = "mixed",
+    }};
+    const plan = ExecutionPlan{
+        .query_text = "MATCH (n) RETURN n",
+        .parameters = &.{},
+        .target_shards = &.{3},
+        .fragments = &fragments,
+        .coordination_strategy = .scatter_gather,
+        .estimated_cost = 1.0,
+    };
+    const noop_cb = struct {
+        fn cb(query_id: u64, result: QueryResult) void {
+            _ = query_id;
+            _ = result;
+        }
+    }.cb;
+    try transport.trackActiveQuery(11, &plan, noop_cb);
+    try std.testing.expectEqual(@as(usize, 1), transport.active_trackers.count());
+
+    // Lookup returns the live tracker with the recorded query id.
+    const tracker = transport.getQueryTracker(11) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 11), tracker.query_id);
+
+    // Removal deallocates and clears the map entry; lookup misses again.
+    transport.removeQueryTracker(11);
+    try std.testing.expectEqual(@as(usize, 0), transport.active_trackers.count());
+    try std.testing.expectEqual(@as(?*QueryTracker, null), transport.getQueryTracker(11));
+}
+
+test "selectShardForQuery: load balancing strategies (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var transport = try makeTestTransport(allocator);
+    defer transport.deinit();
+
+    // No shards: fail loud.
+    try std.testing.expectError(error.NoShardsAvailable, transport.selectShardForQuery(&.{}, null));
+
+    // Single shard: always selected regardless of strategy.
+    try std.testing.expectEqual(@as(u64, 7), try transport.selectShardForQuery(&.{7}, null));
+
+    const shards = [_]u64{ 1, 2, 3 };
+
+    // Round-robin: three consecutive picks hit three distinct shards.
+    transport.config.load_balancing_strategy = .round_robin;
+    const a = try transport.selectShardForQuery(&shards, null);
+    const b = try transport.selectShardForQuery(&shards, null);
+    const c = try transport.selectShardForQuery(&shards, null);
+    try std.testing.expect(a != b and b != c and a != c);
+
+    // Hash-based: same key always routes to the same shard.
+    transport.config.load_balancing_strategy = .hash_based;
+    const h1 = try transport.selectShardForQuery(&shards, "tenant-42");
+    const h2 = try transport.selectShardForQuery(&shards, "tenant-42");
+    try std.testing.expectEqual(h1, h2);
+
+    // Least-connections: the shard with the lowest executed-query count wins.
+    transport.config.load_balancing_strategy = .least_connections;
+    try transport.statistics.shard_utilization.put(1, .{
+        .queries_executed = 100,
+        .avg_response_time_ms = 1.0,
+        .cpu_usage_percent = 0.5,
+        .memory_usage_mb = 10.0,
+        .error_rate = 0.0,
+    });
+    try transport.statistics.shard_utilization.put(2, .{
+        .queries_executed = 5,
+        .avg_response_time_ms = 1.0,
+        .cpu_usage_percent = 0.5,
+        .memory_usage_mb = 10.0,
+        .error_rate = 0.0,
+    });
+    try transport.statistics.shard_utilization.put(3, .{
+        .queries_executed = 50,
+        .avg_response_time_ms = 1.0,
+        .cpu_usage_percent = 0.5,
+        .memory_usage_mb = 10.0,
+        .error_rate = 0.0,
+    });
+    try std.testing.expectEqual(@as(u64, 2), try transport.selectShardForQuery(&shards, null));
 }
