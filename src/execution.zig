@@ -564,7 +564,22 @@ pub const ExecutionError = error{
     DuplicateIndex,
     IncompatibleIndexDataType,
     GraphNotFound,
+    // GAP-0871: GQL BACKUP/RESTORE statements are intentionally unsupported —
+    // the supported surface is the engine-backed CLI (`geode backup create` /
+    // `geode restore`). Named (not bare NotImplemented) so the wire layer can
+    // surface the documented 0A000 message. The error name is part of the
+    // contract (same pattern as GAP-0856 DistributedExplainUnsupported).
+    GqlBackupRestoreUnsupported,
 };
+
+// GAP-0871: stable client-visible message for the GQL BACKUP/RESTORE refusal.
+// Asserted by tests/test_gap0871_gql_backup_refusal.zig; keep the word
+// "unsupported" present — the backup shell regression suites grep for it.
+// CANARY: REQ=REQ-GQL-BACKUP-REFUSAL-001; FEATURE="GqlBackupRestoreRefusal"; ASPECT=StableUnsupportedContract; STATUS=TESTED; TEST=tests/test_gap0871_gql_backup_refusal.zig; OWNER=engine; UPDATED=2026-06-11
+pub const gql_backup_restore_unsupported_message =
+    "GQL BACKUP/RESTORE statements are unsupported: use the CLI instead " ++
+    "(`geode backup create --output <file>` to create a backup, " ++
+    "`geode restore <file>` to restore one).";
 
 /// Tracks ownership of graph nodes and edges materialized during query execution.
 /// Ensures heap-allocated entities are freed when the result is destroyed.
@@ -2241,6 +2256,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 .owns_value_memory = true,
             };
         },
+        // GAP-0871: GQL BACKUP/RESTORE parse cleanly (so clients get a clean
+        // executor-level refusal, not a parse error) but are intentionally
+        // unsupported — the engine-backed CLI (`geode backup create` /
+        // `geode restore`) is the supported surface. Stable named error; the
+        // wire layer (proto_util.mapError) surfaces SQLSTATE 0A000 with
+        // gql_backup_restore_unsupported_message naming the CLI alternative.
+        .Backup, .Restore => return error.GqlBackupRestoreUnsupported,
         else => return error.NotImplemented,
     }
 }

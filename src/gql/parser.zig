@@ -6381,19 +6381,31 @@ pub const Parser = struct {
         while (self.cur.kind == .TO or self.cur.kind == .identifier) {
             if (self.cur.kind == .TO) {
                 self.advance();
+                // GAP-0871: accept the documented `TO TIMESTAMP '<ts>'` form —
+                // TIMESTAMP lexes as a keyword token, skip it before the literal.
+                if (self.cur.kind == .TIMESTAMP) {
+                    self.advance();
+                }
                 // Expect timestamp
                 if (self.cur.kind == .string_lit) {
                     timestamp = self.cur.lexeme;
                     self.advance();
                 }
-            } else if (self.cur.kind == .identifier) {
+            } else {
                 const option = self.cur.lexeme;
                 if (std.ascii.eqlIgnoreCase(option, "VERIFY")) {
                     verify_only = true;
                     self.advance();
-                    if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "ONLY")) {
+                    // GAP-0871: ONLY lexes as a keyword token (.ONLY), not an
+                    // identifier — accept both so `VERIFY ONLY` parses and the
+                    // statement reaches the stable executor-level refusal.
+                    if (self.cur.kind == .ONLY or (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "ONLY"))) {
                         self.advance();
                     }
+                } else {
+                    // Unknown option identifier — consume to guarantee progress
+                    // (the loop previously spun forever on unrecognized options).
+                    self.advance();
                 }
             }
         }

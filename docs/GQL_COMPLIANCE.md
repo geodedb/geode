@@ -483,6 +483,30 @@ Geode implements all core GQL features per ISO/IEC 39075:2024
   - `src/gql/parser.zig` - Parser with complete syntax support
   - `src/gql/ast.zig` - AST structures for all GQL constructs
 
+## 🚫 Residual Limits — Intentionally Unsupported Statements (GAP-0871)
+
+These forms parse but are refused with a **stable, documented contract** — not
+silently ignored and not a moving target:
+
+- **GQL `BACKUP ... TO` / `RESTORE ... FROM` statements are unsupported.** The
+  parser accepts the forms (including `WITH INCREMENTAL/COMPRESSED/ENCRYPTED`,
+  `VERIFY ONLY`, and `TO TIMESTAMP '<ts>'`), and the executor refuses every one
+  with the named error `GqlBackupRestoreUnsupported`, surfaced on the wire as
+  SQLSTATE **`0A000`** ("feature not supported") with a message naming the
+  supported alternative. **The supported surface is the engine-backed CLI:**
+  `geode backup create --output <file>` and `geode restore <file>` (S3 /
+  DigitalOcean Spaces targets included). Regression:
+  `tests/test_gap0871_gql_backup_refusal.zig` (`zig build test-gap0871`).
+- **Recursive CTE `SEARCH` / `CYCLE` clauses are not implemented.**
+  `WITH RECURSIVE` follows the working-set list-value model documented under
+  [Common Table Expressions](#common-table-expressions-with-recursive) above:
+  the recursive term operates on the accumulated working-set value (consumed
+  with `UNWIND`), cycle safety comes from the 100-iteration hard cap
+  (`RECURSIVE_CTE_MAX_ITERATIONS`), and depth/breadth ordering (`SEARCH`) or
+  explicit cycle-mark columns (`CYCLE`) are unavailable. For arbitrary-depth
+  graph traversal prefer variable-length path patterns
+  (`MATCH (a)-[:REL*1..10]->(b)`) or `MATCH SHORTEST`.
+
 ## 🚀 Future Enhancements
 
 All core GQL features are now fully implemented. Future work focuses on:

@@ -1104,6 +1104,20 @@ pub fn build(b: *std.Build) void {
     const gap0862_backup_step = b.step("test-gap0862", "Run GAP-0862 backup/restore data-integrity regression");
     gap0862_backup_step.dependOn(&run_gap0862_backup_tests.step);
 
+    // GAP-0871: GQL BACKUP/RESTORE stable refusal — the parser accepts the
+    // forms but the executor refuses with the named, documented
+    // error.GqlBackupRestoreUnsupported (wire: SQLSTATE 0A000 + a message
+    // naming the supported `geode backup create` / `geode restore` CLI).
+    const gap0871_refusal_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0871_gql_backup_refusal.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0871_refusal_tests.root_module.addImport("geode", root_mod);
+    const run_gap0871_refusal_tests = b.addRunArtifact(gap0871_refusal_tests);
+    const gap0871_refusal_step = b.step("test-gap0871", "Run GAP-0871 GQL BACKUP/RESTORE stable-refusal regression");
+    gap0871_refusal_step.dependOn(&run_gap0871_refusal_tests.step);
+
     // GAP-0880: backup protocol upload ingestion + honest compression codec.
     // Drives the REAL BackupManager paths the QUIC/gRPC upload handlers call:
     // ingestUploadedBackup (verify -> persist -> durable registration), the
