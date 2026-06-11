@@ -1120,6 +1120,103 @@ prod remains UNTOUCHED (single-node 0.6.14).
 
 ---
 
+## ❌ RE-OPENED on real Kubernetes (2026-06-11, `dev` = `78bb908`) — the #5 stall-detector OVER-CORRECTS into a permanent all-candidate election livelock
+
+The `1637bcf8` stall-detector fix is **present and works at the transport layer**
+(the silent blackhole is gone — stalls are now detected and logged at warn), but on
+real k8s it **over-evicts and deadlocks the whole cluster on a leader restart**,
+which is strictly worse than the `a25a6f5` behavior it replaced (that retained a
+functional 2/3 quorum; this elects no leader at all).
+
+### Reproduction (the exact verification the fix doc said was owed)
+
+Rolled qa to `78bb908` (carries `1637bcf8`). Clean boot elected geode-2 leader at
+`term=13` (term restored from the prior session's **FileStorage** durable hard-state
+on the reused PVCs). Then `kubectl delete pod geode-2` (the leader). Outcome after
+~10 minutes: **all three nodes are wedged as candidates at `term=13`, the term never
+advances, no leader is ever elected, every write returns `ClusterNotLeader`, and it
+does not self-heal.**
+
+```
+node 1 (geode-0) state=candidate term=13 iter=45700   # max term ever reached: 13
+node 2 (geode-1) state=candidate term=13 iter=51400   # max term ever reached: 13
+node 3 (geode-2) state=candidate term=13 iter=35100   # max term ever reached: 13
+# CREATE on any node -> ClusterNotLeader ; RETURN 1 -> ok (client iface alive)
+```
+
+### Root cause — the stall detector evicts the connections an election needs, on a cadence shorter than the election itself
+
+The smoking gun is in the logs — **every node evicts BOTH its peers every ~3 s,
+indefinitely**:
+
+```
+WARN geode.raft raft transport peer stalled (no progress within budget); evicting stale connection endpoint=geode-1... peer=2
+WARN geode.raft raft transport peer stalled (no progress within budget); evicting stale connection endpoint=geode-2... peer=3
+```
+
+`shouldEvictOnStall` treats **absence of inbound AppendEntries-type progress** as a
+dead stream. That assumption holds only in steady state *with a leader*. During a
+leader-election window there is **legitimately no AppendEntries traffic** — yet
+`frames_sent > 0` (candidates are sending `RequestVote`), so every peer trips the
+`peer_stall_budget_ms` (3000 ms) and gets evicted. Evicting tears down the QUIC
+connection the in-flight `RequestVote` / `RequestVoteResponse` ride on; rebuilding it
+(`connectWithTLS` + TLS handshake) takes long enough that the next 3 s pass with
+still no AppendEntries progress → evict again. The election can never gather a
+majority, so no leader emerges, so AppendEntries never resumes, so the stall clock
+never refreshes — a **self-perpetuating livelock**. Because the term only advances
+when an election makes progress, it is frozen at the FileStorage-restored `term=13`
+forever.
+
+The fix doc's own tuning note is the bug: `peer_stall_budget_ms = 3000 ms`,
+deliberately set **"≤ the 5000 ms election-timeout ceiling."** A stall budget
+*below* the election timeout **guarantees** the detector fires in the middle of any
+election that takes more than one round — which, under restart churn, is the norm.
+
+### Two distinct problems, ranked
+
+1. **(Blocker, NEW) The stall detector evicts during elections.** Inbound
+   `RequestVote` / `RequestVoteResponse` (and ideally *any* decoded raft frame, plus
+   "I am a candidate / there is no leader" state) must count as liveness, and/or the
+   stall budget must be **well above** the worst-case election convergence time
+   (several × the election timeout), not below it. Best: suppress the stall check
+   entirely while this node is a candidate or while there is no established leader —
+   a stalled *stream* is only meaningful to detect when you actually expect periodic
+   traffic (steady state under a leader). As written, the recovery mechanism is the
+   outage.
+2. **(Pre-existing, exposed) A leaderless start from FileStorage-restored
+   hard-state does not reliably re-elect.** Even setting the eviction storm aside,
+   all three coming up as candidates pinned at the persisted `term=13` (each having
+   persisted `votedFor` from the prior term) needs the normal Raft escape — election
+   timeout → `currentTerm++` → fresh `RequestVote`. The term never advanced past 13
+   here; confirm the candidate election-timeout path increments the term when the
+   durable `votedFor` for the current term is already spent. (This may be entirely a
+   downstream symptom of #1 starving every election before it can complete — fix #1
+   first, then re-test before chasing #2.)
+
+### Also observed — write-commit was already failing at baseline, before the restart
+
+The pre-restart seed (leader geode-2 + 2 followers, all `term=13`)
+`CREATE (a:R13)-[:R13L]->(b)` did **not** replicate (`R13L=0/0/ERR`) — the leader
+could not commit even with two followers present. Consistent with the stall detector
+already churning the leader↔follower connections in steady state once the 3 s budget
+elapses between writes (the heartbeat is 50 ms, but if `notePeerProgress` only
+counts data-bearing AppendEntries and not idle heartbeats, an idle-then-write gap
+> 3 s evicts mid-propose). Worth checking whether **heartbeats refresh the stall
+clock** — if only non-empty AppendEntries do, any cluster idle for > 3 s will evict
+all peers and stall the next write too.
+
+### Recommendation
+
+`1637bcf8` needs to be reworked before any further k8s cluster testing: the stall
+detector must not evict connections that are healthy-but-quiet during an election or
+between writes. Until then a leader restart (or even an idle period) takes the whole
+cluster down — a worse failure than the silent-stall wedge it was built to fix. The
+correctness work (replication, fail-closed, restart-no-dup, MATCH…CREATE) remains
+sound and is unaffected; this is purely the transport-liveness reaper over-firing.
+prod remains UNTOUCHED (single-node 0.6.14); do NOT enable prod clustering.
+
+---
+
 ## ✅ CLOSED (2026-06-10) — `MATCH … CREATE` silent divergence fixed; counter fix; fail-closed sweep + FTS apply symmetry as related hardening
 
 The `MATCH … CREATE (a)-[:R]->(b)` hole above is **fixed on `main`**:
