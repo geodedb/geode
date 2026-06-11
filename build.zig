@@ -3079,6 +3079,12 @@ pub fn build(b: *std.Build) void {
     const sharding_tests = b.addTest(.{ .root_module = sharding_test_mod });
     const run_sharding_tests = b.addRunArtifact(sharding_tests);
     shardDep(test_step, &run_sharding_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: named step so the sharding.zig inline suite
+    // (ShardManager add/merge/transport-callback/key-lookup + migration,
+    // split-point, range/graph/geo routing) runs outside the blocked
+    // monolithic `zig build test`.
+    const sharding_step = b.step("test-sharding", "Run sharding.zig inline unit tests (ShardManager, migration, split, range/graph/geo routing)");
+    sharding_step.dependOn(&run_sharding_tests.step);
 
     // GAP-0513: federation_merge pure-helper unit tests (standalone, no distributed module import)
     const federation_merge_tests = b.addTest(.{

@@ -122,7 +122,7 @@ pub const ShardManager = struct {
     };
 
     // GAP-0208 FIX: Migration state tracking for progress monitoring and checkpointing
-    // CANARY: REQ=REQ-DIST-MIGRATION-002; FEATURE="Migration State"; ASPECT=ProgressTracking; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-MIGRATION-002; FEATURE="Migration State"; ASPECT=ProgressTracking; STATUS=TESTED; TEST="executeMigration: transport path batches through the network callback (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     pub const MigrationState = struct {
         source_shard_id: u64,
         target_shard_id: u64,
@@ -146,7 +146,7 @@ pub const ShardManager = struct {
     };
 
     // GAP-0208 FIX: Transport callback interface for network-based migration
-    // CANARY: REQ=REQ-DIST-TRANSPORT-001; FEATURE="Migration Transport"; ASPECT=NetworkCallback; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-TRANSPORT-001; FEATURE="Migration Transport"; ASPECT=NetworkCallback; STATUS=TESTED; TEST="executeMigration: transport path batches through the network callback (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     pub const TransportCallback = struct {
         context: *anyopaque,
         requestBatchFn: *const fn (
@@ -498,7 +498,7 @@ pub const ShardManager = struct {
         return .{ .start = "", .end = "" };
     }
 
-    // CANARY: REQ=REQ-DIST-MIGRATION-001; FEATURE="Shard Data Migration"; ASPECT=Migration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-MIGRATION-001; FEATURE="Shard Data Migration"; ASPECT=Migration; STATUS=TESTED; TEST="executeMigration: direct path drains source statistics into target (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     // GAP-0208 FIX: Implemented real shard migration with transport callback, progress tracking, and checksum verification
     fn executeMigration(self: *ShardManager, migration: Migration) !void {
         const source_shard = self.shards.getPtr(migration.source_shard) orelse return error.ShardNotFound;
@@ -533,10 +533,10 @@ pub const ShardManager = struct {
             try self.executeMigrationDirect(&state, source_shard, target_shard);
         }
 
-        // Update key ranges
-        if (migration.key_range) |range| {
-            target_shard.key_range = range;
-        }
+        // Update key ranges (Migration.key_range is non-optional; GAP-0514 P3
+        // fixed a rotted optional-capture here that never compiled — this
+        // function was previously never analyzed by any test root).
+        target_shard.key_range = migration.key_range;
 
         // Mark migration complete
         source_shard.status = .active;
@@ -642,7 +642,7 @@ pub const ShardManager = struct {
         return @intCast(compat_timestamp());
     }
 
-    // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=TESTED; TEST="findSplitPoint: lexicographic midpoint of the shard key range (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn findSplitPoint(self: *ShardManager, shard: *Shard) ![]const u8 {
         // Find median key for balanced split
         if (shard.key_range) |range| {
@@ -707,7 +707,7 @@ pub const ShardManager = struct {
         return replicas;
     }
 
-    // CANARY: REQ=REQ-DIST-MIGRATE-002; FEATURE="Shard Data Migration"; ASPECT=PartialMigration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-MIGRATE-002; FEATURE="Shard Data Migration"; ASPECT=PartialMigration; STATUS=TESTED; TEST="migrateData: splits statistics proportionally at the split point (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn migrateData(self: *ShardManager, source_id: u64, target_id: u64, split_point: []const u8) !void {
         const source = self.shards.getPtr(source_id) orelse return error.ShardNotFound;
         const target = self.shards.getPtr(target_id) orelse return error.ShardNotFound;
@@ -751,7 +751,7 @@ pub const ShardManager = struct {
         target.statistics.last_updated = compat_timestamp();
     }
 
-    // CANARY: REQ=REQ-DIST-MIGRATE-003; FEATURE="Shard Data Migration"; ASPECT=FullMigration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-MIGRATE-003; FEATURE="Shard Data Migration"; ASPECT=FullMigration; STATUS=TESTED; TEST="migrateAllData: moves every statistic and clears the source (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn migrateAllData(self: *ShardManager, source_id: u64, target_id: u64) !void {
         const source = self.shards.getPtr(source_id) orelse return error.ShardNotFound;
         const target = self.shards.getPtr(target_id) orelse return error.ShardNotFound;
@@ -770,7 +770,7 @@ pub const ShardManager = struct {
         target.statistics.last_updated = compat_timestamp();
     }
 
-    // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=TESTED; TEST="rangeOverlaps: lexicographic overlap and null handling (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn rangeOverlaps(self: *ShardManager, range1: ?KeyRange, range2: ?KeyRange) bool {
         _ = self;
         if (range1 == null or range2 == null) return false;
@@ -794,7 +794,7 @@ pub const ShardManager = struct {
         return .map_reduce;
     }
 
-    // CANARY: REQ=REQ-DIST-RANGE-SHARD-001; FEATURE="Range-Based Sharding"; ASPECT=ShardLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-RANGE-SHARD-001; FEATURE="Range-Based Sharding"; ASPECT=ShardLookup; STATUS=TESTED; TEST="getRangeShardId: returns shard whose key range contains the key (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn getRangeShardId(self: *ShardManager, key: []const u8) u64 {
         // Find shard whose key range contains the given key
         var it = self.shards.iterator();
@@ -820,7 +820,7 @@ pub const ShardManager = struct {
         return 0;
     }
 
-    // CANARY: REQ=REQ-DIST-GRAPH-SHARD-001; FEATURE="Graph-Aware Sharding"; ASPECT=EdgeCutMinimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-GRAPH-SHARD-001; FEATURE="Graph-Aware Sharding"; ASPECT=EdgeCutMinimization; STATUS=TESTED; TEST="getGraphAwareShardId: community prefix routes consistently (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn getGraphAwareShardId(self: *ShardManager, key: []const u8) u64 {
         // Graph-aware sharding aims to minimize edge cuts by keeping connected nodes together
         // Strategy: Use community detection hint from key prefix
@@ -853,7 +853,7 @@ pub const ShardManager = struct {
         return (self.consistent_hash.getNode(key) orelse return 0).id;
     }
 
-    // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=TESTED; TEST="getGeoShardId: region prefix routes consistently (GAP-0514 P3)"; OWNER=distributed; UPDATED=2026-06-11
     fn getGeoShardId(self: *ShardManager, key: []const u8) u64 {
         // Geo-distributed sharding places data near users
         // Keys can be formatted as "region:data_key" to hint at geography
@@ -1287,4 +1287,267 @@ test "enhanced ShardManager getShardForKey with hash strategy returns added shar
     // With only one shard in the ring, any key lookup must return that shard
     const found = try sm.getShardForKey("some-graph-key");
     try testing.expectEqual(shard_id, found.id);
+}
+
+// ---- GAP-0514 Phase 6 P3: migration / split / routing coverage ----
+
+fn mkTestShard(id: u64, port: u16, node_count: u64, key_range: ?ShardManager.KeyRange) !ShardManager.Shard {
+    return ShardManager.Shard{
+        .id = id,
+        .primary = .{
+            .id = id,
+            .address = try net.IpAddress.parseIp4("127.0.0.1", port),
+            .role = .primary,
+            .status = .healthy,
+            .last_heartbeat = 0,
+        },
+        .replicas = &[_]ShardManager.ShardNode{},
+        .key_range = key_range,
+        .status = .active,
+        .statistics = .{
+            .node_count = node_count,
+            .edge_count = 0,
+            .size_bytes = 0,
+            .read_qps = 0,
+            .write_qps = 0,
+            .last_updated = 0,
+        },
+    };
+}
+
+test "rangeOverlaps: lexicographic overlap and null handling (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    // Null on either side never overlaps.
+    try std.testing.expect(!sm.rangeOverlaps(null, .{ .start = "a", .end = "z" }));
+    try std.testing.expect(!sm.rangeOverlaps(.{ .start = "a", .end = "z" }, null));
+    try std.testing.expect(!sm.rangeOverlaps(null, null));
+
+    // Overlapping ranges.
+    try std.testing.expect(sm.rangeOverlaps(.{ .start = "a", .end = "m" }, .{ .start = "h", .end = "z" }));
+    // Disjoint ranges.
+    try std.testing.expect(!sm.rangeOverlaps(.{ .start = "a", .end = "b" }, .{ .start = "c", .end = "d" }));
+    // Touching ranges (end == start) do not overlap (half-open semantics).
+    try std.testing.expect(!sm.rangeOverlaps(.{ .start = "a", .end = "c" }, .{ .start = "c", .end = "e" }));
+}
+
+test "getRangeShardId: returns shard whose key range contains the key (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    try sm.addShard(try mkTestShard(1, 7101, 0, .{ .start = "a", .end = "m" }));
+    try sm.addShard(try mkTestShard(2, 7102, 0, .{ .start = "m", .end = "z" }));
+
+    try std.testing.expectEqual(@as(u64, 1), sm.getRangeShardId("cat"));
+    try std.testing.expectEqual(@as(u64, 2), sm.getRangeShardId("pig"));
+    // Range start is inclusive, end exclusive.
+    try std.testing.expectEqual(@as(u64, 2), sm.getRangeShardId("m"));
+}
+
+test "findSplitPoint: lexicographic midpoint of the shard key range (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    // Plain range: midpoint of 'a'..'z' is 'm' ((97+122)/2 = 109).
+    var shard = try mkTestShard(1, 7103, 0, .{ .start = "a", .end = "z" });
+    const mid = try sm.findSplitPoint(&shard);
+    defer allocator.free(mid);
+    try std.testing.expectEqualStrings("m", mid);
+
+    // No key range: default sentinel midpoint.
+    var unranged = try mkTestShard(2, 7104, 0, null);
+    const fallback = try sm.findSplitPoint(&unranged);
+    defer allocator.free(fallback);
+    try std.testing.expectEqualStrings("midpoint", fallback);
+}
+
+test "executeMigration: direct path drains source statistics into target (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    // 2500 nodes forces multiple 1000-item MigrationState batches.
+    try sm.addShard(try mkTestShard(1, 7105, 2500, .{ .start = "a", .end = "z" }));
+    try sm.addShard(try mkTestShard(2, 7106, 0, null));
+
+    try sm.executeMigration(.{
+        .source_shard = 1,
+        .target_shard = 2,
+        .key_range = .{ .start = "m", .end = "z" },
+    });
+
+    const source = sm.shards.getPtr(1).?;
+    const target = sm.shards.getPtr(2).?;
+    try std.testing.expectEqual(@as(u64, 0), source.statistics.node_count);
+    try std.testing.expectEqual(@as(u64, 2500), target.statistics.node_count);
+    // Migration completion restores both shards to active and applies the key range.
+    try std.testing.expectEqual(ShardManager.ShardStatus.active, source.status);
+    try std.testing.expectEqual(ShardManager.ShardStatus.active, target.status);
+    try std.testing.expectEqualStrings("m", target.key_range.?.start);
+
+    // Unknown shard ids fail loud.
+    try std.testing.expectError(error.ShardNotFound, sm.executeMigration(.{
+        .source_shard = 404,
+        .target_shard = 2,
+        .key_range = .{ .start = "", .end = "" },
+    }));
+}
+
+test "executeMigration: transport path batches through the network callback (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    try sm.addShard(try mkTestShard(1, 7107, 2500, .{ .start = "a", .end = "z" }));
+    try sm.addShard(try mkTestShard(2, 7108, 0, null));
+
+    const Counter = struct {
+        requests: u64 = 0,
+        sends: u64 = 0,
+    };
+    var counter = Counter{};
+
+    var cb = ShardManager.TransportCallback{
+        .context = &counter,
+        .requestBatchFn = struct {
+            fn f(
+                ctx: *anyopaque,
+                _: net.IpAddress,
+                _: u64,
+                _: u64,
+                count: u64,
+                buf: []u8,
+            ) ShardManager.TransportError![]u8 {
+                const c: *Counter = @ptrCast(@alignCast(ctx));
+                c.requests += 1;
+                return buf[0..@min(count, buf.len)];
+            }
+        }.f,
+        .sendBatchFn = struct {
+            fn f(
+                ctx: *anyopaque,
+                _: net.IpAddress,
+                _: u64,
+                _: []const u8,
+                _: u32,
+            ) ShardManager.TransportError!bool {
+                const c: *Counter = @ptrCast(@alignCast(ctx));
+                c.sends += 1;
+                return true;
+            }
+        }.f,
+    };
+    sm.setTransportCallback(&cb);
+
+    try sm.executeMigration(.{
+        .source_shard = 1,
+        .target_shard = 2,
+        .key_range = .{ .start = "a", .end = "z" },
+    });
+
+    // 2500 items / 1000 batch size = 3 request+send round trips.
+    try std.testing.expectEqual(@as(u64, 3), counter.requests);
+    try std.testing.expectEqual(@as(u64, 3), counter.sends);
+    try std.testing.expectEqual(@as(u64, 2500), sm.shards.getPtr(2).?.statistics.node_count);
+    try std.testing.expectEqual(@as(u64, 0), sm.shards.getPtr(1).?.statistics.node_count);
+}
+
+test "migrateData: splits statistics proportionally at the split point (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    var source = try mkTestShard(1, 7109, 100, .{ .start = "a", .end = "z" });
+    source.statistics.edge_count = 50;
+    source.statistics.size_bytes = 1000;
+    try sm.addShard(source);
+    try sm.addShard(try mkTestShard(2, 7110, 0, null));
+
+    // Split at 'm': ratio = (109-97)/(122-97) = 0.48 -> migrate 52% to target.
+    try sm.migrateData(1, 2, "m");
+
+    const src = sm.shards.getPtr(1).?;
+    const dst = sm.shards.getPtr(2).?;
+    try std.testing.expectEqual(@as(u64, 100), src.statistics.node_count + dst.statistics.node_count);
+    try std.testing.expectEqual(@as(u64, 50), src.statistics.edge_count + dst.statistics.edge_count);
+    try std.testing.expectEqual(@as(u64, 1000), src.statistics.size_bytes + dst.statistics.size_bytes);
+    // Both sides hold a non-trivial share (proportional split, not all-or-nothing).
+    try std.testing.expect(dst.statistics.node_count > 0);
+    try std.testing.expect(src.statistics.node_count > 0);
+
+    try std.testing.expectError(error.ShardNotFound, sm.migrateData(404, 2, "m"));
+}
+
+test "migrateAllData: moves every statistic and clears the source (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .range);
+    defer sm.deinit();
+
+    var source = try mkTestShard(1, 7111, 100, null);
+    source.statistics.edge_count = 50;
+    source.statistics.size_bytes = 1000;
+    try sm.addShard(source);
+    var target = try mkTestShard(2, 7112, 7, null);
+    target.statistics.edge_count = 3;
+    target.statistics.size_bytes = 11;
+    try sm.addShard(target);
+
+    try sm.migrateAllData(1, 2);
+
+    const src = sm.shards.getPtr(1).?;
+    const dst = sm.shards.getPtr(2).?;
+    try std.testing.expectEqual(@as(u64, 0), src.statistics.node_count);
+    try std.testing.expectEqual(@as(u64, 0), src.statistics.edge_count);
+    try std.testing.expectEqual(@as(u64, 0), src.statistics.size_bytes);
+    try std.testing.expectEqual(@as(u64, 107), dst.statistics.node_count);
+    try std.testing.expectEqual(@as(u64, 53), dst.statistics.edge_count);
+    try std.testing.expectEqual(@as(u64, 1011), dst.statistics.size_bytes);
+
+    try std.testing.expectError(error.ShardNotFound, sm.migrateAllData(1, 404));
+}
+
+test "getGraphAwareShardId: community prefix routes consistently (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .graph_aware);
+    defer sm.deinit();
+
+    try sm.addShard(try mkTestShard(1, 7113, 0, null));
+    try sm.addShard(try mkTestShard(2, 7114, 0, null));
+    try sm.addShard(try mkTestShard(3, 7115, 0, null));
+
+    // Same community prefix -> same shard for every node in the community.
+    const s1 = sm.getGraphAwareShardId("community7:node1");
+    const s2 = sm.getGraphAwareShardId("community7:node2");
+    const s3 = sm.getGraphAwareShardId("community7:node999");
+    try std.testing.expectEqual(s1, s2);
+    try std.testing.expectEqual(s1, s3);
+    try std.testing.expect(s1 == 1 or s1 == 2 or s1 == 3);
+
+    // No community hint: falls back to consistent hashing over registered shards.
+    const fallback = sm.getGraphAwareShardId("plain-key-no-prefix");
+    try std.testing.expect(fallback == 1 or fallback == 2 or fallback == 3);
+}
+
+test "getGeoShardId: region prefix routes consistently (GAP-0514 P3)" {
+    const allocator = std.testing.allocator;
+    var sm = ShardManager.init(allocator, 1, .geo_distributed);
+    defer sm.deinit();
+
+    try sm.addShard(try mkTestShard(1, 7116, 0, null));
+    try sm.addShard(try mkTestShard(2, 7117, 0, null));
+    try sm.addShard(try mkTestShard(3, 7118, 0, null));
+
+    // Same region prefix -> same shard for any data key in the region.
+    const r1 = sm.getGeoShardId("us-east:user42");
+    const r2 = sm.getGeoShardId("us-east:order7");
+    try std.testing.expectEqual(r1, r2);
+    try std.testing.expect(r1 == 1 or r1 == 2 or r1 == 3);
+
+    // Unknown format: consistent-hash fallback still lands on a registered shard.
+    const fallback = sm.getGeoShardId("no-region-key");
+    try std.testing.expect(fallback == 1 or fallback == 2 or fallback == 3);
 }
