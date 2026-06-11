@@ -2924,6 +2924,24 @@ pub fn build(b: *std.Build) void {
     });
     const run_dist_query_planner_tests = b.addRunArtifact(dist_query_planner_tests);
     shardDep(test_step, &run_dist_query_planner_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: named step so the distributed query planner suites
+    // run outside the blocked monolithic `zig build test`. Two halves:
+    // tests/test_distributed_query_planner.zig (geode-module API surface) and
+    // src/distributed/query_planner.zig rooted directly so its INLINE tests
+    // (which exercise private fns like generateShardQuery / planDistributed*)
+    // are actually discovered — tests in a different module (geode root_mod)
+    // are not collected by the test runner.
+    const qp_inline_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/query_planner_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const qp_inline_tests = b.addTest(.{ .root_module = qp_inline_test_mod });
+    const run_qp_inline_tests = b.addRunArtifact(qp_inline_tests);
+    shardDep(test_step, &run_qp_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    const dist_query_planner_step = b.step("test-dist-query-planner", "Run distributed query planner unit tests (GAP-D007 + inline query_planner.zig tests)");
+    dist_query_planner_step.dependOn(&run_dist_query_planner_tests.step);
+    dist_query_planner_step.dependOn(&run_qp_inline_tests.step);
 
     // SEC-D009: Nonce tracker unit tests
     const nonce_tracker_tests = b.addTest(.{

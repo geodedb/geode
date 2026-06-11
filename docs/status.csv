@@ -790,21 +790,21 @@ REQ-DIST-MOD-001,PartitionAwarePlanning,QueryRouting,IMPL,,,distributed,2026-04-
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,IMPL,,,distributed,2026-04-05,src/distributed/merge_strategies.zig
 REQ-DIST-ORDERBY-002,Distributed ORDER BY Sort,QueryCorrectness,IMPL,,,distributed,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,IMPL,,,distributed,2026-04-05,src/distributed/merge_strategies.zig
-REQ-DIST-PLAN-001,DistributedQueryPlanning,Orchestration,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-001,DistributedQueryPlanning,Orchestration,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
 REQ-DIST-PLAN-002,ShardRowEstimation,CBO,TESTED,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
+REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
 REQ-DIST-PLAN-004,ShardPruning,QueryRouting,TESTED,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
-REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
-REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
-REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
-REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
-REQ-DIST-PLAN-010,DataFlowAnalysis,TransferEstimation,IMPL,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-011,ExecutionPhases,PhasePlanning,IMPL,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-012,PropertyFilterTracking,ShardRouting,IMPL,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-013,EdgePatternTracking,ShardRouting,IMPL,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-014,FilterConditionExtraction,ShardRouting,IMPL,,,distributed,2026-04-10,src/distributed/query_planner.zig
-REQ-DIST-PLAN-015,FunctionFilterExtraction,ShardRouting,IMPL,,,distributed,2026-04-10,src/distributed/query_planner.zig
+REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-010,DataFlowAnalysis,TransferEstimation,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-011,ExecutionPhases,PhasePlanning,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-012,PropertyFilterTracking,ShardRouting,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-013,EdgePatternTracking,ShardRouting,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-014,FilterConditionExtraction,ShardRouting,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
+REQ-DIST-PLAN-015,FunctionFilterExtraction,ShardRouting,TESTED,,,distributed,2026-06-11,src/distributed/query_planner.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,MergeStrategies,IMPL,,,dist,2026-04-05,src/distributed/merge_strategies.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,MergeStrategies,TESTED,,,dist,2026-04-10,src/distributed/merge_strategies.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,IMPL,,,dist,2026-04-05,src/distributed/enhanced_query_coordinator.zig
