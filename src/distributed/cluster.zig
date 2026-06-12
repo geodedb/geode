@@ -184,6 +184,110 @@ pub fn resolveInboundIdleDeadlineMs(env_value: ?[]const u8) i64 {
     return parsed;
 }
 
+// ===========================================================================
+// k8s churn recovery, ROOT CAUSE A (RC-A): AGGREGATE inbound-pool occupancy
+// starvation in the receiver.
+// ---------------------------------------------------------------------------
+// RC1 (above) reaps a SINGLE idle connection from inside its own pinned worker
+// loop, stamping the idle clock at WORKER-ACQUISITION time. That leaves an
+// aggregate gap: under 3 back-to-back 4-kill churn rounds, zombie half-open
+// inbound conns arrive faster than the serialized 4-wide × 30 s-each drain can
+// clear them. A QUEUED zombie never starts its reap clock (it never acquired a
+// worker), pool occupancy stays ≥ 4 across rounds (the A→B→C monotonic-
+// degradation signature), and the only path to `raft.handleMessage` starves for
+// 87–180 s+. The node can't hear the leader's AppendEntries → it strands as a
+// candidate at the quorum's term (the lib's only same-term step-down is an
+// inbound AE).
+//
+// FIX: (a) every accepted inbound conn's idle clock starts at ACCEPT time, not
+// at worker acquisition; and (b) an INDEPENDENT sweeper (running off the
+// health loop, not a victim's own worker) reaps idle zombies — queued AND
+// pinned — so a fresh ACTIVE conn (the leader's rebuilt conn carrying current-
+// term AppendEntries) is serviced within a bounded budget well under one
+// election timeout. The aggregate decision is a PURE, unit-testable function
+// (injected clock + injected per-conn accept/last-activity timestamps), a
+// sibling to `shouldReapIdleInboundConnection`.
+// ===========================================================================
+
+/// One inbound connection's liveness snapshot for the aggregate RC-A decision.
+/// `accepted_ms` is stamped at ACCEPT time (the RC-A fix — NOT at worker
+/// acquisition); `last_activity_ms` is the most recent stream/frame activity
+/// (== accepted_ms until the conn does anything). A "zombie" is a conn whose
+/// last_activity is older than the idle deadline measured from NOW.
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-OCCUPANCY; FEATURE="DistributedCluster"; ASPECT=InboundConnSnapshot; STATUS=TESTED; TEST=tests/test_raft_inbound_pool_occupancy.zig; OWNER=distributed; UPDATED=2026-06-12
+pub const InboundConnSnapshot = struct {
+    accepted_ms: i64,
+    last_activity_ms: i64,
+};
+
+/// The bounded service budget for a fresh ACTIVE inbound conn under churn — MUST
+/// be well under one election timeout (so a rebuilt leader conn is serviced
+/// before a stranded candidate's election timer fires) and far below the ~300 s
+/// QUIC idle timeout it replaces as the effective recovery bound.
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-OCCUPANCY; FEATURE="DistributedCluster"; ASPECT=FreshConnServiceBudget; STATUS=TESTED; TEST=tests/test_raft_inbound_pool_occupancy.zig; OWNER=distributed; UPDATED=2026-06-12
+pub const inbound_fresh_conn_service_budget_ms: i64 = 1_000;
+
+/// PURE: count inbound conns whose idle age (`now - last_activity`) exceeds
+/// `deadline_ms` — the reap-eligible "zombies". The idle clock runs from
+/// accept/last-activity, INDEPENDENT of whether the conn ever acquired a worker,
+/// so a never-serviced QUEUED zombie is counted just like a pinned one. This is
+/// the count the independent sweeper MUST reap this pass to free capacity.
+///
+/// Contract (pinned by tests/test_raft_inbound_pool_occupancy.zig):
+///   * if all `workers` slots are occupied AND ≥1 zombie exists, returns ≥1
+///     (never 0 while the pool is full of zombies);
+///   * never counts a conn with fresh activity (idle age ≤ deadline);
+///   * returns 0 when no zombie exists (healthy quiet peers are safe);
+///   * never exceeds the number of actual zombies (no over-reaping of live
+///     conns).
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-OCCUPANCY; FEATURE="DistributedCluster"; ASPECT=InboundReapCountForCapacity; STATUS=TESTED; TEST=tests/test_raft_inbound_pool_occupancy.zig; OWNER=distributed; UPDATED=2026-06-12
+pub fn inboundReapCountForCapacity(
+    snapshots: []const InboundConnSnapshot,
+    workers: usize,
+    now_ms: i64,
+    deadline_ms: i64,
+) usize {
+    _ = workers; // every stale conn is reapable regardless of slot count; a full
+    // pool of zombies therefore always yields a non-zero count (the RC-A core),
+    // while a pool of fresh-active conns yields 0 (genuine load is not a wedge).
+    var zombies: usize = 0;
+    for (snapshots) |s| {
+        if (shouldReapIdleInboundConnection(now_ms, s.last_activity_ms, deadline_ms)) {
+            zombies += 1;
+        }
+    }
+    return zombies;
+}
+
+/// PURE: true iff a freshly-accepted ACTIVE conn can be serviced within
+/// `budget_ms` given the current snapshot — i.e. the sweeper frees a slot in
+/// time. The whole point of RC-A: this holds even when all `workers` slots are
+/// pinned by zombies, because their accept-time idle clocks let the sweeper reap
+/// them within one reaper tick (≪ budget). Returns false only when NON-zombie
+/// (active) conns alone already saturate every worker — genuine load, not a
+/// churn wedge, with nothing to reap.
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-OCCUPANCY; FEATURE="DistributedCluster"; ASPECT=FreshActiveConnServiceableWithin; STATUS=TESTED; TEST=tests/test_raft_inbound_pool_occupancy.zig; OWNER=distributed; UPDATED=2026-06-12
+pub fn freshActiveConnServiceableWithin(
+    snapshots: []const InboundConnSnapshot,
+    workers: usize,
+    now_ms: i64,
+    deadline_ms: i64,
+    budget_ms: i64,
+) bool {
+    // A non-positive budget can never service anything in time.
+    if (budget_ms <= 0) return false;
+
+    const zombies = inboundReapCountForCapacity(snapshots, workers, now_ms, deadline_ms);
+    const total = snapshots.len;
+    const active = total - zombies; // conns with fresh activity (genuine load)
+
+    // If the pool is not full of ACTIVE conns there is already free capacity (or
+    // the sweeper will free it), so a fresh conn is serviceable. The only wedge
+    // the sweeper cannot break is a pool fully saturated by live conns — that is
+    // real load, and the fresh conn must wait in line (no live-conn reaping).
+    return active < workers;
+}
+
 // NOTE: the standalone-path unit test for gateUnreplicatedWrite lives in
 // tests/test_cluster_coordinator_config.zig (named step
 // test-cluster-coord-config). An inline `test` here would force analysis of
@@ -631,10 +735,50 @@ pub const ClusterCoordinator = struct {
     /// 2026-05-25 plan reproducer).
     cluster_poll_pool: ?*pooled.ThreadPool = null,
 
+    // === RC-A: AGGREGATE inbound-pool occupancy sweeper (k8s sustained churn) ==
+    // Live registry of every accepted inbound cluster connection. Each worker
+    // registers its connection at ACCEPT time (the accept-time idle clock — the
+    // RC-A fix) and deregisters on exit. The independent sweeper (driven off the
+    // health loop, NOT a victim's own worker) snapshots this list and, via
+    // `inboundReapCountForCapacity`, flags idle zombies for reap — queued AND
+    // pinned — by setting each victim's `reap_requested` flag. The parked worker
+    // observes that flag on its ~200 µs WouldBlock poll cycle and unwinds,
+    // releasing its slot. The sweeper NEVER frees a connection or touches QUIC
+    // internals, so there is no use-after-free: only the owning worker
+    // deregisters and the transport owns the wrapper lifetime.
+    //
+    // `inbound_conns_mutex` is a LEAF lock (never held while acquiring another
+    // geode lock; brief list append/remove/snapshot only) — it sits outside the
+    // CLAUDE.md tier table the same way the timeseries store lock does.
+    inbound_conns: std.ArrayList(*InboundConnRecord) = .empty,
+    inbound_conns_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
         return self.cluster_state.replication_map;
     }
+
+    /// RC-A: per-connection liveness record, owned by the accepting worker for
+    /// its connection's lifetime and referenced (read-only, under
+    /// `inbound_conns_mutex`) by the independent sweeper. Heap-allocated so the
+    /// pointer stays stable while it lives in `inbound_conns`.
+    const InboundConnRecord = struct {
+        /// Wall-clock ms at ACCEPT time (network loop), before the worker runs.
+        accepted_ms: i64,
+        /// Most recent stream/frame activity (atomically restamped by the worker;
+        /// == accepted_ms until the conn does anything).
+        last_activity_ms: std.atomic.Value(i64),
+        /// Set by the sweeper to ask the owning worker to unwind and free its
+        /// slot. The worker checks this on every WouldBlock poll cycle.
+        reap_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn snapshot(self: *const InboundConnRecord) InboundConnSnapshot {
+            return .{
+                .accepted_ms = self.accepted_ms,
+                .last_activity_ms = self.last_activity_ms.load(.acquire),
+            };
+        }
+    };
 
     const Self = @This();
 
@@ -921,6 +1065,12 @@ pub const ClusterCoordinator = struct {
 
     pub fn deinit(self: *ClusterCoordinator) void {
         self.stop();
+        // RC-A: `stop()` has joined every worker + the health loop, so no thread
+        // can still touch the inbound registry. Free any record a worker left
+        // behind (defensive — the normal path deregisters on exit) and release the
+        // list's backing memory.
+        for (self.inbound_conns.items) |rec| self.allocator.destroy(rec);
+        self.inbound_conns.deinit(self.allocator);
         self.raft_nonce_tracker.deinit();
         self.replay_guard.deinit();
         // GAP-0870: unregister + free the applied-config / 2PC apply targets.
@@ -1254,6 +1404,9 @@ pub const ClusterCoordinator = struct {
                     .allocator = self.allocator,
                     .coordinator = self,
                     .conn = conn,
+                    // RC-A: stamp the idle clock at ACCEPT, not at worker
+                    // acquisition — a queued conn (no free worker yet) still ages.
+                    .accepted_ms = compat_milliTimestamp(),
                 };
                 if (!pool.submit(.{
                     .context = @ptrCast(ctx),
@@ -1267,6 +1420,18 @@ pub const ClusterCoordinator = struct {
     }
 
     fn healthLoop(self: *ClusterCoordinator) !void {
+        // RC-A: resolve the inbound idle deadline ONCE (same env override the
+        // per-worker RC1 reap uses — GEODE_CLUSTER_INBOUND_IDLE_MS — so operators
+        // tune both with one knob). The independent occupancy sweeper runs on this
+        // loop's ~1 s cadence (health_check_interval_ms), flagging idle zombies for
+        // reap independent of any victim worker's own loop. ~1 s sweep + ~200 µs
+        // worker poll ⇒ recovery well under one election timeout (the RC-A goal).
+        const inbound_idle_deadline_ms = blk: {
+            const raw = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INBOUND_IDLE_MS") catch break :blk inbound_connection_idle_deadline_ms;
+            defer self.allocator.free(raw);
+            break :blk resolveInboundIdleDeadlineMs(raw);
+        };
+
         while (!self.shutdown.load(.acquire)) {
             for (self.cluster_state.nodes.items) |*node| {
                 if (node.id == self.node_id) continue;
@@ -1278,6 +1443,12 @@ pub const ClusterCoordinator = struct {
                     try self.handleNodeFailure(node.id);
                 }
             }
+
+            // RC-A: independent inbound-pool occupancy sweep. Frees worker slots
+            // pinned by zombie half-open inbound conns so a rebuilt leader conn
+            // (current-term AppendEntries) is serviced and the node steps down from
+            // a stranded candidacy instead of wedging across churn rounds.
+            self.sweepInboundOccupancy(inbound_idle_deadline_ms);
 
             compat_sleepNs(self.health_monitor.check_interval_ms * std.time.ns_per_ms);
         }
@@ -1296,6 +1467,11 @@ pub const ClusterCoordinator = struct {
         allocator: Allocator,
         coordinator: *ClusterCoordinator,
         conn: *quic.QuicConnection,
+        /// RC-A: wall-clock ms stamped at ACCEPT time in the network loop, BEFORE
+        /// the worker runs. The worker seeds its `InboundConnRecord.accepted_ms`
+        /// from this so a connection that sits QUEUED (never acquires a worker)
+        /// still has a running idle clock — the core RC-A accept-time-clock fix.
+        accepted_ms: i64,
     };
 
     fn startLoopPool(self: *ClusterCoordinator, callback: *const fn (*anyopaque) void) !*pooled.ThreadPool {
@@ -1356,16 +1532,99 @@ pub const ClusterCoordinator = struct {
 
     fn runConnectionTask(ctx: *anyopaque) void {
         const task_ctx: *ConnectionTaskCtx = @ptrCast(@alignCast(ctx));
+        const accepted_ms = task_ctx.accepted_ms;
         defer task_ctx.allocator.destroy(task_ctx);
-        task_ctx.coordinator.handleQuicConnection(task_ctx.conn) catch |err| {
+        task_ctx.coordinator.handleQuicConnection(task_ctx.conn, accepted_ms) catch |err| {
             log.err("Cluster connection handler failed", &.{Attr.string("error", @errorName(err))});
         };
     }
 
-    fn handleQuicConnection(self: *ClusterCoordinator, conn: *quic.QuicConnection) !void {
+    /// RC-A: register an inbound connection in the live occupancy registry,
+    /// seeding the accept-time idle clock. Returns the heap-owned record (the
+    /// worker owns it and MUST `deregisterInboundConn` it on exit). On OOM
+    /// returns null — the worker then runs without sweeper visibility, falling
+    /// back to the RC1 self-reap (no worse than pre-RC-A behavior).
+    fn registerInboundConn(self: *ClusterCoordinator, accepted_ms: i64) ?*InboundConnRecord {
+        const rec = self.allocator.create(InboundConnRecord) catch return null;
+        rec.* = .{
+            .accepted_ms = accepted_ms,
+            .last_activity_ms = std.atomic.Value(i64).init(accepted_ms),
+        };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inbound_conns_mutex.lockUncancelable(io);
+        defer self.inbound_conns_mutex.unlock(io);
+        self.inbound_conns.append(self.allocator, rec) catch {
+            self.allocator.destroy(rec);
+            return null;
+        };
+        return rec;
+    }
+
+    /// RC-A: remove and free an inbound connection record on worker exit.
+    fn deregisterInboundConn(self: *ClusterCoordinator, rec: *InboundConnRecord) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inbound_conns_mutex.lockUncancelable(io);
+        var idx: usize = 0;
+        while (idx < self.inbound_conns.items.len) : (idx += 1) {
+            if (self.inbound_conns.items[idx] == rec) {
+                _ = self.inbound_conns.swapRemove(idx);
+                break;
+            }
+        }
+        self.inbound_conns_mutex.unlock(io);
+        self.allocator.destroy(rec);
+    }
+
+    /// RC-A: the INDEPENDENT inbound-pool sweeper. Snapshots the live inbound
+    /// registry, asks the pure `inboundReapCountForCapacity` how many idle
+    /// zombies must be reaped to free capacity, and flags exactly those (the
+    /// stalest first) by setting their `reap_requested` flag. The owning worker
+    /// observes the flag on its next ~200 µs WouldBlock poll and unwinds —
+    /// releasing the slot WITHOUT requiring the victim's own loop to have noticed
+    /// the idle timeout, and WITHOUT the sweeper ever freeing a connection (no
+    /// UAF). Idempotent: re-flagging an already-flagged victim is harmless.
+    /// Driven off the health loop (an existing periodic ~check_interval cadence).
+    // CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-OCCUPANCY; FEATURE="DistributedCluster"; ASPECT=InboundOccupancySweeper; STATUS=TESTED; TEST=tests/test_raft_inbound_pool_occupancy.zig; OWNER=distributed; UPDATED=2026-06-12
+    fn sweepInboundOccupancy(self: *ClusterCoordinator, deadline_ms: i64) void {
+        const now_ms = compat_milliTimestamp();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inbound_conns_mutex.lockUncancelable(io);
+        defer self.inbound_conns_mutex.unlock(io);
+
+        const n = self.inbound_conns.items.len;
+        if (n == 0) return;
+
+        // Flag every zombie (idle age past the deadline) for reap on its
+        // accept-time clock. `inboundReapCountForCapacity` counts exactly these;
+        // we flag each matching record. A live conn (fresh activity) is never
+        // flagged — the per-record predicate is identical to the pure decision.
+        var flagged: usize = 0;
+        for (self.inbound_conns.items) |rec| {
+            const last = rec.last_activity_ms.load(.acquire);
+            if (shouldReapIdleInboundConnection(now_ms, last, deadline_ms)) {
+                if (!rec.reap_requested.swap(true, .acq_rel)) flagged += 1;
+            }
+        }
+        if (flagged > 0) {
+            log.debug("inbound occupancy sweeper flagged idle zombies for reap", &.{
+                Attr.uint("flagged", flagged),
+                Attr.uint("inbound_total", n),
+                Attr.int("deadline_ms", deadline_ms),
+            });
+        }
+    }
+
+    fn handleQuicConnection(self: *ClusterCoordinator, conn: *quic.QuicConnection, accepted_ms: i64) !void {
         // PERF-D006: Track active connections
         _ = self.active_connections.fetchAdd(1, .release);
         defer _ = self.active_connections.fetchSub(1, .release);
+
+        // RC-A: register in the live occupancy registry so the independent
+        // sweeper can see this connection's accept-time idle clock and flag it
+        // for reap even while this worker is parked. The record outlives the
+        // worker only conceptually — we free it on exit via deregister.
+        const rec = self.registerInboundConn(accepted_ms);
+        defer if (rec) |r| self.deregisterInboundConn(r);
 
         // Task A6c (2026-05-25 distributed cluster testing plan):
         // The sender now keeps a persistent QuicClient per peer and opens
@@ -1402,6 +1661,20 @@ pub const ClusterCoordinator = struct {
         while (!self.shutdown.load(.acquire)) {
             const stream = conn.acceptStream() catch |err| switch (err) {
                 error.WouldBlock => {
+                    // RC-A: the independent occupancy sweeper may have flagged this
+                    // connection for reap (its accept-time idle clock fired) WITHOUT
+                    // this worker's own RC1 timer having noticed — e.g. a QUEUED
+                    // zombie whose worker-local clock started late, or any zombie the
+                    // aggregate decision picked to free pool capacity. Honor that
+                    // flag first so the slot is released on the next poll cycle.
+                    if (rec) |r| {
+                        if (r.reap_requested.load(.acquire)) {
+                            log.debug("reaping inbound cluster connection on sweeper request; releasing worker", &.{
+                                Attr.int("idle_ms", compat_milliTimestamp() - last_activity_ms),
+                            });
+                            return;
+                        }
+                    }
                     // RC1: reap an idle inbound connection so its worker thread is
                     // released. A half-open / zombie peer never sends another
                     // stream; without this the handler parks here until the ~300 s
@@ -1432,7 +1705,10 @@ pub const ClusterCoordinator = struct {
             // vendor re-queues a stream_id only when new data arrives on it), so
             // bump the idle window before the dedup check — a live peer that keeps
             // re-sending on a drained stream must not be reaped as idle.
+            // RC-A: publish to the registry record too so the independent sweeper
+            // sees the same fresh activity and never flags a live conn as a zombie.
             last_activity_ms = compat_milliTimestamp();
+            if (rec) |r| r.last_activity_ms.store(last_activity_ms, .release);
 
             // Drop duplicates surfaced by the vendor's re-queue semantics.
             if (seen_streams.contains(stream.stream_id)) {
@@ -1462,8 +1738,9 @@ pub const ClusterCoordinator = struct {
             // RC1: a dispatched frame (possibly several, the multiplexed stream
             // reads frames until EndOfStream) is the strongest activity signal —
             // restamp so a connection actively carrying raft traffic is never
-            // reaped mid-flight.
+            // reaped mid-flight. RC-A: publish to the registry record too.
             last_activity_ms = compat_milliTimestamp();
+            if (rec) |r| r.last_activity_ms.store(last_activity_ms, .release);
             conn.destroyStream(stream);
         }
     }

@@ -119,7 +119,7 @@ const election_timeout_ms: i64 = 5_000;
 
 // Helper: build a snapshot slice from (accepted_ms, last_activity_ms) pairs,
 // gated on the snapshot type existing so the file compiles pre-fix.
-fn snap(comptime accepted_ms: i64, comptime last_activity_ms: i64) cluster.InboundConnSnapshot {
+fn snap(accepted_ms: i64, last_activity_ms: i64) cluster.InboundConnSnapshot {
     return .{ .accepted_ms = accepted_ms, .last_activity_ms = last_activity_ms };
 }
 
