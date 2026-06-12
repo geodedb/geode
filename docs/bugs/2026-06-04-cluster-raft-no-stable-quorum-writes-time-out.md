@@ -2087,3 +2087,70 @@ sustained/repeated churn (a node can still strand as a candidate after consecuti
 2/3 quorum stays functional) and **(2)** the committed-write client-`Timeout` idempotency
 residual. (Genuine live-blackhole recovery and reused-PVC divergent-roll remain
 unexercised.) prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ✅ 2026-06-12 (later) — Sustained-churn stranded-candidate fixed (RC-A: inbound-pool aggregate starvation; accept-time clocks + independent sweeper)
+
+### Symptom (v0.6.27-5-gd84cb40 k8s, three back-to-back 4-kill rounds)
+
+Round A reconverged instantly, round B at ~iter 20, round C stranded geode-0 as a
+candidate at the 2/3 quorum's term 14 for 70 s+. The 2/3 quorum stayed healthy and
+committed writes throughout; a pod roll of geode-0 rejoined it. Monotonic recovery
+degradation across rounds — distinct from the single-burst case (`3466751`, which
+recovered cleanly).
+
+### Root cause RC-A (`src/distributed/cluster.zig`) — inbound-pool aggregate starvation
+
+The cluster inbound connection pool has **4 workers**. Each accepted connection pinned
+one worker for its lifetime inside `handleQuicConnection`. The existing 30 s idle-reap
+ran **inside** the pinned worker's loop with `last_activity` stamped at
+worker-ACQUISITION time, not at accept time. A zombie connection queued but not yet
+picked up (worker unavailable) **never started its reap clock** — it sat in the queue
+indefinitely. Four kills in rapid succession accumulated 4+ zombies; successive kill
+rounds accumulated them faster than the 4×30 s drain (backlog carried across rounds =
+the monotonic signature). With all 4 workers occupied by zombies, the node's only path
+to `raft.handleMessage` was starved — it never saw the leader's AppendEntries and never
+reached `node.zig:937` (the raft lib's sole same-term candidate step-down). A
+discrete-event model predicted 87–180 s starvation from exactly 12 kills; the single
+4-kill burst fits the 4-worker pool exactly (matching "single burst recovers cleanly").
+
+### Fix (commits `42c319e9` + `65a5c668`)
+
+**Accept-time idle clocks + independent sweeper** (`42c319e9`): on `accept()` each
+connection is registered in `InboundConnRecord` with `accepted_ms` stamped at that
+moment. A sweeper fires off `healthLoop` every ~1 s, independent of the worker pool —
+it inspects every registered connection (queued AND pinned) via a per-conn atomic and
+flags zombies that have been idle longer than the reap budget. The pinned worker polls
+the atomic on its ~200 µs heartbeat and unwinds. The sweeper never touches QUIC state
+directly (no UAF). `inboundReapCountForCapacity` / `freshActiveConnServiceableWithin`
+are the pure decision surface — the latter bounds fresh-connection service budget to
+1000 ms (well under any election timeout). RC1 30 s idle semantics preserved.
+
+### Evidence
+
+- `zig build test-raft-inbound-pool-occupancy` **8/8** (was 8 RED) — new suite pins
+  the accept-time clock and sweeper behaviour under sustained churn.
+- Existing suites unchanged green: receiver-reap 6/6, rebuild-probation 6/6,
+  follower-response-eviction 10/10, stall-detector 22/22, raft-apply 28/28,
+  cluster-replicable-mutations 7/7, steady-state shards all green.
+- **netns M9 NEW sustained-churn phase** (3 back-to-back 4-kill rounds, no settle
+  between): 1 leader + 2 followers `term=10`, write replicated 3/3. **PASS**.
+
+### RC-B noted (defense-in-depth, lib follow-up — not required for this fix)
+
+The raft lib's only same-term candidate step-down is inbound `AppendEntries`
+(`node.zig:937`). Pre-vote denials from a quorum (`node.zig:837-854`) carry no
+live-leader signal, so a candidate denied quorum pre-votes remains in the election loop
+indefinitely without a direct delivery path. This is a defense-in-depth gap that
+becomes visible when the delivery path (the inbound pool) is restored — the fix above
+re-establishes that path, making RC-B non-urgent. An issue has been filed against
+`devnw/zig/raft` (see below) proposing etcd-style candidate demotion on quorum
+pre-vote rejections or a denial response carrying `leader_id`/`term`.
+
+### Owed
+
+- **Real k8s arda re-validation** — sustained churn (3+ back-to-back rounds) → 3/3
+  reconverges, no monotonic degradation. Commit the next stable release build and
+  re-run the arda churn sequence.
+- **Committed-write client-`Timeout` idempotency residual** — unchanged, still open.
