@@ -1892,3 +1892,88 @@ Local verification: all four new/changed suites green (`test-raft-receiver-reap`
 `test-cluster-replicable-mutations` 7/7, distributed unit + cluster smoke steps all
 pass. **k8s validation owed**: clean-boot ×N flake check, 4-kill aggressive churn,
 and the previously owed live-blackhole + reused-PVC roll, on the next release build.
+
+---
+
+## ✅ VERIFIED on real Kubernetes (2026-06-12, `dev` = `3466751`) — churn-recovery fix HOLDS (liveness milestone); ❌ but it unmasks a NEW edge data-integrity bug under churn (`EdgeSlotMappingMissing`)
+
+`3466751` carries the `80ed0539`+`14b7295e` churn-recovery fix. On real arda (clean
+PVCs, `--ca-cert` probes) the owed k8s validation **passes** — this is the first build
+that genuinely survives the 4-kill aggressive churn — but surviving long enough to
+*query afterward* exposed a separate, serious edge-durability defect.
+
+### ✅ Owed item — clean-boot ×N flake check: PASS
+
+Three fresh starts on wiped PVCs all converged 1 leader + 2 followers (term 1). The
+`a765c9f` boot-2 stranding (geode-0 stuck candidate, 2/3 quorum couldn't commit) did
+**not** reproduce — RC1 (receiver-reap) + RC3 (directional follower eviction) resolved
+it.
+
+### ✅ Owed item — 4-kill aggressive churn: PASS (liveness/recovery)
+
+**Three independent churn rounds, each = 4 rapid leader kills, all RECOVERED:**
+
+| round | result | term after | post-churn write | node replication |
+|------|--------|-----------|------------------|------------------|
+| A | reconverged 1+2 (~iter 4) | 9 | `ok` | `1/1/1` |
+| B | reconverged 1+2 (~iter 5) | 12 | `ok` | `1/1/1` |
+| C | reconverged 1+2 (~iter 5) | 16 | `ok` | `1/1/1` |
+
+The **term advances** every round (9 → 12 → 16; no frozen-term freeze), all three
+reconverge to one leader + two followers, and a post-churn write commits and replicates
+to all three. The all-candidate frozen-term wedge (`78bb908`/`a765c9f`) and the
+stranded-term-behind wedge (`3ddb3f7`) are both **gone**. The receiver worker-pool
+starvation (RC1) was indeed the foundational blocker — vote delivery now recovers.
+Frozen-term warns dropped to ~0 sustained (a couple transient stamps during churn, then
+clear).
+
+### ❌ NEW data-integrity bug — aggressive churn corrupts pre-existing EDGES (`EdgeSlotMappingMissing`), nodes survive
+
+Now that the cluster survives churn, post-churn queries are reachable — and they reveal
+that **edges created before the churn are corrupted**. Reproduced twice,
+deterministically:
+
+- A baseline edge `CREATE (a:BW)-[:BWL]->(b:BW)` (replicated `1/1/1` before the churn) →
+  after 3 churn rounds, `MATCH ()-[r:BWL]->() RETURN count(r)` returns
+  **`58000 EdgeSlotMappingMissing` on ALL three nodes**, while the endpoint nodes
+  survive (`MATCH (n:BW) → count=2` on all three).
+- Isolated repro: created a fresh edge `FEL` on the stable cluster (queried `1/1/1`,
+  healthy), then ran **one** 4-kill churn round → `FEL` → **`EdgeSlotMappingMissing` on
+  all three**, `FE` nodes intact (`count=2`). A brand-new edge created on the *stable*
+  cluster always works (`1/1/1`); it is specifically **survival across churn** that
+  corrupts it.
+
+So: **nodes durably survive aggressive restart churn; edges do not** — an edge's slot
+mapping is lost (`EdgeSlotMappingMissing`) after enough restart/re-apply cycles,
+consistently on every replica (deterministic, not a one-node corruption). The edge is
+effectively unqueryable/lost while its endpoints remain. This was *masked* on every
+prior build because the cluster never survived churn long enough to query the edge
+afterward; the liveness fix exposed it.
+
+**Likely area:** the edge-create apply / FileStorage restart-reapply path
+(`GNC2` edge payload, idempotent apply). On restart the committed edge-create entry is
+re-applied: the endpoint nodes idempotently already-exist, but the edge→slot mapping is
+evidently not reliably rebuilt/persisted across repeated re-applies, so after several
+restart cycles the slot lookup is missing. Suspect the edge-slot index reconstruction on
+durable-log replay (or the idempotent-skip path skipping the edge while not ensuring its
+slot mapping), as opposed to the node path which is keyed by stable id and survives.
+Recommend a netns/3-node regression: seed an edge, restart all nodes N× (PVCs preserved),
+assert `MATCH ()-[r]->()` still returns the edge (not `EdgeSlotMappingMissing`) and
+`count` is unchanged.
+
+### ⚠️ Recurring (acknowledged/owed) — `Timeout` response on a committed write
+
+Still present: the baseline `CREATE (a)-[:BWL]->(b)` returned client `Timeout` yet
+replicated `1/1/1`. This matches the doc's noted "committed write → client `Timeout` →
+retry double-insert" propose-level idempotency residual — unchanged, still owed.
+
+### Net
+
+The churn-recovery fix is a **genuine milestone**: clean-boot is reliable and the
+cluster now survives 4-kill aggressive churn (recovers, replicates, term advances) on
+real k8s — the central liveness blocker of this entire report is resolved. The remaining
+blockers before a production 3-node cluster are now **(1) edge durability under churn
+(`EdgeSlotMappingMissing`)** — a data-integrity bug, the new top priority — and **(2)**
+the committed-write client-`Timeout` idempotency residual. (Owed item — genuine
+live-blackhole recovery — still unexercised; reused-PVC divergent-roll likewise.) prod
+remains UNTOUCHED (single-node 0.6.14).
