@@ -173,12 +173,22 @@ test "REGRESSION: N idempotent edge re-applies + restart leave exactly one durab
 // Test 2 — hydration self-heal of an ALREADY-corrupted store.
 // ===========================================================================
 //
-// Boot 1 deliberately drives the CURRENT buggy behavior to manufacture orphan
-// physical edge slots on the PVC (re-apply the same committed edge N times,
-// checkpoint WITHOUT a heal pass). Boot 2 re-opens and re-hydrates; the post-fix
-// hydration repair must DELETE the orphan slots (no __geode_internal_edge_id, not
-// canonical for their public id) instead of skipping them, so an already-damaged
-// store converges to a single durable edge and the canonical edge still queries.
+// Boot 1 manufactures the EXACT on-disk damage the OLD buggy binary left on a
+// PVC, but does so by INJECTING orphan physical edge slots DIRECTLY at the
+// storage-adapter layer (`adapter.createEdge`, the same path `vt.createEdgeFn`
+// wraps) — deliberately BYPASSING the now-fixed `createEdgeWithIdInternal`. The
+// canonical edge is created normally first (so it carries a real
+// `__geode_internal_edge_id` + IdMap entry); then we mint N EXTRA physical slots
+// between the same endpoints WITHOUT a public-id property — precisely the shape
+// the pre-fix re-apply ordering bug left behind (an adapter slot with no
+// `__geode_internal_edge_id` and no legacy mapping). We MUST inject directly:
+// now that Part 1 of the fix runs the existence check before minting the slot,
+// re-applying the committed entry no longer produces any orphan, so driving the
+// re-apply path would corrupt nothing and the Part 2 self-heal deletion logic
+// would never be exercised. Boot 2 re-opens and re-hydrates; the post-fix
+// hydration repair must DELETE the orphan slots instead of skipping them, so an
+// already-damaged store converges to a single durable edge and the canonical
+// edge still queries.
 test "REGRESSION: hydration self-heals an already-corrupted store — orphan edge slots are deleted, canonical edge still queries" {
     const a = std.testing.allocator;
 
@@ -200,20 +210,63 @@ test "REGRESSION: hydration self-heals an already-corrupted store — orphan edg
 
     const raft_index: u64 = 9;
     const canonical_edge_id = cluster_replication.deriveMultiEdgeId(raft_index, 0);
+    // Endpoint PUBLIC node ids are deterministic from the raft index (same
+    // derivation applyMultiCreatePayload uses), so we can resolve their durable
+    // SLOT ids from the rehydrated IdMap to address the adapter directly.
+    const from_node_id = cluster_replication.deriveMultiNodeId(raft_index, 0);
+    const to_node_id = cluster_replication.deriveMultiNodeId(raft_index, 1);
 
-    // ---- Boot 1: corrupt the store on purpose (re-apply -> orphan slots). ----
+    // Number of orphan physical edge slots the old buggy binary would have left
+    // (one per idempotent re-apply in a churn round).
+    const orphan_count: usize = 3;
+
+    // ---- Boot 1: create the canonical edge normally, then INJECT orphan slots
+    // directly at the adapter layer (bypassing the fixed createEdgeWithIdInternal)
+    // to reproduce the exact on-disk damage of an old buggy binary. ----
     {
         const store = try graph_store.initGlobalStore(a, data_dir);
         defer graph_store.deinitGlobalStore();
         const adapter = graph_store.getGlobalAdapter().?;
 
+        // Canonical create: goes through the fixed path, so it carries a real
+        // __geode_internal_edge_id property and an IdMap entry — exactly ONE
+        // healthy durable slot.
         _ = try cluster_replication.applyMultiCreatePayload(a, store, payload, raft_index);
-        var i: usize = 0;
-        while (i < 3) : (i += 1) {
-            _ = try cluster_replication.applyMultiCreatePayload(a, store, payload, raft_index);
+
+        // Resolve the endpoint SLOT ids the adapter addresses (the engine's
+        // addEdge operates on slot ids, NOT public ids).
+        const id_map = store.getIdMap("default") orelse return error.IdMapNotLoaded;
+        const from_slot = id_map.nodeSlot(@as(u128, from_node_id)) orelse {
+            std.debug.print("[test2 boot1] FAIL: could not resolve from-node slot for public id {d}\n", .{from_node_id});
+            return error.NodeSlotMappingMissing;
+        };
+        const to_slot = id_map.nodeSlot(@as(u128, to_node_id)) orelse {
+            std.debug.print("[test2 boot1] FAIL: could not resolve to-node slot for public id {d}\n", .{to_node_id});
+            return error.NodeSlotMappingMissing;
+        };
+
+        // Mint N EXTRA physical edge slots between the same endpoints, WITHOUT
+        // ever calling persistEdgePublicId / inserting an IdMap entry — the
+        // adapter slot exists in the durable adjacency but has no
+        // __geode_internal_edge_id property. This is byte-for-byte the orphan
+        // shape the pre-fix createEdgeWithIdInternal ordering bug produced on
+        // every idempotent Raft re-apply.
+        var j: usize = 0;
+        while (j < orphan_count) : (j += 1) {
+            const orphan_slot = try adapter.createEdge("default", from_slot, to_slot, "BWL");
+            std.debug.print("[test2 boot1] injected orphan physical edge slot {d} (no __geode_internal_edge_id)\n", .{orphan_slot});
         }
+
         try adapter.checkpointAll();
-        std.debug.print("[test2 boot1] corrupted store: durable_edges={d} (1 canonical + orphans)\n", .{try adapter.edgeCount("default")});
+        const durable = try adapter.edgeCount("default");
+        std.debug.print("[test2 boot1] corrupted store: durable_edges={d} (1 canonical + {d} injected orphan slots)\n", .{ durable, orphan_count });
+        // Precondition: the injection actually produced the damage we intend to
+        // self-heal. If this fails, Boot 2 would pass trivially and never exercise
+        // the deletion path — defeating the whole point of this test.
+        if (durable != 1 + @as(u64, orphan_count)) {
+            std.debug.print("[test2 boot1] FAIL: expected {d} durable slots after injecting {d} orphans, found {d} — corruption setup did not take\n", .{ 1 + @as(u64, orphan_count), orphan_count, durable });
+        }
+        try std.testing.expectEqual(@as(u64, 1 + @as(u64, orphan_count)), durable);
     }
 
     // ---- Boot 2: rehydrate. The fix's hydration repair must delete the orphan
