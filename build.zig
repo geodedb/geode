@@ -1638,6 +1638,56 @@ pub fn build(b: *std.Build) void {
     const raft_inbound_pool_occupancy_step = b.step("test-raft-inbound-pool-occupancy", "Run aggregate inbound-pool occupancy reap/admission reproduction tests (k8s sustained-churn RC-A)");
     raft_inbound_pool_occupancy_step.dependOn(&run_raft_inbound_pool_occupancy_tests.step);
 
+    // "committed write -> client Timeout -> retry double-insert" RED reproductions
+    // (triage docs/bugs/2026-06-12-cluster-committed-write-timeout-retry-double-
+    // insert.md). Three sibling RC files, each a standalone named step (NOT added
+    // to all_tests.zig / the shard aggregate while RED; the fixer flips them in
+    // once green, mirroring commit 65a5c668's pattern for the inbound-pool RED):
+    //   * RC-3 (idempotency-key dedup, core data integrity): a retried CREATE with
+    //     the same idempotency key at a DIFFERENT raft index must NOT duplicate
+    //     rows. @hasDecl-guarded on the new keyed serialize/apply + IdempotencyDedup
+    //     surface in cluster_replication.zig; keyless guards run on current code.
+    const cluster_write_idempotency_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_write_idempotency.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_write_idempotency_tests.root_module.addImport("geode", root_mod);
+    cluster_write_idempotency_tests.root_module.link_libc = true;
+    const run_cluster_write_idempotency_tests = b.addRunArtifact(cluster_write_idempotency_tests);
+    const cluster_write_idempotency_step = b.step("test-cluster-write-idempotency", "Run idempotency-key dedup reproduction tests (committed-write Timeout retry double-insert RC-3)");
+    cluster_write_idempotency_step.dependOn(&run_cluster_write_idempotency_tests.step);
+
+    //   * RC-1 (commit-aware post-propose wait): a committed-but-apply-lagged entry
+    //     must NOT be reported as error.Timeout. @hasDecl-guarded on the new
+    //     waitOutcomeForState / WaitOutcome decision + committedIndex /
+    //     waitForCommittedThenApplied coordinator API in cluster.zig.
+    const cluster_commit_aware_wait_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_commit_aware_wait.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_commit_aware_wait_tests.root_module.addImport("geode", root_mod);
+    cluster_commit_aware_wait_tests.root_module.link_libc = true;
+    const run_cluster_commit_aware_wait_tests = b.addRunArtifact(cluster_commit_aware_wait_tests);
+    const cluster_commit_aware_wait_step = b.step("test-cluster-commit-aware-wait", "Run commit-aware post-propose wait reproduction tests (committed write misreported as Timeout RC-1)");
+    cluster_commit_aware_wait_step.dependOn(&run_cluster_commit_aware_wait_tests.step);
+
+    //   * RC-2 (distinct cluster-write SQLSTATE outcomes): error.Timeout and the
+    //     not-applied cluster errors must map to distinct retryable classes, NOT
+    //     the generic 58000. Direct unit test on the already-public
+    //     proto_util.mapError (no @hasDecl guard; RED until the arms are added).
+    const proto_util_cluster_error_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_proto_util_cluster_error_mapping.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    proto_util_cluster_error_tests.root_module.addImport("geode", root_mod);
+    proto_util_cluster_error_tests.root_module.link_libc = true;
+    const run_proto_util_cluster_error_tests = b.addRunArtifact(proto_util_cluster_error_tests);
+    const proto_util_cluster_error_step = b.step("test-proto-util-cluster-error-mapping", "Run cluster-write SQLSTATE outcome mapping reproduction tests (Timeout/NotLeader not 58000 RC-2)");
+    proto_util_cluster_error_step.dependOn(&run_proto_util_cluster_error_tests.step);
+
     // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
     // distributed cluster testing plan).  Brings up two real
     // ClusterCoordinators with their QUIC listeners on loopback,
