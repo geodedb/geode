@@ -1977,3 +1977,57 @@ blockers before a production 3-node cluster are now **(1) edge durability under 
 the committed-write client-`Timeout` idempotency residual. (Owed item — genuine
 live-blackhole recovery — still unexercised; reused-PVC divergent-roll likewise.) prod
 remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ✅ 2026-06-12 — Edge churn durability fixed (orphan slot on idempotent re-apply; hydration self-heal)
+
+### Root cause
+
+`createEdgeWithIdInternal` (`src/storage/graph_store.zig:2371`) minted the durable
+adapter edge slot **before** the in-memory idempotency check — the opposite of the
+node path. On every raft-log re-apply after a restart the in-memory edge already
+existed (idempotency guard fired), so the function returned early; but the adapter
+slot had already been minted without a `__geode_internal_edge_id` property. After N
+restart cycles each re-apply left one additional orphan physical slot. Hydration
+skipped orphan slots (no public-id property, no legacy mapping entry) so the
+edge's canonical slot was never registered → `EdgeSlotMappingMissing` on query.
+
+### Fix
+
+Two-part — commits ab700319 / 2cdc053a / 11c97371:
+
+1. **Existence check before slot mint** (`2cdc053a`): adapter slot is now only minted
+   when the edge does not already exist, matching the node path. No new orphans
+   are created by re-apply under new binaries.
+
+2. **Hydration orphan-slot self-heal** (`2cdc053a`): on startup hydration, any edge
+   slot missing the `__geode_internal_edge_id` property AND having no legacy
+   mapping entry is deleted (not the canonical edge, not legitimate parallel edges —
+   guarded by property presence + mapping lookup). PVCs already corrupted by old
+   binaries repair on first restart under the new binary.
+
+### Evidence
+
+- `zig build test-edge-durability-churn-repro`: **3/3** (was 2 RED — idempotent
+  re-apply orphan + orphan query failure; now includes RED-with-repair-disabled
+  check that proves the self-heal path is exercised under the test).
+- Related suites all green: cluster-replicable-mutations 51/51,
+  raft-apply-idempotent 366/366, fts-apply-symmetry, gap0509, gap0891,
+  graph-store, adapter-registry-restart.
+
+### Net
+
+The edge durability bug — previously the new top-priority data-integrity blocker —
+is **closed**. Legitimate edges and legitimate parallel edges are preserved; corrupted
+PVCs from old binaries self-heal on first restart under the new binary.
+
+### ⚠️ Residuals (unchanged/owed)
+
+- **k8s re-validation on arda** (owed): seed an edge, run churn rounds, assert the
+  edge still queries; also exercise existing corrupted PVCs self-healing on restart.
+  Canonical regression: `MATCH ()-[r]->()` must return the edge (not
+  `EdgeSlotMappingMissing`) after N restart cycles with PVCs preserved.
+- **Committed-write client-`Timeout` idempotency residual** (unchanged): a write
+  committed at raft level but returning `Timeout` to the client can be retried and
+  applied twice — still open, still owed.
