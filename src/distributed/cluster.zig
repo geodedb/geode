@@ -133,6 +133,57 @@ pub fn gateUnreplicatedWrite() error{ ClusterNotLeader, ClusterWriteNotReplicabl
     return error.ClusterWriteNotReplicable;
 }
 
+// ===========================================================================
+// k8s churn recovery, ROOT CAUSE #1 (RC1): receiver-side worker-pool starvation.
+// ---------------------------------------------------------------------------
+// Each inbound cluster connection runs a long-lived `handleQuicConnection` task
+// on the fixed 4-thread `connection_pool`. For a half-open / zombie peer
+// connection the accept loop NEVER exits: `acceptStream()` returns
+// `error.WouldBlock`, the handler parks and `continue`s forever until the
+// ~300 s QUIC idle timeout finally tears the connection down. After a few rapid
+// pod kills the zombie inbound connections pin all 4 worker threads, so REBUILT
+// outbound connections from peers are never serviced — vote/heartbeat delivery
+// is dead no matter what the sender does, and the cluster wedges all-candidate
+// at a frozen term.
+//
+// FIX: the inbound-connection handler REAPS an idle connection and releases its
+// worker after a bounded inactivity deadline (default ~30 s, env-overridable via
+// GEODE_CLUSTER_INBOUND_IDLE_MS), far below the ~300 s QUIC idle timeout.
+// "Activity" = any accepted stream or successfully dispatched frame; the handler
+// stamps a `last_activity_ms` on each. The reap decision is a PURE,
+// unit-testable function (fake clock), mirroring the stall-detector decision
+// functions in raft_consensus.zig.
+// ===========================================================================
+
+/// Default idle deadline (ms) after which an inbound cluster connection with no
+/// observed activity is reaped and its worker thread released. ~30 s: far below
+/// the ~300 s QUIC idle timeout (the whole point), but large enough not to churn
+/// a healthy-but-quiet peer (heartbeats keep a live link active well within it).
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-REAP; FEATURE="DistributedCluster"; ASPECT=InboundIdleDeadline; STATUS=TESTED; TEST=tests/test_raft_receiver_reap.zig; OWNER=distributed; UPDATED=2026-06-12
+pub const inbound_connection_idle_deadline_ms: i64 = 30_000;
+
+/// PURE: true iff we have observed NO activity on an inbound cluster connection
+/// for longer than `deadline_ms`. Strict `>` so exactly-at-deadline does NOT
+/// reap (one extra reaper tick of grace).
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-REAP; FEATURE="DistributedCluster"; ASPECT=ShouldReapIdleInbound; STATUS=TESTED; TEST=tests/test_raft_receiver_reap.zig; OWNER=distributed; UPDATED=2026-06-12
+pub fn shouldReapIdleInboundConnection(now_ms: i64, last_activity_ms: i64, deadline_ms: i64) bool {
+    return (now_ms - last_activity_ms) > deadline_ms;
+}
+
+/// PURE: resolve the effective idle deadline from an optional env override
+/// (GEODE_CLUSTER_INBOUND_IDLE_MS). A null / empty / non-numeric / non-positive
+/// value falls back to the default. Kept pure (takes the raw string, returns ms)
+/// so it is testable without touching the real env.
+// CANARY: REQ=REQ-DIST-CLUSTER-INBOUND-REAP; FEATURE="DistributedCluster"; ASPECT=ResolveInboundIdleDeadline; STATUS=TESTED; TEST=tests/test_raft_receiver_reap.zig; OWNER=distributed; UPDATED=2026-06-12
+pub fn resolveInboundIdleDeadlineMs(env_value: ?[]const u8) i64 {
+    const raw = env_value orelse return inbound_connection_idle_deadline_ms;
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return inbound_connection_idle_deadline_ms;
+    const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return inbound_connection_idle_deadline_ms;
+    if (parsed <= 0) return inbound_connection_idle_deadline_ms;
+    return parsed;
+}
+
 // NOTE: the standalone-path unit test for gateUnreplicatedWrite lives in
 // tests/test_cluster_coordinator_config.zig (named step
 // test-cluster-coord-config). An inline `test` here would force analysis of
@@ -1334,9 +1385,34 @@ pub const ClusterCoordinator = struct {
         var seen_streams = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_streams.deinit();
 
+        // RC1 (k8s churn): resolve the idle-reap deadline ONCE at handler start
+        // (env override, else default). `last_activity_ms` is stamped on every
+        // accepted stream / dispatched frame; an inbound connection that goes
+        // quiet past the deadline is reaped here so its worker thread is released
+        // long before the ~300 s QUIC idle timeout would — otherwise a handful of
+        // zombie half-open connections after a pod churn pin all 4 workers and
+        // rebuilt peer connections are never serviced.
+        const idle_deadline_ms = blk: {
+            const raw = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INBOUND_IDLE_MS") catch break :blk inbound_connection_idle_deadline_ms;
+            defer self.allocator.free(raw);
+            break :blk resolveInboundIdleDeadlineMs(raw);
+        };
+        var last_activity_ms: i64 = compat_milliTimestamp();
+
         while (!self.shutdown.load(.acquire)) {
             const stream = conn.acceptStream() catch |err| switch (err) {
                 error.WouldBlock => {
+                    // RC1: reap an idle inbound connection so its worker thread is
+                    // released. A half-open / zombie peer never sends another
+                    // stream; without this the handler parks here until the ~300 s
+                    // QUIC idle timeout, pinning the worker the whole time.
+                    if (shouldReapIdleInboundConnection(compat_milliTimestamp(), last_activity_ms, idle_deadline_ms)) {
+                        log.debug("reaping idle inbound cluster connection; releasing worker", &.{
+                            Attr.int("idle_ms", compat_milliTimestamp() - last_activity_ms),
+                            Attr.int("deadline_ms", idle_deadline_ms),
+                        });
+                        return;
+                    }
                     compat_sleepNs(200 * std.time.ns_per_us);
                     continue;
                 },
@@ -1351,6 +1427,12 @@ pub const ClusterCoordinator = struct {
                     return;
                 },
             };
+
+            // RC1: any accepted stream is fresh activity from this peer (the
+            // vendor re-queues a stream_id only when new data arrives on it), so
+            // bump the idle window before the dedup check — a live peer that keeps
+            // re-sending on a drained stream must not be reaped as idle.
+            last_activity_ms = compat_milliTimestamp();
 
             // Drop duplicates surfaced by the vendor's re-queue semantics.
             if (seen_streams.contains(stream.stream_id)) {
@@ -1377,6 +1459,11 @@ pub const ClusterCoordinator = struct {
                     Attr.string("error", @errorName(err)),
                 });
             };
+            // RC1: a dispatched frame (possibly several, the multiplexed stream
+            // reads frames until EndOfStream) is the strongest activity signal —
+            // restamp so a connection actively carrying raft traffic is never
+            // reaped mid-flight.
+            last_activity_ms = compat_milliTimestamp();
             conn.destroyStream(stream);
         }
     }
@@ -1607,8 +1694,32 @@ pub const ClusterCoordinator = struct {
         // `notePeerProgress` is a no-op if we have no outbound connection to
         // that peer yet (built lazily on first send) — it can never cause a
         // false eviction of a healthy peer.
-        if (raft_consensus.frameProvesOurOutboundDelivered(frame_res.body))
-            self.raft_transport.notePeerProgress(frame_res.from, compat_milliTimestamp());
+        const now_inbound_ms = compat_milliTimestamp();
+        if (raft_consensus.frameProvesOurOutboundDelivered(frame_res.body)) {
+            self.raft_transport.notePeerProgress(frame_res.from, now_inbound_ms);
+        } else {
+            // RC3 (follower response-direction eviction): an inbound REQUEST
+            // proves only the PEER's outbound path. Stamp the per-peer
+            // last-inbound-REQUEST clock so the directional reaper can tell a
+            // one-way-wedged follower (still receiving requests, outbound proof
+            // stale) from a QUIET follower (suppressed).
+            self.raft_transport.noteInboundRequest(frame_res.from, now_inbound_ms);
+            // RC3 (healthy-follower implicit ack): an AppendEntries whose
+            // prev_log_index / leader_commit ADVANCES is an implicit ack that our
+            // PRIOR response reached the leader — stamp outbound progress so a
+            // HEALTHY follower never looks stale and never churns its connection.
+            // A WEDGED follower sees only non-advancing retransmits, gets no
+            // stamp, and stays eligible for directional eviction.
+            switch (frame_res.body) {
+                .append_entries => |ae| self.raft_transport.noteInboundAppendEntriesAdvance(
+                    frame_res.from,
+                    ae.prev_log_index,
+                    ae.leader_commit,
+                    now_inbound_ms,
+                ),
+                else => {},
+            }
+        }
 
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{

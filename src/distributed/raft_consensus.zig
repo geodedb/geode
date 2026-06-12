@@ -210,6 +210,78 @@ pub const FrozenCandidateTracker = struct {
     }
 };
 
+// ===========================================================================
+// k8s churn recovery, ROOT CAUSE #2 (RC2): rebuild clock-reset re-eviction chase.
+// ---------------------------------------------------------------------------
+// The stall reaper `maybeReconnectOnStall` rebuilds this node's OUTBOUND
+// connection to a peer. The buggy rebuild path stamped `last_progress_ms = now`
+// at connect time — i.e. it treated a FORCED rebuild as PROOF OF HEALTH. With
+// all directed connections stale and all nodes candidates, the rebuilds chase
+// each other on phase-shifted clocks: each side rebuilds, stamps itself
+// "healthy", and never actually exchanges a frame before the next stale window —
+// the cluster never converges.
+//
+// FIX: a stall-triggered rebuild does NOT count as progress proof. After a
+// rebuild the peer enters PROBATION (it is "unproven"). ONLY a real inbound
+// `*_response` frame (the `frameProvesOurOutboundDelivered` gate) clears
+// probation. CONSECUTIVE rebuilds without an intervening proof ESCALATE the next
+// eviction budget (exponential backoff, capped) — so simultaneous mutual
+// rebuilds get progressively longer windows to complete handshakes and exchange
+// frames. A real `*_response` clears probation AND resets the budget to base.
+//
+// This is a PURE, clock-free state machine (no QUIC). The wiring (off
+// `PeerConnection`) lives in `Transport`: `noteStallRebuild()` on a
+// stall-triggered rebuild (and NO `last_progress_ms` stamp as proof), the reaper
+// compares the stall window against `currentBudgetMs()` while in probation, and
+// the gated stamp site calls `noteOutboundProof()` exactly when
+// `frameProvesOurOutboundDelivered(body)` is true.
+// CANARY: REQ=REQ-DIST-RAFT-REBUILD-PROBATION; FEATURE="Raft Rebuild Probation"; ASPECT=Backoff; STATUS=TESTED; TEST=tests/test_raft_rebuild_probation.zig; OWNER=distributed; UPDATED=2026-06-12
+pub const RebuildProbation = struct {
+    /// Base eviction budget; equals the flat `Transport.peer_stall_budget_ms`.
+    pub const base_budget_ms: i64 = Transport.peer_stall_budget_ms; // 15_000
+    /// Cap for the exponential backoff (60 s = base * 4).
+    pub const max_budget_ms: i64 = base_budget_ms * 4; // 60_000
+
+    in_probation: bool = false,
+    consecutive_rebuilds: u32 = 0,
+
+    /// A stall-triggered rebuild occurred: enter probation and escalate the
+    /// consecutive-rebuild count. Stamps NO progress clock (the whole fix).
+    /// The escalation is saturating so the `<<` in `currentBudgetMs` can never
+    /// shift past the cap or overflow.
+    pub fn noteStallRebuild(self: *RebuildProbation) void {
+        self.in_probation = true;
+        // Saturate the counter well below any shift-overflow point. The budget is
+        // capped at base*4 (shift of 2), so anything >= a small bound is already
+        // pinned at the cap; clamp to keep `base << consecutive_rebuilds` safe.
+        if (self.consecutive_rebuilds < 32) self.consecutive_rebuilds += 1;
+    }
+
+    /// A real inbound `*_response` proved our outbound: clear probation and reset
+    /// the escalation back to base.
+    pub fn noteOutboundProof(self: *RebuildProbation) void {
+        self.in_probation = false;
+        self.consecutive_rebuilds = 0;
+    }
+
+    /// Are we currently unproven since the last stall-rebuild?
+    pub fn inProbation(self: *const RebuildProbation) bool {
+        return self.in_probation;
+    }
+
+    /// Eviction budget for the NEXT stall window given the current escalation:
+    /// min(base << consecutive_rebuilds, max), i.e.
+    ///   0 rebuilds -> base (15 s); 1 -> 30 s; 2 -> 60 s; 3+ -> 60 s (capped).
+    pub fn currentBudgetMs(self: *const RebuildProbation) i64 {
+        // Clamp the shift to where the cap is already reached (base << 2 == cap):
+        // any larger escalation is pinned at `max_budget_ms`, so a tiny shift
+        // bound keeps `base << shift` trivially overflow-safe.
+        const shift: u6 = @intCast(@min(self.consecutive_rebuilds, 8));
+        const scaled = base_budget_ms << shift;
+        return @min(scaled, max_budget_ms);
+    }
+};
+
 pub const Command = union(enum) {
     noop,
     write: []const u8,
@@ -430,6 +502,18 @@ pub const Transport = struct {
     peers: std.AutoHashMap(u64, *PeerConnection) = undefined,
     peers_initialized: bool = false,
 
+    /// RC2 (rebuild-probation) escalation carry, keyed by `peer.id`. A
+    /// stall-triggered eviction DESTROYS the `PeerConnection`, so the consecutive
+    /// -rebuild escalation count cannot live solely on it — it must survive the
+    /// evict → (lazy) rebuild boundary. This map carries the escalation forward:
+    /// `noteStallRebuildForPeer` bumps it at eviction time;
+    /// `getOrCreatePeerConnection` seeds the freshly built `PeerConnection`'s
+    /// probation atomics from it; a real inbound `*_response`
+    /// (`notePeerProgress`) clears it. Guarded by `peers_mutex` (same lock as
+    /// `peers`, so the seed-at-build read and the clear-on-proof write are
+    /// serialized with eviction). A peer with no entry is "proven" (no escalation).
+    probation_carry: std.AutoHashMap(u64, u32) = undefined,
+
     /// Task A6e (2026-05-26 distributed cluster testing plan), reworked into
     /// PER-PEER queues by Task A2 (2026-06-08 raft-transport-stream-starvation
     /// plan).  The raft library's `sendMsg` vtable callback fires synchronously
@@ -570,6 +654,56 @@ pub const Transport = struct {
         /// unarmed (follower) pass resets this to zero.
         stall_strikes: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
+        /// RC2 (rebuild-probation): atomic backing for the `RebuildProbation`
+        /// state machine. A stall-triggered rebuild enters probation
+        /// (`probation_active = true`) and escalates `probation_rebuilds` instead
+        /// of stamping `last_progress_ms` as health; the reaper then measures the
+        /// stall window from `rebuilt_at_ms` against the escalated
+        /// `RebuildProbation.currentBudgetMs()` (NOT the flat budget) while in
+        /// probation, so simultaneous mutual rebuilds get progressively longer
+        /// windows to actually exchange a frame. A real inbound `*_response`
+        /// (`noteOutboundProof` from the inbound path) clears probation and resets
+        /// the escalation. Atomics (not a plain struct) because the reaper thread
+        /// writes the escalation while the inbound-dispatch thread writes the
+        /// clear — the same fail-safe-toward-not-evicting discipline as
+        /// `stall_strikes`.
+        probation_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        probation_rebuilds: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        /// Wall-clock ms of the last stall-triggered rebuild. The probation-window
+        /// arithmetic measures `now - rebuilt_at_ms` (NOT delivery proof — a
+        /// rebuild is explicitly NOT health), giving the freshly rebuilt
+        /// connection the escalated budget to complete a handshake + exchange a
+        /// real frame before it can be re-evicted.
+        rebuilt_at_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+
+        /// RC3 (follower response-direction eviction): wall-clock ms of the last
+        /// inbound REQUEST (request_vote / append_entries / install_snapshot)
+        /// observed FROM this peer. Stamped in the inbound path
+        /// (`cluster.zig:applyDecodedRaftFrame`) for the NON-response branch — i.e.
+        /// exactly when `!frameProvesOurOutboundDelivered(body)`. Drives
+        /// `inbound_request_recent` in `directionalEvictAllowed`: a follower whose
+        /// response-carrying OUTBOUND is dead keeps receiving requests (inbound
+        /// fine) but never gets an outbound proof, so it must be allowed to
+        /// rebuild — while a QUIET follower (no recent inbound requests) stays
+        /// suppressed so a leaderless election never churns connections.
+        last_inbound_request_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+
+        /// RC3 (healthy-follower implicit ack): the highest `prev_log_index` /
+        /// `leader_commit` seen on an inbound AppendEntries from the leader keyed
+        /// by this outbound peer. A healthy follower never receives `*_response`
+        /// frames, so its outbound would look permanently unproven; but the leader
+        /// only ADVANCES these after it applied the follower's prior response, so
+        /// an advance is an IMPLICIT ack that our response arrived. When either
+        /// advances we stamp `notePeerProgress` — keeping a healthy follower's
+        /// `outbound_proof_stale == false` (no churn) while a WEDGED follower sees
+        /// only non-advancing retransmits and is allowed to rebuild.
+        /// `+1`-biased sentinel is unnecessary: index/commit start at 0 and only
+        /// ever grow, so a strict `>` comparison against the stored value is the
+        /// advance test. Initialized to 0; the first AppendEntries with a non-zero
+        /// index/commit (or any later advance) counts as an advance.
+        last_seen_prev_log_index: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+        last_seen_leader_commit: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
         fn deinit(self: *PeerConnection) void {
             if (self.send_stream) |s| {
                 s.finish() catch {};
@@ -620,6 +754,7 @@ pub const Transport = struct {
             .allocator = allocator,
             .peers_mutex = std.Io.Mutex.init,
             .peers = std.AutoHashMap(u64, *PeerConnection).init(allocator),
+            .probation_carry = std.AutoHashMap(u64, u32).init(allocator),
             .peers_initialized = true,
             .peer_drains_mutex = std.Io.Mutex.init,
             .peer_drains = std.AutoHashMap(u64, *PeerDrain).init(allocator),
@@ -666,6 +801,7 @@ pub const Transport = struct {
                 entry.value_ptr.*.deinit();
             }
             self.peers.deinit();
+            self.probation_carry.deinit();
             self.peers_initialized = false;
             self.peers_mutex.unlock(io);
         }
@@ -1176,6 +1312,109 @@ pub const Transport = struct {
         return strikes >= peer_stall_strikes_required;
     }
 
+    /// k8s churn recovery, ROOT CAUSE #3 (RC3): follower response-direction
+    /// eviction. PURE decision, additive to (and leaving untouched)
+    /// `shouldEvictOnStallArmed` so the existing 22-test stall suite stays green.
+    ///
+    /// `shouldEvictOnStallArmed` suppresses eviction for ANY follower
+    /// unconditionally, which was correct to stop the original election livelock
+    /// (a QUIET follower during a leaderless election must not churn its
+    /// connections). But a follower whose RESPONSE-carrying OUTBOUND is dead keeps
+    /// receiving AppendEntries (its INBOUND is fine), answers into a dead send
+    /// buffer, and the leader never gets the acks — the write never commits and
+    /// the follower never rebuilds. This replaces the blanket suppression with a
+    /// DIRECTIONAL condition: a follower ACTIVELY RECEIVING requests but with no
+    /// outbound-delivery proof for the budget IS allowed to evict/rebuild; a quiet
+    /// follower (no recent inbound requests) stays suppressed.
+    ///
+    /// Inputs (the reaper computes the booleans; this is pure given them):
+    ///   * `frames_sent_nonzero`    — we have actually been sending to this peer.
+    ///   * `outbound_proof_stale`   — now - last_progress_ms > effective budget.
+    ///   * `inbound_request_recent` — we recently saw an inbound REQUEST from peer.
+    ///
+    /// CRITICAL caveat owned by the reaper, not this function: for a follower,
+    /// `outbound_proof_stale` must NOT be permanently true just because a follower
+    /// never receives `*_response` frames. A healthy follower's outbound is
+    /// IMPLICITLY proven when it receives an AppendEntries whose prev_log_index /
+    /// leader_commit ADVANCES (the leader only advances after applying the
+    /// follower's prior response). The inbound path stamps `notePeerProgress` on
+    /// that advance, so a healthy follower reads `outbound_proof_stale == false`
+    /// and this returns false; a WEDGED follower sees repeated non-advancing
+    /// retransmits -> stale + inbound recent -> eviction allowed.
+    // CANARY: REQ=REQ-DIST-RAFT-FOLLOWER-DIRECTIONAL-EVICT; FEATURE="Raft Directional Eviction"; ASPECT=DirectionalEvictAllowed; STATUS=TESTED; TEST=tests/test_raft_follower_response_eviction.zig; OWNER=distributed; UPDATED=2026-06-12
+    pub fn directionalEvictAllowed(
+        arm: StallArm,
+        frames_sent_nonzero: bool,
+        outbound_proof_stale: bool,
+        inbound_request_recent: bool,
+    ) bool {
+        if (!frames_sent_nonzero) return false; // never sent -> nothing to rebuild
+        if (!outbound_proof_stale) return false; // outbound proven recently -> healthy
+        return switch (arm) {
+            .leader, .candidate => true, // armed roles evict on stale proof alone
+            .follower => inbound_request_recent, // follower: only the one-way-wedge case
+        };
+    }
+
+    /// RC2 wiring: the eviction budget the reaper measures against for `pc` on
+    /// this pass. While the connection is in probation (a stall-rebuild without an
+    /// intervening `*_response` proof), use the ESCALATED
+    /// `RebuildProbation.currentBudgetMs()` so a freshly rebuilt connection gets a
+    /// progressively longer window to exchange a real frame. Otherwise the flat
+    /// `peer_stall_budget_ms`. Pure (reads atomics only).
+    fn effectiveStallBudgetMs(pc: *PeerConnection) i64 {
+        if (!pc.probation_active.load(.acquire)) return peer_stall_budget_ms;
+        const rp = RebuildProbation{
+            .in_probation = true,
+            .consecutive_rebuilds = pc.probation_rebuilds.load(.acquire),
+        };
+        return rp.currentBudgetMs();
+    }
+
+    /// RC2+RC3 wiring: the per-pass directional stall decision for the reaper.
+    /// Composes the probation-aware budget (RC2) with the directional eviction
+    /// rule (RC3). PURE (reads atomics only), so it is unit-testable with an
+    /// injected clock + arm and never mutates `pc`.
+    ///
+    /// `outbound_proof_stale` is measured against `effectiveStallBudgetMs`. While
+    /// in probation the baseline is `rebuilt_at_ms` (the rebuild is NOT delivery
+    /// proof, so we cannot measure from `last_progress_ms`); otherwise it is
+    /// `last_progress_ms` (the response-gated / implicit-ack progress clock).
+    /// `inbound_request_recent` is true iff an inbound REQUEST was observed within
+    /// the same budget — this is what lets a one-way-wedged follower recover while
+    /// a QUIET follower stays suppressed.
+    fn shouldEvictDirectional(pc: *PeerConnection, now_ms: i64, arm: StallArm) bool {
+        const frames_sent_nonzero = pc.frames_sent.load(.acquire) != 0;
+        const budget = effectiveStallBudgetMs(pc);
+        const baseline = if (pc.probation_active.load(.acquire))
+            pc.rebuilt_at_ms.load(.acquire)
+        else
+            pc.last_progress_ms.load(.acquire);
+        const outbound_proof_stale = (now_ms - baseline) > budget;
+        const last_inbound = pc.last_inbound_request_ms.load(.acquire);
+        const inbound_request_recent = last_inbound != 0 and (now_ms - last_inbound) <= budget;
+        return directionalEvictAllowed(arm, frames_sent_nonzero, outbound_proof_stale, inbound_request_recent);
+    }
+
+    /// RC2+RC3 wiring: strike-gated directional stall pass for the reaper, the
+    /// directional analog of `recordStallPassArmed`. Requires
+    /// `peer_stall_strikes_required` CONSECUTIVE positive directional passes
+    /// before returning true (so a single isolated pass — common during a
+    /// leaderless election — never evicts). Resets strikes when the directional
+    /// decision is false on this pass. Shares the `stall_strikes` counter with
+    /// `recordStallPassArmed` and `notePeerProgress` under the same
+    /// "fail-safe-toward-not-evicting" discipline (single reaper writer; the
+    /// inbound path only ever resets to 0).
+    fn recordDirectionalStallPass(pc: *PeerConnection, now_ms: i64, arm: StallArm) bool {
+        if (!shouldEvictDirectional(pc, now_ms, arm)) {
+            pc.stall_strikes.store(0, .release);
+            return false;
+        }
+        const strikes = pc.stall_strikes.load(.acquire) + 1;
+        pc.stall_strikes.store(strikes, .release);
+        return strikes >= peer_stall_strikes_required;
+    }
+
     /// Refresh the forward-progress timestamp for the peer identified by
     /// `peer_id`. Called from the INBOUND path (raft AppendEntries from the
     /// leader / AppendEntriesResponse from a follower, dispatched in
@@ -1195,6 +1434,12 @@ pub const Transport = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.peers_mutex.lockUncancelable(io);
         defer self.peers_mutex.unlock(io);
+        // RC2 (rebuild-probation): a real proof of outbound delivery clears the
+        // escalation carry so a peer that resumes responding drops back to the
+        // base budget on its next (re)build. Cleared even if the PeerConnection is
+        // not yet (re)built — the carry is keyed by peer_id and lives across the
+        // evict → rebuild boundary.
+        _ = self.probation_carry.remove(peer_id);
         if (self.peers.get(peer_id)) |pc| {
             pc.last_progress_ms.store(now_ms, .release);
             // election-livelock fix (2026-06-11): observed progress clears any
@@ -1203,7 +1448,69 @@ pub const Transport = struct {
             // off-reaper writer of `stall_strikes`, and it only ever resets to 0
             // (the safe direction — see `recordStallPassArmed`).
             pc.stall_strikes.store(0, .release);
+            // RC2: this is the `RebuildProbation.noteOutboundProof()` site — a real
+            // inbound `*_response` proved OUR outbound reached the peer (the caller
+            // already gated on `frameProvesOurOutboundDelivered`), so clear the
+            // PeerConnection's probation atomics too.
+            pc.probation_active.store(false, .release);
+            pc.probation_rebuilds.store(0, .release);
         }
+    }
+
+    /// RC3: stamp the last-inbound-REQUEST clock for the peer that sent us a
+    /// request frame (request_vote / append_entries / install_snapshot). Called
+    /// from the inbound path for the NON-response branch (i.e. when
+    /// `!frameProvesOurOutboundDelivered(body)`). Drives `inbound_request_recent`
+    /// in the directional reaper: a one-way-wedged follower keeps receiving
+    /// requests, so this clock stays fresh while its outbound proof goes stale —
+    /// exactly the signal that distinguishes a recoverable wedge from a quiet
+    /// follower. Same peer-id-keyed, `peers_mutex`-guarded, leaf-atomic discipline
+    /// as `notePeerProgress`; a no-op if we have no outbound connection to that
+    /// peer yet.
+    pub fn noteInboundRequest(self: *Transport, peer_id: u64, now_ms: i64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        if (self.peers.get(peer_id)) |pc| {
+            pc.last_inbound_request_ms.store(now_ms, .release);
+        }
+    }
+
+    /// RC3 (healthy-follower implicit ack): an inbound AppendEntries from the
+    /// leader whose `prev_log_index` OR `leader_commit` ADVANCES versus the last
+    /// one we saw from that leader is an IMPLICIT proof that our PRIOR response
+    /// reached the leader (the leader only advances after applying it). Stamp
+    /// forward progress (clearing probation / strikes via the same path as a real
+    /// `*_response`) so a HEALTHY follower's outbound never looks stale and never
+    /// churns its connection — while a WEDGED follower sees only non-advancing
+    /// retransmits, gets no stamp, and remains eligible for directional eviction.
+    ///
+    /// Peer-id keyed and `peers_mutex`-guarded like `notePeerProgress`; a no-op if
+    /// the outbound connection to the leader does not exist yet. The last-seen
+    /// values live on that outbound PeerConnection.
+    pub fn noteInboundAppendEntriesAdvance(
+        self: *Transport,
+        peer_id: u64,
+        prev_log_index: u64,
+        leader_commit: u64,
+        now_ms: i64,
+    ) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        const pc = self.peers.get(peer_id) orelse return;
+        const prev_seen_idx = pc.last_seen_prev_log_index.load(.acquire);
+        const prev_seen_commit = pc.last_seen_leader_commit.load(.acquire);
+        const advanced = prev_log_index > prev_seen_idx or leader_commit > prev_seen_commit;
+        if (prev_log_index > prev_seen_idx) pc.last_seen_prev_log_index.store(prev_log_index, .release);
+        if (leader_commit > prev_seen_commit) pc.last_seen_leader_commit.store(leader_commit, .release);
+        if (!advanced) return;
+        // Implicit ack: treat exactly like a real outbound proof.
+        _ = self.probation_carry.remove(peer_id);
+        pc.last_progress_ms.store(now_ms, .release);
+        pc.stall_strikes.store(0, .release);
+        pc.probation_active.store(false, .release);
+        pc.probation_rebuilds.store(0, .release);
     }
 
     /// election-livelock fix (2026-06-11) + owed item (4): wire the live
@@ -1219,11 +1526,12 @@ pub const Transport = struct {
 
     /// Periodic stalled-stream reaper, sibling to `maybeReconnectOnIpChange`,
     /// invoked from `clientPollLoop` on the same slow cadence. If the connection
-    /// has stalled (`shouldEvictOnStallArmed`), evict it so the next `send`
+    /// has stalled (`shouldEvictDirectional`), evict it so the next `send`
     /// rebuilds via `connectWithTLS` (which re-resolves the FQDN) — exactly like
-    /// the IP-change path. Takes no lock here; `evictPeerConnection` takes
-    /// `peers_mutex` itself. Logs at warn (mirroring the IP-change reaper) so the
-    /// previously-silent wedge is now observable to an operator.
+    /// the IP-change path. Takes no lock here for the decision; `evictPeerConnection`
+    /// and the probation-carry bump take `peers_mutex` themselves. Logs at warn
+    /// (mirroring the IP-change reaper) so the previously-silent wedge is
+    /// observable to an operator.
     fn maybeReconnectOnStall(self: *Transport, pc: *PeerConnection, now_ms: i64) void {
         // election-livelock fix (2026-06-11) + owed item (4): the eviction
         // decision is armed ONLY when THIS node is the raft LEADER or a
@@ -1232,20 +1540,50 @@ pub const Transport = struct {
         // conservatively treat the node as a `.follower` so the standalone path
         // never evicts.
         const arm = if (self.role_source_fn) |f| f(self.role_source_ctx) else StallArm.follower;
-        // recordStallPassArmed tracks M consecutive stalled passes; only the Mth
-        // pass returns true, so a single quiet pass (or anything observed while a
-        // follower) never evicts.
-        if (recordStallPassArmed(pc, now_ms, arm)) {
-            const last = pc.last_progress_ms.load(.acquire);
+        // RC2+RC3: `recordDirectionalStallPass` tracks M consecutive directional
+        // stalled passes — armed roles evict on stale OUTBOUND proof alone, a
+        // follower only in the one-way-wedge case (stale outbound proof AND recent
+        // inbound requests), and the budget is the probation-escalated window
+        // while in probation. Only the Mth consecutive pass returns true, so a
+        // single quiet pass (or a quiet follower) never evicts.
+        if (recordDirectionalStallPass(pc, now_ms, arm)) {
+            const baseline = if (pc.probation_active.load(.acquire))
+                pc.rebuilt_at_ms.load(.acquire)
+            else
+                pc.last_progress_ms.load(.acquire);
             log.warn("raft transport peer stalled (no progress within budget); evicting stale connection", &.{
                 Attr.string("endpoint", pc.endpoint),
                 Attr.uint("peer", pc.peer_id),
                 Attr.uint("strikes", pc.stall_strikes.load(.acquire)),
                 Attr.uint("strikes_required", peer_stall_strikes_required),
-                Attr.int("budget_ms", peer_stall_budget_ms),
-                Attr.int("stall_ms", now_ms - last),
+                Attr.int("budget_ms", effectiveStallBudgetMs(pc)),
+                Attr.int("stall_ms", now_ms - baseline),
             });
+            // RC2: this eviction triggers a (lazy) rebuild — record it as a
+            // stall-rebuild in the probation carry so the rebuilt connection
+            // enters probation with an escalated budget (NOT treated as health).
+            // The carry survives the PeerConnection's destruction; a later real
+            // `*_response` (`notePeerProgress`) clears it.
+            self.noteStallRebuildForPeer(pc.peer_id);
             self.evictPeerConnection(pc.peer_id);
+        }
+    }
+
+    /// RC2: bump the probation escalation carry for `peer_id` (the
+    /// `RebuildProbation.noteStallRebuild()` effect, persisted across the
+    /// evict → rebuild boundary). Saturates well below the shift-overflow point
+    /// (the budget is capped at base*4, so a small count already pins the cap).
+    /// Guarded by `peers_mutex` so it is serialized with the build-time seed read
+    /// and the proof-time clear.
+    fn noteStallRebuildForPeer(self: *Transport, peer_id: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        const gop = self.probation_carry.getOrPut(peer_id) catch return;
+        if (!gop.found_existing) {
+            gop.value_ptr.* = 1;
+        } else if (gop.value_ptr.* < 32) {
+            gop.value_ptr.* += 1;
         }
     }
 
@@ -1444,6 +1782,7 @@ pub const Transport = struct {
         // too, so no established connection is ever published with an empty IP.
         const resolved = quic.resolveHostIpAlloc(self.allocator, endpoint_dup) catch &.{};
         errdefer if (resolved.len > 0) self.allocator.free(resolved);
+        const build_ms = compat_milliTimestamp();
         conn.* = .{
             .allocator = self.allocator,
             .client = quic.QuicClient.init(self.allocator),
@@ -1458,8 +1797,19 @@ pub const Transport = struct {
             // sent a frame AND observed no progress for the full budget. This is
             // the "stall clock resets on reconnect" guarantee that prevents a
             // re-evict loop after the stall reaper rebuilds a connection.
-            .last_progress_ms = std.atomic.Value(i64).init(compat_milliTimestamp()),
+            //
+            // RC2 (rebuild-probation): `last_progress_ms = build_ms` is the
+            // FRESH-connection (no prior stall) baseline; it is NOT counted as
+            // delivery proof. When this build is a stall-triggered REBUILD (the
+            // `probation_carry` below is non-empty for this peer), the reaper
+            // ignores `last_progress_ms` and instead measures the window from
+            // `rebuilt_at_ms` against the ESCALATED `RebuildProbation.currentBudgetMs()`
+            // — so the freshly rebuilt connection gets a progressively longer
+            // window to complete its handshake and exchange a real frame, instead
+            // of being immediately re-evicted on the next stale pass.
+            .last_progress_ms = std.atomic.Value(i64).init(build_ms),
             .frames_sent = std.atomic.Value(u64).init(0),
+            .rebuilt_at_ms = std.atomic.Value(i64).init(build_ms),
         };
         errdefer conn.client.deinit();
 
@@ -1477,6 +1827,17 @@ pub const Transport = struct {
                 existing.acquire();
                 return existing;
             }
+        }
+        // RC2: seed this (re)built connection's probation state from the carry.
+        // A non-zero carry means prior stall-rebuilds escalated the budget without
+        // an intervening `*_response` proof; the connection enters probation so
+        // the reaper uses the escalated window. Zero / absent carry = fresh,
+        // proven connection on the base budget. Read under `peers_mutex` so it is
+        // serialized with the eviction-time bump and the proof-time clear.
+        const carried = self.probation_carry.get(peer.id) orelse 0;
+        if (carried > 0) {
+            conn.probation_active.store(true, .release);
+            conn.probation_rebuilds.store(carried, .release);
         }
         try self.peers.put(peer.id, conn);
         conn.acquire();
