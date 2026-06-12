@@ -1726,21 +1726,14 @@ pub const Message = union(enum) {
 // still a request (false) and a pre-vote RequestVoteResponse is still a response
 // (true).
 //
-// SKELETON (red phase): returns `true` for EVERY variant — the current
-// unconditional-stamp behavior — so the tests compile and FAIL on the three
-// request variants. The fixer narrows the body to the `*_response`-only switch.
 pub fn frameProvesOurOutboundDelivered(body: Message) bool {
-    // SKELETON: current (buggy) behavior — every inbound frame is treated as
-    // proof of our outbound delivery. The fix replaces this with:
-    //   return switch (body) {
-    //       .request_vote_response,
-    //       .append_entries_response,
-    //       .install_snapshot_response,
-    //       => true,
-    //       else => false,
-    //   };
-    _ = body;
-    return true;
+    return switch (body) {
+        .request_vote_response,
+        .append_entries_response,
+        .install_snapshot_response,
+        => true,
+        else => false,
+    };
 }
 
 pub const RequestVote = struct {
