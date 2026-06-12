@@ -2031,3 +2031,59 @@ PVCs from old binaries self-heal on first restart under the new binary.
 - **Committed-write client-`Timeout` idempotency residual** (unchanged): a write
   committed at raft level but returning `Timeout` to the client can be retried and
   applied twice — still open, still owed.
+
+---
+
+## ✅ VERIFIED on real Kubernetes (2026-06-12, `dev` = `v0.6.27-5-gd84cb40`) — edge churn-durability fix HOLDS; liveness degrades only under SUSTAINED extreme churn
+
+`v0.6.27-5-gd84cb40` carries the edge-durability fix (`2cdc053a` et al.). The owed
+arda re-validation **passes** — edges now survive aggressive churn, closing the
+`3466751` top blocker on real k8s.
+
+### ✅ Edge churn-durability — FIXED (the owed canonical regression, on real k8s)
+
+Clean-slate boot (PVCs wiped). Seeded an edge `ED1` (`CREATE (a:ED)-[:ED1]->(b:ED)`,
+replicated `1/1/1`), then ran **three** 4-kill aggressive-churn rounds, re-checking the
+edge after each:
+
+| after churn round | `ED1` (`MATCH ()-[r:ED1]->()`) | endpoint nodes |
+|---|---|---|
+| round 1 | `1/1/1` | `2/2/2` |
+| round 2 | `1/1/1` | `2/2/2` |
+| round 3 | `1/1/1` | `2/2/2` |
+
+`ED1` survived **all three rounds** as `1/1/1` on every node — **no
+`EdgeSlotMappingMissing`**. Two additional edges seeded mid-test (`EBL`, `ECL`) also end
+`1/1/1` on all three. The exact prior repro (an edge that existed before churn) — which
+deterministically corrupted to `EdgeSlotMappingMissing` on `3466751` after a single
+round — now holds. The existence-check-before-slot-mint + hydration self-heal works in
+the real cluster.
+
+### ⚠️ Liveness — recovers for moderate churn, but degrades under SUSTAINED extreme churn
+
+Across the three back-to-back rounds (12 leader kills with no settle time between),
+recovery **slowed monotonically**: round A reconverged ~immediately, round B at ~iter 20,
+round C did **not** reconverge within the window — it ended with **geode-0 stranded as a
+candidate at the quorum's term** (`term=14`, watched ~70 s+, not stepping down to
+follower), while geode-1 + geode-2 held a **2/3 quorum that still commits and replicates**
+(`CREATE (:FINOK)` → `ok`, `FINOK` on geode-1+geode-2; geode-0 partitioned out). So data
+stays correct and the cluster stays available at 2/3 throughout, but full 3/3 health is
+not restored under sustained extreme churn. This is the same stranded-candidate family as
+`3ddb3f7` — the `80ed0539`/`14b7295e` churn-recovery fix handles a single 4-kill burst
+cleanly (verified on `3466751` and here), but consecutive bursts can still strand a node.
+A pod roll of the stranded node rejoins it. (12 rapid kills is well beyond realistic
+operation; the realistic single-burst case recovers.)
+
+### ⚠️ Recurring (owed) — committed write → client `Timeout`
+
+Unchanged: the baseline edge `CREATE` returned client `Timeout` while replicating `1/1/1`
+— the acknowledged propose-level idempotency residual.
+
+### Net
+
+The edge churn-durability data-integrity bug is **closed on real k8s** — the verification
+the fix doc owed. Remaining before a production 3-node cluster: **(1)** liveness under
+sustained/repeated churn (a node can still strand as a candidate after consecutive bursts;
+2/3 quorum stays functional) and **(2)** the committed-write client-`Timeout` idempotency
+residual. (Genuine live-blackhole recovery and reused-PVC divergent-roll remain
+unexercised.) prod remains UNTOUCHED (single-node 0.6.14).
