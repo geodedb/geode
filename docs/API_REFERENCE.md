@@ -103,13 +103,26 @@ DROP INDEX IF EXISTS person_age_idx;
 >
 > The CLI is engine-backed by `BackupManager` (`src/storage/backup.zig`):
 > full backup of the per-graph storage tree with CRC32 integrity verification
-> on restore. Compression is requested-but-not-applied in this release (the
-> header truthfully records `none`; no zstd/lz4/gzip encoder is bundled).
-> Restore data-integrity (node/edge counts + property round-trip + checksum
-> rejection) is regression-tested by `zig build test-gap0862`. The GQL forms
-> below are retained as a forward-looking grammar sketch; implementing any of
-> them MUST also flip the `UNSUPPORTED` assertions in
+> on restore. **Supported compression codecs (GAP-0880, 2026-06-10): `none`
+> and `gzip`.** `--compress` / the wire `compress` flag applies a real gzip
+> (DEFLATE) encoder and the backup header/metadata record the codec actually
+> applied; requesting `zstd`/`lz4` fails with `UnsupportedCompression`
+> (decode-only zstd support is retained for old artifacts). Restore
+> data-integrity (node/edge counts + property round-trip + checksum
+> rejection) is regression-tested by `zig build test-gap0862`; the gzip
+> round-trip + magic-byte verification by `zig build test-gap0880`. The GQL
+> forms below are retained as a forward-looking grammar sketch; implementing
+> any of them MUST also flip the `UNSUPPORTED` assertions in
 > `tests/backup_restore_test.sh` / `tests/backup_restore_regression_test.sh`.
+>
+> **Backup upload (protocol, GAP-0880):** the QUIC/gRPC `upload_backup`
+> message carries the complete backup artifact bytes (`payload`, field 4)
+> plus declared `size_bytes` and the hex CRC32 `checksum` from the original
+> `BackupResponse`. The server verifies size, checksum, and the artifact
+> header (magic/version/payload-length/CRC32) BEFORE writing, persists the
+> exact bytes into `./server_backups/`, and durably registers the backup in
+> the metadata log so it is restorable. Metadata-only uploads (no payload)
+> are rejected — there is no "upload slot" placeholder path.
 
 ### BACKUP TO
 
@@ -127,7 +140,8 @@ BACKUP TO 'file_path' [OPTIONS]
 
 #### Options
 
-- `COMPRESSED`: Enable gzip compression
+- `COMPRESSED`: Enable gzip compression (NOT executed — see status note above;
+  the implemented gzip surface is the CLI `--compress` flag / wire `compress`)
 - `INCREMENTAL`: Create incremental backup (requires base backup)
 - `METADATA ONLY`: Backup only schema and indexes, not data
 

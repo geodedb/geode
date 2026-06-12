@@ -3,7 +3,10 @@
 **Generated**: 2025-11-12
 **Purpose**: Baseline architecture documentation for modularization effort
 **Phase**: Phase 0, M0.4 - Document Current Architecture
-**Status**: Pre-Modularization Snapshot
+**Status**: Pre-Modularization Snapshot (HISTORICAL — all counts and pass
+rates below are point-in-time from 2025-11-12 and are NOT current claims;
+the canonical current baseline is [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md)
+and [GAP_ANALYSIS.md](GAP_ANALYSIS.md))
 
 ## Table of Contents
 
@@ -33,7 +36,7 @@
 - **Test Files**: 843 Zig test files
 - **Test/Source Ratio**: 1.9:1
 - **Integration Tests**: 1,688 geodetestlab tests
-- **Pass Rate**: 97.4% (1,644 passing, 9 failing)
+- **Pass Rate**: 97.4% (1,644 passing, 9 failing) — historical 2025-11 snapshot; see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the current baseline
 
 **File Size Distribution**:
 
@@ -316,13 +319,13 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 
 1. **Unit Tests** (Zig `test` blocks):
    - **Total**: 393 Zig test blocks
-   - **Pass Rate**: 100% (393/393 passing)
+   - **Pass Rate**: 393/393 passing at the 2025-11 snapshot (historical; the current per-step baseline lives in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md))
    - **Location**: Inline with source files
    - **Coverage**: Core functionality, data structures, algorithms
 
 2. **Integration Tests** (geodetestlab):
    - **Total**: 1,688 tests across 80+ spec files
-   - **Pass Rate**: 97.4% (1,644 passing, 9 failing, 46 skipped)
+   - **Pass Rate**: 97.4% (1,644 passing, 9 failing, 46 skipped) — historical 2025-11 snapshot; a fresh harness run is owed
    - **Location**: `geodetestlab/specs/*.yml`
    - **Coverage**: End-to-end scenarios, GQL compliance, features
 
@@ -620,7 +623,7 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 
 **Strengths**:
 
-- ✅ High test coverage (97.4% integration tests, 100% unit tests)
+- ✅ High test pass rates at the 2025-11 snapshot (97.4% integration, 393/393 unit — historical; current baseline in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md))
 - ✅ Clear module boundaries in many areas
 - ✅ Good documentation
 - ✅ Strong type system

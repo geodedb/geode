@@ -6,6 +6,37 @@ const builtin = @import("builtin");
 const kms = @import("security/kms_remote");
 const quic = @import("transport/quic");
 
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+// GAP-0883 review fix: getrandom failure previously left the buffer
+// undefined; fall back to a monotonic-clock-seeded PRNG fill instead.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime builtin.os.tag == .linux) {
+        var filled: usize = 0;
+        while (filled < buf.len) {
+            const rc = std.os.linux.getrandom(buf.ptr + filled, buf.len - filled, 0);
+            if (@as(isize, @bitCast(rc)) <= 0) {
+                var prng = std.Random.DefaultPrng.init(nowNs());
+                prng.random().bytes(buf[filled..]);
+                return;
+            }
+            filled += rc;
+        }
+    } else {
+        std.c.arc4random_buf(buf.ptr, buf.len);
+    }
+}
+
+// Zig 0.16 compat: std.time.Timer removed; clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance; OWNER=security; UPDATED=2025-09-26
 // Standalone executable to emit concurrency unwrap variance JSON.
 
@@ -22,16 +53,16 @@ pub fn main() !void {
     // Local direct mode (skip QUIC handshake due to instability in benchmark context)
     var plain: [32]u8 = undefined;
     // GAP-0142: Use cryptographic random instead of PRNG
-    std.crypto.random.bytes(&plain);
+    compat_fillRandom(&plain);
     const env = server.server.wrap(plain);
     const iterations: usize = 64;
     var times = try std.heap.page_allocator.alloc(u64, iterations);
     defer std.heap.page_allocator.free(times);
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        var t = try std.time.Timer.start();
+        const t0 = nowNs();
         _ = try server.server.unwrap(env);
-        times[i] = t.read();
+        times[i] = nowNs() - t0;
     }
     std.sort.heap(u64, times, {}, comptime struct {
         fn lt(_: void, a: u64, b: u64) bool {
@@ -52,9 +83,9 @@ pub fn main() !void {
     const variance = diff / @as(f128, @floatFromInt(times.len));
     const stdev = std.math.sqrt(variance);
     const cv = stdev / mean_f;
+    // Zig 0.16: fixedBufferStream removed; use std.Io.Writer.fixed.
     var buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w = std.Io.Writer.fixed(&buf);
     try w.writeAll("{\"bench\":\"BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance\",");
     try w.writeAll("\"iterations\":");
     try w.print("{d}", .{iterations});
@@ -63,10 +94,8 @@ pub fn main() !void {
     try w.writeAll(",\"p95_mean_ratio\":");
     try w.print("{d:.4}", .{p95_mean_ratio});
     try w.writeAll("}\n");
-    const line = fbs.getWritten();
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    try stdout.writeAll(line);
+    const line = w.buffered();
+    // Zig 0.16: std.fs.File removed; std.Io.File.stdout() is platform-aware.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    try std.Io.File.stdout().writeStreamingAll(io, line);
 }

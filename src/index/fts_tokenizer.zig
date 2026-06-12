@@ -165,3 +165,78 @@ pub fn freeTermPostings(allocator: std.mem.Allocator, postings: []fts.TermPostin
     }
     if (postings.len > 0) allocator.free(postings);
 }
+
+/// One token in raw-stream order, with its normalized term, raw-stream ordinal
+/// (the SAME position numbering `tokenize` emits, assigned before stopword
+/// removal), and the byte range of the raw token in the original text.
+///
+/// This is the host-side half of the fts-storage highlight contract
+/// (fts-storage search.zig `TermIterator.Match.positions` doc): the engine
+/// yields token-positions, and the embedder maps token-position -> byte range
+/// by re-tokenizing the authorized document content with the SAME tokenizer
+/// used at index time. Phrase/proximity query planning also uses the ordinal
+/// sequence (stopword gaps preserved) so query-side alignment matches the
+/// indexed positions exactly.
+// CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=OrderedTokenize; STATUS=TESTED; TEST=tests/e2e_fts_advanced.zig; OWNER=index; UPDATED=2026-06-10
+pub const OrderedToken = struct {
+    /// Normalized (NFC + case-fold) term. Owned; freed by freeOrderedTokens.
+    term: []const u8,
+    /// Raw-stream ordinal — identical numbering to `tokenize` positions.
+    ordinal: u32,
+    /// Byte range [start, end) of the RAW token in the input text.
+    byte_start: usize,
+    byte_end: usize,
+};
+
+/// Tokenize `text` into the ordered, non-stopword token stream with byte
+/// offsets. Same boundary, stopword, and normalization rules as `tokenize`,
+/// but per-occurrence (no grouping) and ordered by appearance. Caller owns the
+/// result; free with `freeOrderedTokens`.
+pub fn tokenizeOrdered(allocator: std.mem.Allocator, text: []const u8) ![]OrderedToken {
+    var out: std.ArrayListUnmanaged(OrderedToken) = .empty;
+    errdefer {
+        for (out.items) |t| allocator.free(t.term);
+        out.deinit(allocator);
+    }
+
+    var raw_ordinal: u32 = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        while (i < text.len and !(std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
+        if (i >= text.len) break;
+
+        const start = i;
+        while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
+
+        const raw = text[start..i];
+        const position = raw_ordinal;
+        raw_ordinal += 1;
+
+        if (isStopword(raw)) continue;
+
+        const nfc = try geode_unicode.nfcNormalize(allocator, raw);
+        defer allocator.free(nfc);
+        const folded = try geode_unicode.foldCase(allocator, nfc);
+        errdefer allocator.free(folded);
+
+        if (folded.len == 0) {
+            allocator.free(folded);
+            continue;
+        }
+
+        try out.append(allocator, .{
+            .term = folded,
+            .ordinal = position,
+            .byte_start = start,
+            .byte_end = i,
+        });
+    }
+
+    return try out.toOwnedSlice(allocator);
+}
+
+/// Free a slice returned by `tokenizeOrdered`.
+pub fn freeOrderedTokens(allocator: std.mem.Allocator, tokens: []OrderedToken) void {
+    for (tokens) |t| allocator.free(t.term);
+    if (tokens.len > 0) allocator.free(tokens);
+}

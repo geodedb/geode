@@ -12,6 +12,10 @@ Regressions covered:
   blank STATUS column.
 - GAP-0539: non-schema STATUS values (e.g. `COMPLETE`) must be dropped
   with a warning rather than silently written to status.csv.
+- Quality #730 (2026-06-11): golden end-to-end fixture — a sample tree of
+  marker lines (valid, malformed, straddle, COMPLETE-reject) is scanned
+  with ``find_canary_markers`` and rendered with ``generate_status_csv``,
+  and the resulting CSV rows are compared against an exact expected list.
 """
 
 import csv
@@ -24,6 +28,17 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import status_generate  # noqa: E402
+
+
+def _marker(req: str, rest: str) -> str:
+    """Build a one-line CANARY marker for fixture content.
+
+    The token is assembled from fragments so that THIS test file never
+    contains a complete single-line marker — otherwise the repo-wide
+    status scan (which includes .py files) would pick up the fixture
+    lines as real governance markers.
+    """
+    return "// CAN" + "ARY: " + f"REQ={req}; " + rest + "\n"
 
 
 class TestCanaryRegexNoNewlineStraddle(unittest.TestCase):
@@ -111,6 +126,133 @@ class TestStrictStatusFilter(unittest.TestCase):
         rows = self._write_csv(markers, strict=False)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["Status"], "COMPLETE")
+
+
+class TestGoldenFixtureEndToEnd(unittest.TestCase):
+    """Quality #730: golden fixture → exact expected CSV rows.
+
+    Exercises the full pipeline (``find_canary_markers`` over a fixture
+    tree, then ``generate_status_csv`` in strict mode) against ~10 sample
+    marker lines covering: every VALID_STATUS value, TEST=/BENCH= field
+    variants, escaped-quote FEATURE, the GAP-0539 newline-straddle shape,
+    a malformed marker (missing OWNER), the STATUS=COMPLETE reject case
+    seen in STATUS_GEN_WARN, and extension filtering (.md scanned, .txt
+    not).
+    """
+
+    # Fixture marker lines (assembled via _marker so this source file
+    # never contains a complete marker — see _marker docstring).
+    ZIG_FIXTURE = (
+        # 1. basic 6-field marker
+        _marker("REQ-GOLD-001", 'FEATURE="GoldenBasic"; ASPECT=Parse; STATUS=TESTED; OWNER=gov; UPDATED=2026-06-11')
+        # 2. single TEST= field (the regex consumes but does not capture TEST)
+        + _marker(
+            "REQ-GOLD-002",
+            'FEATURE="GoldenWithTest"; ASPECT=Unit; STATUS=IMPL; TEST=tests/foo.zig; OWNER=gov; UPDATED=2026-06-11',
+        )
+        # 3. multiple TEST= and BENCH= fields
+        + _marker(
+            "REQ-GOLD-003",
+            'FEATURE="GoldenBench"; ASPECT=Perf; STATUS=BENCHED; TEST=a.zig; TEST=b.zig; '
+            "BENCH=bench_a.zig; OWNER=perf; UPDATED=2026-06-11",
+        )
+        # 4. escaped-quote FEATURE (shell/string-literal form)
+        + _marker(
+            "REQ-GOLD-004", 'FEATURE=\\"GoldenEscaped\\"; ASPECT=Cli; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-06-11'
+        )
+        # 5-6. remaining schema statuses
+        + _marker("REQ-GOLD-005", 'FEATURE="GoldenStub"; ASPECT=Todo; STATUS=STUB; OWNER=gov; UPDATED=2026-06-11')
+        + _marker("REQ-GOLD-006", 'FEATURE="GoldenPending"; ASPECT=Todo; STATUS=PENDING; OWNER=gov; UPDATED=2026-06-11')
+        # 7. GAP-0539 straddle: a Zig test declaration naming a marker on
+        #    one line, the real marker comment on the next. Must produce
+        #    exactly ONE row (the comment), never a blank-STATUS blob.
+        + ('test "CAN' + 'ARY: REQ=REQ-GOLD-007" {\n')
+        + "    "
+        + _marker(
+            "REQ-GOLD-007", 'FEATURE="GoldenStraddle"; ASPECT=Regression; STATUS=TESTED; OWNER=gov; UPDATED=2026-06-11'
+        )
+        + "}\n"
+        # 8. malformed marker — OWNER missing entirely → regex must not match
+        + (
+            "// CAN"
+            + "ARY: REQ=REQ-GOLD-BAD; "
+            + 'FEATURE="GoldenNoOwner"; ASPECT=X; STATUS=TESTED; UPDATED=2026-06-11\n'
+        )
+        # 9. schema-invalid STATUS → matched, then dropped with STATUS_GEN_WARN
+        + _marker(
+            "REQ-GOLD-REJECT", 'FEATURE="GoldenComplete"; ASPECT=X; STATUS=COMPLETE; OWNER=gov; UPDATED=2026-06-11'
+        )
+    )
+
+    # 10. marker in a Markdown file (scanned extension)
+    MD_FIXTURE = _marker(
+        "REQ-GOLD-010", 'FEATURE="GoldenDoc"; ASPECT=Docs; STATUS=EXEMPT; OWNER=docs; UPDATED=2026-06-11'
+    )
+
+    # 11. marker in a .txt file — extension NOT scanned → no row
+    TXT_FIXTURE = _marker(
+        "REQ-GOLD-011", 'FEATURE="GoldenTxt"; ASPECT=Skip; STATUS=TESTED; OWNER=gov; UPDATED=2026-06-11'
+    )
+
+    # Golden expectation: (REQ, Feature, Aspect, Status, File), in the
+    # generator's deterministic sort order (req, feature, aspect, file).
+    EXPECTED_ROWS = [
+        ("REQ-GOLD-001", "GoldenBasic", "Parse", "TESTED", "src/sample.zig"),
+        ("REQ-GOLD-002", "GoldenWithTest", "Unit", "IMPL", "src/sample.zig"),
+        ("REQ-GOLD-003", "GoldenBench", "Perf", "BENCHED", "src/sample.zig"),
+        ("REQ-GOLD-004", "GoldenEscaped", "Cli", "EXEMPT", "src/sample.zig"),
+        ("REQ-GOLD-005", "GoldenStub", "Todo", "STUB", "src/sample.zig"),
+        ("REQ-GOLD-006", "GoldenPending", "Todo", "PENDING", "src/sample.zig"),
+        ("REQ-GOLD-007", "GoldenStraddle", "Regression", "TESTED", "src/sample.zig"),
+        ("REQ-GOLD-010", "GoldenDoc", "Docs", "EXEMPT", "docs/notes.md"),
+    ]
+
+    def _run_pipeline(self, tmp: str) -> tuple[list[dict[str, str]], str]:
+        repo = Path(tmp)
+        (repo / "src").mkdir()
+        (repo / "docs").mkdir()
+        (repo / "src" / "sample.zig").write_text(self.ZIG_FIXTURE, encoding="utf-8")
+        (repo / "docs" / "notes.md").write_text(self.MD_FIXTURE, encoding="utf-8")
+        (repo / "docs" / "skipped.txt").write_text(self.TXT_FIXTURE, encoding="utf-8")
+
+        markers = status_generate.find_canary_markers(repo)
+        out = repo / "status.csv"
+        buf = io.StringIO()
+        old = sys.stderr
+        sys.stderr = buf
+        try:
+            status_generate.generate_status_csv(markers, out, strict=True)
+        finally:
+            sys.stderr = old
+        with open(out, newline="") as f:
+            return list(csv.DictReader(f)), buf.getvalue()
+
+    def test_golden_rows_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rows, _ = self._run_pipeline(tmp)
+
+        got = [(r["REQ"], r["Feature"], r["Aspect"], r["Status"], r["File"]) for r in rows]
+        expected = sorted(self.EXPECTED_ROWS, key=lambda t: (t[0], t[1], t[2], t[4]))
+        self.assertEqual(got, expected)
+
+        # Straddle case: exactly one REQ-GOLD-007 row, no blank STATUS anywhere.
+        self.assertEqual(sum(1 for r in rows if r["REQ"] == "REQ-GOLD-007"), 1)
+        for r in rows:
+            self.assertIn(r["Status"], status_generate.VALID_STATUS, r)
+
+        # Malformed (no OWNER) and non-scanned-extension markers never appear.
+        self.assertNotIn("REQ-GOLD-BAD", {r["REQ"] for r in rows})
+        self.assertNotIn("REQ-GOLD-011", {r["REQ"] for r in rows})
+
+    def test_golden_complete_rejected_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rows, stderr_text = self._run_pipeline(tmp)
+
+        self.assertNotIn("REQ-GOLD-REJECT", {r["REQ"] for r in rows})
+        self.assertIn("STATUS_GEN_WARN", stderr_text)
+        self.assertIn("bad_status='COMPLETE'", stderr_text)
+        self.assertIn("req=REQ-GOLD-REJECT", stderr_text)
+        self.assertIn("STATUS_GEN_SUMMARY accepted=8 rejected=1", stderr_text)
 
 
 class TestValidStatusSet(unittest.TestCase):

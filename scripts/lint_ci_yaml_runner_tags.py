@@ -30,29 +30,30 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 CI_YAML = Path(".gitlab-ci.yml")
 
 
-def parse_yaml(text: str) -> Dict[str, Any]:
+def parse_yaml(text: str) -> dict[str, Any]:
     """Parse via PyYAML if available; fall back to a tolerant degraded
     walker that just captures top-level job blocks."""
     try:
         import yaml  # type: ignore
+
         return yaml.safe_load(text) or {}
     except ImportError:
         return _shallow_parse(text)
 
 
-def _shallow_parse(text: str) -> Dict[str, Any]:
+def _shallow_parse(text: str) -> dict[str, Any]:
     """Degraded parser: detect top-level keys (jobs) with body lines.
     Sufficient for `tags:`, `image:`, `services:` extraction. Each
     value is the raw multi-line string of the job body.
     """
-    out: Dict[str, Any] = {}
-    cur_name: Optional[str] = None
-    cur_body: List[str] = []
+    out: dict[str, Any] = {}
+    cur_name: str | None = None
+    cur_body: list[str] = []
     for line in text.splitlines():
         if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*:\s*$", line):
             if cur_name is not None:
@@ -66,17 +67,17 @@ def _shallow_parse(text: str) -> Dict[str, Any]:
     return out
 
 
-def collect_tags(body: Any) -> Set[str]:
+def collect_tags(body: Any) -> set[str]:
     """Return the set of `tags:` entries declared on a job body.
     Body may be a dict (when PyYAML is available) or a string
     (degraded mode)."""
     if isinstance(body, dict):
         tags = body.get("tags") or []
-        return set(t for t in tags if isinstance(t, str))
+        return {t for t in tags if isinstance(t, str)}
     if isinstance(body, str):
-        out: Set[str] = set()
+        out: set[str] = set()
         in_tags = False
-        tag_indent: Optional[int] = None
+        tag_indent: int | None = None
         for line in body.splitlines():
             stripped = line.lstrip()
             indent = len(line) - len(stripped)
@@ -144,7 +145,7 @@ def main() -> int:
 
     default_tags = collect_tags(parsed.get("default") or {})
 
-    offenders: List[Tuple[str, int, List[str]]] = []
+    offenders: list[tuple[str, int, list[str]]] = []
     for name, body in parsed.items():
         if name == "default" or name.startswith("."):
             continue

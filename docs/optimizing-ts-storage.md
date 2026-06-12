@@ -1,5 +1,36 @@
 # Optimizing Time-Series Storage for Geode
 
+> ## ⚠️ STATUS (2026-06-10): HISTORICAL — gaps below are CLOSED (GAP-0865)
+>
+> This research document was written against the **legacy ChunkStorage
+> persistence model** (`chunks.dat` / `chunk_meta.dat` / `series_meta.dat`,
+> best-effort full-series snapshotting). That model has been **replaced**: the
+> recommended "hybrid segment-LSM with WAL + manifest-driven lifecycle"
+> architecture below was implemented in the external `timeseries-storage`
+> library (pinned **v0.2.3** in `build.zig.zon`), and the remaining
+> geode-side integration gaps were closed on 2026-06-10 under **GAP-0865**
+> (regression: `zig build test-ts-durability`, `tests/ts_durability.zig`).
+> Current truth, per claim in this document:
+>
+> | Claim below (legacy) | Current state (engine v0.2.3 + GAP-0865 wiring) |
+> |---|---|
+> | Best-effort full-series snapshot persistence, no crash atomicity | WAL-first `appendPoints` (CRC32C, write-through), immutable `.tsseg` segments, double-slot manifest with atomic publish; WAL replay + segment verification on open |
+> | Fail-soft `Store.initWithConfig`/`loadFromDisk` (silent empty store) | **Fail-closed by default** in the wrapper, the graph adapter, and server start; explicit `GEODE_TS_DURABILITY=best_effort` opt-out. The wrapper also creates `{dir}/timeseries` itself, closing the fresh-dir silent-fallback trap |
+> | Retention rebuilds metadata only, never reclaims disk | `GEODE_TS_RETENTION_DAYS` → engine `retention_max_age_ms`; `pruneExpired` unlinks whole expired segments from disk + manifest (explicit `Store.runRetention()` + throttled ingest-path pass) |
+> | Graph WAL has no TS record types | By design: the TS engine owns its **own WAL** (`ts.wal`) with the same fail-closed replay model — TS mutations are not routed through the graph WAL |
+> | TS files have no TDE framing | Engine-level AES-256-GCM TDE (WAL + TSSEG003 segments + TSMNF002 manifest, AAD domain separation); opt-in `GEODE_TS_TDE=1` + `GEODE_TDE_KEY`; fail-closed on wrong/missing key. No in-place plaintext→encrypted migration (documented limitation) |
+> | Backup modules are GraphStore-only | Stale since GAP-0862: `readPerGraphStoragePayload` archives the full data-dir tree recursively, including the server-wide and per-graph `timeseries/` trees; round-trip verified by `tests/ts_durability.zig` |
+> | `series_meta.dat` leaks device_id/metric plaintext | `series_meta.dat` no longer exists; series ids are 128-bit Wyhash-derived. Residual: ids are deterministically derived (not keyed via the engine's `opaqueSeriesId` HMAC helper) — acceptable single-tenant, revisit for multi-tenant TS |
+> | Startup hydrates all series into memory | Engine loads manifest + replays WAL only; segments are read lazily per query. The wrapper's `series_cache` hydrates a series only on first `getSeries` access |
+>
+> Remaining residuals (tracked, not hidden): backup of a live heavily-ingesting
+> store is a crash-consistent (not quiesced) snapshot; retention granularity is
+> whole segments; TS TDE keys are global, not per-tenant (see
+> `docs/design/TDE_PER_TENANT_KEYS_DEFERRED.md`). See
+> [TIMESERIES.md](TIMESERIES.md) "Concurrency & Durability" for the
+> authoritative current contract. The text below is preserved as the original
+> analysis record.
+
 ## Executive summary
 
 ### Best recommendation  

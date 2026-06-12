@@ -1,6 +1,7 @@
 // GQL Graph Migration: 004_dns.gql
 // Converts VDB DNS schema to graph-based DNS hierarchy
 // Based on ../../../vdb/migrations/004_dns.sql
+// destructive: acknowledged -- DELETE inside set_nameservers() replaces existing DELEGATES_TO relationships by design
 
 // --- Graph Schema Definition ---
 

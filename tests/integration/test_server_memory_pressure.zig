@@ -18,14 +18,41 @@ const testing = std.testing;
 // std.c.mkdtemp is not exposed in Zig 0.15.2 — declare the libc extern directly.
 extern "c" fn mkdtemp(template: [*:0]u8) ?[*:0]u8;
 
+// Zig 0.16 compat: synchronous test helper.  Io.Threaded.global_single_threaded
+// has a `.failing` allocator, so io operations that allocate (spawn does) need
+// a Threaded backed by a real allocator (same shape proto_test_util.zig uses).
+var test_threaded: ?std.Io.Threaded = null;
+
+fn testIo() std.Io {
+    if (test_threaded == null) {
+        test_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    }
+    return test_threaded.?.io();
+}
+
+// Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
+fn compat_sleep(ns: u64) void {
+    var req: std.posix.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
+    var rem: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+}
+
+// Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
+fn compat_nanoNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 /// Read /proc/<pid>/status VmRSS in KB.  Returns 0 on failure (non-Linux).
 fn readRssKb(pid: std.os.linux.pid_t) usize {
+    const io = testIo();
     var path_buf: [64]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/status", .{pid}) catch return 0;
-    const file = std.fs.openFileAbsolute(path, .{}) catch return 0;
-    defer file.close();
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{ .mode = .read_only }) catch return 0;
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    const n = file.readAll(&buf) catch return 0;
+    const n = file.readPositionalAll(io, &buf, 0) catch return 0;
     const contents = buf[0..n];
     const needle = "VmRSS:";
     const start = std.mem.indexOf(u8, contents, needle) orelse return 0;
@@ -57,7 +84,7 @@ test "server RSS stays bounded across 60 connections" {
     // this defer is declared BEFORE the child spawn so it runs AFTER the
     // child.kill() defer (LIFO).  The sequence is: (1) kill child to release
     // file handles, (2) delete tmp dir.
-    defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testIo(), tmp_dir) catch {};
 
     // Launch the real server binary so the test covers the shipping allocator.
     // Hard-coded high port — acceptable because this test is gated to test-e2e
@@ -76,29 +103,58 @@ test "server RSS stays bounded across 60 connections" {
     // GEODE_ADMIN_PASSWORD bootstraps the admin user on first launch; the
     // client then authenticates with -U geode -P <password>.  No auth bypass
     // flags are needed (and none exist for release builds).
-    var env_map = try std.process.getEnvMap(alloc);
+    //
+    // Zig 0.16: std.process.getEnvMap/EnvMap retired.  Snapshot the parent
+    // env from /proc/self/environ into an Environ.Map (this test is already
+    // linux-gated above), then overlay the bootstrap password.
+    const io = testIo();
+    var env_map = std.process.Environ.Map.init(alloc);
     defer env_map.deinit();
+    {
+        var environ_file = std.Io.Dir.openFileAbsolute(io, "/proc/self/environ", .{ .mode = .read_only }) catch null;
+        if (environ_file) |*f| {
+            defer f.close(io);
+            var env_buf: [64 * 1024]u8 = undefined;
+            const env_n = f.readPositionalAll(io, &env_buf, 0) catch 0;
+            const data = env_buf[0..env_n];
+            var entry_start: usize = 0;
+            for (data, 0..) |c, idx| {
+                if (c != 0) continue;
+                if (idx > entry_start) {
+                    const entry = data[entry_start..idx];
+                    if (std.mem.indexOfScalar(u8, entry, '=')) |eq| {
+                        try env_map.put(entry[0..eq], entry[eq + 1 ..]);
+                    }
+                }
+                entry_start = idx + 1;
+            }
+        }
+    }
     try env_map.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
 
-    var child = std.process.Child.init(&argv, alloc);
-    child.env_map = &env_map;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-    defer _ = child.kill() catch {};
+    // Zig 0.16: std.process.Child.init/spawn retired in favor of
+    // std.process.spawn(io, SpawnOptions).
+    var child = try std.process.spawn(io, .{
+        .argv = &argv,
+        .environ_map = &env_map,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    defer child.kill(io);
 
-    const pid = @as(std.os.linux.pid_t, @intCast(child.id));
+    const pid = @as(std.os.linux.pid_t, @intCast(child.id orelse return error.ChildPidUnavailable));
 
     // Poll readiness via the warmup query (up to 10s total).  The first
     // successful query both confirms the server is listening AND doubles as
     // the warmup that touches initial thread stacks.  This replaces a blind
     // 3s sleep that was flaky on slow/cold CI runners.
     const deadline_ns: u64 = 10 * std.time.ns_per_s;
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = compat_nanoNow();
     var ready = false;
-    while (@as(u64, @intCast(std.time.nanoTimestamp() - start_ns)) < deadline_ns) {
+    while (compat_nanoNow() - start_ns < deadline_ns) {
         // Give the first attempt a small delay so the server has a chance to bind.
-        std.Thread.sleep(250 * std.time.ns_per_ms);
+        compat_sleep(250 * std.time.ns_per_ms);
         runOneQuery(alloc, listen, "RETURN 1 AS warmup") catch continue;
         ready = true;
         break;
@@ -147,9 +203,13 @@ fn runOneQuery(alloc: std.mem.Allocator, listen: []const u8, query: []const u8) 
         "geode",                 "-P",
         "GeodeTestPassword123!", query,
     };
-    var child = std.process.Child.init(&argv, alloc);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-    _ = try child.wait();
+    _ = alloc;
+    const io = testIo();
+    var child = try std.process.spawn(io, .{
+        .argv = &argv,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    _ = try child.wait(io);
 }

@@ -934,4 +934,4 @@ The module testing framework provides comprehensive tools for testing Geode's mo
 
 **Last Updated**: 2025-11-14
 **Framework Version**: 1.0
-**Status**: Production Ready
+**Status**: Implemented — current baseline in [../KNOWN_TEST_ISSUES.md](../KNOWN_TEST_ISSUES.md)

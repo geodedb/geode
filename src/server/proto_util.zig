@@ -155,6 +155,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },
+        // GAP-0871: GQL BACKUP/RESTORE statements are intentionally unsupported;
+        // the engine-backed CLI (`geode backup create` / `geode restore`) is the
+        // supported surface. Stable message names the CLI alternative.
+        error.GqlBackupRestoreUnsupported => .{ .code = "0A000", .message = execution.gql_backup_restore_unsupported_message },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

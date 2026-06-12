@@ -201,13 +201,14 @@ test "GAP-0862 restore preserves node/edge counts and properties" {
     try assertRestoredIntegrity(&restored, seed);
 }
 
-// GAP-0862: the default BackupConfig requests `.zstd`, but the stdlib codec in
-// this toolchain is decompress-only, so the engine stores the payload
-// UNCOMPRESSED and must record `.none` in the header/metadata. This test pins
-// that truthful behavior: a `.zstd` request lands as `.none` on disk AND the
-// round-trip still restores the graph intact. (Recording `.zstd` while storing
-// raw bytes was the bug that made every default backup un-restorable.)
-test "GAP-0862 zstd request degrades to none and still round-trips" {
+// GAP-0862 -> GAP-0880: there is no zstd encoder in this toolchain. The
+// GAP-0862 fix made a `.zstd` request silently degrade to `.none` with a
+// truthful header; GAP-0880 hardened that further — a codec the engine cannot
+// apply is now REJECTED loudly (error.UnsupportedCompression) instead of
+// silently storing something other than what was requested. Real compression
+// is available via `.gzip` (see tests/test_gap0880_backup_upload.zig for the
+// gzip round-trip + magic-byte verification).
+test "GAP-0862 zstd request is rejected with UnsupportedCompression" {
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -218,7 +219,7 @@ test "GAP-0862 zstd request degrades to none and still round-trips" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     store.data_dir = data_dir;
-    const seed = try seedKnownGraph(&store);
+    _ = try seedKnownGraph(&store);
 
     const backup_dir = try makeTempDir(allocator, "cbackups");
     defer cleanupTempDir(allocator, backup_dir);
@@ -226,22 +227,7 @@ test "GAP-0862 zstd request degrades to none and still round-trips" {
     var mgr = try backup.BackupManager.init(allocator, backup_dir, .{ .compression = .zstd }, &store);
     defer mgr.deinit();
 
-    const meta = try mgr.createFullBackup();
-    try testing.expect(meta.size_bytes > 0);
-    // Truthful header: requested .zstd, stored .none (no encoder available).
-    try testing.expectEqual(backup.CompressionType.none, meta.compression);
-
-    const restore_dir = try makeTempDir(allocator, "crestore");
-    defer cleanupTempDir(allocator, restore_dir);
-    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
-
-    try initAdapterForDir(allocator, restore_dir);
-    var restored = try graph_store.GraphStore.init(allocator);
-    defer restored.deinit();
-    restored.data_dir = restore_dir;
-    try restored.loadFromFile();
-
-    try assertRestoredIntegrity(&restored, seed);
+    try testing.expectError(error.UnsupportedCompression, mgr.createFullBackup());
 }
 
 // A corrupted backup payload must be rejected by checksum verification rather

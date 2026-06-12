@@ -136,7 +136,7 @@ test "restore: full roundtrip" {
     try std.fs.cwd().access(restore_path, .{});
 }
 
-test "upload: validation and success" {
+test "upload: metadata-only requests are rejected (GAP-0880)" {
     const allocator = testing.allocator;
 
     const data_dir = try makeTempDir(allocator, "upload");
@@ -153,9 +153,11 @@ test "upload: validation and success" {
     defer invalid_res.deinit(allocator);
     try expect(!invalid_res.success);
 
-    var valid_res = try client.uploadBackup(allocator, 2048, "deadbeef");
-    defer valid_res.deinit(allocator);
-    try expect(valid_res.success);
-    try expect(valid_res.upload_path.len > 0);
-    try std.fs.cwd().access(valid_res.upload_path, .{});
+    // GAP-0880: the old contract accepted metadata-only uploads and created
+    // an empty file. Uploads now require the artifact payload (and verify
+    // size + CRC32 before any write), so a metadata-only request must be
+    // rejected — no file, no registry entry, no fake success.
+    var meta_only_res = try client.uploadBackup(allocator, 2048, "deadbeef");
+    defer meta_only_res.deinit(allocator);
+    try expect(!meta_only_res.success);
 }

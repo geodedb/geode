@@ -25,6 +25,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+const fulltext = @import("../index/fulltext.zig");
 
 const execution = @import("../execution.zig");
 const execution_helpers = @import("execution_helpers.zig");
@@ -51,6 +52,13 @@ pub fn execute(
     _ = context;
     if (std.mem.eql(u8, proc_name, "geode.fts.search")) {
         return try handleFtsSearch(allocator, call_stmt);
+    }
+    // CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_gap0869_fts_advanced.zig; OWNER=index; UPDATED=2026-06-10
+    if (std.mem.eql(u8, proc_name, "geode.fts.phrase")) {
+        return try handleFtsPhrase(allocator, call_stmt);
+    }
+    if (std.mem.eql(u8, proc_name, "geode.fts.proximity")) {
+        return try handleFtsProximity(allocator, call_stmt);
     }
     return null;
 }
@@ -133,6 +141,126 @@ fn handleFtsSearch(
     // Project the YIELD columns when present (e.g. `YIELD score` only). The
     // YIELD names must match the result columns case-insensitively; here the
     // canonical columns are `node` and `score`.
+    if (call_stmt.yield_items) |yield_items| {
+        result = try filterYieldColumns(allocator, result, yield_items);
+    }
+    return result;
+}
+
+/// `geode.fts.phrase(index_name, phrase [, max])` → rows of `(node, score)`.
+///
+/// Exact-adjacency phrase search over the persisted positional postings:
+/// matches documents in which the phrase terms appear at consecutive raw-token
+/// ordinals (stopword gaps preserved on both sides — see
+/// `FullTextIndex.phraseSearch`). Same arg shapes and error contract as
+/// `geode.fts.search`.
+// CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=PhraseProc; STATUS=TESTED; TEST=tests/test_gap0869_fts_advanced.zig; OWNER=index; UPDATED=2026-06-10
+fn handleFtsPhrase(
+    allocator: std.mem.Allocator,
+    call_stmt: ast.CallProcedure,
+) !ExecutionResult {
+    const args = switch (call_stmt.procedure) {
+        .Call => |call| call.args,
+        else => return error.InvalidArgs,
+    };
+    if (args.len < 2 or args.len > 3) return error.InvalidArgs;
+
+    const index_name = try literalString(args[0]);
+    const phrase_text = try literalString(args[1]);
+
+    var max_results: usize = DEFAULT_MAX_RESULTS;
+    if (args.len == 3) {
+        if (args[2].* != .Int) return error.TypeMismatch;
+        const n = args[2].Int;
+        if (n < 0) return error.InvalidArgs;
+        max_results = @intCast(n);
+    }
+
+    const facade = try resolveFacade(index_name);
+    const hits = facade.phraseSearch(phrase_text, max_results) catch return error.Unsupported;
+    defer facade.allocator.free(hits);
+
+    return try buildNodeScoreResult(allocator, call_stmt, hits);
+}
+
+/// `geode.fts.proximity(index_name, query, distance [, max])` → rows of
+/// `(node, score)`.
+///
+/// Order-insensitive NEAR search: matches documents in which every distinct
+/// query term occurs within a token window of `distance` (inclusive,
+/// max(pos) - min(pos) <= distance over the persisted positional postings).
+/// Requires at least 2 distinct non-stopword terms (`error.InvalidArgs`
+/// otherwise) and a non-negative `distance`.
+// CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=ProximityProc; STATUS=TESTED; TEST=tests/test_gap0869_fts_advanced.zig; OWNER=index; UPDATED=2026-06-10
+fn handleFtsProximity(
+    allocator: std.mem.Allocator,
+    call_stmt: ast.CallProcedure,
+) !ExecutionResult {
+    const args = switch (call_stmt.procedure) {
+        .Call => |call| call.args,
+        else => return error.InvalidArgs,
+    };
+    if (args.len < 3 or args.len > 4) return error.InvalidArgs;
+
+    const index_name = try literalString(args[0]);
+    const query_text = try literalString(args[1]);
+
+    if (args[2].* != .Int) return error.TypeMismatch;
+    const dist_raw = args[2].Int;
+    if (dist_raw < 0) return error.InvalidArgs;
+    const distance: u32 = std.math.cast(u32, dist_raw) orelse return error.InvalidArgs;
+
+    var max_results: usize = DEFAULT_MAX_RESULTS;
+    if (args.len == 4) {
+        if (args[3].* != .Int) return error.TypeMismatch;
+        const n = args[3].Int;
+        if (n < 0) return error.InvalidArgs;
+        max_results = @intCast(n);
+    }
+
+    const facade = try resolveFacade(index_name);
+    const hits = facade.proximitySearch(query_text, distance, max_results) catch |err| switch (err) {
+        error.TooFewTerms => return error.InvalidArgs,
+        else => return error.Unsupported,
+    };
+    defer facade.allocator.free(hits);
+
+    return try buildNodeScoreResult(allocator, call_stmt, hits);
+}
+
+/// Resolve the named fulltext facade on the DEFAULT graph (same resolver and
+/// failure contract as `handleFtsSearch`).
+fn resolveFacade(index_name: []const u8) !*fulltext.FullTextIndex {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return adapter.getFulltextIndexNamed(graph_store.DEFAULT_GRAPH_NAME, index_name) orelse
+        error.Unsupported;
+}
+
+/// Build the `(node, score)` binding table from facade SearchResults, applying
+/// YIELD projection when present. Shared by search/phrase/proximity handlers.
+fn buildNodeScoreResult(
+    allocator: std.mem.Allocator,
+    call_stmt: ast.CallProcedure,
+    hits: anytype,
+) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 2);
+    columns[0] = try allocator.dupe(u8, "node");
+    columns[1] = try allocator.dupe(u8, "score");
+
+    const rows = try allocator.alloc([]Value, hits.len);
+    for (hits, 0..) |hit, i| {
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(hit.doc_id) };
+        row[1] = Value{ .Double = hit.score };
+        rows[i] = row;
+    }
+
+    var result = ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+
     if (call_stmt.yield_items) |yield_items| {
         result = try filterYieldColumns(allocator, result, yield_items);
     }

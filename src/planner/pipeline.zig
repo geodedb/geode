@@ -228,9 +228,13 @@ pub fn plannerPathCacheInsert(
 pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerOptions) !struct { plan: planner_root.Plan, timings: phase_timing_mod.PhaseTimings, cost_estimate: f64 } {
     var timings: phase_timing_mod.PhaseTimings = .{};
     var pt = phase_timing_mod.PhaseTimer.init(&timings);
-    // Treat pre-validation (rewrite), group-by validation (cardinality placeholder), final selection (cost_eval)
+    // GAP-0867 honesty note: the phase labels are coarse proxies, not
+    // dedicated passes. No rewrite passes exist today, so the `.rewrite`
+    // phase measures an empty region (reported as ~0); `planQuery` (which
+    // performs validation + plan construction, including its internal
+    // cardinality-ish checks) is timed under `.cardinality`; the explicit
+    // cost-factor evaluation below is timed under `.cost_eval`.
     pt.begin(.rewrite);
-    // Potential future rewrite passes would occur here.
     pt.end();
     pt.begin(.cardinality);
     const plan = try planner_root.planQuery(q, opts);

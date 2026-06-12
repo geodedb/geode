@@ -30,7 +30,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 ZON = Path("build.zig.zon")
 
@@ -44,12 +43,12 @@ DEP_BLOCK = re.compile(
 )
 
 
-def parse_deps(text: str) -> List[Tuple[str, str, str]]:
+def parse_deps(text: str) -> list[tuple[str, str, str]]:
     """Return [(dep_name, url, recorded_hash), ...]."""
     return [(m.group(1), m.group(2), m.group(3)) for m in DEP_BLOCK.finditer(text)]
 
 
-def zig_fetch(url: str, timeout: int = 60) -> Tuple[str, str]:
+def zig_fetch(url: str, timeout: int = 60) -> tuple[str, str]:
     """Return (fetched_hash, error_message). Empty hash on failure."""
     try:
         cp = subprocess.run(
@@ -79,8 +78,8 @@ def main() -> int:
     if not deps:
         return 0
 
-    mismatches: List[Tuple[str, str, str]] = []
-    fetch_errors: List[Tuple[str, str]] = []
+    mismatches: list[tuple[str, str, str]] = []
+    fetch_errors: list[tuple[str, str]] = []
     verified = 0
 
     for name, url, recorded in deps:
@@ -120,7 +119,7 @@ def main() -> int:
 
     if fetch_errors:
         print(
-            f"zon-hash-verify: {verified}/{verified+len(fetch_errors)} deps verified, "
+            f"zon-hash-verify: {verified}/{verified + len(fetch_errors)} deps verified, "
             f"{len(fetch_errors)} could not be fetched (skipping):",
             file=sys.stderr,
         )

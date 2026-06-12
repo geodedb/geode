@@ -16,6 +16,11 @@ const raft_consensus = @import("raft_consensus.zig");
 const Command = raft_consensus.Command;
 const GraphMutation = raft_consensus.GraphMutation;
 const SchemaChange = raft_consensus.SchemaChange;
+const ConfigChange = raft_consensus.ConfigChange;
+const SnapshotPointer = raft_consensus.SnapshotPointer;
+const TxnPrepare = raft_consensus.TxnPrepare;
+const TxnDecide = raft_consensus.TxnDecide;
+const TxnCoordinator = @import("txn_coordinator.zig").TxnCoordinator;
 const graph_store_mod = @import("../graph_store.zig");
 const GraphStore = graph_store_mod.GraphStore;
 const cluster_replication = @import("cluster_replication.zig");
@@ -49,6 +54,132 @@ pub fn getGlobalStore() ?*GraphStore {
 /// Reset the global store to null (for test isolation).
 pub fn resetGlobalStore() void {
     g_store = null;
+}
+
+// ---------------------------------------------------------------------------
+// Applied cluster configuration (GAP-0870)
+//
+// Committed `config_change` entries mutate this membership view.  The
+// coordinator registers its instance at startup (same pattern as
+// `setGlobalStore`); tests register their own.  Apply runs single-threaded
+// inside the Raft tick loop, so no internal locking is required — readers
+// outside that loop get an eventually-consistent snapshot, which matches
+// the semantics of every other raft-applied state in this module.
+// ---------------------------------------------------------------------------
+
+pub const ClusterMember = struct {
+    server_id: u64,
+    /// Owned by the AppliedClusterConfig allocator.
+    endpoint: []u8,
+    port: ?u16,
+};
+
+pub const AppliedClusterConfig = struct {
+    allocator: Allocator,
+    members: std.AutoHashMap(u64, ClusterMember),
+    /// Bumped on every applied config_change (observable progress marker).
+    version: u64 = 0,
+
+    pub fn init(allocator: Allocator) AppliedClusterConfig {
+        return .{
+            .allocator = allocator,
+            .members = std.AutoHashMap(u64, ClusterMember).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *AppliedClusterConfig) void {
+        var it = self.members.iterator();
+        while (it.next()) |entry| self.allocator.free(entry.value_ptr.endpoint);
+        self.members.deinit();
+    }
+
+    pub fn getMember(self: *const AppliedClusterConfig, server_id: u64) ?ClusterMember {
+        return self.members.get(server_id);
+    }
+
+    pub fn memberCount(self: *const AppliedClusterConfig) usize {
+        return self.members.count();
+    }
+
+    /// Upsert a member (add_server / update_server). Deterministic across
+    /// nodes: a duplicate add or an update of an unknown id both resolve to
+    /// "member present with these coordinates" — restart-idempotent.
+    pub fn upsertMember(self: *AppliedClusterConfig, server_id: u64, endpoint: []const u8, port: ?u16) !void {
+        const owned = try self.allocator.dupe(u8, endpoint);
+        errdefer self.allocator.free(owned);
+        const gop = try self.members.getOrPut(server_id);
+        if (gop.found_existing) self.allocator.free(gop.value_ptr.endpoint);
+        gop.value_ptr.* = .{ .server_id = server_id, .endpoint = owned, .port = port };
+        self.version += 1;
+    }
+
+    /// Remove a member. Removing an absent member is a clean no-op
+    /// (restart-idempotent replay of remove after remove).
+    pub fn removeMember(self: *AppliedClusterConfig, server_id: u64) void {
+        if (self.members.fetchRemove(server_id)) |kv| self.allocator.free(kv.value.endpoint);
+        self.version += 1;
+    }
+};
+
+var g_cluster_config: ?*AppliedClusterConfig = null;
+
+/// Register the applied-membership view mutated by committed config_change
+/// entries. Must be set before the Raft node ticks if config changes are
+/// proposed; an unregistered view fails apply loudly.
+pub fn setGlobalClusterConfig(cfg: *AppliedClusterConfig) void {
+    g_cluster_config = cfg;
+}
+
+pub fn getGlobalClusterConfig() ?*AppliedClusterConfig {
+    return g_cluster_config;
+}
+
+pub fn resetGlobalClusterConfig() void {
+    g_cluster_config = null;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot pointer metadata (GAP-0870)
+//
+// A committed `snapshot_pointer` records that a snapshot covering the log
+// prefix up to `last_included_index` exists — the licence for log
+// truncation. We keep the latest (highest-index) pointer; an older pointer
+// arriving later (restart replay) never regresses the recorded watermark.
+// ---------------------------------------------------------------------------
+
+var g_snapshot_pointer: ?SnapshotPointer = null;
+
+/// The latest applied snapshot pointer, or null if none committed yet.
+pub fn lastSnapshotPointer() ?SnapshotPointer {
+    return g_snapshot_pointer;
+}
+
+pub fn resetSnapshotPointer() void {
+    g_snapshot_pointer = null;
+}
+
+// ---------------------------------------------------------------------------
+// 2PC coordinator registration (GAP-0870)
+//
+// Committed txn_prepare / txn_decide entries route into the existing 2PC
+// machinery (`txn_coordinator.TxnCoordinator`): prepare buffers the write
+// set + takes locks, decide(commit) applies the write set to the store,
+// decide(abort) releases without applying.
+// ---------------------------------------------------------------------------
+
+var g_txn_coordinator: ?*TxnCoordinator = null;
+
+/// Register the 2PC coordinator used by txn_prepare / txn_decide apply.
+pub fn setGlobalTxnCoordinator(coord: *TxnCoordinator) void {
+    g_txn_coordinator = coord;
+}
+
+pub fn getGlobalTxnCoordinator() ?*TxnCoordinator {
+    return g_txn_coordinator;
+}
+
+pub fn resetGlobalTxnCoordinator() void {
+    g_txn_coordinator = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,24 +233,133 @@ pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command,
             return applySchemaChange(allocator, store, sc);
         },
 
-        // ---- not yet implemented — log a warning and skip ----
-        .config_change => {
-            log.warn("raft apply: config_change not yet implemented, skipping", &.{});
-            return allocator.alloc(u8, 0);
+        // ---- cluster membership change (GAP-0870) ----
+        .config_change => |cc| {
+            return applyConfigChange(allocator, cc);
         },
-        .snapshot_pointer => {
-            log.warn("raft apply: snapshot_pointer not yet implemented, skipping", &.{});
-            return allocator.alloc(u8, 0);
+
+        // ---- snapshot pointer: record metadata for log truncation (GAP-0870) ----
+        .snapshot_pointer => |sp| {
+            return applySnapshotPointer(allocator, sp);
         },
-        .txn_prepare => {
-            log.warn("raft apply: txn_prepare not yet implemented, skipping", &.{});
-            return allocator.alloc(u8, 0);
+
+        // ---- 2PC prepare/decide: route into TxnCoordinator (GAP-0870) ----
+        .txn_prepare => |tp| {
+            return applyTxnPrepare(allocator, tp);
         },
-        .txn_decide => {
-            log.warn("raft apply: txn_decide not yet implemented, skipping", &.{});
-            return allocator.alloc(u8, 0);
+        .txn_decide => |td| {
+            return applyTxnDecide(allocator, td);
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Config change handler (GAP-0870)
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplyConfigChange; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
+fn applyConfigChange(allocator: Allocator, cc: ConfigChange) ![]u8 {
+    const cfg = g_cluster_config orelse {
+        log.err("raft apply: config_change received but no cluster config registered", &.{});
+        return error.ClusterConfigNotAvailable;
+    };
+
+    switch (cc.change_type) {
+        .add_server, .update_server => {
+            // validateCommand rejects an empty endpoint at proposal time;
+            // an entry from an older log without one is invalid — fail loud.
+            const ep = cc.server_endpoint orelse return error.InvalidConfigChange;
+            if (ep.len == 0) return error.InvalidConfigChange;
+            try cfg.upsertMember(cc.server_id, ep, cc.server_port);
+            log.info("raft apply: cluster member upserted", &.{
+                Attr.uint("server_id", cc.server_id),
+                Attr.string("endpoint", ep),
+            });
+        },
+        .remove_server => {
+            cfg.removeMember(cc.server_id);
+            log.info("raft apply: cluster member removed", &.{
+                Attr.uint("server_id", cc.server_id),
+            });
+        },
+    }
+    return allocator.alloc(u8, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot pointer handler (GAP-0870)
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplySnapshotPointer; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
+fn applySnapshotPointer(allocator: Allocator, sp: SnapshotPointer) ![]u8 {
+    // Monotonic: never regress the truncation watermark (an older pointer
+    // can re-arrive during restart log replay).
+    if (g_snapshot_pointer) |cur| {
+        if (sp.last_included_index <= cur.last_included_index) {
+            log.debug("raft apply: stale snapshot_pointer ignored (monotonic watermark)", &.{
+                Attr.uint("incoming_index", sp.last_included_index),
+                Attr.uint("current_index", cur.last_included_index),
+            });
+            return allocator.alloc(u8, 0);
+        }
+    }
+    g_snapshot_pointer = sp;
+    log.info("raft apply: snapshot pointer recorded", &.{
+        Attr.uint("last_included_index", sp.last_included_index),
+        Attr.uint("last_included_term", sp.last_included_term),
+        Attr.uint("size_bytes", sp.size_bytes),
+    });
+    return allocator.alloc(u8, 0);
+}
+
+// ---------------------------------------------------------------------------
+// 2PC prepare / decide handlers (GAP-0870)
+//
+// KNOWN BLOCKER (documented, unchanged): the pinned protobuf 0.1.3 cannot
+// encode OR decode a TwoPhaseMessage (union-as-submessage @compileError), so
+// the protobuf WIRE format stays gated behind
+// `protobuf_union_submessage_supported` in tests/test_txn_coordinator_2pc.zig.
+// The APPLY path below does not depend on it: write sets use the native G2PC
+// codec (txn_coordinator.serializeWriteSet / deserializeWriteSet), so the
+// full prepare → decide → store-mutation path is real and exercised by
+// in-process tests constructing commands directly (test-gap0870).
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplyTxnPrepare; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
+fn applyTxnPrepare(allocator: Allocator, tp: TxnPrepare) ![]u8 {
+    const coord = g_txn_coordinator orelse {
+        log.err("raft apply: txn_prepare received but no 2PC coordinator registered", &.{});
+        return error.TxnCoordinatorNotAvailable;
+    };
+
+    const vote_commit = try coord.handlePrepare(tp);
+    log.info("raft apply: txn_prepare applied", &.{
+        Attr.uint("xid", tp.xid),
+        Attr.string("vote", if (vote_commit) "commit" else "abort"),
+    });
+    // Result payload: 1 byte vote (1 = VOTE_COMMIT, 0 = VOTE_ABORT).
+    const result = try allocator.alloc(u8, 1);
+    result[0] = if (vote_commit) 1 else 0;
+    return result;
+}
+
+// CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplyTxnDecide; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
+fn applyTxnDecide(allocator: Allocator, td: TxnDecide) ![]u8 {
+    const coord = g_txn_coordinator orelse {
+        log.err("raft apply: txn_decide received but no 2PC coordinator registered", &.{});
+        return error.TxnCoordinatorNotAvailable;
+    };
+
+    // handleDecide commits (applies the buffered write set to the store) or
+    // aborts (releases locks without applying).  An unknown xid is tolerated
+    // inside handleDecide — a decide(abort) legitimately follows a prepare
+    // that voted abort and never registered.
+    try coord.handleDecide(td);
+    log.info("raft apply: txn_decide applied", &.{
+        Attr.uint("xid", td.xid),
+        Attr.string("decision", if (td.commit) "commit" else "abort"),
+    });
+    return allocator.alloc(u8, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -312,9 +552,16 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
         },
 
         .alter_graph => {
-            log.warn("raft apply: alter_graph not yet implemented, skipping", &.{
+            // GAP-0870: geode has no ALTER GRAPH semantics (no GQL surface,
+            // no GraphStore handler).  `validateCommand` rejects this variant
+            // at proposal time; an entry that nevertheless reaches apply
+            // (older log / mixed version) fails LOUD instead of silently
+            // skipping.  When ALTER GRAPH lands, route it through the same
+            // store handler family create_graph/drop_graph use above.
+            log.err("raft apply: alter_graph has no implementation — rejecting (proposal-time validation should have refused this)", &.{
                 Attr.string("graph", sc.graph),
             });
+            return error.UnsupportedSchemaOperation;
         },
     }
 
@@ -339,49 +586,91 @@ test "applyCommand: write returns empty slice (MVP)" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "applyCommand: config_change returns empty slice" {
+test "applyCommand: config_change without registered cluster config fails loud" {
     const allocator = std.testing.allocator;
-    const result = try applyCommand(allocator, null, .{ .config_change = .{
+    resetGlobalClusterConfig();
+    const result = applyCommand(allocator, null, .{ .config_change = .{
         .change_type = .add_server,
         .server_id = 42,
         .server_endpoint = "10.0.0.1",
     } }, 1);
-    defer allocator.free(result);
-    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectError(error.ClusterConfigNotAvailable, result);
 }
 
-test "applyCommand: snapshot_pointer returns empty slice" {
+test "applyCommand: config_change add/remove mutates registered cluster config" {
     const allocator = std.testing.allocator;
-    const result = try applyCommand(allocator, null, .{ .snapshot_pointer = .{
-        .last_included_index = 1,
-        .last_included_term = 1,
-        .size_bytes = 0,
-        .checksum = 0,
+    var cfg = AppliedClusterConfig.init(allocator);
+    defer cfg.deinit();
+    setGlobalClusterConfig(&cfg);
+    defer resetGlobalClusterConfig();
+
+    const r1 = try applyCommand(allocator, null, .{ .config_change = .{
+        .change_type = .add_server,
+        .server_id = 42,
+        .server_endpoint = "10.0.0.1",
+        .server_port = 4242,
     } }, 1);
-    defer allocator.free(result);
-    try std.testing.expectEqual(@as(usize, 0), result.len);
+    defer allocator.free(r1);
+
+    try std.testing.expectEqual(@as(usize, 1), cfg.memberCount());
+    const m = cfg.getMember(42).?;
+    try std.testing.expectEqualStrings("10.0.0.1", m.endpoint);
+    try std.testing.expectEqual(@as(?u16, 4242), m.port);
+
+    const r2 = try applyCommand(allocator, null, .{ .config_change = .{
+        .change_type = .remove_server,
+        .server_id = 42,
+        .server_endpoint = null,
+    } }, 2);
+    defer allocator.free(r2);
+    try std.testing.expectEqual(@as(usize, 0), cfg.memberCount());
 }
 
-test "applyCommand: txn_prepare returns empty slice" {
+test "applyCommand: snapshot_pointer records metadata, watermark is monotonic" {
     const allocator = std.testing.allocator;
-    const result = try applyCommand(allocator, null, .{ .txn_prepare = .{
+    resetSnapshotPointer();
+    defer resetSnapshotPointer();
+
+    const r1 = try applyCommand(allocator, null, .{ .snapshot_pointer = .{
+        .last_included_index = 50,
+        .last_included_term = 2,
+        .size_bytes = 1024,
+        .checksum = 7,
+    } }, 1);
+    defer allocator.free(r1);
+    try std.testing.expectEqual(@as(u64, 50), lastSnapshotPointer().?.last_included_index);
+
+    // An older pointer (restart replay) never regresses the watermark.
+    const r2 = try applyCommand(allocator, null, .{ .snapshot_pointer = .{
+        .last_included_index = 10,
+        .last_included_term = 1,
+        .size_bytes = 64,
+        .checksum = 3,
+    } }, 2);
+    defer allocator.free(r2);
+    try std.testing.expectEqual(@as(u64, 50), lastSnapshotPointer().?.last_included_index);
+}
+
+test "applyCommand: txn_prepare without registered coordinator fails loud" {
+    const allocator = std.testing.allocator;
+    resetGlobalTxnCoordinator();
+    const result = applyCommand(allocator, null, .{ .txn_prepare = .{
         .xid = 1,
         .shard_id = 0,
         .write_set = "",
         .metadata = "",
     } }, 1);
-    defer allocator.free(result);
-    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectError(error.TxnCoordinatorNotAvailable, result);
 }
 
-test "applyCommand: txn_decide returns empty slice" {
+test "applyCommand: txn_decide without registered coordinator fails loud" {
     const allocator = std.testing.allocator;
-    const result = try applyCommand(allocator, null, .{ .txn_decide = .{
+    resetGlobalTxnCoordinator();
+    const result = applyCommand(allocator, null, .{ .txn_decide = .{
         .xid = 1,
         .commit = true,
     } }, 1);
-    defer allocator.free(result);
-    try std.testing.expectEqual(@as(usize, 0), result.len);
+    try std.testing.expectError(error.TxnCoordinatorNotAvailable, result);
 }
 
 test "applyCommand: graph_mutation without store returns StoreNotAvailable" {

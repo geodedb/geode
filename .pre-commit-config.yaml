@@ -431,6 +431,22 @@ repos:
     pass_filenames: false
     stages: [pre-commit, pre-push]
 
+      # Quality #730: golden tests for the CANARY parser/generator tooling.
+      # Runs only when the generator/lint tools (or their tests) change —
+      # the status-csv-check hook above trusts status_generate.py, so any
+      # edit to it must keep the golden fixture green.
+  - id: status-generate-selftest
+    name: CANARY parser/generator golden tests
+    entry: bash
+    args:
+    - -c
+    - |
+      python3 tools/test_status_generate.py && python3 tools/test_canary_lint.py
+    language: system
+    files: ^tools/(status_generate|test_status_generate|canary_lint|test_canary_lint)\.py$
+    pass_filenames: false
+    stages: [pre-commit, pre-push]
+
       # MATCH staged parity + benchmark + CLI transport parity (matches CI governance-match-ops-campaign)
   - id: match-ops-campaign
     name: MATCH ops campaign (parity + bench + CLI transport)

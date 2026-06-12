@@ -923,6 +923,82 @@ fn unsetenvForTest(name: [*:0]const u8) c_int {
     return unsetenv(name);
 }
 
+// #813 / GAP-0886a: REQ-FLE-ENFORCE-030 — the fle_has_encrypted_fields
+// fast-path flag MUST read true once the schema has encrypted fields;
+// otherwise encryptFieldIfNeeded() silently skips encryption (fail-open).
+// Two mechanisms guarantee the invariant:
+//   1. Explicit set: the `CALL geode.fle.configureField` dispatch calls
+//      setHasEncryptedFields(true) right after catalog.configureField
+//      (src/execution/storage_dispatch.zig).
+//   2. Lazy self-heal: hasEncryptedFields() consults catalog.count() > 0 when
+//      the flag is unset and unchecked — covering any path that populates the
+//      catalog WITHOUT the explicit setter (e.g. persisted-catalog boot load).
+// This test exercises mechanism 2 (the one a code reviewer can't see at the
+// dispatch call site) plus the explicit-setter round-trip.
+// CANARY: REQ=REQ-FLE-ENFORCE-030; FEATURE="FLEEnforcement"; ASPECT=GlobalFlagSkipDisabled; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-06-10
+test "GAP-0886: hasEncryptedFields reflects catalog state (flag self-heal + setter)" {
+    const testing = std.testing;
+
+    // Isolate catalog persistence: point GEODE_DATA_DIR at a tmp dir so
+    // configureField's saveCatalog never touches a real data dir and the lazy
+    // path never loads a real persisted catalog from /tmp.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // std.Io.Dir has no realpath in Zig 0.16; TmpDir.sub_path is relative to
+    // `.zig-cache/tmp`, so reconstruct the absolute path from getcwd (same
+    // pattern as tests/test_gap0854_fle_chain.zig).
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    if (@as(isize, @bitCast(cwd_rc)) < 0) return error.GetCwdFailed;
+    var cwd_len: usize = cwd_rc;
+    while (cwd_len > 0 and cwd_buf[cwd_len - 1] == 0) : (cwd_len -= 1) {}
+    const data_dir = try std.fmt.allocPrint(
+        testing.allocator,
+        "{s}/.zig-cache/tmp/{s}",
+        .{ cwd_buf[0..cwd_len], &tmp.sub_path },
+    );
+    defer testing.allocator.free(data_dir);
+    const data_dir_z = try testing.allocator.dupeZ(u8, data_dir);
+    defer testing.allocator.free(data_dir_z);
+    try testing.expectEqual(@as(c_int, 0), setenvForTest("GEODE_DATA_DIR", data_dir_z.ptr));
+    defer _ = unsetenvForTest("GEODE_DATA_DIR");
+
+    // Clean global FLE state; restore it for sibling tests in this binary.
+    fle_catalog.resetGlobalCatalog(testing.allocator);
+    setHasEncryptedFields(false);
+    defer {
+        fle_catalog.resetGlobalCatalog(testing.allocator);
+        setHasEncryptedFields(false);
+    }
+
+    // Explicit-setter round-trip while the catalog is still empty
+    // (mirrors the storage_dispatch configureField call site).
+    setHasEncryptedFields(true);
+    try testing.expect(hasEncryptedFields());
+    setHasEncryptedFields(false);
+    try testing.expect(!hasEncryptedFields()); // empty catalog → lazy check stays false
+
+    // Populate the catalog WITHOUT calling setHasEncryptedFields — simulating
+    // a path that configures encryption while bypassing the dispatch setter.
+    const catalog = try fle_catalog.globalCatalog(testing.allocator);
+    try catalog.configureField("Gap0886Type", .{
+        .field_name = "ssn",
+        .encryption = .{ .enabled = true },
+    });
+
+    // Force the "never explicitly set" state: unset AND unchecked.
+    {
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        fle_has_encrypted_fields = false;
+        fle_catalog_state_checked = false;
+    }
+
+    // INVARIANT under test: the lazy self-heal must observe the configured
+    // field and flip the flag — no silent encryption skip.
+    try testing.expect(hasEncryptedFields());
+}
+
 // GAP-0515: Thread reuse isolation regression test.
 //
 // The earlier test covers the single direction (set → clear → empty). The

@@ -1,6 +1,17 @@
 const std = @import("std");
 const testing = std.testing;
 
+// Zig 0.16 compat: std.time.milliTimestamp removed; use clock_gettime(REALTIME).
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 // Mock crypto types for testing
 const EncryptionAlgorithm = enum {
     aes_256_gcm,
@@ -117,7 +128,7 @@ test "E2E: TDE with AES-256-GCM" {
         .provenance = .{
             .source = .local_file,
             .key_id = "test-master-key",
-            .created_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
             .rotated_at = null,
             .version = 1,
         },
@@ -208,7 +219,7 @@ test "E2E: Backup encryption and recovery" {
         .provenance = .{
             .source = .local_file,
             .key_id = "backup-key",
-            .created_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
             .rotated_at = null,
             .version = 1,
         },

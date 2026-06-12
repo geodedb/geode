@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-AUTH-INIT-CLI-001; FEATURE="AuthInitCLI"; ASPECT=OfflineAuthManagement; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+// CANARY: REQ=REQ-AUTH-INIT-CLI-001; FEATURE="AuthInitCLI"; ASPECT=OfflineAuthManagement; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
 //! Offline CLI commands for managing auth chain integrity.
 //!
 //! Provides:
@@ -106,6 +106,11 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.debug.print("Error: Failed to bootstrap admin user: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
+    // GAP-0514 Phase 6: BootstrapResult strings are caller-owned (username is
+    // duped, password is env-duped or generated) — free them or the
+    // DebugAllocator reports a leak on every `geode auth init`.
+    defer allocator.free(result.username);
+    defer allocator.free(result.password);
 
     // Issue #819 (CWE-200 information disclosure / CWE-538 file/dir info
     // exposure): never echo the bootstrap password to stdout.  Mirror the

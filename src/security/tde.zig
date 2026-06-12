@@ -115,10 +115,20 @@ pub fn decrypt(allocator: std.mem.Allocator, ct: Ciphertext, aad: []const u8) ![
     return out;
 }
 
+// GAP-0881: status() must reflect actual key material, not just the feature
+// flag. It performs a real key-manager load: enabled + missing/invalid
+// GEODE_TDE_KEY reports loaded=false; a valid key reports loaded=true with
+// the HKDF-derived key fingerprint (never key material — see deriveKeyId in
+// tde_key_manager.zig). Uses a small stack buffer since the env read only
+// needs ~80 bytes and status() must stay allocator-free for callers.
 pub fn status() KeyStatus {
-    if (!enabled()) return KeyStatus{ .loaded = false };
-    const dummy: [32]u8 = [_]u8{0} ** 32; // improvement: store hashed key bytes
-    return KeyStatus{ .loaded = true, .key_id = dummy };
+    const not_loaded = KeyStatus{ .loaded = false, .key_id = [_]u8{0} ** 32 };
+    if (!enabled()) return not_loaded;
+    var buf: [256]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const ks = key_manager.loadKey(fba.allocator(), true) catch return not_loaded;
+    if (!ks.loaded) return not_loaded;
+    return ks;
 }
 
 // Global rotation state (added to fix undeclared identifier usage in evaluation and cleanup functions)

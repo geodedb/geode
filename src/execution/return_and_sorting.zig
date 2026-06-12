@@ -11,6 +11,9 @@ const ExecutionContext = execution.ExecutionContext;
 // Import helper functions used by return and sorting
 const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 
+// GAP-0535: value ownership helpers for projection results
+const value_utilities = @import("value_utilities.zig");
+
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
@@ -463,6 +466,10 @@ pub fn isNonConstantExpr(expr: ast.Expr) bool {
     }
 }
 
+// CANARY: REQ=REQ-EXEC-RESULT-OWNERSHIP-001; FEATURE="ExecutionResultOwnership"; ASPECT=ReturnProjection; STATUS=TESTED; TEST=tests/test_gap0535_result_ownership.zig; OWNER=execution; UPDATED=2026-06-11
+// GAP-0535: bare-RETURN projection results fully own their row values
+// (owns_value_memory = true) so ExecutionResult.deinit is leak-free under a
+// strict allocator. See ensureOwnedProjectionValue for the ownership rules.
 pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClause, env: Env) !ExecutionResult {
     const items = ret.items;
 
@@ -474,16 +481,17 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
         var row = try allocator.alloc(Value, total_vars);
 
         var idx: usize = 0;
-        // Add regular environment variables
+        // Add regular environment variables (GAP-0535: duplicated — env values
+        // are borrowed from the caller, the result must own its memory)
         for (env.names, 0..) |name, i| {
             columns[idx] = try allocator.dupe(u8, name);
-            row[idx] = env.values[i];
+            row[idx] = try value_utilities.duplicateValue(allocator, env.values[i]);
             idx += 1;
         }
         // Add parameter variables
         for (env.param_names, 0..) |name, i| {
             columns[idx] = try allocator.dupe(u8, name);
-            row[idx] = env.param_values[i];
+            row[idx] = try value_utilities.duplicateValue(allocator, env.param_values[i]);
             idx += 1;
         }
 
@@ -497,16 +505,19 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
                 const list = std.ArrayList([]const u8).empty;
                 break :blk list;
             },
+            .owns_value_memory = true,
         };
     }
 
     // Collect column names (with disambiguation for duplicates)
     const columns = try generateUniqueColumnNames(allocator, items);
 
-    // Evaluate expressions with provided environment
+    // Evaluate expressions with provided environment (GAP-0535: each value is
+    // adopted or duplicated so the result fully owns its row memory)
     var row = try allocator.alloc(Value, items.len);
     for (items, 0..) |item, i| {
-        row[i] = try eval.evalExpr(allocator, item.expr, env);
+        const evaluated = try eval.evalExpr(allocator, item.expr, env);
+        row[i] = try value_utilities.ensureOwnedProjectionValue(allocator, item.expr, evaluated);
     }
 
     var rows = try allocator.alloc([]Value, 1);
@@ -519,6 +530,7 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
             const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
+        .owns_value_memory = true,
     };
 }
 
@@ -570,9 +582,9 @@ fn executeSessionSet(allocator: std.mem.Allocator, ss: ast.SessionSetStatement) 
 // ============================================================================
 
 test "D05: exprsEqual - Ident expressions" {
-    const id1 = ast.Expr{ .Ident = .{ .orig = "name", .lower = "name" } };
-    const id2 = ast.Expr{ .Ident = .{ .orig = "name", .lower = "name" } };
-    const id3 = ast.Expr{ .Ident = .{ .orig = "other", .lower = "other" } };
+    const id1 = ast.Expr{ .Ident = .{ .orig = "name", .cnf = "name" } };
+    const id2 = ast.Expr{ .Ident = .{ .orig = "name", .cnf = "name" } };
+    const id3 = ast.Expr{ .Ident = .{ .orig = "other", .cnf = "other" } };
 
     try std.testing.expect(exprsEqual(id1, id2));
     try std.testing.expect(!exprsEqual(id1, id3));
@@ -583,21 +595,21 @@ test "D05: exprsEqual - Member expressions" {
 
     // Create n.name Member expression
     const target1 = try allocator.create(ast.Expr);
-    target1.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    target1.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(target1);
 
     const member1 = ast.Expr{ .Member = .{ .target = target1, .field = "name" } };
 
     // Create identical n.name
     const target2 = try allocator.create(ast.Expr);
-    target2.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    target2.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(target2);
 
     const member2 = ast.Expr{ .Member = .{ .target = target2, .field = "name" } };
 
     // Create different n.age
     const target3 = try allocator.create(ast.Expr);
-    target3.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    target3.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(target3);
 
     const member3 = ast.Expr{ .Member = .{ .target = target3, .field = "age" } };
@@ -617,7 +629,7 @@ test "D05: exprsEqual - Int expressions" {
 
 test "D05: exprsEqual - different types" {
     const int_expr = ast.Expr{ .Int = 42 };
-    const id_expr = ast.Expr{ .Ident = .{ .orig = "x", .lower = "x" } };
+    const id_expr = ast.Expr{ .Ident = .{ .orig = "x", .cnf = "x" } };
 
     try std.testing.expect(!exprsEqual(int_expr, id_expr));
 }
@@ -627,18 +639,18 @@ test "D05: findColumnIndexByExpression - finds matching expression" {
 
     // Create ORDER BY expression: n.name
     const order_target = try allocator.create(ast.Expr);
-    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(order_target);
 
     const order_expr = ast.Expr{ .Member = .{ .target = order_target, .field = "name" } };
 
     // Create RETURN items: [n.name AS persons, n.age AS age]
     const return_target1 = try allocator.create(ast.Expr);
-    return_target1.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    return_target1.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(return_target1);
 
     const return_target2 = try allocator.create(ast.Expr);
-    return_target2.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    return_target2.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(return_target2);
 
     const return_items = [_]ast.ReturnItem{
@@ -657,14 +669,14 @@ test "D05: findColumnIndexByExpression - returns null for non-matching" {
 
     // Create ORDER BY expression: n.unknown
     const order_target = try allocator.create(ast.Expr);
-    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(order_target);
 
     const order_expr = ast.Expr{ .Member = .{ .target = order_target, .field = "unknown" } };
 
     // Create RETURN items: [n.name AS persons]
     const return_target = try allocator.create(ast.Expr);
-    return_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    return_target.* = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "n" } };
     defer allocator.destroy(return_target);
 
     const return_items = [_]ast.ReturnItem{
@@ -740,15 +752,15 @@ test "F01: sortRowsEx - DESC NULLS LAST puts nulls at end" {
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .row_count = 4,
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // ORDER BY salary DESC NULLS LAST
-    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .cnf = "salary" } };
     var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .last };
-    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+    const order = ast.OrderBy{ .keys = order_keys };
 
     try sortRowsEx(allocator, &result, order, null);
 
@@ -787,15 +799,15 @@ test "F01: sortRowsEx - ASC NULLS LAST also puts nulls at end" {
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .row_count = 3,
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // ORDER BY salary ASC NULLS LAST
-    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .cnf = "salary" } };
     var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = false, .nulls = .last };
-    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+    const order = ast.OrderBy{ .keys = order_keys };
 
     try sortRowsEx(allocator, &result, order, null);
 
@@ -833,15 +845,15 @@ test "F01: sortRowsEx - DESC NULLS FIRST puts nulls at beginning" {
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .row_count = 3,
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // ORDER BY salary DESC NULLS FIRST
-    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .cnf = "salary" } };
     var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .first };
-    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+    const order = ast.OrderBy{ .keys = order_keys };
 
     try sortRowsEx(allocator, &result, order, null);
 

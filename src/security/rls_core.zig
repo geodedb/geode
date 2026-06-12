@@ -171,6 +171,17 @@ pub const RLSEngine = struct {
         constants: []const Value,
         jump_table: []const usize,
 
+        // CANARY: REQ=REQ-PERF-RLS-ROW-SKIP-001; FEATURE="RLSRowBuildSkip"; ASPECT=NeedsRowFlag; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-06-11
+        // PERF-A / #808: true when the bytecode contains a `load_row`
+        // opcode (the only opcode that reads row data). When every
+        // applicable policy's flag is false, the match loop can skip the
+        // per-row StringHashMap rebuild entirely — the VM never touches
+        // the row. Defaults to true (conservative) so hand-constructed
+        // CompiledExpressions that bypass compileExpression/createPolicy
+        // keep the old always-build behavior. compileExpression and
+        // createPolicy compute the real value via bytecodeNeedsRowData.
+        needs_row_data: bool = true,
+
         // CANARY: REQ=REQ-RLS-EXPR-001; FEATURE="RLSExpressionCompilation"; ASPECT=Bytecode; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
         pub const Opcode = enum(u8) {
             nop = 0x00,
@@ -236,6 +247,28 @@ pub const RLSEngine = struct {
                 };
             }
         };
+
+        // PERF-A / #808: pre-scan for row-reading opcodes. Walks the
+        // bytecode with the same operand widths the VM uses (1-byte arg
+        // for push_const / load_row / load_session / load_attr / jump /
+        // jump_if_*) so an operand byte that happens to equal 0x10 is
+        // never misread as a load_row opcode. Unknown opcodes return
+        // true (conservative: the VM will fail-closed on them anyway,
+        // but the row must exist for whatever the evaluator does first).
+        pub fn bytecodeNeedsRowData(bytecode: []const u8) bool {
+            var pc: usize = 0;
+            while (pc < bytecode.len) {
+                const opcode = Opcode.fromByte(bytecode[pc]) orelse return true;
+                pc += 1;
+                switch (opcode) {
+                    .load_row => return true,
+                    // Opcodes carrying a 1-byte operand: skip it.
+                    .push_const, .load_session, .load_attr, .jump, .jump_if_false, .jump_if_true => pc += 1,
+                    else => {},
+                }
+            }
+            return false;
+        }
     };
 
     pub const TemporalConstraint = struct {
@@ -330,11 +363,17 @@ pub const RLSEngine = struct {
         if (compiled_policy.using_expr) |*expr| {
             if (expr.compiled == null) {
                 expr.compiled = try self.compileExpression(expr.raw);
+            } else {
+                // PERF-A / #808: pinned pre-compiled expressions bypass
+                // compileExpression, so compute the row-skip flag here.
+                expr.compiled.?.needs_row_data = CompiledExpression.bytecodeNeedsRowData(expr.compiled.?.bytecode);
             }
         }
         if (compiled_policy.check_expr) |*expr| {
             if (expr.compiled == null) {
                 expr.compiled = try self.compileExpression(expr.raw);
+            } else {
+                expr.compiled.?.needs_row_data = CompiledExpression.bytecodeNeedsRowData(expr.compiled.?.bytecode);
             }
         }
 
@@ -706,10 +745,15 @@ pub const RLSEngine = struct {
         try bytecode.append(self.allocator, @intFromEnum(Opcode.ret));
 
         const compiled = try self.allocator.create(CompiledExpression);
+        const owned_bytecode = try bytecode.toOwnedSlice(self.allocator);
         compiled.* = CompiledExpression{
-            .bytecode = try bytecode.toOwnedSlice(self.allocator),
+            .bytecode = owned_bytecode,
             .constants = try constants.toOwnedSlice(self.allocator),
             .jump_table = try jump_table.toOwnedSlice(self.allocator),
+            // PERF-A / #808: pre-scan once at compile time so the match
+            // loop can skip per-row StringHashMap construction when no
+            // policy reads row data.
+            .needs_row_data = CompiledExpression.bytecodeNeedsRowData(owned_bytecode),
         };
 
         return compiled;
@@ -1149,6 +1193,50 @@ pub const RLSEngine = struct {
         return true;
     }
 
+    // CANARY: REQ=REQ-PERF-RLS-ROW-SKIP-002; FEATURE="RLSRowBuildSkip"; ASPECT=TablePreScan; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-06-11
+    /// PERF-A / #808: returns true when any enabled policy applicable to
+    /// (operation, graph, table) could read row data during evaluation —
+    /// i.e. its compiled bytecode contains a `load_row` opcode, or it has
+    /// no compiled form (conservative: the evaluator's behavior for raw
+    /// expressions is out of this pre-scan's hands).
+    ///
+    /// When this returns false the caller may pass an EMPTY row to
+    /// checkRowAccessByUsername and skip per-row row construction
+    /// entirely: no applicable policy executes `load_row`, so the row
+    /// contents are never read. "No policies registered" returns false
+    /// (checkRowAccessByUsername default-allows without reading the row).
+    ///
+    /// Temporal constraints are deliberately NOT consulted here — they can
+    /// flip between this pre-scan and evaluation, so a temporally-gated
+    /// policy is treated as potentially active.
+    pub fn needsRowDataForTable(
+        self: *Self,
+        operation: Operation,
+        graph: []const u8,
+        table: []const u8,
+    ) bool {
+        const key = PolicyKey{ .graph = graph, .table = table };
+        const policies = self.policies.get(key) orelse return false;
+
+        for (policies.items) |policy| {
+            if (!policy.enabled) continue;
+            if (policy.operation != operation and policy.operation != .all) continue;
+
+            // Mirror checkRowAccessByUsername's expression selection.
+            const expr = switch (operation) {
+                .select, .delete => policy.using_expr,
+                .insert, .update => policy.check_expr,
+                .all => policy.using_expr orelse policy.check_expr,
+            };
+
+            if (expr) |e| {
+                const compiled = e.compiled orelse return true;
+                if (compiled.needs_row_data) return true;
+            }
+        }
+        return false;
+    }
+
     // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=UsernameRowAccess; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
     /// Simplified row access check using username string instead of full SecurityContext.
     /// For use in the match loop where only username and graph context are available.
@@ -1326,7 +1414,11 @@ pub const RLSEngine = struct {
                 .load_user => {
                     if (sp >= stack.len) return error.StackOverflow;
                     // Push hashed username as integer (matches cache key derivation).
-                    stack[sp] = .{ .integer = @intCast(std.hash.Wyhash.hash(0, username)) };
+                    // PERF-A drive-by fix: @intCast of the u64 Wyhash into i64
+                    // panicked (Debug) / was UB (release) for any username whose
+                    // hash has the high bit set (~50% of usernames). @bitCast
+                    // keeps the full 64-bit identity deterministically.
+                    stack[sp] = .{ .integer = @bitCast(std.hash.Wyhash.hash(0, username)) };
                     sp += 1;
                 },
                 .load_session => {
@@ -2482,6 +2574,8 @@ pub const AttributeBasedAccessControl = struct {
             };
 
             // Cache the result
+            // error-policy: A — best-effort attribute cache; the freshly computed
+            // result is still returned, so a failed put only costs re-evaluation.
             self.attribute_cache.put(rule.name, .{
                 .value = .{ .boolean = result },
                 .timestamp = now,

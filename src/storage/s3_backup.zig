@@ -1,4 +1,20 @@
+//! S3 cloud backup manager (GraphStore snapshots).
+//!
+//! SEC-S3-SIGV2-01 (GAP-0885d): requests are signed with AWS Signature
+//! Version 4 (header-based Authorization; see `s3_sigv4.zig`) — the legacy
+//! SigV2 HMAC-SHA1 signing was removed. SigV4 is required by AWS and is also
+//! supported by S3-compatible targets (DigitalOcean Spaces, MinIO, Ceph RGW),
+//! so the existing `S3Config` endpoint/credential plumbing is unchanged.
+
 const std = @import("std");
+const geode = @import("geode");
+const graph_store = geode.graph_store;
+// Named module (build.zig `storage_backup_mod`) — backup.zig is already the
+// root of the `storage/backup` module; a relative import would duplicate it.
+const backup = @import("storage/backup");
+// Named module (see build.zig `s3_sigv4_mod`) — the same file backs the
+// SigV4 KAT suite, so a relative import here would split it across modules.
+const sigv4 = @import("s3_sigv4");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -9,7 +25,7 @@ fn compat_fillRandom(buf: []u8) void {
     }
 }
 
-// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp removed.
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -21,6 +37,7 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+
 fn compat_timestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -32,19 +49,27 @@ fn compat_timestamp() i64 {
     }
     return @as(i64, ts.sec);
 }
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+
+// Zig 0.16 compat: std.time.sleep removed. Raw nanosleep on Linux, libc elsewhere.
+fn compat_sleepMs(ms: u64) void {
+    if (ms == 0) return;
+    const ns: u64 = ms * std.time.ns_per_ms;
     if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
+        const req = std.os.linux.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
     } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
+        const req = std.c.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.c.timespec = undefined;
+        _ = std.c.nanosleep(&req, &rem);
     }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
-const backup = @import("backup.zig");
-const graph_store = @import("../graph_store.zig");
 
 /// S3 backup configuration
 pub const S3Config = struct {
@@ -62,7 +87,8 @@ pub const S3Config = struct {
 };
 
 /// S3 backup manager for cloud backups
-// CANARY: REQ=REQ-GQL-S3-001; FEATURE="S3 Cloud Backups"; ASPECT=Storage; STATUS=TESTED; TEST=e2e_s3_backup_restore; BENCH=benchmark_s3_throughput; OWNER=storage; UPDATED=2026-01-17
+// CANARY: REQ=REQ-GQL-S3-001; FEATURE="S3 Cloud Backups"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_s3_sigv4.zig; OWNER=storage; UPDATED=2026-06-10
+// CANARY: REQ=REQ-SEC-S3-SIGV4-001; FEATURE="S3 SigV4 Signing"; ASPECT=Integration; STATUS=TESTED; TEST=tests/test_s3_sigv4.zig; OWNER=security; UPDATED=2026-06-10
 pub const S3BackupManager = struct {
     allocator: std.mem.Allocator,
     config: S3Config,
@@ -77,13 +103,13 @@ pub const S3BackupManager = struct {
             .allocator = allocator,
             .config = config,
             .backup_config = backup_config,
-            .http_client = try HttpClient.init(allocator),
+            .http_client = HttpClient{ .allocator = allocator },
             .metrics = S3Metrics.init(),
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.http_client.deinit();
+        _ = self;
     }
 
     /// Perform a full backup to S3 (GraphStore snapshots only).
@@ -113,7 +139,8 @@ pub const S3BackupManager = struct {
         );
         defer self.allocator.free(s3_key);
 
-        const file_info = try std.Io.Dir.cwd().statFile(backup_path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file_info = try std.Io.Dir.cwd().statFile(io, backup_path, .{});
         if (file_info.size > self.config.multipart_threshold) {
             try self.multipartUpload(backup_path, s3_key, metadata.checksum);
         } else {
@@ -146,13 +173,16 @@ pub const S3BackupManager = struct {
 
         const metadata = try self.downloadMetadata(backup_id);
 
+        const io = std.Io.Threaded.global_single_threaded.io();
         const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/geode_s3_restore_{x}", .{backup_id});
         defer self.allocator.free(tmp_dir);
-        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), tmp_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDirPath(io, tmp_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
-        defer std.Io.Dir.cwd().deleteTree(tmp_dir) catch {};
+        // error-policy: A — best-effort cleanup of the restore staging dir
+        // under /tmp; a leftover tree affects nothing but disk hygiene.
+        defer std.Io.Dir.cwd().deleteTree(io, tmp_dir) catch {};
 
         const s3_key = try std.fmt.allocPrint(
             self.allocator,
@@ -174,11 +204,11 @@ pub const S3BackupManager = struct {
         const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{tmp_dir});
         defer self.allocator.free(metadata_path);
         {
-            const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), metadata_path, .{});
-            defer file.close();
+            const file = try std.Io.Dir.cwd().createFile(io, metadata_path, .{});
+            defer file.close(io);
             const json_str = try std.json.Stringify.valueAlloc(self.allocator, &[_]backup.BackupMetadata{metadata}, .{});
             defer self.allocator.free(json_str);
-            try file.writeAll(json_str);
+            try file.writePositionalAll(io, json_str, 0);
         }
 
         var mgr = try backup.BackupManager.init(self.allocator, tmp_dir, self.backup_config, store);
@@ -191,19 +221,22 @@ pub const S3BackupManager = struct {
 
     /// Multipart upload for large files
     fn multipartUpload(self: *Self, file_path: []const u8, s3_key: []const u8, expected_checksum: u64) !void {
-        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
-        defer file.close();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().openFile(io, file_path, .{ .mode = .read_only });
+        defer file.close(io);
 
-        const file_size = (try file.stat()).size;
+        const file_size = (try file.stat(io)).size;
         const part_size = self.config.multipart_part_size;
-        const num_parts = (file_size + part_size - 1) / part_size;
 
         // Initiate multipart upload
         const upload_id = try self.initiateMultipartUpload(s3_key);
         defer self.allocator.free(upload_id);
 
-        var parts = std.ArrayList(PartInfo).init(self.allocator);
-        defer parts.deinit();
+        var parts: std.ArrayList(PartInfo) = .empty;
+        defer {
+            for (parts.items) |part| self.allocator.free(part.etag);
+            parts.deinit(self.allocator);
+        }
 
         // Upload parts
         var part_number: u32 = 1;
@@ -216,69 +249,66 @@ pub const S3BackupManager = struct {
             const chunk_size = @min(part_size, file_size - offset);
 
             // Read chunk
-            var buffer = try self.allocator.alloc(u8, chunk_size);
+            const buffer = try self.allocator.alloc(u8, @intCast(chunk_size));
             defer self.allocator.free(buffer);
 
-            _ = try file.pread(buffer, offset);
+            const n = try file.readPositionalAll(io, buffer, offset);
+            if (n != buffer.len) return error.UnexpectedEndOfFile;
 
-            // Upload part with retry
-            var retry_count: u32 = 0;
-            var etag: []const u8 = undefined;
+            // Upload part with retry (exponential backoff with jitter)
+            const etag = try self.uploadPartWithRetry(upload_id, s3_key, part_number, buffer);
+            errdefer self.allocator.free(etag);
 
-            while (retry_count < self.config.max_retries) : (retry_count += 1) {
-                etag = self.uploadPart(upload_id, s3_key, part_number, buffer) catch |err| {
-                    if (retry_count == self.config.max_retries - 1) return err;
-
-                    // Exponential backoff with jitter
-                    const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
-                    const jitter = blk: {
-                        var _rng_buf: [8]u8 = undefined;
-                        compat_fillRandom(&_rng_buf);
-                        break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2);
-                    };
-                    std.time.sleep((delay + jitter) * 1_000_000);
-                    continue;
-                };
-                break;
-            }
-
-            try parts.append(.{
+            try parts.append(self.allocator, .{
                 .part_number = part_number,
-                .etag = try self.allocator.dupe(u8, etag),
+                .etag = etag,
             });
         }
 
         // Complete multipart upload
         try self.completeMultipartUpload(upload_id, s3_key, parts.items, expected_checksum);
+    }
 
-        // Clean up part ETags
-        for (parts.items) |part| {
-            self.allocator.free(part.etag);
+    fn uploadPartWithRetry(self: *Self, upload_id: []const u8, s3_key: []const u8, part_number: u32, data: []const u8) ![]const u8 {
+        var retry_count: u32 = 0;
+        while (true) : (retry_count += 1) {
+            return self.uploadPart(upload_id, s3_key, part_number, data) catch |err| {
+                if (retry_count + 1 >= self.config.max_retries) return err;
+                self.backoff(retry_count);
+                continue;
+            };
         }
+    }
+
+    fn backoff(self: *Self, retry_count: u32) void {
+        const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
+        const jitter = blk: {
+            var rng_buf: [8]u8 = undefined;
+            compat_fillRandom(&rng_buf);
+            break :blk std.mem.readInt(u64, &rng_buf, .little) % @max(delay / 2, 1);
+        };
+        compat_sleepMs(delay + jitter);
     }
 
     /// Simple upload for smaller files
     fn simpleUpload(self: *Self, file_path: []const u8, s3_key: []const u8, expected_checksum: u64) !void {
-        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
-        defer file.close();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().openFile(io, file_path, .{ .mode = .read_only });
+        defer file.close(io);
 
-        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024 * 100); // Max 100MB
+        const stat = try file.stat(io);
+        if (stat.size > 1024 * 1024 * 100) return error.FileTooLarge; // Max 100MB
+        const content = try self.allocator.alloc(u8, @intCast(stat.size));
         defer self.allocator.free(content);
+        const n = try file.readPositionalAll(io, content, 0);
+        if (n != content.len) return error.UnexpectedEndOfFile;
 
         // Upload with retry
         var retry_count: u32 = 0;
         while (retry_count < self.config.max_retries) : (retry_count += 1) {
             self.putObject(s3_key, content, expected_checksum) catch |err| {
                 if (retry_count == self.config.max_retries - 1) return err;
-
-                // Exponential backoff with jitter
-                const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
-                const jitter = blk: {
-                    var _rng_buf: [8]u8 = undefined;
-                    compat_fillRandom(&_rng_buf);
-                    break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2);
-                };
-                std.time.sleep((delay + jitter) * 1_000_000);
+                self.backoff(retry_count);
                 continue;
             };
             break;
@@ -286,11 +316,9 @@ pub const S3BackupManager = struct {
     }
 
     fn uploadMetadata(self: *Self, metadata: backup.BackupMetadata, s3_key: []const u8) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
-
-        try metadata.toJSON(buffer.writer());
-        try self.putObject(s3_key, buffer.items, 0);
+        const json_str = try std.json.Stringify.valueAlloc(self.allocator, metadata, .{});
+        defer self.allocator.free(json_str);
+        try self.putObject(s3_key, json_str, 0);
     }
 
     fn downloadMetadata(self: *Self, backup_id: u64) !backup.BackupMetadata {
@@ -304,97 +332,125 @@ pub const S3BackupManager = struct {
         const content = try self.getObject(metadata_key);
         defer self.allocator.free(content);
 
-        var stream = std.Io.fixedBufferStream(content);
-        return try backup.BackupMetadata.fromJSON(stream.reader(), self.allocator);
+        const parsed = try std.json.parseFromSlice(backup.BackupMetadata, self.allocator, content, .{});
+        defer parsed.deinit();
+        return parsed.value;
     }
 
-    // S3 API operations
-    fn initiateMultipartUpload(self: *Self, s3_key: []const u8) ![]const u8 {
-        const url = try self.buildS3Url(s3_key, "uploads");
-        const auth_headers = try self.buildAuthHeaders("POST", s3_key, "", "");
-        defer self.freeHeaders(auth_headers);
+    // ------------------------------------------------------------------
+    // SigV4 request signing (SEC-S3-SIGV2-01)
+    // ------------------------------------------------------------------
 
-        const response = try self.http_client.request(.POST, url, auth_headers, null);
-        defer self.allocator.free(response);
-        defer self.allocator.free(url);
+    /// Owned strings backing one signed request.
+    const SignedRequest = struct {
+        url: []u8,
+        host: []u8,
+        amz_date: []u8,
+        payload_hash: []u8,
+        authorization: []u8,
+
+        fn deinit(self: *const SignedRequest, allocator: std.mem.Allocator) void {
+            allocator.free(self.url);
+            allocator.free(self.host);
+            allocator.free(self.amz_date);
+            allocator.free(self.payload_hash);
+            allocator.free(self.authorization);
+        }
+
+        /// x-amz-* headers to send (Authorization rides the typed slot).
+        fn extraHeaders(self: *const SignedRequest) [2]std.http.Header {
+            return .{
+                .{ .name = "x-amz-date", .value = self.amz_date },
+                .{ .name = "x-amz-content-sha256", .value = self.payload_hash },
+            };
+        }
+    };
+
+    /// Build the request URL and the SigV4 Authorization header for one
+    /// S3 operation. The signed header set is host + x-amz-content-sha256 +
+    /// x-amz-date (the S3 minimum); the canonical URI/query used for signing
+    /// are byte-identical to the URL actually requested.
+    fn signRequest(
+        self: *Self,
+        method: []const u8,
+        s3_key: []const u8,
+        query_params: []const sigv4.QueryParam,
+        payload: []const u8,
+    ) !SignedRequest {
+        const allocator = self.allocator;
+
+        const encoded_key = try sigv4.uriEncodePath(allocator, s3_key);
+        defer allocator.free(encoded_key);
+        const canonical_uri = try std.fmt.allocPrint(allocator, "/{s}", .{encoded_key});
+        defer allocator.free(canonical_uri);
+        const canonical_query = try sigv4.buildCanonicalQuery(allocator, query_params);
+        defer allocator.free(canonical_query);
+
+        const host = if (self.config.endpoint) |endpoint|
+            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ self.config.bucket, endpoint })
+        else
+            try std.fmt.allocPrint(allocator, "{s}.s3.{s}.amazonaws.com", .{ self.config.bucket, self.config.region });
+        errdefer allocator.free(host);
+
+        const now: u64 = @intCast(@max(compat_timestamp(), 0));
+        const amz_date_buf = sigv4.formatAmzDate(now);
+        const amz_date = try allocator.dupe(u8, &amz_date_buf);
+        errdefer allocator.free(amz_date);
+
+        const payload_hash_buf = sigv4.hashPayloadHex(payload);
+        const payload_hash = try allocator.dupe(u8, &payload_hash_buf);
+        errdefer allocator.free(payload_hash);
+
+        const signed_headers = [_]sigv4.Header{
+            .{ .name = "host", .value = host },
+            .{ .name = "x-amz-content-sha256", .value = payload_hash },
+            .{ .name = "x-amz-date", .value = amz_date },
+        };
+
+        const authorization = try sigv4.authorizationHeader(allocator, .{
+            .method = method,
+            .canonical_uri = canonical_uri,
+            .canonical_query = canonical_query,
+            .headers = &signed_headers,
+            .payload_hash_hex = payload_hash,
+            .amz_date = amz_date,
+            .region = self.config.region,
+            .service = "s3",
+            .access_key_id = self.config.access_key_id,
+            .secret_access_key = self.config.secret_access_key,
+        });
+        errdefer allocator.free(authorization);
+
+        const scheme: []const u8 = if (self.config.use_ssl) "https" else "http";
+        const url = if (canonical_query.len > 0)
+            try std.fmt.allocPrint(allocator, "{s}://{s}{s}?{s}", .{ scheme, host, canonical_uri, canonical_query })
+        else
+            try std.fmt.allocPrint(allocator, "{s}://{s}{s}", .{ scheme, host, canonical_uri });
+
+        return .{
+            .url = url,
+            .host = host,
+            .amz_date = amz_date,
+            .payload_hash = payload_hash,
+            .authorization = authorization,
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // S3 API operations
+    // ------------------------------------------------------------------
+
+    fn initiateMultipartUpload(self: *Self, s3_key: []const u8) ![]const u8 {
+        const params = [_]sigv4.QueryParam{.{ .name = "uploads", .value = "" }};
+        const sr = try self.signRequest("POST", s3_key, &params, "");
+        defer sr.deinit(self.allocator);
+        const extra = sr.extraHeaders();
+
+        var response = try self.http_client.doRequest(.POST, sr.url, sr.authorization, &extra, null, null);
+        defer response.deinit(self.allocator);
 
         // Parse XML response to extract UploadId
-        return try self.parseUploadId(response);
-    }
-
-    /// Helper to build S3 URL
-    fn buildS3Url(self: *Self, s3_key: []const u8, query: ?[]const u8) ![]const u8 {
-        const base_url = if (self.config.endpoint) |endpoint|
-            try std.fmt.allocPrint(self.allocator, "https://{s}.{s}", .{ self.config.bucket, endpoint })
-        else
-            try std.fmt.allocPrint(self.allocator, "https://{s}.s3.{s}.amazonaws.com", .{ self.config.bucket, self.config.region });
-
-        return if (query) |q|
-            try std.fmt.allocPrint(self.allocator, "{s}/{s}?{s}", .{ base_url, s3_key, q })
-        else
-            try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ base_url, s3_key });
-    }
-
-    /// Helper to build authentication headers
-    fn buildAuthHeaders(self: *Self, method: []const u8, s3_key: []const u8, content_type: []const u8, content_md5: []const u8) !std.http.Headers {
-        var headers = std.http.Headers.init(self.allocator);
-
-        const date = try self.getDateString();
-        defer self.allocator.free(date);
-
-        try headers.append("Host", try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ self.config.bucket, self.config.endpoint orelse "s3.amazonaws.com" }));
-        try headers.append("Date", date);
-
-        if (content_type.len > 0) {
-            try headers.append("Content-Type", content_type);
-        }
-        if (content_md5.len > 0) {
-            try headers.append("Content-MD5", content_md5);
-        }
-
-        // Build signature string
-        const signature_string = try std.fmt.allocPrint(self.allocator, "{s}\n{s}\n{s}\n{s}\n/{s}/{s}", .{ method, content_md5, content_type, date, self.config.bucket, s3_key });
-        defer self.allocator.free(signature_string);
-
-        const signature = try self.sign(signature_string);
-        defer self.allocator.free(signature);
-
-        const auth = try std.fmt.allocPrint(self.allocator, "AWS {s}:{s}", .{ self.config.access_key_id, signature });
-        try headers.append("Authorization", auth);
-
-        return headers;
-    }
-
-    /// Helper to sign string with secret key
-    fn sign(self: *Self, string_to_sign: []const u8) ![]const u8 {
-        var mac = std.crypto.auth.hmac.HmacSha1.init(self.config.secret_access_key);
-        mac.update(string_to_sign);
-        var result: [std.crypto.auth.hmac.HmacSha1.mac_length]u8 = undefined;
-        mac.final(&result);
-
-        // Base64 encode
-        var encoded = try self.allocator.alloc(u8, std.base64.standard.Encoder.calcSize(result.len));
-        _ = std.base64.standard.Encoder.encode(encoded, &result);
-        return encoded;
-    }
-
-    /// Helper to get RFC 2822 date string
-    fn getDateString(self: *Self) ![]const u8 {
-        const timestamp = compat_timestamp();
-        const epoch_seconds = @as(u64, @intCast(timestamp));
-
-        // Simple date formatting - in production use proper RFC 2822 formatting
-        return try std.fmt.allocPrint(self.allocator, "{d}", .{epoch_seconds});
-    }
-
-    /// Helper to free headers
-    fn freeHeaders(self: *Self, headers: std.http.Headers) void {
-        // Free all allocated header values
-        var iter = headers.iterator();
-        while (iter.next()) |header| {
-            self.allocator.free(header.value);
-        }
-        headers.deinit();
+        return try self.parseUploadId(response.body);
     }
 
     /// Parse UploadId from XML response
@@ -414,79 +470,84 @@ pub const S3BackupManager = struct {
     }
 
     fn uploadPart(self: *Self, upload_id: []const u8, s3_key: []const u8, part_number: u32, data: []const u8) ![]const u8 {
-        const query = try std.fmt.allocPrint(self.allocator, "partNumber={d}&uploadId={s}", .{ part_number, upload_id });
-        defer self.allocator.free(query);
+        var part_buf: [10]u8 = undefined;
+        // error-policy: D — a u32 prints at most 10 decimal digits; part_buf is [10]u8.
+        const part_str = std.fmt.bufPrint(&part_buf, "{d}", .{part_number}) catch unreachable;
+        const params = [_]sigv4.QueryParam{
+            .{ .name = "partNumber", .value = part_str },
+            .{ .name = "uploadId", .value = upload_id },
+        };
+        const sr = try self.signRequest("PUT", s3_key, &params, data);
+        defer sr.deinit(self.allocator);
+        const extra = sr.extraHeaders();
 
-        const url = try self.buildS3Url(s3_key, query);
-        defer self.allocator.free(url);
+        var response = try self.http_client.doRequest(.PUT, sr.url, sr.authorization, &extra, "application/octet-stream", data);
+        defer response.deinit(self.allocator);
 
-        const auth_headers = try self.buildAuthHeaders("PUT", s3_key, "application/octet-stream", "");
-        defer self.freeHeaders(auth_headers);
-
-        const response = try self.http_client.request(.PUT, url, auth_headers, data);
-        defer self.allocator.free(response);
-
-        // Extract ETag from response headers (simplified)
-        return try self.allocator.dupe(u8, "\"etag-example\"");
+        // The part ETag from the response header is required to complete the
+        // multipart upload.
+        const etag = response.etag orelse return error.MissingPartETag;
+        return try self.allocator.dupe(u8, etag);
     }
 
     fn completeMultipartUpload(self: *Self, upload_id: []const u8, s3_key: []const u8, parts: []const PartInfo, expected_checksum: u64) !void {
         _ = expected_checksum;
 
-        const query = try std.fmt.allocPrint(self.allocator, "uploadId={s}", .{upload_id});
-        defer self.allocator.free(query);
-
-        const url = try self.buildS3Url(s3_key, query);
-        defer self.allocator.free(url);
-
         // Build XML payload for completion
-        var xml_payload = std.ArrayList(u8).init(self.allocator);
-        defer xml_payload.deinit();
+        var xml_payload: std.ArrayList(u8) = .empty;
+        defer xml_payload.deinit(self.allocator);
 
-        try xml_payload.appendSlice("<CompleteMultipartUpload>");
+        try xml_payload.appendSlice(self.allocator, "<CompleteMultipartUpload>");
         for (parts) |part| {
-            try xml_payload.writer().print("<Part><PartNumber>{d}</PartNumber><ETag>{s}</ETag></Part>", .{ part.part_number, part.etag });
+            const part_xml = try std.fmt.allocPrint(
+                self.allocator,
+                "<Part><PartNumber>{d}</PartNumber><ETag>{s}</ETag></Part>",
+                .{ part.part_number, part.etag },
+            );
+            defer self.allocator.free(part_xml);
+            try xml_payload.appendSlice(self.allocator, part_xml);
         }
-        try xml_payload.appendSlice("</CompleteMultipartUpload>");
+        try xml_payload.appendSlice(self.allocator, "</CompleteMultipartUpload>");
 
-        const auth_headers = try self.buildAuthHeaders("POST", s3_key, "application/xml", "");
-        defer self.freeHeaders(auth_headers);
+        const params = [_]sigv4.QueryParam{.{ .name = "uploadId", .value = upload_id }};
+        const sr = try self.signRequest("POST", s3_key, &params, xml_payload.items);
+        defer sr.deinit(self.allocator);
+        const extra = sr.extraHeaders();
 
-        const response = try self.http_client.request(.POST, url, auth_headers, xml_payload.items);
-        defer self.allocator.free(response);
+        var response = try self.http_client.doRequest(.POST, sr.url, sr.authorization, &extra, "application/xml", xml_payload.items);
+        defer response.deinit(self.allocator);
     }
 
     fn putObject(self: *Self, s3_key: []const u8, data: []const u8, checksum: u64) !void {
         _ = checksum;
 
-        const url = try self.buildS3Url(s3_key, null);
-        defer self.allocator.free(url);
+        const sr = try self.signRequest("PUT", s3_key, &.{}, data);
+        defer sr.deinit(self.allocator);
+        const extra = sr.extraHeaders();
 
-        const auth_headers = try self.buildAuthHeaders("PUT", s3_key, "application/octet-stream", "");
-        defer self.freeHeaders(auth_headers);
-
-        const response = try self.http_client.request(.PUT, url, auth_headers, data);
-        defer self.allocator.free(response);
+        var response = try self.http_client.doRequest(.PUT, sr.url, sr.authorization, &extra, "application/octet-stream", data);
+        defer response.deinit(self.allocator);
     }
 
     fn getObject(self: *Self, s3_key: []const u8) ![]const u8 {
-        const url = try self.buildS3Url(s3_key, null);
-        defer self.allocator.free(url);
+        const sr = try self.signRequest("GET", s3_key, &.{}, "");
+        defer sr.deinit(self.allocator);
+        const extra = sr.extraHeaders();
 
-        const auth_headers = try self.buildAuthHeaders("GET", s3_key, "", "");
-        defer self.freeHeaders(auth_headers);
-
-        return try self.http_client.request(.GET, url, auth_headers, null);
+        const response = try self.http_client.doRequest(.GET, sr.url, sr.authorization, &extra, null, null);
+        if (response.etag) |etag| self.allocator.free(etag);
+        return response.body;
     }
 
     fn downloadFile(self: *Self, s3_key: []const u8, local_path: []const u8) !void {
         const data = try self.getObject(s3_key);
         defer self.allocator.free(data);
 
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), local_path, .{});
-        defer file.close();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io, local_path, .{});
+        defer file.close(io);
 
-        try file.writeAll(data);
+        try file.writePositionalAll(io, data, 0);
     }
 };
 
@@ -495,47 +556,94 @@ const PartInfo = struct {
     etag: []const u8,
 };
 
-/// HTTP client for S3 API
+/// Response from one S3 HTTP exchange. Body and ETag are caller-owned.
+const HttpResponse = struct {
+    status: std.http.Status,
+    body: []u8,
+    etag: ?[]u8,
+
+    fn deinit(self: *HttpResponse, allocator: std.mem.Allocator) void {
+        allocator.free(self.body);
+        if (self.etag) |etag| allocator.free(etag);
+        self.* = undefined;
+    }
+};
+
+/// Minimal HTTP client for the S3 API (Zig 0.16 std.http.Client).
 const HttpClient = struct {
     allocator: std.mem.Allocator,
-    client: std.http.Client,
 
-    fn init(allocator: std.mem.Allocator) !HttpClient {
-        return .{
-            .allocator = allocator,
-            .client = std.http.Client{ .allocator = allocator },
-        };
-    }
+    /// Perform one signed S3 request. Non-2xx statuses surface as
+    /// error.S3RequestFailed so the caller's retry loop can re-attempt.
+    fn doRequest(
+        self: *HttpClient,
+        method: std.http.Method,
+        url: []const u8,
+        authorization: []const u8,
+        extra_headers: []const std.http.Header,
+        content_type: ?[]const u8,
+        payload: ?[]const u8,
+    ) !HttpResponse {
+        const uri = try std.Uri.parse(url);
 
-    fn deinit(self: *HttpClient) void {
-        self.client.deinit();
-    }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var client = std.http.Client{ .allocator = self.allocator, .io = io };
+        defer client.deinit();
 
-    /// Perform authenticated S3 request
-    fn request(self: *HttpClient, method: std.http.Method, url: []const u8, headers: std.http.Headers, body: ?[]const u8) ![]const u8 {
-        var uri = try std.Uri.parse(url);
-
-        var req = try self.client.open(method, uri, headers, .{});
+        var req = try client.request(method, uri, .{
+            .redirect_behavior = .unhandled,
+            .headers = .{
+                .authorization = .{ .override = authorization },
+                .content_type = if (content_type) |ct| .{ .override = ct } else .default,
+            },
+            .extra_headers = extra_headers,
+            .keep_alive = false,
+        });
         defer req.deinit();
 
-        req.transfer_encoding = .none;
-
-        if (body) |payload| {
-            req.transfer_encoding = .{ .content_length = payload.len };
-            try req.send();
-            try req.writeAll(payload);
+        if (payload) |p| {
+            req.transfer_encoding = .{ .content_length = p.len };
+            var body = try req.sendBodyUnflushed(&.{});
+            try body.writer.writeAll(p);
+            try body.end();
+            try req.connection.?.flush();
         } else {
-            try req.send();
+            try req.sendBodiless();
         }
 
-        try req.finish();
-        try req.wait();
+        var response = try req.receiveHead(&.{});
 
-        if (req.response.status != .ok) {
+        // Capture the ETag before the body stream invalidates head pointers.
+        var etag: ?[]u8 = null;
+        errdefer if (etag) |e| self.allocator.free(e);
+        var header_it = response.head.iterateHeaders();
+        while (header_it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "etag")) {
+                etag = try self.allocator.dupe(u8, header.value);
+                break;
+            }
+        }
+        const status = response.head.status;
+
+        var body_writer: std.Io.Writer.Allocating = .init(self.allocator);
+        defer body_writer.deinit();
+        var transfer_buffer: [4096]u8 = undefined;
+        const reader = response.reader(&transfer_buffer);
+        _ = reader.streamRemaining(&body_writer.writer) catch |err| switch (err) {
+            error.ReadFailed => return response.bodyErr().?,
+            else => |e| return e,
+        };
+
+        const code = @intFromEnum(status);
+        if (code < 200 or code >= 300) {
             return error.S3RequestFailed;
         }
 
-        return try req.reader().readAllAlloc(self.allocator, 1024 * 1024 * 100); // Max 100MB
+        return .{
+            .status = status,
+            .body = try body_writer.toOwnedSlice(),
+            .etag = etag,
+        };
     }
 };
 

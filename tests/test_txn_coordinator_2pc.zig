@@ -21,10 +21,15 @@
 // reshaped into a struct-with-oneof). When that lands, flip the flag to `true`
 // and the four real tests below run verbatim.
 //
-// Why this path is test-only today: production never reaches the union-encode
-// path — `distributed/txn_coordinator.TxnCoordinator` is held as a
-// `?*TxnCoordinator = null` field on raft_consensus and is never instantiated;
-// the live 2PC path is `src/transactions/two_phase_commit.zig`.
+// GAP-0870 (2026-06-11): the 2PC APPLY path no longer depends on protobuf —
+// txn_coordinator.zig now uses the native G2PC write-set codec, instantiated
+// by ClusterCoordinator.init and routed from committed Raft txn_prepare /
+// txn_decide entries via raft_apply.zig (covered by `zig build test-gap0870`).
+// This file's gated tests now track ONLY the protobuf TwoPhaseMessage WIRE
+// format (blocked for both encode and decode of union-as-submessage).  NOTE:
+// when the flag below flips to true, these tests must be updated — the
+// coordinator's handlePrepare now expects a G2PC payload, so a protobuf
+// write set votes abort instead of preparing.
 //
 // CANARY: REQ=REQ-GQL-2PC-002; FEATURE="Distributed Transaction Coordinator"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_Coordinator; OWNER=distributed; UPDATED=2026-06-10
 // CANARY: REQ=REQ-GQL-2PC-003; FEATURE="2PC Idempotence"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_Idempotent; OWNER=distributed; UPDATED=2026-06-10

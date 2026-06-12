@@ -83,7 +83,13 @@ pub fn callTool(
     args_json: []const u8,
     cancel: *const mcp.CancelToken,
 ) ![]const u8 {
-    _ = cancel; // TODO: Implement cancellation support // #473
+    // GAP-0875: honour the MCP cancellation token. The transport layer flips
+    // the token on `notifications/cancelled`; a request that is already
+    // cancelled must short-circuit BEFORE any tool work (in particular the
+    // blocking QUIC round-trips below) begins. The QUIC client call itself
+    // is synchronous, so the pre-flight check is the honest propagation
+    // boundary today; mid-flight abort requires a cancellable client API.
+    if (cancel.isCancelled()) return error.Cancelled;
     // GPS Phase 7 Task 7-5: caller Principal is available for local pre-flight
     // decide() calls at the MCP boundary (wired in server.zig).  Wire-level
     // forwarding to the remote executor requires the external geode-client-zig

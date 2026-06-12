@@ -43,6 +43,9 @@ responsibility (WAL + segments + manifest).
 | Live maintenance | ✅ | Node create / `SET` / delete keep the index current |
 | Backfill | ✅ | `CREATE INDEX … USING fulltext` indexes existing matching nodes |
 | Wire protocol | ✅ | `CALL geode.fts.search(…)` rides the generic GQL Execute+rows path over QUIC |
+| Phrase search | ✅ | `CALL geode.fts.phrase(…)` — positional adjacency over the persisted postings (GAP-0869) |
+| Proximity search | ✅ | `CALL geode.fts.proximity(…)` — NEAR window over persisted token positions (GAP-0869) |
+| Highlighting | ✅ (API) | `FullTextIndex.highlight` — byte-accurate offsets against caller-supplied authorized content; no GQL surface yet (see below) |
 | Bulk-MERGE auto-index | ⚠️ | Bulk-MERGE fast path does NOT auto-index — see [Known Limitation](#known-limitation-bulk-merge-fast-path) |
 
 ---
@@ -90,6 +93,57 @@ Returns one row per match with two columns:
 The optional third argument caps the number of results. The call is reachable
 over the QUIC wire because results ride the generic GQL Execute+rows protocol —
 **no client, proto, or transport changes are required** to consume them.
+
+### `CALL geode.fts.phrase` (GAP-0869)
+
+```gql
+CALL geode.fts.phrase('<index>', '<phrase>'[, <max>]);
+```
+
+Exact-adjacency phrase search over the **persisted positional postings**: the
+engine stores token-positions per `(term, doc)` (fts-storage `TermPosting`
+contract), and a document matches only when the phrase terms occur at
+consecutive raw-token ordinals. Stopword gaps are preserved on BOTH sides —
+the tokenizer assigns ordinals before stopword removal, so the phrase
+`'quick and brown'` matches a document indexed from `quick and brown` even
+though `and` is never indexed, while `'quick brown'` does NOT match that
+document (the gap is real). Returns `(node, score)` rows; `score` is the sum
+of the constituent terms' BM25 scores.
+
+### `CALL geode.fts.proximity` (GAP-0869)
+
+```gql
+CALL geode.fts.proximity('<index>', '<terms>', <distance>[, <max>]);
+```
+
+Order-insensitive NEAR search: a document matches when one occurrence of every
+distinct query term can be chosen with `max(pos) - min(pos) <= distance`
+(inclusive, in token ordinals), verified against the persisted positions.
+Requires at least 2 distinct non-stopword terms (`InvalidArgs` otherwise) and a
+non-negative integer `distance`. Returns `(node, score)` rows.
+
+### Highlighting (FTS-layer API; GQL surface is future work)
+
+`FullTextIndex.highlight(allocator, content, query)` in
+`src/index/fulltext.zig` maps query-term matches to **byte-accurate**
+`{offset, length, term}` ranges inside `content`, using the same index-time
+tokenizer pipeline on both sides (this is the host half of the fts-storage
+positional highlight contract). It takes the document text as a parameter by
+design: **snippet/highlight generation must run AFTER row-level authorization**
+(RLS/FLE) — the caller passes only content it was already cleared to read; the
+function never fetches document content itself.
+
+There is intentionally NO `CALL geode.fts.highlight(...)` procedure yet: the
+procedure dispatcher has no authorized node-content fetch path, so a GQL
+highlight surface is deferred until one exists. Consumers retrieve the node by
+id (from `geode.fts.search/phrase/proximity`) under their own authorization and
+call the API (embedders) or highlight client-side.
+
+**Case-folding caveat (pre-existing pipeline behavior):** term normalization
+uses `geode_unicode.foldCase`, a documented minimal subset (see
+`tests/test_fts_tokenizer.zig` Case 3) — full Unicode/ASCII case-insensitivity
+is not guaranteed for all letters. This applies equally to `search`, `phrase`,
+`proximity`, and `highlight`.
 
 ### `DROP INDEX`
 
@@ -190,6 +244,7 @@ needed to consume them — any GQL client that can read result rows works.
 FTS is held to graph-storage parity:
 
 - **Unit tests:** `tests/test_fts_storage_adapter.zig`, `tests/test_fts_tokenizer.zig`, `tests/test_fts_e2e.zig`, `tests/test_fts_apply_symmetry.zig` (raft-apply/snapshot maintenance). NOTE (2026-06-10): `tests/test_fts_coverage.zig` and `tests/test_fts_maintenance.zig` are DEAD code (they call a nonexistent `initGlobalStoreWithDataDir` and are never analyzed by the compiler) — do not cite them as live coverage.
+- **Advanced FTS (GAP-0869):** `tests/e2e_fts_advanced.zig` (facade-level phrase/proximity/highlight over a real engine) + `tests/test_gap0869_fts_advanced.zig` (GQL path: `CALL geode.fts.phrase` / `geode.fts.proximity`), both under `zig build test-gap0869`
 - **Benchmark:** `benchmarks/benchmark_fts_storage.zig` (native VarianceEnvelope benchmark, in the `bench` / `benchmark` aggregates)
 - **Latency gate:** `tests/test_fts_latency.zig` (CI-aware)
 - **Harness specs:** `geodetestlab-cli/specs/fts_storage_basic.yml`, `geodetestlab-cli/specs/fulltext_search_basic.yml`

@@ -130,16 +130,16 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 
 // GAP-0258: Global mTLS provider for QUIC certificate authentication
-// CANARY: REQ=REQ-AUTH-MTLS-QUIC-004; FEATURE="mTLS over QUIC"; ASPECT=GlobalProvider; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+// CANARY: REQ=REQ-AUTH-MTLS-QUIC-004; FEATURE="mTLS over QUIC"; ASPECT=GlobalProvider; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
 var g_mtls_provider: ?*mtls_provider.MtlsProvider = null;
 
 // S6: Per-IP authentication rate limiter — prevents brute-force attacks on QUIC HELLO.
-// CANARY: REQ=REQ-SEC-RATE-LIMIT-003; FEATURE="AuthRateLimiting"; ASPECT=GlobalInstance; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+// CANARY: REQ=REQ-SEC-RATE-LIMIT-003; FEATURE="AuthRateLimiting"; ASPECT=GlobalInstance; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
 const auth_rate_limiter = @import("auth_rate_limiter.zig");
 var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
 
 // S1: Post-execution RLS filter — removes result rows containing denied labels.
-// CANARY: REQ=REQ-SEC-RLS-WIRE-002; FEATURE="RLS Query Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+// CANARY: REQ=REQ-SEC-RLS-WIRE-002; FEATURE="RLS Query Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=geodetestlab/specs/rls_injection_resistance.yml; OWNER=security; UPDATED=2026-06-11
 const rls_filter = @import("rls_filter.zig");
 const index_manager = geode.index_manager;
 
@@ -376,7 +376,7 @@ pub fn getMtlsProvider() ?*mtls_provider.MtlsProvider {
 }
 
 /// Set the global authentication rate limiter (called from server/main.zig during startup).
-/// CANARY: REQ=REQ-SEC-RATE-LIMIT-004; FEATURE="AuthRateLimiting"; ASPECT=GlobalSetter; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+/// CANARY: REQ=REQ-SEC-RATE-LIMIT-004; FEATURE="AuthRateLimiting"; ASPECT=GlobalSetter; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
 pub fn setAuthRateLimiter(limiter: ?*auth_rate_limiter.AuthRateLimiter) void {
     g_auth_rate_limiter = limiter;
 }
@@ -387,7 +387,7 @@ pub fn getAuthRateLimiter() ?*auth_rate_limiter.AuthRateLimiter {
 }
 
 // GAP-0283: Graph-scoped RBAC policy access — delegates to multi_graph_security global singleton.
-// CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-001; FEATURE="GraphRBACEnforcement"; ASPECT=GlobalInstance; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+// CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-001; FEATURE="GraphRBACEnforcement"; ASPECT=GlobalInstance; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=security; UPDATED=2026-06-11
 
 /// Set the global graph RBAC policy (called from server/main.zig during startup).
 pub fn setGraphRbacPolicy(policy: ?*multi_graph_security.GraphRBACPolicy) void {
@@ -1145,7 +1145,7 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
     _ = quic_response_metrics.response_messages_completed_total.fetchAdd(1, .monotonic);
 }
 
-// CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+// CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=wire; UPDATED=2026-06-11
 /// Buffered Protobuf reader that handles Length-Prefixed messages.
 const BufferedProtoReader = struct {
     allocator: std.mem.Allocator,
@@ -1668,7 +1668,7 @@ fn buildOrderKeys(
 const DEBUG_PROFILE = false;
 
 // ── Stream multiplexing support ──────────────────────────────────────────────
-// CANARY: REQ=REQ-QUIC-MUX-001; FEATURE="StreamMultiplexing"; ASPECT=SharedConnState; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+// CANARY: REQ=REQ-QUIC-MUX-001; FEATURE="StreamMultiplexing"; ASPECT=SharedConnState; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
 /// Shared connection state for QUIC stream multiplexing.
 /// After the HELLO handshake on the first stream, this holds the authenticated
 /// identity that is inherited by all additional streams on the connection.
@@ -4227,9 +4227,9 @@ pub fn handleQuicConnection(
     }
 
     // #683: Use cached env config instead of per-connection getEnvVarOwned syscalls.
-    // CANARY: REQ=REQ-PERF-OPT-GATE-001; FEATURE="OptimizerGating"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-PERF-OPT-GATE-001; FEATURE="OptimizerGating"; ASPECT=HotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=engine; UPDATED=2026-06-11
     state.query_optimizer_enabled = env_config.query_optimizer_enabled;
-    // CANARY: REQ=REQ-PERF-INLINE-PULL-001; FEATURE="InlineRunPull"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-PERF-INLINE-PULL-001; FEATURE="InlineRunPull"; ASPECT=HotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=engine; UPDATED=2026-06-11
     state.inline_results_enabled = env_config.inline_results_enabled;
     state.inline_results_max_rows = env_config.inline_results_max_rows;
 
@@ -4255,7 +4255,7 @@ pub fn handleQuicConnection(
     state.distributed_planner = &dist_planner;
 
     // GAP-0258: mTLS authentication over QUIC — extract peer certificate and authenticate
-    // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+    // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
     if (conn.getPeerCertificateDer()) |cert_der| {
         const identity = mtls_provider.extractIdentity(gpa, cert_der) catch |err| {
             log.warn("mTLS: Failed to extract certificate identity", &.{Attr.string("error", @errorName(err))});
@@ -4284,7 +4284,7 @@ pub fn handleQuicConnection(
     }
 
     // S6: Extract peer IP for rate limiting before the message loop.
-    // CANARY: REQ=REQ-SEC-RATE-LIMIT-005; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    // CANARY: REQ=REQ-SEC-RATE-LIMIT-005; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
     const peer_ip = conn.getPeerAddressString(gpa);
     const peer_ip_allocated = !std.mem.eql(u8, peer_ip, "unknown");
     var peer_ip_handed_off = false;
@@ -4387,7 +4387,7 @@ pub fn handleQuicConnection(
     }
 
     // ── Phase 2: Stream multiplexing ─────────────────────────────────────
-    // CANARY: REQ=REQ-QUIC-MUX-004; FEATURE="StreamMultiplexing"; ASPECT=AcceptorSpawn; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+    // CANARY: REQ=REQ-QUIC-MUX-004; FEATURE="StreamMultiplexing"; ASPECT=AcceptorSpawn; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
     // Start a stream acceptor thread that watches for additional client-initiated
     // streams on this connection. Each new stream gets its own handler thread
     // with per-stream transaction/result state but shared authentication.
@@ -4729,20 +4729,14 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 /// Validate federation HELLO using GEODE_CLUSTER_TOKEN.
 /// GAP-0490: Both nodes must share the same cluster token.
 /// Returns true only if username is "geode-cluster" AND password matches token.
-// CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+/// SEC-INFRA-03: delegates to the shared cluster_auth validator (constant-time
+/// compare) so the dual-token rotation overlap window
+/// (GEODE_CLUSTER_TOKEN_PREVIOUS) applies to federation HELLOs too.
+// CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-06-10
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_CLUSTER_TOKEN") else null;
-    const expected_tok = expected orelse return false;
-    if (expected_tok.len == 0 or password.len == 0) return false;
-    // SEC-07: No early length check — pad both independently to prevent length-leak timing
-    var buf_a: [256]u8 = [_]u8{0} ** 256;
-    var buf_b: [256]u8 = [_]u8{0} ** 256;
-    const n_pw = @min(password.len, 256);
-    const n_ex = @min(expected_tok.len, 256);
-    @memcpy(buf_a[0..n_pw], password[0..n_pw]);
-    @memcpy(buf_b[0..n_ex], expected_tok[0..n_ex]);
-    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
+    if (comptime builtin.os.tag == .windows) return false;
+    return geode.distributed.cluster_auth.validateClusterToken(password);
 }
 
 /// Parse an ALTER USER <name> SET PASSWORD '<pwd>' statement from raw query text.
@@ -5069,7 +5063,7 @@ fn handleClientMessage(
             try caps.append(gpa, try gpa.dupe(u8, "PROTOBUF"));
 
             // S6: Per-IP rate limiting — reject locked-out IPs before attempting authentication.
-            // CANARY: REQ=REQ-SEC-RATE-LIMIT-006; FEATURE="AuthRateLimiting"; ASPECT=HelloCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+            // CANARY: REQ=REQ-SEC-RATE-LIMIT-006; FEATURE="AuthRateLimiting"; ASPECT=HelloCheck; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
             if (g_auth_rate_limiter) |limiter| {
                 if (limiter.isLocked(peer_ip)) {
                     log.warn("Authentication rate limit exceeded", &.{
@@ -5199,7 +5193,7 @@ fn handleClientMessage(
                 fle_integration.setCurrentUserRole(null);
             }
 
-            // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             // Resolve graph from HELLO request — validate, auto-create, bind session
             var resolved_graph: ?[]const u8 = null;
             if (hello_req.graph) |requested_graph| {
@@ -5238,7 +5232,7 @@ fn handleClientMessage(
                         // Admin bypass: admins always have access to all graphs.
                         // If RBAC policy has graph-specific assignments, check them.
                         // Fall back to user's global role (backward compatible).
-                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=security; UPDATED=2026-06-11
                         const rbac_allowed = blk: {
                             if (!user_mgmt.isAuthEnabled()) break :blk true; // No auth = allow
                             const role_val = state.authenticated_role;
@@ -5731,7 +5725,7 @@ fn handleClientMessage(
                 .fle_role = state.fle_user_role,
                 .principal = &principal_for_request,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
-                // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+                // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
                 .pending_index_rebuilds = null,
             };
@@ -5841,6 +5835,13 @@ fn handleClientMessage(
             if (needs_store_lock and !is_mutation) count_fast_path_blk: {
                 const target = analysis.target orelse break :count_fast_path_blk;
                 if (target.* != .Query) break :count_fast_path_blk;
+                // GAP-0892: a multi-statement program (e.g. `SESSION SET
+                // PROPERTY GRAPH "G1"; MATCH (n) RETURN count(*)`) must run
+                // through the full executor — the count fast path executes
+                // ONLY `target`, so it would count against the request-start
+                // session graph and silently drop the preamble's side
+                // effects (gql_conformance T11/T12/T14 returned 0).
+                if (analysis.has_effectful_preamble) break :count_fast_path_blk;
 
                 // GAP-0840: route the count fast-path tenant scope through the
                 // shared strict-tenancy decision rather than the inline
@@ -6346,7 +6347,9 @@ fn handleClientMessage(
                 },
                 .rows => {
                     const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
-                    if (!rls_active) {
+                    // GAP-0892: node-scan streaming executes only `analysis.target`;
+                    // bail when other statements (SESSION SET, DDL, ...) must run.
+                    if (!rls_active and !analysis.has_effectful_preamble) {
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
@@ -6834,7 +6837,7 @@ fn handleClientMessage(
             }
         },
         .savepoint => |sp_req| {
-            // CANARY: REQ=REQ-TXN-SAVEPOINT-004; FEATURE="TransactionSavepoints"; ASPECT=QuicSavepoint; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            // CANARY: REQ=REQ-TXN-SAVEPOINT-004; FEATURE="TransactionSavepoints"; ASPECT=QuicSavepoint; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             switch (try validateSessionAuth(gpa, state)) {
                 .ok => {},
                 else => {
@@ -6854,7 +6857,7 @@ fn handleClientMessage(
             }
         },
         .rollback_to => |rt_req| {
-            // CANARY: REQ=REQ-TXN-SAVEPOINT-005; FEATURE="TransactionSavepoints"; ASPECT=QuicRollbackTo; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            // CANARY: REQ=REQ-TXN-SAVEPOINT-005; FEATURE="TransactionSavepoints"; ASPECT=QuicRollbackTo; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             switch (try validateSessionAuth(gpa, state)) {
                 .ok => {},
                 else => {
@@ -6937,7 +6940,10 @@ fn handleClientMessage(
             defer graph_store.releaseStoreLock();
             const backup_dir = "./server_backups";
             const backup_config = BackupConfig{
-                .compression = if (backup_req.compress) .zstd else .none,
+                // GAP-0880: gzip is the only compression codec with a real
+                // encoder; never request zstd (no encoder — it would fail
+                // with UnsupportedCompression).
+                .compression = if (backup_req.compress) .gzip else .none,
                 .encryption = false,
                 .retention_days = 30,
             };
@@ -7049,7 +7055,10 @@ fn handleClientMessage(
             }
 
             const backup_config = BackupConfig{
-                .compression = .zstd,
+                // Restore reads the codec from each backup file's header;
+                // the config codec is irrelevant here. Keep the honest
+                // default (.none) — .zstd has no encoder (GAP-0880).
+                .compression = .none,
                 .encryption = false,
                 .retention_days = 30,
             };
@@ -7109,19 +7118,42 @@ fn handleClientMessage(
                     return;
                 }
             }
+            // GAP-0880: real upload ingestion. The request must carry the
+            // complete backup artifact bytes; the old metadata-only path
+            // created an EMPTY file and reported fake success.
             if (upload_req.size_bytes == 0 or upload_req.checksum.len == 0) {
-                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid upload request") } });
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid upload request: missing size or checksum") } });
                 return;
             }
+            if (upload_req.payload.len == 0) {
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Upload payload required: metadata-only upload is not supported") } });
+                return;
+            }
+            if (upload_req.payload.len != upload_req.size_bytes) {
+                const msg_text = try std.fmt.allocPrint(gpa, "Upload size mismatch: declared {d} bytes, received {d}", .{ upload_req.size_bytes, upload_req.payload.len });
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
+                return;
+            }
+            const expected_checksum = std.fmt.parseInt(u64, upload_req.checksum, 16) catch {
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid checksum: expected hex CRC32 from BackupResponse") } });
+                return;
+            };
 
-            std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "./uploaded_backups") catch {};
-            const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
-            // Create empty placeholder file
-            if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
-                file.close(std.Io.Threaded.global_single_threaded.io());
-            } else |_| {}
+            var upload_mgr = SimplifiedBackupManager.init(gpa, "./server_backups", .{}) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Upload init failed: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
+                return;
+            };
+            defer upload_mgr.deinit();
 
-            try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Upload slot ready"), .upload_path = path } });
+            const ingested = upload_mgr.ingestUploadedBackup(upload_req.payload, expected_checksum) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Upload rejected: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
+                return;
+            };
+
+            const stored_path = try std.fmt.allocPrint(gpa, "./server_backups/full_{x}.backup", .{ingested.backup_id});
+            try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Backup uploaded, verified, and registered"), .upload_path = stored_path } });
         },
     }
 }

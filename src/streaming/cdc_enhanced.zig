@@ -367,9 +367,16 @@ pub const CDCEngine = struct {
             } else |_| {}
         } else |_| {}
 
-        // Initialize sinks
+        // Initialize sinks. GAP-0872: an unimplemented sink (kinesis/pubsub)
+        // fails construction here — tear down any sinks already built so the
+        // error path leaks nothing.
+        errdefer {
+            for (engine.sinks.items) |*s| s.deinit();
+            engine.sinks.deinit(allocator);
+        }
         for (config.sinks) |sink_type| {
-            const sink = try Sink.init(allocator, sink_type);
+            var sink = try Sink.init(allocator, sink_type);
+            errdefer sink.deinit();
             try engine.sinks.append(allocator, sink);
         }
 
@@ -968,9 +975,11 @@ const Sink = struct {
             .memory => SinkImpl{ .memory = MemorySink.init(allocator) },
             .file => SinkImpl{ .file = try FileSink.init(allocator, "cdc.log") },
             .kafka => SinkImpl{ .kafka = KafkaSink.init(allocator) },
-            .kinesis => SinkImpl{ .kinesis = KinesisSink.init(allocator) },
+            // GAP-0872: kinesis/pubsub are unimplemented — construction fails
+            // loud (error.SinkNotImplemented) instead of silently dropping events.
+            .kinesis => SinkImpl{ .kinesis = try KinesisSink.init(allocator) },
             .webhook => SinkImpl{ .webhook = WebhookSink.init(allocator) },
-            .pubsub => SinkImpl{ .pubsub = PubSubSink.init(allocator) },
+            .pubsub => SinkImpl{ .pubsub = try PubSubSink.init(allocator) },
         };
 
         return Sink{
@@ -1007,15 +1016,23 @@ const Sink = struct {
 // - MemorySink and FileSink in cdc_sinks.zig
 // - KafkaSink in sinks/kafka_sink.zig
 // - WebhookSink in sinks/webhook_sink.zig
-// - KinesisSink and PubSubSink remain here (simple stub implementations)
+//
+// GAP-0872: Kinesis and PubSub are NOT implemented. They used to be silent
+// no-op stubs that accepted events and returned success — silent data loss
+// for any operator who configured them. They now fail LOUD at construction
+// time (so a misconfigured deployment dies at startup, not at flush time),
+// and send() also errors as defense-in-depth should a sink ever be
+// constructed through a future code path that skips init.
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CloudSinkFailLoud; STATUS=TESTED; TEST=test_gap0872_cdc_sinks; OWNER=streaming; UPDATED=2026-06-11
 
 const KinesisSink = struct {
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator) KinesisSink {
-        return KinesisSink{
-            .allocator = allocator,
-        };
+    pub fn init(allocator: Allocator) error{SinkNotImplemented}!KinesisSink {
+        _ = allocator;
+        // No authenticated Kinesis client exists. Refuse construction rather
+        // than silently discarding every event handed to send().
+        return error.SinkNotImplemented;
     }
 
     pub fn deinit(self: *KinesisSink) void {
@@ -1025,17 +1042,18 @@ const KinesisSink = struct {
     pub fn send(self: *KinesisSink, events: []const ChangeEvent) !void {
         _ = self;
         _ = events;
-        // Send to Kinesis
+        return error.SinkNotImplemented;
     }
 };
 
 const PubSubSink = struct {
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator) PubSubSink {
-        return PubSubSink{
-            .allocator = allocator,
-        };
+    pub fn init(allocator: Allocator) error{SinkNotImplemented}!PubSubSink {
+        _ = allocator;
+        // No authenticated Pub/Sub client exists. Refuse construction rather
+        // than silently discarding every event handed to send().
+        return error.SinkNotImplemented;
     }
 
     pub fn deinit(self: *PubSubSink) void {
@@ -1045,7 +1063,7 @@ const PubSubSink = struct {
     pub fn send(self: *PubSubSink, events: []const ChangeEvent) !void {
         _ = self;
         _ = events;
-        // Send to Pub/Sub
+        return error.SinkNotImplemented;
     }
 };
 

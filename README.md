@@ -15,7 +15,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 ### **Standards Compliance**
 
-- **ISO/IEC 39075:2024 GQL Conformance Suite** - 70/70 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
+- **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
 - **ACID Transactions** - Full MVCC with Serializable Snapshot Isolation (SSI)
 - **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
 
@@ -183,7 +183,7 @@ COMMIT;
 
 ### **Core Components**
 
-- **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 70/70 named conformance suite (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
+- **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 96/96 named conformance suite (parse-only scope) (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
 - **Query Planner** - Cost-based optimization with real-time statistics integration
 - **Storage Engine** - MVCC with WAL, TDE encryption, and memory-mapped I/O
 - **Index System** - 6 index types: B-tree, Hash, Full-text, Spatial, Vector (HNSW), Interval
@@ -281,9 +281,9 @@ make verify-fast
 ./run_gpu_benchmarks.sh
 ```
 
-### **GPU Acceleration Testing**
+### **GPU Build Foundation Testing**
 
-Geode includes GPU-accelerated graph algorithms (BFS, PageRank, Set Operations). Test with Docker:
+Geode ships a GPU build foundation (Vulkan backend scaffold + dlopen-based CUDA device detection). Graph algorithms (BFS, PageRank, Set Operations) currently run on the CPU path; GPU-accelerated execution is planned but not implemented (see GAP-0878 in `docs/GAP_ANALYSIS_RESOLVED.md`). Test the foundation with Docker:
 
 ```bash
 # Build GPU-enabled Docker image
@@ -314,14 +314,13 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
 - **CANARY Governance** - ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility
-- **GPU Acceleration** - Optional Vulkan/CUDA-based graph algorithm acceleration
+- **GPU Build Foundation** - Vulkan backend scaffold with honest device detection (`zig build test-gpu` self-skips hardware dispatch); algorithms run the CPU path, GPU acceleration planned
 
 ### **Quality Assurance**
 
 - **Memory Safety** - Zero memory leaks in test runs
 - **Performance Regression** - Automated benchmark validation
 - **Standards Compliance** - Continuous ISO/IEC 39075:2024 verification
-- **GPU Performance** - Target speedups: BFS ≥5x, PageRank ≥3x, Set Ops ≥3-4x
 
 ## 📚 Documentation
 
@@ -340,7 +339,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Advanced Features**
 
-- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
+- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk (experimental)
 - **[Security Progress](docs/SECURITY_PROGRESS.md)** - Enhanced RLS and compliance
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming and pattern detection
 - **[Graph Algorithms](docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md)** - Algorithm usage and performance

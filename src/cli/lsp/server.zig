@@ -12,6 +12,13 @@ const json_helpers = @import("json_helpers.zig");
 const auth_mod = @import("auth.zig");
 const schema_provider_mod = @import("schema_provider.zig");
 
+/// LSP-F-02/#770: per-document AST cache. `pub` so the out-of-tree
+/// regression (tests/test_lsp_ast_cache.zig, which roots an `lsp_server`
+/// named module at this file) can reach LspAstCache / DocParse / Document
+/// without rooting a second module at ast_cache.zig (Zig 0.16 forbids one
+/// file living in two modules of a compilation).
+pub const ast_cache = @import("ast_cache.zig");
+
 // Task 12: reach the unified authentication provider and the execution
 // context type via the `geode` named module. We deliberately do not pull
 // these via relative `../../security/authn.zig` / `../../execution.zig`
@@ -27,6 +34,88 @@ const graph_store = geode.graph_store;
 
 const Transport = transport.Transport;
 const DocumentStore = document.DocumentStore;
+
+// ---------------------------------------------------------------------------
+// GAP-0885b hardening helpers (LSP-SEC-005 / LSP-SEC-008)
+// ---------------------------------------------------------------------------
+
+/// LSP-SEC-005: RFC-3986 percent-encode a document URI before it is embedded
+/// in an outgoing `textDocument/publishDiagnostics` envelope.
+///
+/// Policy: unreserved bytes (ALPHA / DIGIT / `-._~`) and the gen-delim /
+/// sub-delim bytes that legitimately appear in a document URI
+/// (`:/?[]@!$&'()*+,;=`) pass through unchanged. `%` passes through so an
+/// already-encoded URI round-trips byte-identical (we never double-encode a
+/// client-supplied `%20`). Everything else — space, `#`, `"`, `\`,
+/// control bytes, and non-ASCII (>= 0x80) — is emitted as `%XX` (uppercase
+/// hex, per RFC 3986 §2.1). Because every pass-through byte is printable
+/// ASCII excluding `"` and `\`, the result is also always safe to splice
+/// into the manually-built JSON string literal in `sendDiagnostics`.
+pub fn percentEncodeUri(allocator: Allocator, uri: []const u8) error{OutOfMemory}![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, uri.len);
+    errdefer out.deinit(allocator);
+    for (uri) |b| {
+        if (isUriSafeByte(b)) {
+            try out.append(allocator, b);
+        } else {
+            const hex = "0123456789ABCDEF";
+            try out.appendSlice(allocator, &[3]u8{ '%', hex[b >> 4], hex[b & 0x0F] });
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn isUriSafeByte(b: u8) bool {
+    return switch (b) {
+        'A'...'Z', 'a'...'z', '0'...'9' => true,
+        // RFC 3986 unreserved marks.
+        '-', '.', '_', '~' => true,
+        // gen-delims legal in a document URI. `#` is deliberately NOT here:
+        // document URIs carry no fragment, and a raw `#` in a file path must
+        // be escaped (LSP-SEC-005).
+        ':', '/', '?', '[', ']', '@' => true,
+        // sub-delims.
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+        // Pass-through so already-encoded URIs are not double-encoded.
+        '%' => true,
+        else => false,
+    };
+}
+
+/// LSP-SEC-008: error returned when a TCP bind configuration would expose an
+/// unauthenticated LSP listener beyond the loopback interface.
+pub const BindPolicyError = error{InsecureNonLoopbackBind};
+
+/// LSP-SEC-008: single source of truth for the LSP TCP bind policy, called
+/// by both bind sites (src/server/main.zig:runLspListener for the embedded
+/// `geode serve` listener, src/cli/main.zig for standalone `geode lsp
+/// --listen`).
+///
+///   - A loopback bind is always allowed (stdio has no bind at all).
+///   - A non-loopback bind requires authenticated sessions: `allow_unauth`
+///     (the `.none`-auth mode) is refused, and a missing verifier is refused
+///     too — a fail-closed listener that can never authenticate anyone has
+///     no business on a public interface (it would still expose the
+///     pre-auth JSON-RPC parse surface).
+///   - The legitimate authenticated `--lsp-bind-all` path (verifier present,
+///     allow_unauth = false) stays legal — SEC-LSP-BIND-01's regression
+///     concern is exactly that this combination must keep working while the
+///     unauthenticated ones must never start working.
+pub fn validateBindPolicy(policy: struct {
+    loopback_only: bool,
+    allow_unauth: bool,
+    has_verifier: bool,
+}) BindPolicyError!void {
+    if (policy.loopback_only) return;
+    if (policy.allow_unauth) return BindPolicyError.InsecureNonLoopbackBind;
+    if (!policy.has_verifier) return BindPolicyError.InsecureNonLoopbackBind;
+}
+
+/// LSP-SEC-008: classify a bind host string as loopback. Thin alias to the
+/// shared single-source implementation in `src/net_policy.zig` (exported via
+/// the `geode` module) so this security control cannot drift from the MCP
+/// side's `isLoopbackBind` (src/mcp/server.zig).
+pub const isLoopbackHost = geode.net_policy.isLoopbackHost;
 
 /// GAP-0832: re-export the transport module so out-of-tree test files
 /// (tests/test_gap0832_lsp_decode.zig) that root the LSP server through the
@@ -52,6 +141,13 @@ pub const document_mod = document;
 /// check — the exact reason transport_mod/document_mod are re-exported).
 pub const features_mod = features;
 pub const schema_provider_mod_export = schema_provider_mod;
+
+/// GAP-0818 enforcement gate: re-export the auth module so the gate
+/// regression pack (tests/test_gap0818_gate.zig) rooting the LSP server
+/// through `lsp_server` can hand-build `AuthState` values without a
+/// relative `@import("auth.zig")` (same module-diamond rationale as the
+/// re-exports above).
+pub const auth_mod_export = auth_mod;
 
 pub const ServerCapabilities = struct {
     textDocumentSync: i32 = 1, // Full sync
@@ -666,6 +762,14 @@ pub const Server = struct {
     /// hover / diagnostics handlers.
     exec_context: ?execution.ExecutionContext = null,
 
+    /// LSP-F-02/#770: per-document AST cache for the parsing feature
+    /// providers (diagnostics / definition / symbols). One per session;
+    /// installed as this thread's active cache at every message entry
+    /// point (see `activateAstCache`) and invalidated by
+    /// didOpen/didChange/didClose. Single-threaded by the run-loop
+    /// contract — no mutex (not a lock-table tier).
+    ast_cache: ast_cache.LspAstCache,
+
     /// F-01: minimum interval between successive diagnostic flushes
     /// for the same document. Real LSP clients debounce around
     /// 100 ms; 80 ms gives plenty of headroom.
@@ -697,6 +801,7 @@ pub const Server = struct {
             .documents = DocumentStore.init(allocator),
             .debounce_state = std.StringHashMap(DebounceState).init(allocator),
             .debounce_state_initialized = true,
+            .ast_cache = ast_cache.LspAstCache.init(allocator, ast_cache.DEFAULT_MAX_ENTRIES),
             .verifier = verifier,
             .allow_unauth = allow_unauth,
         };
@@ -721,6 +826,7 @@ pub const Server = struct {
             .documents = DocumentStore.init(allocator),
             .debounce_state = std.StringHashMap(DebounceState).init(allocator),
             .debounce_state_initialized = true,
+            .ast_cache = ast_cache.LspAstCache.init(allocator, ast_cache.DEFAULT_MAX_ENTRIES),
             .verifier = verifier,
             .allow_unauth = allow_unauth,
         };
@@ -730,6 +836,13 @@ pub const Server = struct {
         if (self.debounce_state_initialized) {
             self.debounce_state.deinit();
         }
+        // LSP-F-02: clear the thread's active-cache pointer if it still
+        // points at us (so a later direct provider call on this thread —
+        // e.g. a features_test running after a server_test in the same
+        // test binary — can never dereference a freed cache), then free
+        // every cached AST.
+        ast_cache.clearActiveIf(&self.ast_cache);
+        self.ast_cache.deinit();
         // Tear down session state in reverse order of allocation so the
         // DDL notifier never dispatches on a freed SchemaProvider.
         if (self.schema) |sp| {
@@ -1001,7 +1114,20 @@ pub const Server = struct {
         };
     }
 
+    /// LSP-F-02: install this session's AST cache as the thread's active
+    /// cache so the parsing feature providers (which only receive
+    /// `*const Document`) can consult it. Called at every entry point
+    /// that can reach a provider: `handleMessage` (the run-loop path),
+    /// `computeDefinition` (public helper tests drive directly), and
+    /// `sendDiagnostics` (also reached from the run-loop debounce flush).
+    /// A threadlocal store — cheap enough to repeat per message.
+    fn activateAstCache(self: *Server) void {
+        ast_cache.setActive(&self.ast_cache);
+    }
+
     pub fn handleMessage(self: *Server, message_text: []const u8) !void {
+        self.activateAstCache();
+
         // LSP-SEC-003: reject deeply nested or oversized payloads BEFORE
         // entering the recursive parser. checkJsonDepth is O(n), allocation-free,
         // and aware of in-string brace characters.
@@ -1366,9 +1492,24 @@ pub const Server = struct {
     /// `--no-auth` path) so both ends of the auth dispatch wire up an
     /// identical session shape. Takes ownership of `state` on success;
     /// on any failure path it releases `state` before returning.
-    fn publishVerifiedState(self: *Server, state: auth_mod.AuthState) auth_mod.AuthError!void {
+    /// Public so the GAP-0818 gate regression (tests/test_gap0818_gate.zig)
+    /// can pin the unverified-refusal path without driving the JSON-RPC
+    /// transport; production callers remain `bindSession` / `bindUnauthSession`.
+    pub fn publishVerifiedState(self: *Server, state: auth_mod.AuthState) auth_mod.AuthError!void {
         var st = state;
         errdefer st.deinit(self.allocator);
+
+        // GAP-0818 enforcement gate: refuse to publish a session whose
+        // principal was never verified. The SchemaProvider and
+        // ExecutionContext built below both carry the (client-asserted)
+        // tenant — publishing them for an unverified AuthState would let
+        // tenant-scoped schema / RLS-filtered data be served to a caller
+        // auth never vouched for. `bindSession` only reaches here after
+        // `AuthState.verify` succeeds and `bindUnauthSession` synthesizes
+        // a verified null-tenant state, so this is a chokepoint assert
+        // against future callers/refactors, pinned by
+        // tests/test_gap0818_gate.zig.
+        if (!st.verified) return auth_mod.AuthError.InvalidToken;
 
         // Allocate the SchemaProvider on the heap so the DDL notifier
         // can hold a stable pointer (see registerInvalidation contract
@@ -1420,12 +1561,24 @@ pub const Server = struct {
     /// The returned slices borrow from `self.auth` (freed in `deinit`);
     /// callers must use the context only for the duration of a single
     /// request handler, which is always synchronous here.
+    ///
+    /// CANARY: REQ=REQ-LSP-CALLER-IDENTITY-001; FEATURE="LspCallerIdentity"; ASPECT=VerifiedPrincipalGate; STATUS=TESTED; TEST=tests/test_gap0818_gate.zig:"callerContext for an unverified principal exposes no tenant"; OWNER=lsp; UPDATED=2026-06-10
     pub fn callerContext(self: *const Server) features.LspContext {
         if (self.auth == null) return features.LspContext.stdio;
         // Borrow directly from the stored AuthState (not a by-value copy)
         // so the derived session-handle slice points at the inline buffer
         // that lives for the duration of the request handler.
         const a: *const auth_mod.AuthState = &self.auth.?;
+        // GAP-0818 enforcement gate: the tenant in AuthState is
+        // CLIENT-ASSERTED (initializeOptions.geode.tenant). Only a
+        // principal that passed `AuthState.verify` may have its asserted
+        // identity exposed to the data-serving providers. With no
+        // verified principal the context collapses to the anonymous
+        // stdio default — whose null tenant can never match a
+        // tenant-scoped SchemaProvider (`LspContext.schemaTenantMatches`),
+        // so tenant-scoped schema is unreachable regardless of what the
+        // request gate upstream did. Pinned by tests/test_gap0818_gate.zig.
+        if (!a.verified) return features.LspContext.stdio;
         return .{
             .tenant_id = a.tenant_id,
             .user_id = if (a.user.len > 0) a.user else null,
@@ -1608,6 +1761,8 @@ pub const Server = struct {
         const version = try json_helpers.castI32(try json_helpers.getInteger(text_document, "version"));
 
         try self.documents.open(uri, text, version);
+        // LSP-F-02: a re-open replaces the document — drop any cached AST.
+        self.ast_cache.invalidate(uri);
 
         // Send diagnostics
         try self.sendDiagnostics(uri);
@@ -1630,6 +1785,11 @@ pub const Server = struct {
             if (first != .object) return json_helpers.JsonError.InvalidParams;
             const text = try json_helpers.getString(first.object, "text");
             try self.documents.update(uri, text, version);
+            // LSP-F-02: the cached AST is for the old (version, text) —
+            // drop it eagerly so the next provider request re-parses.
+            // (The cache's version/text check would also catch this; the
+            // eager invalidate just frees the memory immediately.)
+            self.ast_cache.invalidate(uri);
 
             // F-01: defer diagnostic emission to the run-loop debounce
             // flush instead of firing eagerly on every keystroke.
@@ -1644,6 +1804,8 @@ pub const Server = struct {
         const uri = try json_helpers.getString(text_document, "uri");
 
         self.documents.close(uri);
+        // LSP-F-02: free the closed document's cached AST.
+        self.ast_cache.invalidate(uri);
     }
 
     fn handleHover(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
@@ -1785,6 +1947,9 @@ pub const Server = struct {
     /// or null if not found / unknown / keyword.
     /// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinitionWired"; ASPECT=VariableLookup; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
     pub fn computeDefinition(self: *Server, uri: []const u8, line: u32, character: u32) !?protocol.Location {
+        // LSP-F-02: public helper is also a provider entry point (tests
+        // drive it without going through handleMessage).
+        self.activateAstCache();
         const doc = self.documents.get(uri) orelse return null;
         return try features.provideDefinition(self.allocator, doc, line, character, self.callerContext());
     }
@@ -2201,6 +2366,9 @@ pub const Server = struct {
     }
 
     fn sendDiagnostics(self: *Server, uri: []const u8) !void {
+        // LSP-F-02: also reached from the run-loop debounce flush (not
+        // just handleMessage), so install the cache here too.
+        self.activateAstCache();
         // F-01: count every send for test introspection.
         self.diagnostics_send_count_for_test += 1;
         const doc = self.documents.get(uri) orelse return;
@@ -2218,7 +2386,12 @@ pub const Server = struct {
         defer buffer.deinit(self.allocator);
 
         try buffer.appendSlice(self.allocator, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"");
-        try buffer.appendSlice(self.allocator, uri);
+        // LSP-SEC-005: never splice the client-supplied URI into the JSON
+        // envelope raw — spaces, `#`, non-ASCII, and JSON-breaking bytes
+        // (`"`, `\`, control chars) are RFC-3986 percent-encoded.
+        const encoded_uri = try percentEncodeUri(self.allocator, uri);
+        defer self.allocator.free(encoded_uri);
+        try buffer.appendSlice(self.allocator, encoded_uri);
         try buffer.appendSlice(self.allocator, "\",\"diagnostics\":[");
 
         const alloc = self.allocator;

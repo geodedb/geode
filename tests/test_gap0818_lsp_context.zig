@@ -196,6 +196,44 @@ test "GAP-0818 matching tenant still gets its own schema" {
     try testing.expect(found);
 }
 
+test "GAP-0818 anonymous caller (no verified principal) gets no tenant-scoped schema" {
+    // GAP-0818 enforcement gate (provider level): the stdio/anonymous
+    // context — what `Server.callerContext()` returns when auth provides
+    // no VERIFIED principal — must never be served schema from a
+    // tenant-scoped provider. Only static (unscoped) language metadata
+    // may flow.
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"Beta"}, default_graph, "tenant-b");
+
+    var sp_b = SchemaProvider.init(alloc, &store, .{
+        .user = "bob",
+        .tenant_id = "tenant-b",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp_b.deinit();
+
+    const anon = LspContext.stdio;
+
+    var doc = makeDoc("file:///t.gql", "MATCH (n:");
+    const items = try features.provideCompletion(alloc, &doc, 0, 9, &sp_b, anon);
+    defer freeStaticCompletionItems(alloc, items);
+    for (items) |it| {
+        try testing.expect(!std.mem.eql(u8, it.label, "Beta"));
+    }
+
+    var hover_doc = makeDoc("file:///t2.gql", "MATCH (n:Beta)");
+    const hover = try features.provideHover(alloc, &hover_doc, 0, 10, &sp_b, anon);
+    if (hover) |h| {
+        alloc.free(h.contents.value);
+        try testing.expect(false); // should have been null
+    }
+}
+
 test "GAP-0818 schemaTenantMatches gate" {
     // exact non-null match
     try testing.expect((LspContext{ .tenant_id = "t1" }).schemaTenantMatches("t1"));

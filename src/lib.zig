@@ -132,6 +132,9 @@ pub const recommendations = @import("gql/recommendations.zig");
 
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
+// GAP-0875: exported for the residual-stubs regression suite (test-gap0875)
+pub const constraint_manager = @import("schema/constraint_manager.zig");
+pub const memory_mapped_io = @import("performance/memory_mapped_io.zig");
 // Re-export conformance profile helpers for CLI/tools
 pub const conformance = @import("conformance.zig");
 // Re-export selected runtime helpers so binaries can import via the geode package
@@ -196,6 +199,8 @@ pub const types = struct {
     pub const jsonb = @import("types/jsonb.zig");
     pub const xml = @import("types/xml.zig");
     pub const url = @import("types/url.zig");
+    pub const public_suffix = @import("types/public_suffix.zig");
+    pub const wkt = @import("types/wkt.zig");
     pub const uuid = @import("uuid");
     pub const arrays = @import("types/arrays.zig");
     pub const bitstring = @import("types/bitstring.zig");
@@ -214,6 +219,11 @@ pub const types = struct {
 pub const graph_common = @import("types/graph_common.zig");
 // Re-export materialized views
 pub const materialized_views = @import("query/materialized_views.zig");
+// GAP-0876: enhanced materialized view manager (exact-match query rewrite,
+// API level). Standalone subsystem — not yet consulted by the execution
+// path; exported so the named regression test
+// (tests/test_materialized_views_enhanced.zig) reaches it via `geode`.
+pub const enhanced_materialized_views = @import("query/enhanced_materialized_views.zig");
 
 // Test harness is not exported from production modules; tests import it directly.
 
@@ -333,6 +343,10 @@ pub const index = struct {
 // Re-export wire-neutral protocol value types for distributed coordination.
 pub const protocol = @import("protocol.zig");
 
+// LSP-SEC-008: shared loopback-bind classification (single source of truth
+// for the LSP standalone listener and the MCP HTTP transport bind policy).
+pub const net_policy = @import("net_policy.zig");
+
 // Distributed systems modules
 pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
@@ -343,6 +357,11 @@ pub const distributed = struct {
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
+    /// SEC-INFRA-03: shared cluster bearer-token validator (dual-token
+    /// rotation). Exported so transport-layer federation auth (QUIC + gRPC
+    /// handlers, which live in the exe module) can delegate without a
+    /// file-path import that would split cluster_auth.zig across modules.
+    pub const cluster_auth = @import("distributed/cluster_auth.zig");
     pub const raft = @import("raft");
     pub const query_planner = @import("distributed/query_planner.zig");
     pub const twophase = @import("distributed/twophase.zig");
@@ -468,6 +487,9 @@ pub const tenant_registry = @import("security/tenant_registry.zig");
 // Security modules for enhanced RLS and compliance features
 pub const security = struct {
     pub const rls_enhanced = @import("security/rls_enhanced.zig");
+    // GAP-0890: policy-enforced key-rotation registry (rotateNow refuses
+    // under min_interval; rotateIfDue is the operator-invoked scheduler tick).
+    pub const key_rotation = @import("security/key_rotation.zig");
     pub const auth = @import("geode_auth");
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");
@@ -497,9 +519,16 @@ pub const security = struct {
     // auth_graph_manager, which imports geode (circular).  Consumers that need it
     // (server_init.zig, tests) import it as a named build module ("policy_persistence").
 };
-pub const fts_advanced_stub = @import("fts/advanced.zig");
+// GAP-0869 (2026-06-10): renamed from `fts_advanced_stub` — the hard-coded
+// corpus phrase/proximity/highlight stubs were deleted; what remains
+// (analyzers, stemming, fuzzy, soundex, synonyms) is real. The real
+// phrase/proximity/highlight live on FullTextIndex (src/index/fulltext.zig),
+// backed by the persisted fts-storage positional postings.
+pub const fts_advanced = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
-pub const cbo_api_stub = @import("planner/cbo.zig");
+// GAP-0867 (2026-06-10): renamed from `cbo_api_stub` — the stub APIs were
+// deleted; what remains (StatsRegistry, explainEstimateJSON) is real.
+pub const cbo = @import("planner/cbo.zig");
 
 // Distributed consensus primitives (Raft) for tests/benchmarks
 // (Removed distributed.raft re-export to avoid duplicate module inclusion with separate distributed module import)
@@ -843,4 +872,18 @@ test "lib.parseGql basic" {
     var res = try parseGql("MATCH (a)-[r]->(b) RETURN a", ally);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);
+}
+
+// Quality #733 (2026-06-11): test-reference root for the hot-path inline
+// test backfill. Zig 0.16 only discovers `test` decls in the test ROOT file
+// plus files referenced from analyzed test blocks — a plain runtime
+// `@import` does NOT pull inline tests in (same rationale as the
+// `test { _ = ts_call_handlers; }` block in src/eval.zig). The block is
+// NAMED with the "#733" prefix so the `zig build test-quality733` filter
+// keeps it analyzed; without the name it would be filtered out and the
+// imports below would never enter test discovery.
+test "#733 hot-path inline test roots" {
+    _ = @import("gql/parser.zig");
+    _ = @import("execution.zig");
+    _ = @import("execution/match_operations.zig");
 }

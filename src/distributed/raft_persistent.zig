@@ -1,5 +1,8 @@
 const std = @import("std");
-const raft_lib = @import("raft");
+
+// GAP-0889: std.log (dependency-free) so the standalone test root for this
+// file does not need the geode logging module wired in build.zig.
+const log = std.log.scoped(.raft_persistent);
 
 // CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=RaftState; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -82,14 +85,23 @@ pub const RaftNode = struct {
             .snapshot = null,
         };
 
-        // Attempt to load persistent state from the external library's FileStorage
-        node.loadPersistentState() catch {};
+        // GAP-0889: load failures must not be silently ignored — a node that
+        // boots with current_term=0 after persisting a higher term can vote
+        // twice in the same term (raft safety violation). `loadPersistentState`
+        // treats "no state yet" (missing dir/file) as a clean fresh start; any
+        // other failure (unreadable or corrupt state) propagates.
+        errdefer allocator.destroy(node);
+        try node.loadPersistentState();
 
         return node;
     }
 
     pub fn deinit(self: *RaftNode) void {
-        self.savePersistentState() catch {};
+        // GAP-0889: deinit cannot propagate, but a failed final save means the
+        // persisted term is stale — say so instead of swallowing the error.
+        self.savePersistentState() catch |err| {
+            log.warn("raft persistent-state save failed on shutdown: {s} (path={s})", .{ @errorName(err), self.storage_path });
+        };
         // Free snapshot data if it was allocated by createSnapshot
         if (self.snapshot) |snap| {
             if (snap.data.len > 0) {
@@ -149,20 +161,33 @@ pub const RaftNode = struct {
     }
 
     fn loadPersistentState(self: *RaftNode) !void {
-        // Use external raft library's FileStorage for persistent state
-        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.storage_path, .{}) catch return;
+        // Use external raft library's FileStorage for persistent state.
+        // A missing state dir is a clean fresh start; any other open failure
+        // (permissions, I/O) propagates — GAP-0889.
+        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.storage_path, .{}) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return,
+            else => return err,
+        };
         defer dir.close(std.Io.Threaded.global_single_threaded.io());
 
-        // Read term file
+        // Read term file (missing file = fresh start; corrupt content must
+        // fail loud — silently resetting current_term to 0 lets a node vote
+        // twice in the same term).
         if (dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term", .{})) |f| {
             defer f.close(std.Io.Threaded.global_single_threaded.io());
             var buf: [32]u8 = undefined;
             const n = try f.readPositionalAll(std.Io.Threaded.global_single_threaded.io(), &buf, 0);
             if (n > 0) {
                 const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
-                self.current_term = std.fmt.parseInt(u64, trimmed, 10) catch 0;
+                self.current_term = std.fmt.parseInt(u64, trimmed, 10) catch {
+                    log.warn("corrupt current_term file in {s}: {s}", .{ self.storage_path, trimmed });
+                    return error.CorruptPersistentState;
+                };
             }
-        } else |_| {}
+        } else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
     }
 
     // SEC-D014: Atomic file write — write to temp file, fsync, then rename.
@@ -306,6 +331,55 @@ test "raft_persistent: createSnapshot with null creates empty snapshot" {
 
     node.cluster.members.deinit(std.testing.allocator);
     std.testing.allocator.destroy(node);
+}
+
+test "raft_persistent: corrupt current_term fails loud at open (GAP-0889)" {
+    // The corrupt-state warn is expected here — keep test output clean.
+    std.testing.log_level = .err;
+    defer std.testing.log_level = .warn;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    );
+    defer std.testing.allocator.free(path);
+
+    // Plant a corrupt term file.
+    try RaftNode.atomicWriteFile(tmp.dir, "current_term", "not-a-number");
+
+    // raftOpen must refuse to start with silently-reset state.
+    try std.testing.expectError(
+        error.CorruptPersistentState,
+        RaftNode.raftOpen(std.testing.allocator, path),
+    );
+}
+
+test "raft_persistent: persisted term round-trips through open (GAP-0889)" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    );
+    defer std.testing.allocator.free(path);
+
+    var node = try RaftNode.raftOpen(std.testing.allocator, path);
+    node.current_term = 17;
+    try node.savePersistentState();
+    node.cluster.members.deinit(std.testing.allocator);
+    std.testing.allocator.destroy(node);
+
+    // Re-open: the persisted term must be loaded, not reset.
+    var reopened = try RaftNode.raftOpen(std.testing.allocator, path);
+    try std.testing.expectEqual(@as(u64, 17), reopened.current_term);
+    reopened.cluster.members.deinit(std.testing.allocator);
+    std.testing.allocator.destroy(reopened);
 }
 
 test "raft_persistent: createSnapshot with data stores owned copy" {

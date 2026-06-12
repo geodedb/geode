@@ -37,14 +37,12 @@ pub inline fn nullsFlag() []const u8 {
     return if (g_nulls_last) F_NULLS_LAST else F_NULLS_FIRST;
 }
 
-/// Pagination streaming scaffold (S-018): introduce a stub to emit incremental pages in future slices.
-/// Current implementation writes full result; this stub records an intent and adds CANARY evidence.
-/// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
-pub fn paginationStreamScaffold(total_rows: usize, page_size: usize) bool {
-    // Return true if streaming would produce multiple pages (future: drive incremental emission loop)
-    if (page_size == 0) return false;
-    return total_rows > page_size;
-}
+// GAP-0875: paginationStreamScaffold deleted. It was an intent-only stub
+// (S-018) with zero runtime callers (only an unused alias in server/main.zig)
+// and a CANARY marker claiming a test (TestCANARY_REQ_GQL_004_
+// PaginationStreamingScaffold) that never existed. Pagination execution
+// streaming remains NOT implemented — the server writes full results; any
+// future incremental-page emission must land with real tests.
 
 /// Initialize implementation-defined flags from the flagger module
 pub fn initImplDefinedFlags(allocator: std.mem.Allocator) void {

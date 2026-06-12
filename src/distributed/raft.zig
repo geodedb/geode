@@ -142,13 +142,18 @@ pub const RaftNode = struct {
     }
 
     pub fn handleMessage(self: *RaftNode, from: []const u8, message_type: MessageType, payload: []const u8) !void {
-        // The legacy API passes raw bytes; the inner node expects typed Messages.
-        // Wire deserialization is not yet wired, so we forward as a no-op drain
-        // to keep state synchronized (same behavior as the old implementation).
+        // GAP-0889: the legacy API passes raw bytes; the inner node expects
+        // typed Messages and the wire deserialization for this shim is not
+        // wired. The old no-op drain silently CLAIMED the message was
+        // handled — fail loud instead so a caller that actually routes wire
+        // traffic through this shim discovers the gap immediately. The
+        // production raft wire path lives in raft_consensus.zig
+        // (readRaftFrame → RaftNode.step), not in this shim.
         _ = from;
         _ = message_type;
         _ = payload;
         self.syncFromInner();
+        return error.WireDeserializationNotWired;
     }
 
     pub fn propose(self: *RaftNode, command: []const u8) !bool {

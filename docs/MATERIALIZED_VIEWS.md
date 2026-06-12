@@ -1,19 +1,21 @@
 # Materialized Views System
 
-> **Status**: Complete implementation with comprehensive refresh logic  
-> **Version**: Enhanced system (October 2025)  
+> **Status**: Lifecycle + refresh implemented; query rewrite is EXACT-MATCH only (API level, GAP-0876) — cost-based partial rewrite and automatic executor integration are future work  
+> **Version**: Enhanced system (October 2025; rewrite scoped 2026-06-11)  
 > **CANARY**: REQ-MATVIEW-SYSTEM-001 through REQ-MATVIEW-SYSTEM-008  
 > **Location**: `src/query/enhanced_materialized_views.zig`  
 
 ## Overview
 
-The Enhanced Materialized Views System provides comprehensive materialized view management with intelligent refresh strategies, dependency tracking, and query optimization. This system enables significant performance improvements for complex analytical queries by pre-computing and storing query results with enterprise-grade reliability and scalability.
+The Enhanced Materialized Views System provides materialized view management with refresh strategies, dependency tracking, and exact-match query rewrite. Pre-computed snapshots are stored per view and can answer structurally identical queries through the rewrite API.
+
+**Scope (GAP-0876, 2026-06-11):** the rewrite engine implements the *exact-match* case only — an incoming query whose parsed structure (MATCH pattern, WHERE, RETURN projection, ORDER BY/LIMIT/OFFSET) is identical to a view's definition rewrites to a `complete_replacement` and is served from the view's materialized snapshot. Cost-based partial rewrite is future work. The manager is a standalone subsystem: it is **not yet consulted by the query execution path** — callers reach it via `MaterializedViewManager.getQueryRewrite` / `fetchRewriteRows` (see `zig build test-gap0876`).
 
 ### Key Features
 
 - **Multiple Refresh Strategies**: Manual, auto-immediate, auto-scheduled, incremental, streaming
 - **Dependency Tracking**: Automatic detection of table-view dependencies with cascading updates
-- **Query Rewriting**: Framework for optimization of queries using materialized views
+- **Query Rewriting**: Exact-match rewrite (API level) — structurally identical queries are answered from the view snapshot; partial/cost-based rewrite and executor integration are future work
 - **Performance Monitoring**: Comprehensive metrics and statistics collection
 - **Memory Management**: Efficient cleanup and resource management
 - **Error Recovery**: Robust error handling with graceful degradation
@@ -25,7 +27,7 @@ MaterializedViewManager
 ├── ViewCatalog          - Manages view metadata and storage
 ├── DependencyTracker    - Tracks table-view dependencies
 ├── RefreshScheduler     - Manages refresh timing and priorities
-├── QueryRewriter        - Query optimization using views (framework)
+├── QueryRewriter        - Exact-match rewrite to view snapshots (API level)
 └── ViewMetrics         - Performance monitoring and statistics
 ```
 
@@ -241,13 +243,13 @@ pub const MaterializedViewManager = struct {
   - ViewCatalog for metadata and storage management
   - DependencyTracker for automatic dependency detection
   - RefreshScheduler with priority queue implementation
-  - QueryRewriter framework for query optimization
+  - QueryRewriter with exact-match rewrite (structural AST comparison)
   - ViewMetrics for comprehensive performance monitoring
-- **Integration**: Query coordinator, enhanced transport, MVCC manager integration
+- **Integration**: Standalone subsystem — base data enters through the pluggable `RowSource` seam; executor/coordinator wiring is future work
 
 ### Comprehensive Test Coverage
 
-- **`tests/test_materialized_views_enhanced.zig`**: 15 comprehensive unit tests covering all enhanced functionality
+- **`tests/test_materialized_views_enhanced.zig`**: 15 unit tests, run via `zig build test-gap0876`
   - MaterializedViewManager initialization and cleanup
   - View creation and deletion with validation
   - Refresh strategies and methods testing
@@ -255,10 +257,10 @@ pub const MaterializedViewManager = struct {
   - Error handling and recovery scenarios
   - Memory management validation
   - View catalog operations
-  - Query validation and rewriter functionality
+  - Query validation and exact-match rewrite (positive snapshot-served case + negatives: same-label/different-projection, different literals/limit/order-by never rewrite)
   - Performance metrics and statistics
 
-- **`tests/test_materialized_views_enhanced_integration.zig`**: 8 integration tests for system integration
+- **`tests/test_materialized_views_enhanced_integration.zig`**: STALE — written against an earlier API surface and not wired into any build step; pending rewrite or removal
   - End-to-end materialized view lifecycle with complex queries
   - Multi-view dependency management and cascading refreshes
   - Refresh scheduler integration with priority handling
@@ -274,7 +276,7 @@ pub const MaterializedViewManager = struct {
 - ✅ **Error Handling**: Graceful error handling for all failure scenarios with specific error types
 - ✅ **Performance**: Optimized for large-scale view management (10,000+ views)
 - ✅ **Integration**: Seamless integration with existing distributed infrastructure
-- ✅ **Test Coverage**: 23 total tests (15 unit + 8 integration) with 100% coverage
+- ✅ **Tests**: 23 total tests (15 unit + 8 integration); see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the current baseline
 - ✅ **Scalability**: Tested with up to 50 concurrent views and rapid operations
 
 ## Performance Characteristics
@@ -315,7 +317,7 @@ pub const MaterializedViewManager = struct {
 
 ### Recent Enhancements (October 2025)
 
-- **Query Rewriter Framework**: Foundation for automatic query optimization using materialized views
+- **Exact-Match Query Rewrite (GAP-0876, 2026-06-11)**: structurally identical queries rewrite to the view and are served from its snapshot; the former label-overlap scoring heuristic (which could claim `complete_replacement` for non-equivalent queries) was removed
 - **RefreshScheduler**: Priority queue-based scheduling with immediate, normal, and background priorities
 - **ViewCatalog**: Advanced metadata management with efficient view lookup and storage
 - **Comprehensive Documentation**: Complete usage examples, configuration, and troubleshooting guides
@@ -333,4 +335,4 @@ All materialized view implementations include proper CANARY governance tracking:
 - ✅ **REQ-MATVIEW-SYSTEM-007**: Test coverage
 - ✅ **REQ-MATVIEW-SYSTEM-008**: Documentation
 
-The Enhanced Materialized View Management System represents a **major advancement** in Geode's query optimization capabilities, providing enterprise-grade performance through intelligent result caching, sophisticated refresh strategies, and seamless integration with the distributed query infrastructure.
+The Enhanced Materialized View Management System provides view lifecycle, refresh strategies, and an exact-match query-rewrite API backed by materialized snapshots. Automatic executor integration and cost-based partial rewrite remain future work.

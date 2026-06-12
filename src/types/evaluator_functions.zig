@@ -236,9 +236,17 @@ pub fn LatLonAlt(lat: f64, lon: f64, alt: f64, ref: []const u8) EvaluatorError!V
     return Value{ .LatLonAlt = .{ .lat = lat, .lon = lon, .alt = alt, .ref = alt_ref } };
 }
 
-pub fn GeometryFromText(allocator: std.mem.Allocator, wkt: []const u8) EvaluatorError!Value {
-    // For MVP, just store the WKT as WKB placeholder
-    const wkb = try allocator.dupe(u8, wkt);
+// CANARY: REQ=REQ-GQL-SPATIAL-002; FEATURE="WktToWkb"; ASPECT=Constructor; STATUS=TESTED; TEST=tests/test_gap0877_advanced_types.zig; OWNER=types; UPDATED=2026-06-11
+// GAP-0877: previously stored the raw WKT bytes as a "WKB placeholder", which
+// broke every WKB consumer (st_contains/st_intersects/st_aswkt, R-tree
+// geometry indexing). Now parses WKT into real WKB; unparseable WKT is a
+// stable InvalidFormat error, never silently-wrong bytes.
+pub fn GeometryFromText(allocator: std.mem.Allocator, wkt_text: []const u8) EvaluatorError!Value {
+    const wkt = @import("wkt.zig");
+    const wkb = wkt.parseWktToWkb(allocator, wkt_text) catch |err| switch (err) {
+        error.OutOfMemory => return EvaluatorError.OutOfMemory,
+        else => return EvaluatorError.InvalidFormat,
+    };
     return Value{ .Geometry = .{ .wkb = wkb } };
 }
 

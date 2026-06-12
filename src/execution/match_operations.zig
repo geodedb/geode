@@ -200,13 +200,13 @@ inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
 // expression-based property policies for the current session.
 // Returns true (allow) when no RLS engine is active, no user is authenticated,
 // or the node passes both label-deny and expression checks.
-// CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=MatchLabelDeny; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+// CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=MatchLabelDeny; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
 fn passesRLSFilter(
     reusable_row: *std.StringHashMap(rls.Value),
     node: graph_store.Node,
 ) bool {
     const ctx = execution.getActiveContext() orelse return true;
-    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=MatchRLSPrincipalUsername; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=MatchRLSPrincipalUsername; STATUS=TESTED; TEST=geodetestlab/specs/rls_injection_resistance.yml; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-6: row-level security must be evaluated under the
     // GPS-resolved Principal, not the raw connection user. When an ExecuteRequest
     // carries a principal_envelope (distributed coordinator → shard worker, or a
@@ -238,7 +238,7 @@ fn passesRLSFilter(
 // GAP-0510 D2: Evaluate expression-based RLS policies against a node's properties.
 // Returns true (allow) when no expression engine is configured, or when the
 // expression engine grants access. Fails closed on evaluation errors (GAP-0524).
-// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=IMPL; OWNER=security; UPDATED=2026-04-09
+// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
 fn passesRLSExprFilter(
     reusable_row: *std.StringHashMap(rls.Value),
     node: graph_store.Node,
@@ -257,12 +257,25 @@ fn passesRLSExprFilter(
         }
     }
 
-    // Reuse the caller's row buffer to avoid one HashMap init/deinit per
-    // node. GAP-0524: Fail closed on conversion errors.
-    rls_value_bridge.nodePropertiesToRLSRowInto(reusable_row, &node.properties) catch return false;
-
     // Use first label as the table name for policy lookup.
     const table = if (node.labels.len > 0) node.labels[0] else "default";
+
+    // CANARY: REQ=REQ-PERF-RLS-ROW-SKIP-003; FEATURE="RLSRowBuildSkip"; ASPECT=MatchLoopSkip; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-06-11
+    // PERF-A / #808: only rebuild the RLS row when an applicable compiled
+    // policy actually reads row data (bytecode contains `load_row`). For
+    // row-free policies (e.g. pure current_user / principal.attribute
+    // checks) and for tables with no policies at all, the VM never touches
+    // the row, so an empty scratch row is sufficient and the per-property
+    // conversion + hash-insert cost vanishes from the per-row hot path.
+    if (expr_engine.needsRowDataForTable(.select, node.graph_name, table)) {
+        // Reuse the caller's row buffer to avoid one HashMap init/deinit per
+        // node. GAP-0524: Fail closed on conversion errors.
+        rls_value_bridge.nodePropertiesToRLSRowInto(reusable_row, &node.properties) catch return false;
+    } else {
+        // Keep the scratch row empty so stale entries from a previous node
+        // can never leak into a policy evaluation (hygiene; no allocation).
+        reusable_row.clearRetainingCapacity();
+    }
 
     // Phase C2: this is the REAL expression-RLS evaluation point — the
     // compiled-policy VM decides per-row allow/deny. Measure the VM call and
@@ -344,7 +357,7 @@ fn extractVarProperty(expr: ast.Expr) ?struct { variable: []const u8, property: 
     return null;
 }
 
-// CANARY: REQ=REQ-AUTO-INDEX-PUSHDOWN-001; FEATURE="AutoIdIndex"; ASPECT=WherePredicatePushdown; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+// CANARY: REQ=REQ-AUTO-INDEX-PUSHDOWN-001; FEATURE="AutoIdIndex"; ASPECT=WherePredicatePushdown; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 /// Check simple equality predicates from WHERE clause against a node's properties.
 /// Only pushes down predicates of the form `var.prop = literal` or `literal = var.prop`
 /// connected by AND. This is an early filter - WHERE is still fully evaluated later.
@@ -1281,7 +1294,7 @@ pub fn topKOrderedFastPath(
     };
 }
 
-// CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+// CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
 /// CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
@@ -1384,7 +1397,7 @@ fn nodeMatchesProps(
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-// CANARY: REQ=REQ-GAP-0336-UMH-BINDING; FEATURE="MatchCreateBindingFix"; ASPECT=PatternVarResolution; STATUS=IMPL; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-05-22
+// CANARY: REQ=REQ-GAP-0336-UMH-BINDING; FEATURE="MatchCreateBindingFix"; ASPECT=PatternVarResolution; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
 // GAP-0336 fix: MATCH ... CREATE ... previously extracted variable→node
 // bindings from `match_result.columns` (i.e. RETURN projections).  When the
 // RETURN list does not include the matched node variables — e.g.
@@ -2101,7 +2114,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
 
-    // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-13
+    // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=TESTED; TEST=geodetestlab/specs/limit_pushdown.yml; OWNER=engine; UPDATED=2026-06-11
     // Determine if we can push LIMIT down into the scan phase.
     // Safe when: no ORDER BY, no DISTINCT, no GROUP BY, no aggregation, and no OFFSET
     // (ORDER BY needs all rows to sort; GROUP BY/aggregation need full set to compute)
@@ -2136,7 +2149,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     var chain_vars = try std.ArrayList(?[]const u8).initCapacity(allocator, q.match.chains.len);
     defer chain_vars.deinit(allocator);
 
-    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-001; FEATURE="AutoIdIndex"; ASPECT=LabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-001; FEATURE="AutoIdIndex"; ASPECT=LabelIndexScan; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
     // For each chain, find all matching nodes using label_index when labels are present
     for (q.match.chains) |chain| {
         const node_pattern = chain.head.?;
@@ -2835,7 +2848,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // Get relationship direction for proper edge traversal
         const rel_dir = hop.rel.dir;
 
-        // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+        // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
         // Find all matching relationships using label_index when labels are present
         if (left_labels.len > 0) {
             var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, storageTenantFilter(filter_tenant));
@@ -5073,6 +5086,21 @@ fn applyFinalOrderAndDistinct(
     }
 }
 
+/// GAP-0514 P3: resolve the runtime path mode for variable-length traversal.
+/// Explicit WALK/TRAIL/ACYCLIC/SIMPLE keywords are honored (previously the
+/// parsed mode was DROPPED — both PathIterator call sites hardcoded .acyclic,
+/// so MATCH TRAIL/WALK silently executed with acyclic semantics). A bare
+/// pattern keeps the engine's historical ACYCLIC default: ISO GQL's default
+/// WALK semantics cannot terminate on cyclic graphs with unbounded
+/// quantifiers, and the existing query corpus depends on the acyclic
+/// default's result shape.
+fn effectivePathMode(q: ast.Query) ast.PathMode {
+    if (q.match.chains.len == 0) return .acyclic;
+    const chain = q.match.chains[0];
+    if (!chain.path_mode_explicit) return .acyclic;
+    return chain.path_mode;
+}
+
 /// Execute variable-length path traversal for a given left node.
 /// Expands BFS paths from the left node and applies right-node filters,
 /// WHERE/FILTER clauses, and row building for each valid path.
@@ -5099,13 +5127,14 @@ fn executeVariableLengthPathTraversal(
     has_with: bool,
     items: []const ast.ReturnItem,
     limit: ?usize,
+    path_mode: ast.PathMode,
 ) !void {
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
     // Stream paths via PathIterator instead of materializing all paths upfront
     const min_len = var_len_min orelse 0;
     const max_len = var_len_max;
 
-    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, .acyclic);
+    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, path_mode);
     defer path_iter.deinit();
 
     // Process each path found
@@ -5663,7 +5692,7 @@ fn executeMultiHopGroupBy(
         current_bindings_mh.deinit(arena);
     }
 
-    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
     const first_hop = chain.hops[0];
 
     // Build the shared name schema for hop depth 0 (just the left node variable).
@@ -5938,7 +5967,7 @@ fn executeMultiHopGroupBy(
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
-// CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+// CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
@@ -7050,7 +7079,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Stream variable-length paths from this starting node via PathIterator
-                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, .acyclic);
+                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, effectivePathMode(q));
                     defer path_iter.deinit();
 
                     // Collect all target nodes from paths (deduplicated by node ID)
@@ -7501,7 +7530,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     current_bindings.deinit(allocator);
                 }
 
-                // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+                // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
                 // Initialize with first hop's left nodes - use label_index when labels present
                 const first_hop = chain.hops[0];
 
@@ -8071,7 +8100,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
                     else
                         null;
-                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint);
+                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
                     try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
@@ -8601,4 +8630,86 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
         return result;
     }
+}
+
+// ============================================================================
+// Quality #733 (2026-06-11): inline coverage for the tenant-filter hot path.
+// `passesTenantFilter` guards every full-scan MATCH row (GAP-0509/GAP-0846)
+// but had no inline tests — the regression cover lived only in the
+// integration suite (tests/test_gap0509_tenant_isolation.zig). These tests
+// pin the unit contract: admin pass-through, exact-match isolation
+// (fail-closed cross-tenant), and hierarchy-aware ancestor access with
+// sibling/upward denial. Run via `zig build test-quality733`.
+// ============================================================================
+
+test "#733 passesTenantFilter - admin pass-through and exact-match isolation" {
+    const allocator = std.testing.allocator;
+    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    defer props.deinit();
+    var no_labels = [_][]const u8{};
+    const node = graph_store.Node{
+        .id = 1,
+        .labels = no_labels[0..],
+        .properties = props,
+        .tenant_id = "tenant-a",
+    };
+
+    // No filter (admin / all-tenants context) -> always visible.
+    try std.testing.expect(passesTenantFilter(node, null));
+    // Exact tenant match -> visible (GAP-0509 fast path).
+    try std.testing.expect(passesTenantFilter(node, "tenant-a"));
+    // Cross-tenant with no hierarchy configured -> fail-closed.
+    try std.testing.expect(!passesTenantFilter(node, "tenant-b"));
+}
+
+test "#733 passesTenantFilter - hierarchy grants ancestor access, denies sibling and upward" {
+    const allocator = std.testing.allocator;
+
+    var engine = try rls.RLSEngine.init(allocator);
+    defer engine.deinit();
+    try engine.hierarchy_manager.addTenant("parent", null);
+    try engine.hierarchy_manager.addTenant("child", "parent");
+    try engine.hierarchy_manager.addTenant("sibling", "parent");
+
+    // Install the engine as the process-global expression-RLS engine the way
+    // server startup does (setGlobalExprRLSEngine in src/server/main.zig),
+    // saving and restoring whatever was there so this test cannot poison
+    // sibling tests in the same binary.
+    const prev = rls_types.getGlobalExprRLSEngine();
+    rls_types.setGlobalExprRLSEngine(@ptrCast(&engine));
+    defer rls_types.setGlobalExprRLSEngine(prev);
+
+    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    defer props.deinit();
+    var no_labels = [_][]const u8{};
+    const child_node = graph_store.Node{
+        .id = 2,
+        .labels = no_labels[0..],
+        .properties = props,
+        .tenant_id = "child",
+    };
+    const parent_node = graph_store.Node{
+        .id = 3,
+        .labels = no_labels[0..],
+        .properties = props,
+        .tenant_id = "parent",
+    };
+
+    // Parent (ancestor) session reads its descendant's rows (GAP-0846 grant).
+    try std.testing.expect(passesTenantFilter(child_node, "parent"));
+    // Child session must NOT read the parent's rows (no upward access).
+    try std.testing.expect(!passesTenantFilter(parent_node, "child"));
+    // Sibling tenants stay isolated (fail-closed).
+    try std.testing.expect(!passesTenantFilter(child_node, "sibling"));
+    // The edge variant shares the same contract.
+    const child_edge = graph_store.Edge{
+        .id = 1,
+        .from_id = 2,
+        .to_id = 3,
+        .label = "OWNS",
+        .properties = props,
+        .tenant_id = "child",
+    };
+    try std.testing.expect(passesTenantFilterEdge(child_edge, "parent"));
+    try std.testing.expect(!passesTenantFilterEdge(child_edge, "sibling"));
 }

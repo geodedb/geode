@@ -74,6 +74,9 @@ const read_only_procedure_names = [_][]const u8{
     "geode.rls.policy_count",
     // CANARY: REQ=REQ-GQL-FTS-PROC-001; FEATURE="CALL geode.fts.search YIELD node,score"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=tests/test_fts_e2e.zig; OWNER=index; UPDATED=2026-05-31
     "geode.fts.search",
+    // CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=tests/test_gap0869_fts_advanced.zig; OWNER=index; UPDATED=2026-06-10
+    "geode.fts.phrase",
+    "geode.fts.proximity",
     // CANARY: REQ=REQ-GQL-TS-PROC-001; FEATURE="CALL geode.ts.* read procedures"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=tests/ts_ingest_roundtrip.zig; OWNER=timeseries; UPDATED=2026-05-31
     // Read-only timeseries queries. The write verbs (geode.ts.insert /
     // geode.ts.insert_many) are intentionally NOT listed here so they default to

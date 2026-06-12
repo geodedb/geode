@@ -1,8 +1,9 @@
 // CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD; OWNER=distributed; UPDATED=2026-04-06
 
 //! Unit tests for NodeRegistry — the hashmap-based node tracking component of
-//! query_transport.zig. NodeRegistry has no QUIC or protobuf dependencies, so it
-//! is extracted here for isolated, standalone testing (GAP-0513).
+//! the distributed query transport. GAP-0889: the drift-prone inline copy was
+//! replaced by importing the REAL type from node_registry.zig (extracted from
+//! query_transport.zig, which re-exports it). stdlib-only: no QUIC/protobuf.
 
 const std = @import("std");
 
@@ -12,103 +13,11 @@ fn compat_sleep(ns: u64) void {
     _ = std.os.linux.nanosleep(&req, &rem);
 }
 
-// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
-fn compat_milliTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
-}
-fn compat_timestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec);
-}
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
 const testing = std.testing;
 
-// ---------------------------------------------------------------------------
-// Inline copy of NodeRegistry from src/distributed/query_transport.zig.
-// Kept in sync with the source; only std is needed.
-// ---------------------------------------------------------------------------
-
-const NodeStatus = enum {
-    active,
-    inactive,
-    unknown,
-};
-
-const NodeInfo = struct {
-    node_id: u32,
-    host: []const u8,
-    port: u16,
-    status: NodeStatus,
-    last_heartbeat: i64,
-};
-
-const NodeRegistry = struct {
-    allocator: std.mem.Allocator,
-    nodes: std.AutoHashMap(u32, NodeInfo),
-
-    pub fn init(allocator: std.mem.Allocator) !NodeRegistry {
-        return NodeRegistry{
-            .allocator = allocator,
-            .nodes = std.AutoHashMap(u32, NodeInfo).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *NodeRegistry) void {
-        self.nodes.deinit();
-    }
-
-    pub fn registerNode(self: *NodeRegistry, node_id: u32, host: []const u8, port: u16) !void {
-        try self.nodes.put(node_id, NodeInfo{
-            .node_id = node_id,
-            .host = host,
-            .port = port,
-            .status = .active,
-            .last_heartbeat = compat_milliTimestamp(),
-        });
-    }
-
-    pub fn getNodeInfo(self: *NodeRegistry, node_id: u32) ?NodeInfo {
-        return self.nodes.get(node_id);
-    }
-
-    pub fn updateHeartbeat(self: *NodeRegistry, node_id: u32) void {
-        if (self.nodes.getPtr(node_id)) |info| {
-            info.last_heartbeat = compat_milliTimestamp();
-            info.status = .active;
-        }
-    }
-
-    pub fn markInactive(self: *NodeRegistry, node_id: u32) void {
-        if (self.nodes.getPtr(node_id)) |info| {
-            info.status = .inactive;
-        }
-    }
-};
+const NodeRegistry = @import("node_registry.zig").NodeRegistry;
+const NodeStatus = NodeRegistry.NodeStatus;
+const NodeInfo = NodeRegistry.NodeInfo;
 
 // ---------------------------------------------------------------------------
 // Tests

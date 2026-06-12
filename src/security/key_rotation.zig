@@ -48,9 +48,24 @@ const log = logging.scoped("security");
 const Attr = logging.Attr;
 
 // key_rotation.zig
-// Complete encryption key rotation subsystem with audit logging and rollback support.
-// CANARY: REQ=REQ-GQL-SEC-KEYROT-001; FEATURE="KeyRotation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
-// Provides full key rotation lifecycle management with online rotation capability.
+// Encryption key rotation subsystem with policy enforcement, audit logging and
+// rollback support.
+// CANARY: REQ=REQ-GQL-SEC-KEYROT-001; FEATURE="KeyRotation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_gap0890_rotation_policy.zig; OWNER=security; UPDATED=2026-06-10
+//
+// GAP-0890 scope notes (honesty contract):
+//   - RotationPolicy is ENFORCED by rotateNow()/rotateNowAt(): rotation is
+//     refused (error.RotationPolicyRefused) while the active key is younger
+//     than min_interval_secs, unless it has exceeded max_age_secs.
+//   - rotateIfDue() is the scheduler tick an external scheduler (cron,
+//     operator script, harness) calls periodically. Geode does NOT run an
+//     in-server rotation timer; this registry has no production consumer
+//     wired into the serve path, so wiring a server timer here would rotate
+//     keys nothing encrypts with. Scheduling is operator-invoked.
+//   - Re-encryption of existing pages is LAZY (reencryptPage on access /
+//     reencryptBatch on demand). There is no eager full-scan re-encrypt.
+//   - saveState()/loadState() and the remote-KMS rotation paths predate the
+//     Zig 0.16 std.Io migration; they are unreferenced by any named build
+//     gate and are not exercised by test-gap0890.
 
 /// Audit log entry for rotation events
 pub const RotationAuditEntry = struct {
@@ -91,11 +106,15 @@ pub const RollbackState = struct {
 };
 
 pub const RotationPolicy = struct {
-    // Minimum seconds between automatic rotations
+    // Minimum seconds between automatic rotations. rotateNow() refuses with
+    // error.RotationPolicyRefused while the active key is younger than this
+    // (operators forcing an immediate rotation pass .min_interval_secs = 0).
     min_interval_secs: u64 = 24 * 60 * 60,
-    // Maximum key age before forced rotation (seconds)
+    // Maximum key age before forced rotation (seconds). Once exceeded,
+    // rotation proceeds even if min_interval_secs has not elapsed.
     max_age_secs: u64 = 30 * 24 * 60 * 60,
-    // If true, re-encrypt pages lazily on access; else eager full scan.
+    // If true, re-encrypt pages lazily on access (reencryptPage); else the
+    // operator runs reencryptBatch eagerly. No automatic full scan exists.
     lazy_reencrypt: bool = true,
 };
 
@@ -108,14 +127,16 @@ pub const DataKeyRef = struct {
 };
 
 pub const RotationEvent = struct {
+    pub const Method = enum { scheduled, manual };
+
     old_id: u64,
     new_id: u64,
     ts: i64,
-    method: enum { scheduled, manual },
+    method: Method,
 };
 
 pub const KeyRegistry = struct {
-    allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
     active: ?DataKeyRef = null,
     history: std.ArrayList(DataKeyRef),
     // Audit log for rotation events
@@ -130,13 +151,13 @@ pub const KeyRegistry = struct {
     // Version tracking
     current_version: u32 = 1,
 
-    pub fn init(allocator: *std.mem.Allocator) KeyRegistry {
+    pub fn init(allocator: std.mem.Allocator) KeyRegistry {
         return .{
             .allocator = allocator,
-            .history = std.ArrayList(DataKeyRef).init(allocator),
-            .audit_log = std.ArrayList(RotationAuditEntry).init(allocator),
+            .history = .empty,
+            .audit_log = .empty,
             .rollback_state = .{
-                .pages_to_restore = std.ArrayList(u64).init(allocator),
+                .pages_to_restore = .empty,
             },
             .state_path = null,
             .kms_seed = null,
@@ -148,9 +169,9 @@ pub const KeyRegistry = struct {
     pub fn deinit(self: *KeyRegistry) void {
         // free any envelope json slices
         for (self.history.items) |*ref| if (ref.envelope_json) |ej| self.allocator.free(ej);
-        self.history.deinit();
-        self.audit_log.deinit();
-        self.rollback_state.pages_to_restore.deinit();
+        self.history.deinit(self.allocator);
+        self.audit_log.deinit(self.allocator);
+        self.rollback_state.pages_to_restore.deinit(self.allocator);
     }
 
     /// Log an audit entry for rotation events
@@ -164,7 +185,7 @@ pub const KeyRegistry = struct {
         error_message: ?[]const u8,
         duration_ms: u64,
     ) !void {
-        try self.audit_log.append(.{
+        try self.audit_log.append(self.allocator, .{
             .timestamp = compat_timestamp(),
             .event_type = event_type,
             .old_key_id = old_key_id,
@@ -243,29 +264,62 @@ pub const KeyRegistry = struct {
         };
         // Use std.crypto.random for secure key generation
         compat_fillRandom(&key.material);
-        try self.history.append(key);
+        try self.history.append(self.allocator, key);
         self.active = key;
         return key;
     }
 
-    /// Rotate key immediately using cryptographically secure random source
-    // CANARY: REQ=REQ-KEY-ROTATION-002; FEATURE="SecureKeyRotation"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
+    /// Rotate key immediately using cryptographically secure random source.
+    /// GAP-0890: the supplied policy is ENFORCED — rotation is refused with
+    /// error.RotationPolicyRefused while the active key is younger than
+    /// policy.min_interval_secs, unless it has exceeded policy.max_age_secs.
+    /// Operators forcing an immediate rotation pass .min_interval_secs = 0.
+    // CANARY: REQ=REQ-KEY-ROTATION-002; FEATURE="SecureKeyRotation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_gap0890_rotation_policy.zig; OWNER=security; UPDATED=2026-06-10
     pub fn rotateNow(self: *KeyRegistry, policy: RotationPolicy) !RotationEvent {
-        _ = policy; // placeholder until policy used
+        return self.rotateNowAt(policy, compat_timestamp());
+    }
+
+    /// Policy-enforced rotation with an injectable clock (now_epoch, unix
+    /// seconds) for deterministic tests (GAP-0890).
+    pub fn rotateNowAt(self: *KeyRegistry, policy: RotationPolicy, now_epoch: i64) !RotationEvent {
+        return self.rotateInternal(policy, now_epoch, .manual);
+    }
+
+    /// Scheduler tick: rotate if and only if the policy says rotation is due
+    /// (see scheduleRotation), returning null when nothing is due. This is
+    /// the entry point an EXTERNAL scheduler (cron / operator script) calls
+    /// periodically — geode does not run an in-server rotation timer for this
+    /// registry (GAP-0890 residual; see docs/KMS_PROVIDER_SYSTEM.md).
+    // CANARY: REQ=REQ-GQL-SEC-KEYROT-002; FEATURE="KeyRotationScheduling"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_gap0890_rotation_policy.zig; OWNER=security; UPDATED=2026-06-10
+    pub fn rotateIfDue(self: *KeyRegistry, policy: RotationPolicy, now_epoch: i64) !?RotationEvent {
+        if (!self.scheduleRotation(policy, now_epoch)) return null;
+        return try self.rotateInternal(policy, now_epoch, .scheduled);
+    }
+
+    fn rotateInternal(self: *KeyRegistry, policy: RotationPolicy, now_epoch: i64, method: RotationEvent.Method) !RotationEvent {
+        if (self.active) |k| {
+            const age_signed = now_epoch - k.created_unix_epoch;
+            const age: u64 = if (age_signed < 0) 0 else @intCast(age_signed);
+            if (age < policy.min_interval_secs and age < policy.max_age_secs) {
+                try self.logAuditEvent(.rotation_failed, k.id, 0, .failed, 0, "rotation refused by policy: min_interval_secs not elapsed", 0);
+                return error.RotationPolicyRefused;
+            }
+        }
         const old = self.active;
         // Generate new key material using cryptographically secure random source
         var key: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
-            .created_unix_epoch = compat_timestamp(),
+            .created_unix_epoch = now_epoch,
             .material = undefined,
             .envelope_json = null,
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
         compat_fillRandom(&key.material);
-        try self.history.append(key);
+        try self.history.append(self.allocator, key);
         self.active = key;
-        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = compat_timestamp(), .method = .manual };
+        try self.logAuditEvent(.rotation_completed, if (old) |o| o.id else 0, key.id, .success, 0, null, 0);
+        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = now_epoch, .method = method };
     }
 
     /// Rotate key with KMS wrapping using cryptographically secure random source
@@ -279,9 +333,9 @@ pub const KeyRegistry = struct {
         // Wrap key using KMS client
         const kms = @import("external_kms_client.zig");
         // GAP-0216: Handle potential error from LocalSimulated KMS init
-        var client = try kms.Client.init(self.allocator.*, self.kms_seed.?);
+        var client = try kms.Client.init(self.allocator, self.kms_seed.?);
         const env = try client.wrap(plaintext);
-        const env_json = try kms.envelopeToJson(env, self.allocator.*);
+        const env_json = try kms.envelopeToJson(env, self.allocator);
         const key_ref: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
             .created_unix_epoch = compat_timestamp(),
@@ -289,7 +343,7 @@ pub const KeyRegistry = struct {
             .envelope_json = env_json,
             .is_wrapped = true,
         };
-        try self.history.append(key_ref);
+        try self.history.append(self.allocator, key_ref);
         self.active = key_ref;
         return .{ .old_id = if (old) |o| o.id else 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
     }
@@ -299,7 +353,7 @@ pub const KeyRegistry = struct {
         const host = self.remote_kms_host.?;
         const port = self.remote_kms_port.?;
         const kms_remote = @import("kms_remote.zig");
-        var client = kms_remote.RemoteKmsClient.init(self.allocator.*);
+        var client = kms_remote.RemoteKmsClient.init(self.allocator);
         // Best-effort connect; propagate error if fails
         try client.connect(host, port);
         // Request generate envelope
@@ -307,16 +361,16 @@ pub const KeyRegistry = struct {
         // We cannot unwrap remotely without plaintext; for now treat ct as opaque and store envelope only.
         // Mark is_wrapped=true and leave material zeroed (future: request plaintext via privileged unwrap).
         const zero: [32]u8 = [_]u8{0} ** 32;
-        var env_json_buf = std.ArrayList(u8).init(self.allocator.*);
-        defer env_json_buf.deinit();
+        var env_json_buf: std.ArrayList(u8) = .empty;
+        defer env_json_buf.deinit(self.allocator);
         try env_json_buf.writer().print("{", .{}); // minimal re-serialization using external client helpers would be better; reuse envelopeToJson path via external client module for consistency in future
         // For brevity, reuse kms_remote internal printer by reconstructing JSON (lossless enough for test)
         env_json_buf.clearRetainingCapacity();
         // Simpler: call external_kms_client.envelopeToJson since schema same
         const ekc = @import("external_kms_client.zig");
-        const env_json = try ekc.envelopeToJson(.{ .nonce = env.nonce, .tag = env.tag, .ct = env.ct, .version = env.version, .alg = env.alg }, self.allocator.*);
+        const env_json = try ekc.envelopeToJson(.{ .nonce = env.nonce, .tag = env.tag, .ct = env.ct, .version = env.version, .alg = env.alg }, self.allocator);
         const key_ref: DataKeyRef = .{ .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1, .created_unix_epoch = compat_timestamp(), .material = zero, .envelope_json = env_json, .is_wrapped = true };
-        try self.history.append(key_ref);
+        try self.history.append(self.allocator, key_ref);
         self.active = key_ref;
         return .{ .old_id = 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
     }
@@ -337,7 +391,7 @@ pub const KeyRegistry = struct {
         var digest: [32]u8 = undefined;
         h.final(&digest);
         var checksum_buf: [16]u8 = undefined;
-        std.mem.copy(u8, checksum_buf[0..16], digest[0..16]);
+        @memcpy(checksum_buf[0..16], digest[0..16]);
         try w.print("{{\n", .{});
         try w.print("  \"version\": 1,\n", .{});
         if (self.active) |a| {
@@ -372,7 +426,7 @@ pub const KeyRegistry = struct {
             else => return e,
         };
         defer file.close();
-        const data = try file.readToEndAlloc(*self.allocator, 1 << 16);
+        const data = try file.readToEndAlloc(self.allocator, 1 << 16);
         defer self.allocator.free(data);
         // Minimal JSON scan (avoid full parser): find history and active_id tokens
         // NOT robust JSON; acceptable for internal persistence (documented)
@@ -418,14 +472,14 @@ pub const KeyRegistry = struct {
                 if (std.mem.indexOf(u8, line, "material_hex")) |_| {
                     // Extract id
                     const id_colon = std.mem.indexOfScalarPos(u8, line, idx2, ':') orelse continue;
-                    var after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
+                    const after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
                     const id_end = std.mem.indexOfScalar(u8, after, ',') orelse continue;
                     const id_slice = after[0..id_end];
                     const id_parsed = std.fmt.parseInt(u64, id_slice, 10) catch continue;
                     // created
                     const created_pos = std.mem.indexOf(u8, line, "\"created\"") orelse continue;
                     const created_colon = std.mem.indexOfScalarPos(u8, line, created_pos, ':') orelse continue;
-                    var created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
+                    const created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
                     const created_end = std.mem.indexOfScalar(u8, created_after, ',') orelse continue;
                     const created_slice = created_after[0..created_end];
                     const created_parsed = std.fmt.parseInt(i64, created_slice, 10) catch continue;
@@ -456,19 +510,19 @@ pub const KeyRegistry = struct {
                         }
                         if (material_valid) {
                             const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = null, .is_wrapped = false };
-                            try self.history.append(entry);
+                            try self.history.append(self.allocator, entry);
                         }
                     }
                 } else if (std.mem.indexOf(u8, line, "\"envelope\"")) |_| {
                     // expect envelope JSON starts after : and may span single line
                     const id_colon = std.mem.indexOfScalarPos(u8, line, idx2, ':') orelse continue;
-                    var after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
+                    const after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
                     const id_end = std.mem.indexOfScalar(u8, after, ',') orelse continue;
                     const id_slice = after[0..id_end];
                     const id_parsed = std.fmt.parseInt(u64, id_slice, 10) catch continue;
                     const created_pos = std.mem.indexOf(u8, line, "\"created\"") orelse continue;
                     const created_colon = std.mem.indexOfScalarPos(u8, line, created_pos, ':') orelse continue;
-                    var created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
+                    const created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
                     const created_end = std.mem.indexOfScalar(u8, created_after, ',') orelse continue;
                     const created_slice = created_after[0..created_end];
                     const created_parsed = std.fmt.parseInt(i64, created_slice, 10) catch continue;
@@ -477,14 +531,14 @@ pub const KeyRegistry = struct {
                     const env_end = std.mem.lastIndexOfScalar(u8, line, '}') orelse continue;
                     const env_slice = line[env_start .. env_end + 1];
                     const env_copy = try self.allocator.alloc(u8, env_slice.len);
-                    std.mem.copy(u8, env_copy, env_slice);
+                    @memcpy(env_copy, env_slice);
                     // unwrap if kms_seed configured
                     var material: [32]u8 = [_]u8{0} ** 32;
                     var wrapped_flag = true;
                     if (self.kms_seed) |seed| {
                         const kms = @import("external_kms_client.zig");
                         // GAP-0216: Handle potential error from LocalSimulated KMS init
-                        var client = kms.Client.init(self.allocator.*, seed) catch {
+                        var client = kms.Client.init(self.allocator, seed) catch {
                             wrapped_flag = false; // KMS init failed (production block)
                             continue;
                         };
@@ -502,7 +556,7 @@ pub const KeyRegistry = struct {
                         wrapped_flag = true;
                     }
                     const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = env_copy, .is_wrapped = wrapped_flag };
-                    try self.history.append(entry);
+                    try self.history.append(self.allocator, entry);
                 }
             }
         }
@@ -537,9 +591,18 @@ pub const KeyRegistry = struct {
         }
     }
 
+    /// Rotation-eligibility predicate for the operator-invoked scheduler
+    /// tick (rotateIfDue). Returns true when the active key's age has
+    /// reached policy.min_interval_secs or policy.max_age_secs, or when no
+    /// key exists yet. Takes the clock as a parameter (now_epoch) so
+    /// schedules are deterministic under test (GAP-0890).
     pub fn scheduleRotation(self: *KeyRegistry, policy: RotationPolicy, now_epoch: i64) bool {
         if (self.active) |k| {
-            const age: u64 = @intCast(now_epoch - k.created_unix_epoch);
+            // Clamp negative age (backwards clock) to 0 instead of
+            // panicking on the @intCast in safe builds (same posture
+            // as rotateInternal).
+            const delta = now_epoch - k.created_unix_epoch;
+            const age: u64 = if (delta > 0) @intCast(delta) else 0;
             if (age >= policy.max_age_secs) return true; // hard age limit
             if (age >= policy.min_interval_secs) return true; // periodic rotation window
             return false;
@@ -563,7 +626,7 @@ pub const KeyRegistry = struct {
 
         // Track page for potential rollback
         if (self.rollback_state.enabled) {
-            try self.rollback_state.pages_to_restore.append(page_id);
+            try self.rollback_state.pages_to_restore.append(self.allocator, page_id);
         }
 
         // Re-encryption workflow:
@@ -581,7 +644,7 @@ pub const KeyRegistry = struct {
         const tag = ciphertext[ciphertext.len - aes_gcm.tag_length ..][0..aes_gcm.tag_length].*;
 
         // Decrypt with previous key
-        var plaintext = self.allocator.alloc(u8, encrypted_data.len) catch return error.OutOfMemory;
+        const plaintext = self.allocator.alloc(u8, encrypted_data.len) catch return error.OutOfMemory;
         defer self.allocator.free(plaintext);
 
         aes_gcm.decrypt(plaintext, encrypted_data, tag, "", nonce, previous_key.material) catch {
@@ -696,11 +759,13 @@ pub const KeyRegistry = struct {
 test "key rotation scaffold increments id" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    const alloc = &gpa.allocator;
+    const alloc = gpa.allocator();
     var reg = KeyRegistry.init(alloc);
     defer reg.deinit();
     const k1 = try reg.loadActiveDataKey();
-    const ev = try reg.rotateNow(.{});
+    // GAP-0890: policy is enforced now — a fresh key refuses the default
+    // 24h min interval, so force with min_interval_secs = 0.
+    const ev = try reg.rotateNow(.{ .min_interval_secs = 0 });
     try std.testing.expect(ev.new_id == k1.id + 1);
     try std.testing.expect(reg.history.items.len == 2);
 }

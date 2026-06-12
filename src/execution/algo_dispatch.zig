@@ -72,7 +72,7 @@ const dispatch_table = std.StaticStringMap(AlgoHandler).initComptime(.{
     .{ "algo.biconnectedcomponents.stream", handleBiconnected },
     .{ "biconnected", handleBiconnected },
     // ==================== Graph Statistics ====================
-    // CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=CallProcedure; STATUS=IMPL; OWNER=execution; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=CallProcedure; STATUS=TESTED; TEST="GAP-0514 P3: graph statistics procedures return real values through CALL"; OWNER=execution; UPDATED=2026-06-11
     .{ "algo.graphdensity", handleGraphDensity },
     .{ "algo.density", handleGraphDensity },
     .{ "algo.graphdiameter", handleGraphDiameter },

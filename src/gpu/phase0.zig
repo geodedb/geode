@@ -14,16 +14,14 @@ pub const DeviceInfo = struct {
 };
 
 var global_loader: ?CudaLoader = null;
-var loader_init_once = std.once(initGlobalLoader);
-
-fn initGlobalLoader() void {
-    global_loader = CudaLoader.init();
-}
+var loader_init_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 fn getLoader() *const CudaLoader {
-    loader_init_once.call();
-    if (global_loader) |*loader| return loader;
-    unreachable;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    loader_init_mutex.lockUncancelable(io);
+    defer loader_init_mutex.unlock(io);
+    if (global_loader == null) global_loader = CudaLoader.init();
+    return &global_loader.?;
 }
 
 pub fn enumerate(allocator: std.mem.Allocator) ![]DeviceInfo {

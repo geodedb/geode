@@ -12,6 +12,42 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+// std.testing.tmpDir is unavailable when this file is built as the
+// bench_redo_optimization_delta executable (std.testing.io is
+// @compileError("not testing") outside `zig test`), so manage a unique temp
+// dir under .zig-cache/tmp by hand for both build modes.
+const TmpBenchDir = struct {
+    sub_path: [32]u8,
+
+    fn create() !TmpBenchDir {
+        var self: TmpBenchDir = .{ .sub_path = undefined };
+        _ = try std.fmt.bufPrint(&self.sub_path, "redo_bench_{x:0>21}", .{@as(u64, @truncate(@as(u128, @intCast(nowNs()))))});
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var rel_buf: [64]u8 = undefined;
+        const rel = try std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}", .{self.sub_path});
+        try std.Io.Dir.cwd().createDirPath(io, rel);
+        return self;
+    }
+
+    fn cleanup(self: *TmpBenchDir) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var rel_buf: [64]u8 = undefined;
+        const rel = std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}", .{self.sub_path}) catch return;
+        std.Io.Dir.cwd().deleteTree(io, rel) catch {};
+    }
+};
+
 // CANARY: REQ=REQ-GQL-022; FEATURE="Storage Snapshot Load"; ASPECT=GraphStoreLoadOptimizationDeltaVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness; BENCH=BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 // Benchmark target (S-016): Guard snapshot load optimization delta stability
 // Acceptance: speedup CV<=0.18, p95/mean<=1.35 across N samples; mean speedup >=1.00 (non-regression)
@@ -37,16 +73,16 @@ fn buildSnapshot(allocator: std.mem.Allocator) !void {
 fn sampleDelta(allocator: std.mem.Allocator) !struct { baseline: u64, optimized: u64 } {
     var base = try graph_store.GraphStore.init(allocator);
     defer base.deinit();
-    const t0 = std.time.nanoTimestamp();
+    const t0 = nowNs();
     try base.loadFromFile();
-    const t1 = std.time.nanoTimestamp();
+    const t1 = nowNs();
 
     var opt = try graph_store.GraphStore.init(allocator);
     defer opt.deinit();
     try opt.reserve(NODE_COUNT, 0);
-    const t2 = std.time.nanoTimestamp();
+    const t2 = nowNs();
     try opt.loadFromFile();
-    const t3 = std.time.nanoTimestamp();
+    const t3 = nowNs();
 
     return .{
         .baseline = @intCast(t1 - t0),
@@ -59,7 +95,7 @@ pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var td = std.testing.tmpDir(.{});
+    var td = try TmpBenchDir.create();
     defer td.cleanup();
     const base = try tmpDirRealpathAlloc(allocator, &td.sub_path);
     defer allocator.free(base);

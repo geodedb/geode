@@ -1,13 +1,13 @@
 # TODO - Current Development Priorities
 
-> **Status**: Local test baseline rebaselined 2026-06-10 (GAP-0860) from commit `faac1f3e`.
-> **Test Coverage**: [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) is the authoritative, evidence-backed baseline. Current local sweep: **167/175 named `zig build test-*` steps PASS** (6 FAIL, 2 TIMEOUT — all named with reproduction in KNOWN_TEST_ISSUES.md). `zig build` (production binary) compiles clean. The geodetestlab integration suite (`../geode-test-harness`) requires a separate harness run; the prior ~97% / 1644-1688 figures below are a stale historical snapshot pending a fresh harness run.
+> **Status**: Local test baseline maintained in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (rebaselined GAP-0860/GAP-0863; expected ~175/179 named steps pass).
+> **Test Coverage**: [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) is the authoritative, evidence-backed baseline. Current expected baseline: see KNOWN_TEST_ISSUES.md (canonical; ~175/179 named `zig build test-*` steps PASS, failures named with reproduction). `zig build` (production binary) compiles clean. The geodetestlab integration suite (`../geode-test-harness`) requires a separate harness run; the prior ~97% / 1644-1688 figures below are a stale historical snapshot pending a fresh harness run.
 > **Build Status**: ✅ `zig build` passes with 0 compiler errors. The monolithic `zig build test` is blocked by a protobuf 0.1.3 union-as-submessage limitation in the `graph_store_unit_tests` shard (see KNOWN_TEST_ISSUES.md → Blocked); use the per-step `test-*` sweep as the canonical local gate.
 > **CANARY Status**: see `docs/status.csv` / `make status-generate` for live counts.
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
-> **Security Status**: 🟢 **PRODUCTION READY** - Memory-safe user storage with proper deep-copy patterns
+> **Security Status**: 🟢 Memory-safe user storage with proper deep-copy patterns; open security gaps tracked in [GAP_ANALYSIS.md](GAP_ANALYSIS.md)
 > **GPU Status**: ✅ **Vulkan/CUDA headers properly configured** in NixOS environment
-> **GQL Compliance**: ✅ **100%** (70/70 ISO/IEC 39075:2024 tests passing)
+> **GQL Compliance**: ✅ 96/96 named ISO conformance-suite cases (`zig build test-iso-conformance`; parse-only scope)
 
 ---
 

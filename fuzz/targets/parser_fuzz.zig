@@ -7,7 +7,16 @@ fn mkInput(max: usize, data: []const u8) []const u8 {
     return data[0..cap];
 }
 
-fn fuzz_parser(context: Context, data: []const u8) anyerror!void {
+// Zig 0.16: std.testing.fuzz hands the test a *Smith generator instead of a
+// raw byte slice.  Draw a fuzzer-controlled byte slice from the Smith and
+// feed it to the original byte-driven harness.
+fn fuzz_parser(context: Context, smith: *std.testing.Smith) anyerror!void {
+    var buf: [64 * 1024]u8 = undefined;
+    const len = smith.slice(&buf);
+    try fuzz_parser_bytes(context, buf[0..len]);
+}
+
+fn fuzz_parser_bytes(context: Context, data: []const u8) anyerror!void {
     _ = context;
     const slice = mkInput(64 * 1024, data);
     var fa = std.testing.FailingAllocator.init(std.heap.page_allocator, .{ .fail_index = if (slice.len == 0) 0 else @intCast(slice[0] % 16) });

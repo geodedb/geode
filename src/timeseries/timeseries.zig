@@ -12,9 +12,12 @@
 // CANARY: REQ=REQ-TS-VALUEAT-001; FEATURE="TimeSeriesValueAt"; ASPECT=Query; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: valueAt and lastValue"; OWNER=timeseries; UPDATED=2026-04-01
 // CANARY: REQ=REQ-TS-SERIESKEY-001; FEATURE="TimeSeriesSeriesKey"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
 // CANARY: REQ=REQ-TS-POINT-001; FEATURE="TimeSeriesPoint"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
-// CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=StoreConfig; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
-// CANARY: REQ=REQ-TS-PERSIST-002; FEATURE="TimeSeriesLoadFromDisk"; ASPECT=Startup; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
-// CANARY: REQ=REQ-TS-PERSIST-003; FEATURE="TimeSeriesSync"; ASPECT=Shutdown; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=StoreConfig; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=timeseries; UPDATED=2026-06-10
+// CANARY: REQ=REQ-TS-PERSIST-002; FEATURE="TimeSeriesLoadFromDisk"; ASPECT=Startup; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=timeseries; UPDATED=2026-06-10
+// CANARY: REQ=REQ-TS-PERSIST-003; FEATURE="TimeSeriesSync"; ASPECT=Shutdown; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=timeseries; UPDATED=2026-06-10
+// CANARY: REQ=REQ-TS-DURABILITY-001; FEATURE="TimeSeriesFailClosedOpen"; ASPECT=Core; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=timeseries; UPDATED=2026-06-10
+// CANARY: REQ=REQ-TS-RETENTION-002; FEATURE="TimeSeriesRetentionPrune"; ASPECT=Core; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=timeseries; UPDATED=2026-06-10
+// CANARY: REQ=REQ-TS-TDE-001; FEATURE="TimeSeriesTDE"; ASPECT=Core; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=timeseries; UPDATED=2026-06-10
 
 const ts_lib = @import("timeseries_lib");
 const ts_storage = @import("timeseries_storage_lib");
@@ -27,10 +30,101 @@ pub const PointF64 = ts_lib.PointF64;
 pub const SeriesKey = ts_lib.SeriesKey;
 pub const Series = ts_lib.Series;
 
+/// GAP-0865 (a): durability posture for persistent stores.
+///
+/// * `.fail_closed` (default): any engine open/load error — including the
+///   engine's own fail-closed WAL-replay and segment-verification errors —
+///   propagates out of `initWithConfig`. A corrupt or unreadable timeseries
+///   directory is surfaced to the operator, never silently replaced by an
+///   empty store.
+/// * `.best_effort`: explicit opt-in to the legacy soft-fail posture —
+///   engine open errors degrade to the non-persistent in-memory store with
+///   a warning log. Configure via `GEODE_TS_DURABILITY=best_effort`.
+pub const Durability = enum { fail_closed, best_effort };
+
 pub const StoreConfig = struct {
     data_dir: ?[]const u8 = null,
     chunk_config: ChunkConfig = .{},
+    /// GAP-0865 (a): see `Durability`. Default is fail-closed.
+    durability: Durability = .fail_closed,
+    /// GAP-0865 (c): age-based retention in milliseconds. When set, a
+    /// retention pass (`runRetention`, plus the throttled opportunistic
+    /// pass on ingest) deletes whole expired segments from disk via the
+    /// engine's `pruneExpired`. `null` (default) disables retention —
+    /// nothing is ever deleted implicitly. Wire from
+    /// `GEODE_TS_RETENTION_DAYS` via `retentionMsFromEnv()`.
+    retention_max_age_ms: ?i64 = null,
+    /// Test seam: overrides the "now" reference used by retention cutoff
+    /// math (engine `retention_now_override`). `null` = real clock.
+    retention_now_override: ?i64 = null,
+    /// GAP-0865 (e): optional AES-256-GCM key for engine-level TDE of every
+    /// on-disk timeseries artefact (WAL records, segment blocks TSSEG003,
+    /// manifest TSMNF002). Fail-closed on reopen with a wrong/missing key.
+    /// Wire from `GEODE_TS_TDE=1` + `GEODE_TDE_KEY` via
+    /// `encryptionKeyFromEnv()`.
+    encryption_key: ?[32]u8 = null,
 };
+
+/// Read the durability posture from `GEODE_TS_DURABILITY`
+/// (`best_effort` opts into soft-fail; anything else = fail-closed).
+pub fn durabilityFromEnv() Durability {
+    const v = std.c.getenv("GEODE_TS_DURABILITY") orelse return .fail_closed;
+    const s = std.mem.span(v);
+    if (std.mem.eql(u8, s, "best_effort")) return .best_effort;
+    return .fail_closed;
+}
+
+/// Read the retention window from `GEODE_TS_RETENTION_DAYS` (whole days,
+/// > 0). Unset, unparsable, or non-positive values disable retention —
+/// an unparsable value is logged so a typo cannot silently disable a
+/// configured retention policy.
+pub fn retentionMsFromEnv() ?i64 {
+    const v = std.c.getenv("GEODE_TS_RETENTION_DAYS") orelse return null;
+    const s = std.mem.span(v);
+    const days = std.fmt.parseInt(i64, s, 10) catch {
+        std.log.scoped(.timeseries).warn(
+            "GEODE_TS_RETENTION_DAYS is not a valid integer; retention disabled: '{s}'",
+            .{s},
+        );
+        return null;
+    };
+    if (days <= 0) return null;
+    return days * std.time.ms_per_day;
+}
+
+/// Read the timeseries TDE key. Opt-in via `GEODE_TS_TDE=1` (or `true`);
+/// when enabled the 32-byte key comes from `GEODE_TDE_KEY` (64 hex chars,
+/// the same variable the rest of geode's TDE uses). FAIL-CLOSED: when
+/// `GEODE_TS_TDE` is set but the key is missing/invalid this returns an
+/// error rather than silently writing plaintext.
+pub fn encryptionKeyFromEnv() error{InvalidTsTdeKey}!?[32]u8 {
+    const flag = std.c.getenv("GEODE_TS_TDE") orelse return null;
+    const fs = std.mem.span(flag);
+    const enabled = std.mem.eql(u8, fs, "1") or std.ascii.eqlIgnoreCase(fs, "true");
+    if (!enabled) return null;
+
+    const key_env = std.c.getenv("GEODE_TDE_KEY") orelse {
+        std.log.scoped(.timeseries).err("GEODE_TS_TDE is set but GEODE_TDE_KEY is missing", .{});
+        return error.InvalidTsTdeKey;
+    };
+    const key_hex = std.mem.span(key_env);
+    if (key_hex.len != 64) {
+        std.log.scoped(.timeseries).err("GEODE_TDE_KEY must be 64 hex chars for timeseries TDE", .{});
+        return error.InvalidTsTdeKey;
+    }
+    var key: [32]u8 = undefined;
+    _ = std.fmt.hexToBytes(&key, key_hex) catch {
+        std.log.scoped(.timeseries).err("GEODE_TDE_KEY contains invalid hex", .{});
+        return error.InvalidTsTdeKey;
+    };
+    return key;
+}
+
+/// Minimum interval between opportunistic retention passes triggered from
+/// the ingest path (GAP-0865 (c)). Keeps the prune scan off the per-insert
+/// hot path while guaranteeing retention runs on any actively-ingesting
+/// store without operator intervention.
+const auto_prune_interval_ms: i64 = 60_000;
 
 pub const Store = struct {
     allocator: std.mem.Allocator,
@@ -52,6 +146,9 @@ pub const Store = struct {
     // used everywhere else in geode (graph_store.zig, schema_provider.zig). The
     // `lockHere()`/`unlockHere()` helpers below keep the call sites readable.
     store_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // GAP-0865 (c): wall-clock ms of the last opportunistic retention pass
+    // run from the ingest path. Guarded by `store_mutex`.
+    last_auto_prune_ms: i64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -66,6 +163,24 @@ pub const Store = struct {
     pub fn initWithConfig(allocator: std.mem.Allocator, config: StoreConfig) !Store {
         if (config.data_dir == null) return init(allocator);
 
+        // GAP-0865 (a): the durability posture decides what an engine
+        // open/load failure means. Fail-closed (default) propagates the
+        // error — corrupt on-disk state must be surfaced, never silently
+        // replaced with an empty store. Best-effort is the explicit opt-in
+        // to the legacy degrade-to-memory behaviour.
+        return initDurable(allocator, config) catch |err| switch (config.durability) {
+            .fail_closed => err,
+            .best_effort => blk: {
+                std.log.scoped(.timeseries).warn(
+                    "timeseries engine open failed ({s}); best_effort configured — degrading to non-persistent in-memory store",
+                    .{@errorName(err)},
+                );
+                break :blk init(allocator);
+            },
+        };
+    }
+
+    fn initDurable(allocator: std.mem.Allocator, config: StoreConfig) !Store {
         // We create a dedicated thread pool for the timeseries engine
         const pool_ptr = try allocator.create(thread_pool.ThreadPool);
         errdefer allocator.destroy(pool_ptr);
@@ -92,9 +207,22 @@ pub const Store = struct {
         var data_dir_owned_for_errdefer: ?[]u8 = data_dir_owned;
         errdefer if (data_dir_owned_for_errdefer) |slc| allocator.free(slc);
 
+        // GAP-0865 (a): the engine deliberately refuses to mkdir its own
+        // data_dir; create `{data_dir}/timeseries` (and parents) here so a
+        // FRESH directory opens durably instead of error.FileNotFound. This
+        // closes the trap where a brand-new server silently degraded to a
+        // memory-only store because nothing ever created the subdirectory.
+        try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), data_dir_owned);
+
         const engine_config = ts_storage.engine.Config{
             .data_dir = data_dir_owned,
             .max_memtable_points = config.chunk_config.max_points_per_chunk,
+            // GAP-0865 (c): age-based retention window; pruned via
+            // `runRetention` / the throttled ingest-path pass.
+            .retention_max_age_ms = config.retention_max_age_ms,
+            .retention_now_override = config.retention_now_override,
+            // GAP-0865 (e): engine-level TDE (WAL + segments + manifest).
+            .encryption_key = config.encryption_key,
         };
 
         const engine_ptr = try allocator.create(ts_storage.engine.Engine);
@@ -103,6 +231,19 @@ pub const Store = struct {
         engine_ptr.* = try ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr);
         // Engine.init succeeded; assume it took ownership of data_dir_owned.
         data_dir_owned_for_errdefer = null;
+        errdefer {
+            engine_ptr.deinit();
+            allocator.free(engine_ptr.config.data_dir);
+        }
+
+        // GAP-0865 (b): in the default `.batch` durability mode the engine's
+        // WAL is opened with manual_sync=true — WAL records are written
+        // through to the file per append (crash-safe against process death)
+        // but fsync'd ONLY by this background syncer (power-loss window
+        // bounded by wal_sync_interval_ms, default 100ms). Geode previously
+        // never started it, leaving the fsync window unbounded. The engine
+        // is at its final heap address here, as the API requires.
+        try engine_ptr.startBackgroundSyncer();
 
         return Store{
             .allocator = allocator,
@@ -114,13 +255,7 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
-        var it = self.series_cache.valueIterator();
-        while (it.next()) |s_ptr| {
-            const s = s_ptr.*;
-            s.points.deinit(self.allocator);
-            self.allocator.free(s.key.metric);
-            self.allocator.destroy(s);
-        }
+        self.invalidateSeriesCacheUnlocked();
         self.series_cache.deinit();
 
         if (self.engine) |eng| {
@@ -144,6 +279,74 @@ pub const Store = struct {
     pub fn sync(self: *Store) !void {
         if (self.engine) |eng| {
             try eng.sync();
+        }
+    }
+
+    /// GAP-0865: force a synchronous memtable flush — on return any
+    /// accepted points have been sealed into an on-disk segment and the
+    /// manifest published. No-op for the in-memory store.
+    pub fn flush(self: *Store) !void {
+        self.lockHere();
+        defer self.unlockHere();
+        if (self.engine) |eng| try eng.flush();
+    }
+
+    /// GAP-0865 (c): run a retention pass. Flushes the memtable (so freshly
+    /// accepted-but-unflushed old points become prunable segments), then
+    /// deletes every whole segment older than the configured
+    /// `retention_max_age_ms` from disk and the manifest via the engine's
+    /// `pruneExpired`. Returns the number of segments removed. A no-op
+    /// (returns 0) when retention is not configured or the store is
+    /// in-memory.
+    ///
+    /// Lock note: `store_mutex` is geode's tier-7 leaf lock; the engine's
+    /// internal `mu` is library-internal and is already taken under
+    /// `store_mutex` by every existing call path (appendPoints/queryPoints),
+    /// so flush/pruneExpired here introduce no new ordering edge.
+    pub fn runRetention(self: *Store) !u32 {
+        self.lockHere();
+        defer self.unlockHere();
+        const eng = self.engine orelse return 0;
+        if (self.config.retention_max_age_ms == null) return 0;
+        try eng.flush();
+        const removed = try eng.pruneExpired();
+        if (removed > 0) self.refreshSeriesCacheUnlocked(eng);
+        return removed;
+    }
+
+    /// Tear down every hydrated series (points + key memory). ONLY safe
+    /// from `deinit` — external `getSeries` holders would dangle otherwise.
+    fn invalidateSeriesCacheUnlocked(self: *Store) void {
+        var it = self.series_cache.valueIterator();
+        while (it.next()) |s_ptr| {
+            const s = s_ptr.*;
+            s.points.deinit(self.allocator);
+            self.allocator.free(s.key.metric);
+            self.allocator.destroy(s);
+        }
+        self.series_cache.clearRetainingCapacity();
+    }
+
+    /// Re-hydrate every cached series from the engine after a retention
+    /// prune, IN PLACE: the `*Series` allocations handed out by `getSeries`
+    /// stay valid (only the points array is rebuilt — the same mutation
+    /// class `insertMany` already performs on cached series). On a refresh
+    /// error the series is left EMPTY (conservative: an empty cache entry
+    /// can never serve pruned points; the engine remains the source of
+    /// truth for `queryRange`/`last`). Caller must hold `store_mutex`.
+    fn refreshSeriesCacheUnlocked(self: *Store, eng: *ts_storage.engine.Engine) void {
+        var it = self.series_cache.iterator();
+        while (it.next()) |entry| {
+            const s = entry.value_ptr.*;
+            s.points.clearRetainingCapacity();
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            var iter = eng.queryPoints(arena.allocator(), entry.key_ptr.*, 0, std.math.maxInt(i64)) catch {
+                continue;
+            };
+            while (iter.next()) |pt| {
+                s.points.append(self.allocator, .{ .ts = pt.ts, .value = pt.value }) catch break;
+            }
         }
     }
 
@@ -195,6 +398,34 @@ pub const Store = struct {
         if (self.engine) |eng| {
             const engine_pts = @as([]const ts_storage.types.Point, @ptrCast(pts));
             try eng.appendPoints(sid, engine_pts);
+
+            // GAP-0865 (c): opportunistic retention on the ingest path,
+            // throttled to once per `auto_prune_interval_ms`, so a
+            // configured retention window actually deletes expired
+            // segments on a live server without a dedicated scheduler.
+            // Prune-only (no forced flush): natural memtable rotation
+            // seals segments; un-flushed points are pruned on a later
+            // pass once their segment ages out. Errors are recorded, not
+            // propagated — an ingest must not fail because a concurrent
+            // prune hit a transient I/O error.
+            if (self.config.retention_max_age_ms != null) {
+                const now_ns = std.Io.Clock.Timestamp.now(
+                    std.Io.Threaded.global_single_threaded.io(),
+                    .real,
+                ).raw.nanoseconds;
+                const now_ms: i64 = @intCast(@divTrunc(now_ns, std.time.ns_per_ms));
+                if (now_ms - self.last_auto_prune_ms >= auto_prune_interval_ms) {
+                    self.last_auto_prune_ms = now_ms;
+                    const removed = eng.pruneExpired() catch |err| blk: {
+                        std.log.scoped(.timeseries).warn(
+                            "opportunistic retention prune failed: {s}",
+                            .{@errorName(err)},
+                        );
+                        break :blk 0;
+                    };
+                    if (removed > 0) self.refreshSeriesCacheUnlocked(eng);
+                }
+            }
         }
     }
 
@@ -280,7 +511,15 @@ pub const Store = struct {
 
         if (self.engine) |eng| {
             const sid = self.hashKey(key);
-            var iter = try eng.queryPoints(allocator, sid, start_ts, end_ts);
+            // Engine contract: every allocation for the returned iterator is
+            // made on the arena passed to queryPoints and is reclaimed by
+            // freeing that arena (the iterator has no deinit). Passing the
+            // caller's raw allocator here leaked the iterator's heap/slice
+            // allocations on every durable-path queryRange (found by the
+            // GAP-0865 durability suite under std.testing.allocator).
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            var iter = try eng.queryPoints(arena.allocator(), sid, start_ts, end_ts);
 
             while (iter.next()) |pt| {
                 try points.append(allocator, .{ .ts = pt.ts, .value = pt.value });

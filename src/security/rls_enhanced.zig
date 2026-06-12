@@ -119,6 +119,8 @@ pub const EnhancedRLSEngine = struct {
                 log.warn("RLS expression evaluation failed, denying access (fail-closed)", .{});
                 _ = err;
                 // Cache the denial to avoid repeated evaluation of broken expressions
+                // error-policy: A — best-effort cache of a deny; the fail-closed
+                // denial below is returned regardless of cache success.
                 self.cache_manager.put(cache_key, false) catch {};
                 return false;
             }
@@ -1072,6 +1074,8 @@ pub const EnhancedCacheManager = struct {
 
             // Update access statistics
             entry.access_count += 1;
+            // error-policy: A — LRU access-order bookkeeping only; a failed
+            // update degrades eviction quality, never correctness.
             self.updateAccessOrder(key) catch {};
 
             return entry.result;

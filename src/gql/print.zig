@@ -241,7 +241,10 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
             for (q.ret.items) |it| try walkExpr(ally_inner, dst, it.expr);
             if (q.order_by) |ob| for (ob.keys) |k| try walkExpr(ally_inner, dst, k.expr);
         }
-        fn walkExpr(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), e: ast.Expr) !void {
+        // GAP-0875: explicit error set — walkExpr and walkQuery are now
+        // mutually recursive (IN/NOT IN subquery descent), so the error set
+        // cannot be inferred.
+        fn walkExpr(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), e: ast.Expr) std.mem.Allocator.Error!void {
             switch (e) {
                 .Date => |d| try dst.append(ally_inner, .{ .Date = d.parsed }),
                 .Time => |t| try dst.append(ally_inner, .{ .Time = t.parsed }),
@@ -274,7 +277,9 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                 },
                 .InSubquery => |isq| {
                     try walkExpr(ally_inner, dst, isq.value.*);
-                    // Note: subquery walking not implemented yet
+                    // GAP-0875: descend into the subquery so temporal
+                    // literals inside IN (subquery) are collected.
+                    try walkQuery(ally_inner, dst, isq.subquery.*);
                 },
                 .InListExpr => |ile| {
                     try walkExpr(ally_inner, dst, ile.value.*);
@@ -286,7 +291,9 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                 },
                 .NotInSubquery => |nisq| {
                     try walkExpr(ally_inner, dst, nisq.value.*);
-                    // Note: subquery walking not implemented yet
+                    // GAP-0875: descend into the subquery so temporal
+                    // literals inside NOT IN (subquery) are collected.
+                    try walkQuery(ally_inner, dst, nisq.subquery.*);
                 },
                 .NotInListExpr => |nile| {
                     try walkExpr(ally_inner, dst, nile.value.*);
@@ -441,6 +448,103 @@ fn printRel(w: anytype, r: ast.RelPattern) !void {
     }
     if (r.props) |_| try w.print(" {{…}}", .{});
     try w.writeByte(']');
+}
+
+// GAP-0875: compact, re-parseable rendering of IN / NOT IN subqueries.
+// Renders `MATCH <pattern> [WHERE <expr>] RETURN [DISTINCT] <items>` — the
+// grammar the parser accepts inside `IN ( ... )` (parser.zig parseQuery via
+// the InSubquery/NotInSubquery paths). Clause forms beyond that core
+// (WITH/GROUP BY/ORDER BY chains) are rendered by their core clauses only.
+// Explicit `anyerror` return: printExprWith and printSubqueryCompact are
+// mutually recursive, so the error set cannot be inferred.
+fn printSubqueryCompact(w: anytype, q: ast.Query, opts: PrintOptions) anyerror!void {
+    try w.print("MATCH ", .{});
+    try printGraphPatternCompact(w, q.match, opts);
+    if (q.where_clause) |we| {
+        try w.print(" WHERE ", .{});
+        try printExprWith(w, we, 0, opts);
+    }
+    try w.print(" RETURN ", .{});
+    if (q.ret.distinct) try w.print("DISTINCT ", .{});
+    for (q.ret.items, 0..) |it, i| {
+        if (i > 0) try w.print(", ", .{});
+        try printExprWith(w, it.expr, 0, opts);
+        if (it.alias) |al| try w.print(" AS {s}", .{al});
+    }
+}
+
+fn printGraphPatternCompact(w: anytype, gp: ast.GraphPattern, opts: PrintOptions) !void {
+    for (gp.chains, 0..) |ch, ci| {
+        if (ci > 0) try w.print(", ", .{});
+        if (ch.name) |nm| try w.print("{s} = ", .{nm});
+        if (ch.hops.len == 0) {
+            if (ch.head) |head| try printNodeCompact(w, head, opts);
+            continue;
+        }
+        try printNodeCompact(w, ch.hops[0].left, opts);
+        for (ch.hops) |hp| {
+            switch (hp.rel.dir) {
+                .left => {
+                    try w.print("<-", .{});
+                    try printRelCompact(w, hp.rel, opts);
+                    try w.print("-", .{});
+                },
+                .right => {
+                    try w.print("-", .{});
+                    try printRelCompact(w, hp.rel, opts);
+                    try w.print("->", .{});
+                },
+                .undirected => {
+                    try w.print("-", .{});
+                    try printRelCompact(w, hp.rel, opts);
+                    try w.print("-", .{});
+                },
+            }
+            try printNodeCompact(w, hp.right, opts);
+        }
+    }
+}
+
+fn printNodeCompact(w: anytype, n: ast.NodePattern, opts: PrintOptions) !void {
+    try w.writeByte('(');
+    if (n.name) |nm| try w.print("{s}", .{nm});
+    for (n.labels) |l| try w.print(":{s}", .{l});
+    if (n.props) |props| {
+        try w.writeByte(' ');
+        try printPropsCompact(w, props, opts);
+    }
+    try w.writeByte(')');
+}
+
+fn printRelCompact(w: anytype, r: ast.RelPattern, opts: PrintOptions) !void {
+    try w.writeByte('[');
+    if (r.name) |nm| try w.print("{s}", .{nm});
+    for (r.types, 0..) |t, i| try w.print("{s}{s}", .{ if (i == 0) ":" else "|", t });
+    if (r.min_len != null or r.max_len != null) {
+        try w.writeByte('*');
+        if (r.min_len) |mn| try w.print("{d}", .{mn});
+        if (r.max_len != null and (r.min_len == null or r.max_len.? != r.min_len.?)) {
+            try w.print("..", .{});
+            if (r.max_len) |mx| try w.print("{d}", .{mx});
+        } else if (r.max_len == null and r.min_len != null) {
+            try w.print("..", .{});
+        }
+    }
+    if (r.props) |props| {
+        try w.writeByte(' ');
+        try printPropsCompact(w, props, opts);
+    }
+    try w.writeByte(']');
+}
+
+fn printPropsCompact(w: anytype, props: []ast.Property, opts: PrintOptions) !void {
+    try w.print("{{", .{});
+    for (props, 0..) |p, i| {
+        if (i > 0) try w.print(", ", .{});
+        try w.print("{s}: ", .{p.key});
+        try printExprWith(w, p.value.*, 0, opts);
+    }
+    try w.print("}}", .{});
 }
 
 pub fn printExpr(w: anytype, e: ast.Expr, prec: u8) !void {
@@ -654,7 +758,9 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         },
         .InSubquery => |isq| {
             try printExprWith(w, isq.value.*, 0, opts);
-            try w.print(" IN (subquery)", .{});
+            try w.print(" IN (", .{});
+            try printSubqueryCompact(w, isq.subquery.*, opts);
+            try w.writeByte(')');
         },
         .InListExpr => |ile| {
             try printExprWith(w, ile.value.*, 0, opts);
@@ -673,7 +779,9 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         },
         .NotInSubquery => |nisq| {
             try printExprWith(w, nisq.value.*, 0, opts);
-            try w.print(" NOT IN (subquery)", .{});
+            try w.print(" NOT IN (", .{});
+            try printSubqueryCompact(w, nisq.subquery.*, opts);
+            try w.writeByte(')');
         },
         .NotInListExpr => |nile| {
             try printExprWith(w, nile.value.*, 0, opts);

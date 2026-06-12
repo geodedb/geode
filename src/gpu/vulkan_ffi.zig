@@ -65,6 +65,7 @@ pub const VK_BUFFER_USAGE_TRANSFER_SRC_BIT: u32 = 0x00000001;
 pub const VK_BUFFER_USAGE_TRANSFER_DST_BIT: u32 = 0x00000002;
 
 pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT: u32 = 0x00000001;
+pub const VK_MEMORY_HEAP_DEVICE_LOCAL_BIT: u32 = 0x00000001;
 pub const VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT: u32 = 0x00000002;
 pub const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT: u32 = 0x00000004;
 
@@ -114,6 +115,13 @@ pub const VkInstanceCreateInfo = extern struct {
     enabledExtensionCount: u32,
     ppEnabledExtensionNames: ?[*]const [*:0]const u8,
 };
+
+// VkPhysicalDeviceType values (Vulkan 1.0 spec)
+pub const VK_PHYSICAL_DEVICE_TYPE_OTHER: u32 = 0;
+pub const VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: u32 = 1;
+pub const VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: u32 = 2;
+pub const VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: u32 = 3;
+pub const VK_PHYSICAL_DEVICE_TYPE_CPU: u32 = 4;
 
 pub const VkPhysicalDeviceProperties = extern struct {
     apiVersion: u32,

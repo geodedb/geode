@@ -1,5 +1,18 @@
 # Integrating Signal-Based Anomaly Detection into Geode
 
+> **STATUS: FUTURE / NON-GA — DESIGN SPEC ONLY (gated 2026-06-10, GAP-0866).**
+> Nothing in this document is implemented. FFT/STFT/wavelet transforms,
+> spectral-residual and SR-CNN anomaly detection, `spectral_anomaly_score()`,
+> AnomalyEvent/ANOMALY_DETECTED graph schema, CDC-driven continuous detection,
+> GPU acceleration, and WASM detector extensions are all unimplemented (see
+> `docs/TIMESERIES_REQUIREMENTS_INVENTORY.md` §3.7, TS-SIG-001..015). These
+> capabilities MUST NOT be advertised in user-facing documentation until they
+> ship. The "current capabilities" framing below also reflects the legacy
+> ChunkStorage model and pre-2026-06 claims; the authoritative description of
+> what time-series support actually exists today is `docs/TIMESERIES.md`
+> (the `CALL geode.ts.*` procedure family and the scalar `timeseries.*` eval
+> functions, i64 value lane, timeseries-storage-backed durability).
+
 ## Geode’s Time-Series Architecture and Current Capabilities
 
 Geode is a graph database that recently gained native time-series support, enabling unified storage and querying of graph‑linked telemetry data. Under the hood, Geode stores time‑series as columnar chunks of points with **Gorilla compression** (delta‑of‑delta timestamps and XOR value encoding) for high efficiency \[1]. Each logical series (e.g., a device’s metric) is partitioned into fixed‑size chunks (4096 points each) that are compressed to \~1.5–8 bytes/value depending on regularity \[1]. This chunked design allows fast time‑range scans by skipping chunks outside the query window and yields high write throughput by buffering points into chunks. In the graph data model, time‑series are treated as first‑class related data: for example, each `Device` node has a child `Series` node per metric, which in turn links to multiple `Chunk` nodes holding the actual time‑slices \[2]. This **“chunked series subgraph”** model preserves graph semantics (devices and sensors remain nodes) while storing bulk measurements in an efficient structure.

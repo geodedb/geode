@@ -1,12 +1,24 @@
 const std = @import("std");
 const risk = @import("security/mfa_risk.zig");
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 // Benchmark: step-up decision latency variance envelope
 // Outputs JSON line with iterations, cv, p95_mean_ratio.
 // CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaRiskStepUpDecision"; ASPECT=LatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_MFA_CORE_001_StepUpLatencyVariance; OWNER=security; UPDATED=2025-09-27
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // Zig 0.16: GeneralPurposeAllocator renamed to DebugAllocator.
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const iters: usize = 256;
@@ -17,12 +29,12 @@ pub fn main() !void {
     var enforced = false;
     const policy = risk.StepUpPolicy{ .threshold = 0.55, .hysteresis = 0.05 };
     while (i < iters) : (i += 1) {
-        const start = std.time.nanoTimestamp();
+        const start = nowNs();
         const f = risk.deterministicFactors("userA", if (i % 2 == 0) .Login else .TransferFunds);
         const sc = risk.score(if (i % 2 == 0) .Login else .TransferFunds, f);
         enforced = policy.requiresStepUp(sc, enforced);
-        const end = std.time.nanoTimestamp();
-        const dt: u64 = @as(u64, @intCast(end - start));
+        const end = nowNs();
+        const dt: u64 = end - start;
         times[i] = dt;
         total += dt;
     }

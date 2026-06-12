@@ -37,7 +37,6 @@ fn compat_microTimestamp() i64 {
 const protocol = @import("../protocol.zig");
 const planner = @import("../planner.zig");
 const federation = @import("federation.zig");
-const raft = @import("raft.zig");
 // GAP-0077: Import CBO for statistics integration
 const cbo = @import("../planner/cbo.zig");
 const parallel_wrapper = @import("parallel/thread_pool_parallel");
@@ -223,7 +222,7 @@ pub const QueryCoordinator = struct {
             return results;
         }
 
-        var errors = try self.allocator.alloc(?anyerror, fragment_count);
+        const errors = try self.allocator.alloc(?anyerror, fragment_count);
         defer self.allocator.free(errors);
         for (errors) |*e| e.* = null;
 
@@ -273,14 +272,23 @@ pub const QueryCoordinator = struct {
             parallel_wrapper.Thresholds.forEach,
         );
 
+        // GAP-0889: a failed fragment must fail the query. Continuing with an
+        // empty result for that shard silently returned PARTIAL data as if it
+        // were the complete answer (and the sequential path above already
+        // propagates fragment errors — the two paths now agree).
+        var first_error: ?anyerror = null;
         for (errors, 0..) |err, i| {
             if (err) |e| {
                 log.err("Shard execution failed", &.{
                     Attr.uint("shard_index", i),
                     Attr.string("error", @errorName(e)),
                 });
-                // Continue with empty result rather than failing entire query
+                if (first_error == null) first_error = e;
             }
+        }
+        if (first_error) |e| {
+            for (results) |*r| r.deinit(self.allocator);
+            return e;
         }
 
         _ = self.metrics.concurrent_queries.fetchAdd(1, .monotonic);
@@ -290,6 +298,7 @@ pub const QueryCoordinator = struct {
     // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// Execute query fragment on local shard using the actual query executor
     fn executeLocalFragment(self: *Self, query_text: []const u8, params: []const protocol.Value) !federation.QueryResults {
+        _ = params; // reserved: parameter binding for local fragments is not wired yet
         const start_time = compat_milliTimestamp();
 
         // GAP-0043: Wire to actual executor instead of returning mock results
@@ -308,24 +317,20 @@ pub const QueryCoordinator = struct {
             if (owned_parse_result) |*pr| pr.deinit();
         }
 
+        // GAP-0889: parse/execution failures used to return an EMPTY result
+        // set, which a caller cannot distinguish from "the query matched
+        // nothing" — a wrong-answer bug for distributed merges. Fail loud and
+        // let scatterQuery's per-fragment error channel report the shard.
         const parse_result: *const lib.ParseResult = parse_blk: {
             if (self.ast_cache) |cache| {
-                const outcome = lib.parseGqlCached(cache, query_text, .{}) catch {
-                    return federation.QueryResults{
-                        .rows = &.{},
-                        .schema = &.{},
-                        .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
-                        .ordered = false,
-                    };
+                const outcome = lib.parseGqlCached(cache, query_text, .{}) catch |err| {
+                    log.err("local fragment parse failed", &.{Attr.string("error", @errorName(err))});
+                    return err;
                 };
                 switch (outcome) {
                     .Err => {
-                        return federation.QueryResults{
-                            .rows = &.{},
-                            .schema = &.{},
-                            .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
-                            .ordered = false,
-                        };
+                        log.err("local fragment parse rejected", &.{Attr.string("query", query_text)});
+                        return error.ParseError;
                     },
                     .Ok => |h| {
                         ast_handle = h;
@@ -333,26 +338,18 @@ pub const QueryCoordinator = struct {
                     },
                 }
             }
-            const pr = lib.parseGql(query_text, self.allocator) catch {
-                return federation.QueryResults{
-                    .rows = &.{},
-                    .schema = &.{},
-                    .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
-                    .ordered = false,
-                };
+            const pr = lib.parseGql(query_text, self.allocator) catch |err| {
+                log.err("local fragment parse failed", &.{Attr.string("error", @errorName(err))});
+                return err;
             };
             owned_parse_result = pr;
             break :parse_blk &owned_parse_result.?;
         };
 
         // Get execution context
-        const catalog = execution.ensureCatalogInstance(self.allocator) catch {
-            return federation.QueryResults{
-                .rows = &.{},
-                .schema = &.{},
-                .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
-                .ordered = false,
-            };
+        const catalog = execution.ensureCatalogInstance(self.allocator) catch |err| {
+            log.err("local fragment catalog init failed", &.{Attr.string("error", @errorName(err))});
+            return err;
         };
         // CANARY: REQ=REQ-GPS-DERIVE-002; FEATURE="GPS Principal Derivation"; ASPECT=DistributedCoordinatorWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
         // Phase 2: delegate to derivePrincipal() so all transport sites share
@@ -373,14 +370,11 @@ pub const QueryCoordinator = struct {
             .principal = &coordinator_principal,
         };
 
-        // Execute the program
-        var exec_result = execution.executeProgramWithContext(self.allocator, &parse_result.program, context) catch {
-            return federation.QueryResults{
-                .rows = &.{},
-                .schema = &.{},
-                .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
-                .ordered = false,
-            };
+        // Execute the program (GAP-0889: propagate — an empty result set is
+        // indistinguishable from a successful empty match).
+        var exec_result = execution.executeProgramWithContext(self.allocator, &parse_result.program, context) catch |err| {
+            log.err("local fragment execution failed", &.{Attr.string("error", @errorName(err))});
+            return err;
         };
         defer exec_result.deinit(self.allocator);
 
@@ -582,7 +576,7 @@ pub const QueryCoordinator = struct {
 
         const order_key_names = try self.extractOrderKeyNames(order_keys);
         errdefer {
-            for (order_key_names) |k| self.allocator.free(k);
+            for (order_key_names) |kn| self.allocator.free(kn);
             self.allocator.free(order_key_names);
         }
 
@@ -966,7 +960,7 @@ const CoordinatorMetrics = struct {
 
 test "QueryCoordinator: initialization" {
     const ally = std.testing.allocator;
-    var config = federation.FederationConfig{};
+    const config = federation.FederationConfig{};
     var coordinator = try QueryCoordinator.init(ally, config);
     defer coordinator.deinit();
 

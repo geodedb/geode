@@ -74,6 +74,15 @@ This is a strong signal that the intended semantics include phrase/proximity que
 `src/fts/advanced.zig` implements analyzers and phrase/proximity/highlight logic, but its `phraseQuery` uses a synthetic corpus string and is gated by a feature-flag style `enabled()`/test override. citeturn9view1turn69view0  
 So phrase/proximity/highlight semantics are not presently backed by the persistent index format in `fulltext.idx`.
 
+> **RESOLVED (GAP-0869, 2026-06-10):** the synthetic-corpus `phraseQuery` /
+> `proximityQuery` / `highlight` stubs in `src/fts/advanced.zig` were deleted.
+> Phrase and proximity now run against the persisted fts-storage positional
+> postings (`FullTextIndex.phraseSearch` / `proximitySearch` in
+> `src/index/fulltext.zig`, via `FtsStorageAdapter.searchPositions`), exposed
+> through GQL as `CALL geode.fts.phrase(...)` / `CALL geode.fts.proximity(...)`.
+> Highlighting is a byte-offset API over caller-supplied authorized content
+> (`FullTextIndex.highlight`); see `docs/FULLTEXT_SEARCH.md`.
+
 ### Backup/restore boundary relevant to FTS artifacts
 
 `src/storage/backup.zig` backs up the **entire `graphs/` directory tree** under `data_dir`, plus `graph_registry.dat`, meaning it will include `{uuid}/fts/...` artifacts as they exist today. citeturn63view2  
@@ -334,6 +343,12 @@ Even if FTS is “derived state”, silently returning an empty index is operati
 The advanced module’s phrase/proximity/highlight behavior is stubbed/synthetic and not wired to the persisted `FullTextIndex` format. citeturn9view1turn69view0  
 Yet the optimizer models phrase/proximity as query types. citeturn49view0  
 A segment-based postings+positions format is the appropriate foundation to make those semantics real.
+
+> **RESOLVED (GAP-0869, 2026-06-10):** exactly this landed — the fts-storage
+> engine's delta+varint postings carry per-(term, doc) token positions, and
+> phrase/proximity/highlight are now verified against them (no synthetic
+> corpora; stubs deleted). See `docs/FULLTEXT_SEARCH.md` and
+> `tests/e2e_fts_advanced.zig` / `tests/test_gap0869_fts_advanced.zig`.
 
 ## Security review
 

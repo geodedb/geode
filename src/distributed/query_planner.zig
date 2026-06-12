@@ -29,7 +29,7 @@ pub const DistributedQueryPlanner = struct {
     }
 
     // Plan distributed query execution across federation shards
-    // CANARY: REQ=REQ-DIST-PLAN-001; FEATURE="DistributedQueryPlanning"; ASPECT=Orchestration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-PLAN-001; FEATURE="DistributedQueryPlanning"; ASPECT=Orchestration; STATUS=TESTED; TEST="planDistributedQuery: end-to-end orchestration produces a complete plan"; OWNER=distributed; UPDATED=2026-06-11
     pub fn planDistributedQuery(self: *DistributedQueryPlanner, query: *const ast.Query) !DistributedPlan {
         // Analyze query for distribution opportunities
         const distribution_analysis = try self.analyzeQueryDistribution(query);
@@ -138,7 +138,7 @@ pub const DistributedQueryPlanner = struct {
         // Try label-based pruning: only include shards whose labels
         // overlap with the query's label affinities.
         if (has_label_affinities) {
-            var pruned = std.ArrayList(u32).init(self.allocator);
+            var pruned: std.ArrayList(u32) = .empty;
             var shard_iter = self.shard_registry.shards.iterator();
             while (shard_iter.next()) |entry| {
                 const shard_info = entry.value_ptr.*;
@@ -239,12 +239,12 @@ pub const DistributedQueryPlanner = struct {
                     bin.op == .Le or bin.op == .Gt or bin.op == .Ge)
                 {
                     // Analyze comparison operations for shard filtering
-                    try analysis.addFilterCondition(bin);
+                    try analysis.addFilterCondition(.{ .op = bin.op, .left = bin.left, .right = bin.right });
                 }
             },
             .Call => |call| {
                 // Analyze function calls for geographic or hash-based sharding
-                try analysis.addFunctionFilter(call);
+                try analysis.addFunctionFilter(.{ .callee = call.callee, .args = call.args });
             },
             else => {},
         }
@@ -325,7 +325,7 @@ pub const DistributedQueryPlanner = struct {
         return @min(@as(u8, @intCast(shard_count)), 8); // Max 8 parallel operations
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-003; FEATURE="ShardQueryGeneration"; ASPECT=QueryRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-PLAN-003; FEATURE="ShardQueryGeneration"; ASPECT=QueryRouting; STATUS=TESTED; TEST="generateShardQuery: caps unlimited label query with shard row estimate"; OWNER=distributed; UPDATED=2026-06-11
     /// Generate a shard-scoped query. Currently returns a copy of the original
     /// query annotated with the target shard ID for downstream routing.
     /// Label-based routing is delegated to `selectParticipatingShards`; this
@@ -353,13 +353,13 @@ pub const DistributedQueryPlanner = struct {
         return shard_query;
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-005; FEATURE="ShardLocalOptimization"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-PLAN-005; FEATURE="ShardLocalOptimization"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="optimizeShardLocalPlan: derives operations from query structure"; OWNER=distributed; UPDATED=2026-06-11
     /// Build a local execution plan for a shard based on the query structure.
     /// Derives operations from the query AST (scan, filter, project, etc.)
     /// and estimates cost proportional to the expected rows on this shard.
     fn optimizeShardLocalPlan(self: *DistributedQueryPlanner, query: ast.Query, shard_id: u32) !ShardLocalPlan {
         // Derive operation list from query structure
-        var ops = std.ArrayList(ShardLocalPlan.Operation).init(self.allocator);
+        var ops: std.ArrayList(ShardLocalPlan.Operation) = .empty;
 
         // Every query starts with a scan
         try ops.append(self.allocator, .scan);
@@ -429,7 +429,7 @@ pub const DistributedQueryPlanner = struct {
         }
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-006; FEATURE="DistributedJoin"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-PLAN-006; FEATURE="DistributedJoin"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="planDistributedJoin: strategy follows shard count"; OWNER=distributed; UPDATED=2026-06-11
     /// Select join strategy based on shard count and estimated data volume.
     fn planDistributedJoin(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !JoinStrategy {
         _ = query;
@@ -444,7 +444,7 @@ pub const DistributedQueryPlanner = struct {
         return .hash_join;
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-007; FEATURE="DistributedAggregation"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-PLAN-007; FEATURE="DistributedAggregation"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="planDistributedAggregation: phases by shard count and HAVING"; OWNER=distributed; UPDATED=2026-06-11
     /// Select aggregation strategy based on query and shard topology.
     fn planDistributedAggregation(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !AggregationStrategy {
         _ = self;
@@ -461,7 +461,7 @@ pub const DistributedQueryPlanner = struct {
         return .two_phase;
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-008; FEATURE="DistributedSort"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-PLAN-008; FEATURE="DistributedSort"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="planDistributedSort: strategy follows total estimated rows"; OWNER=distributed; UPDATED=2026-06-11
     /// Select sort strategy based on expected result set size.
     fn planDistributedSort(self: *DistributedQueryPlanner, order: ast.OrderBy, shard_plans: []const ShardPlan) !SortStrategy {
         _ = self;
@@ -482,7 +482,7 @@ pub const DistributedQueryPlanner = struct {
         return .merge_sort;
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-009; FEATURE="DistributedUnion"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-PLAN-009; FEATURE="DistributedUnion"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="planDistributedUnion: strategy follows distinct and shard count"; OWNER=distributed; UPDATED=2026-06-11
     /// Select union strategy based on shard count and whether results need dedup.
     fn planDistributedUnion(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !UnionStrategy {
         _ = self;
@@ -499,7 +499,7 @@ pub const DistributedQueryPlanner = struct {
     /// Analyze data flow across shards using actual shard plan estimates.
     /// Sums data_transfer_size from all shard plans and identifies bottleneck
     /// shards (those with the highest transfer size).
-    // CANARY: REQ=REQ-DIST-PLAN-010; FEATURE="DataFlowAnalysis"; ASPECT=TransferEstimation; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-PLAN-010; FEATURE="DataFlowAnalysis"; ASPECT=TransferEstimation; STATUS=TESTED; TEST=tests/test_distributed_query_planner.zig; OWNER=distributed; UPDATED=2026-06-11
     pub fn analyzeDataFlow(self: *DistributedQueryPlanner, plan: CoordinatorPlan) !DataFlow {
         const shard_plans = plan.shard_plans;
 
@@ -584,7 +584,7 @@ pub const DistributedQueryPlanner = struct {
     /// Phase 2: Data transfer (collect results from shards to coordinator)
     /// Phase 3: Coordinator merge (joins, aggregations, sorts on collected data)
     /// Each phase has estimated duration based on the coordinator plan and transfer optimization.
-    // CANARY: REQ=REQ-DIST-PLAN-011; FEATURE="ExecutionPhases"; ASPECT=PhasePlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-PLAN-011; FEATURE="ExecutionPhases"; ASPECT=PhasePlanning; STATUS=TESTED; TEST=tests/test_distributed_query_planner.zig; OWNER=distributed; UPDATED=2026-06-11
     pub fn planExecutionPhases(self: *DistributedQueryPlanner, plan: CoordinatorPlan, optimization: TransferOptimization) ![]ExecutionPhase {
         var phases = std.ArrayList(ExecutionPhase).initCapacity(self.allocator, 3) catch return error.OutOfMemory;
 
@@ -781,7 +781,7 @@ pub const DistributionAnalysis = struct {
     /// Track property-based filter conditions from node patterns in the MATCH clause.
     /// Stores property key and literal value for shard-routing decisions.
     /// Enables property-based shard pruning (e.g., if shard_key = property value).
-    // CANARY: REQ=REQ-DIST-PLAN-012; FEATURE="PropertyFilterTracking"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-PLAN-012; FEATURE="PropertyFilterTracking"; ASPECT=ShardRouting; STATUS=TESTED; TEST=tests/test_distributed_query_planner.zig; OWNER=distributed; UPDATED=2026-06-11
     pub fn addPropertyFilters(self: *DistributionAnalysis, properties: []const ast.Property) !void {
         for (properties) |prop| {
             // Extract literal value from the property expression for shard routing
@@ -797,7 +797,7 @@ pub const DistributionAnalysis = struct {
     /// Track relationship type patterns for cross-shard join detection and routing.
     /// Stores edge type labels so the shard pruner can route queries involving
     /// specific relationship types to shards that host those edges.
-    // CANARY: REQ=REQ-DIST-PLAN-013; FEATURE="EdgePatternTracking"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-PLAN-013; FEATURE="EdgePatternTracking"; ASPECT=ShardRouting; STATUS=TESTED; TEST=tests/test_distributed_query_planner.zig; OWNER=distributed; UPDATED=2026-06-11
     pub fn addEdgePattern(self: *DistributionAnalysis, rel: ast.RelPattern) !void {
         for (rel.types) |edge_type| {
             // Track the edge type as an affinity (count occurrences)
@@ -809,7 +809,7 @@ pub const DistributionAnalysis = struct {
     /// Process binary comparison expressions from WHERE clause for shard filtering.
     /// Extracts property name from LHS (PropertyAccess or Ident) and literal value
     /// from RHS, storing as property filters for shard selection.
-    // CANARY: REQ=REQ-DIST-PLAN-014; FEATURE="FilterConditionExtraction"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-PLAN-014; FEATURE="FilterConditionExtraction"; ASPECT=ShardRouting; STATUS=TESTED; TEST=tests/test_distributed_query_planner.zig; OWNER=distributed; UPDATED=2026-06-11
     pub fn addFilterCondition(self: *DistributionAnalysis, bin: struct { op: ast.BinOp, left: *ast.Expr, right: *ast.Expr }) !void {
         // Extract property name from LHS
         const prop_name: ?[]const u8 = switch (bin.left.*) {
@@ -841,7 +841,7 @@ pub const DistributionAnalysis = struct {
     /// Process function calls (e.g., geographic hash functions) for shard routing.
     /// Extracts function name and argument count, storing for hash-based or
     /// geographic shard selection strategies.
-    // CANARY: REQ=REQ-DIST-PLAN-015; FEATURE="FunctionFilterExtraction"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    // CANARY: REQ=REQ-DIST-PLAN-015; FEATURE="FunctionFilterExtraction"; ASPECT=ShardRouting; STATUS=TESTED; TEST=tests/test_distributed_query_planner.zig; OWNER=distributed; UPDATED=2026-06-11
     pub fn addFunctionFilter(self: *DistributionAnalysis, call: struct { callee: *ast.Expr, args: []*ast.Expr }) !void {
         // Extract function name from callee
         const func_name: ?[]const u8 = switch (call.callee.*) {
@@ -1379,9 +1379,9 @@ test "optimizeShardLocalPlan: derives operations from query structure" {
     query.match = .{ .chains = &.{} };
     query.ret = .{ .items = &.{}, .distinct = false };
     // Set WHERE clause to trigger filter operation
-    query.where_clause = .{ .Literal = .{ .Boolean = true } };
+    query.where_clause = .{ .Bool = true };
     // Set ORDER BY to trigger sort
-    query.order_by = &ast.OrderBy{ .items = &.{} };
+    query.order_by = .{ .keys = &.{} };
 
     const plan = try planner.optimizeShardLocalPlan(query, 1);
     defer ally.free(plan.operations);
@@ -1450,4 +1450,199 @@ test "estimateTotalCost: compression reduces cost" {
     const with_compress = cost_model.estimateTotalCost(plan, TransferOptimization{ .compression = true, .batching = false });
 
     try std.testing.expect(with_compress < no_compress);
+}
+
+/// Build a minimal, valid zeroed query for planner tests.
+fn testQuery() ast.Query {
+    var q = std.mem.zeroes(ast.Query);
+    q.match = .{ .chains = &.{} };
+    q.ret = .{ .items = &.{}, .distinct = false };
+    return q;
+}
+
+/// Build a zeroed ShardPlan with a given id and estimated row count.
+fn testShardPlan(shard_id: u32, estimated_rows: usize) ShardPlan {
+    return .{
+        .shard_id = shard_id,
+        .query = testQuery(),
+        .local_plan = .{ .operations = &.{}, .estimated_cost = 10.0 },
+        .estimated_rows = estimated_rows,
+        .estimated_cost = 10.0,
+        .data_transfer_size = 1024,
+    };
+}
+
+test "planDistributedQuery: end-to-end orchestration produces a complete plan" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const query = testQuery();
+    var plan = try planner.planDistributedQuery(&query);
+    defer {
+        for (plan.coordinator_plan.shard_plans) |sp| {
+            ally.free(sp.local_plan.operations);
+        }
+        ally.free(plan.coordinator_plan.shard_plans);
+        ally.free(plan.data_flow.bottlenecks);
+        for (plan.execution_phases) |phase| {
+            ally.free(phase.operations);
+            if (phase.dependencies.len > 0) ally.free(phase.dependencies);
+        }
+        ally.free(plan.execution_phases);
+        plan.coordinator_plan.deinit();
+    }
+
+    // Empty registry falls back to default shards 1 and 2.
+    try std.testing.expectEqual(@as(usize, 2), plan.coordinator_plan.shard_plans.len);
+    try std.testing.expectEqual(@as(u32, 1), plan.coordinator_plan.shard_plans[0].shard_id);
+    try std.testing.expectEqual(@as(u32, 2), plan.coordinator_plan.shard_plans[1].shard_id);
+
+    // Each shard plan carries a derived local plan (scan + project minimum).
+    for (plan.coordinator_plan.shard_plans) |sp| {
+        try std.testing.expect(sp.local_plan.operations.len >= 2);
+        try std.testing.expect(sp.estimated_cost > 0);
+        try std.testing.expect(sp.data_transfer_size >= 1024);
+    }
+
+    // Pipeline produced phases, data flow, and a positive total cost.
+    try std.testing.expectEqual(@as(usize, 3), plan.execution_phases.len);
+    try std.testing.expect(plan.data_flow.total_transfer > 0);
+    try std.testing.expect(plan.estimated_cost > 0);
+    try std.testing.expect(!std.math.isNan(plan.estimated_cost));
+
+    // No join/agg/sort/union in this trivial query: strategies stay .none.
+    try std.testing.expectEqual(JoinStrategy.none, plan.coordinator_plan.join_strategy);
+    try std.testing.expectEqual(AggregationStrategy.none, plan.coordinator_plan.aggregation_strategy);
+    try std.testing.expectEqual(SortStrategy.none, plan.coordinator_plan.sort_strategy);
+    try std.testing.expectEqual(UnionStrategy.none, plan.coordinator_plan.union_strategy);
+}
+
+test "generateShardQuery: caps unlimited label query with shard row estimate" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const person_labels: []const []const u8 = &.{"Person"};
+    try planner.shard_registry.shards.put(7, ShardInfo{
+        .id = 7,
+        .endpoint = "localhost:3141",
+        .labels = person_labels,
+        .estimated_size = 500,
+        .status = .active,
+    });
+
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+    try analysis.addLabelAffinity("Person");
+
+    // No explicit LIMIT + label affinity: limit hint set from shard estimate.
+    const query = testQuery();
+    const shard_query = try planner.generateShardQuery(&query, 7, analysis);
+    try std.testing.expectEqual(@as(?usize, 500), shard_query.limit);
+
+    // Explicit LIMIT is preserved untouched.
+    var limited = testQuery();
+    limited.limit = 42;
+    const limited_out = try planner.generateShardQuery(&limited, 7, analysis);
+    try std.testing.expectEqual(@as(?usize, 42), limited_out.limit);
+
+    // No label affinities: no hint is injected.
+    var no_labels = DistributionAnalysis.init(ally);
+    defer no_labels.deinit();
+    const unhinted = try planner.generateShardQuery(&query, 7, no_labels);
+    try std.testing.expectEqual(@as(?usize, null), unhinted.limit);
+
+    // Unknown shard id: query passes through unchanged.
+    const unknown = try planner.generateShardQuery(&query, 99, analysis);
+    try std.testing.expectEqual(@as(?usize, null), unknown.limit);
+}
+
+test "planDistributedJoin: strategy follows shard count" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const query = testQuery();
+    const two = [_]ShardPlan{ testShardPlan(1, 100), testShardPlan(2, 100) };
+    const three = two ++ [_]ShardPlan{testShardPlan(3, 100)};
+    const five = three ++ [_]ShardPlan{ testShardPlan(4, 100), testShardPlan(5, 100) };
+
+    try std.testing.expectEqual(JoinStrategy.broadcast_join, try planner.planDistributedJoin(&query, &two));
+    try std.testing.expectEqual(JoinStrategy.hash_join, try planner.planDistributedJoin(&query, &three));
+    try std.testing.expectEqual(JoinStrategy.shuffle_join, try planner.planDistributedJoin(&query, &five));
+}
+
+test "planDistributedAggregation: phases by shard count and HAVING" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const query = testQuery();
+    const one = [_]ShardPlan{testShardPlan(1, 100)};
+    const three = [_]ShardPlan{ testShardPlan(1, 100), testShardPlan(2, 100), testShardPlan(3, 100) };
+    const five = three ++ [_]ShardPlan{ testShardPlan(4, 100), testShardPlan(5, 100) };
+
+    // Single shard: no distributed aggregation needed.
+    try std.testing.expectEqual(AggregationStrategy.single_phase, try planner.planDistributedAggregation(&query, &one));
+    // Moderate shard count: two-phase.
+    try std.testing.expectEqual(AggregationStrategy.two_phase, try planner.planDistributedAggregation(&query, &three));
+    // Many shards: streaming.
+    try std.testing.expectEqual(AggregationStrategy.streaming, try planner.planDistributedAggregation(&query, &five));
+
+    // HAVING forces two-phase even with many shards (correct post-filter).
+    var having_query = testQuery();
+    having_query.having = .{ .Bool = true };
+    try std.testing.expectEqual(AggregationStrategy.two_phase, try planner.planDistributedAggregation(&having_query, &five));
+}
+
+test "planDistributedSort: strategy follows total estimated rows" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const order = ast.OrderBy{ .keys = &.{} };
+    const small = [_]ShardPlan{ testShardPlan(1, 100), testShardPlan(2, 200) };
+    const medium = [_]ShardPlan{ testShardPlan(1, 30_000), testShardPlan(2, 30_000) };
+    const large = [_]ShardPlan{ testShardPlan(1, 90_000), testShardPlan(2, 90_000) };
+
+    // < 1000 total rows: top-k.
+    try std.testing.expectEqual(SortStrategy.top_k, try planner.planDistributedSort(order, &small));
+    // Mid-size: merge sort of pre-sorted shard results.
+    try std.testing.expectEqual(SortStrategy.merge_sort, try planner.planDistributedSort(order, &medium));
+    // > 100k total rows: distributed sort.
+    try std.testing.expectEqual(SortStrategy.distributed_sort, try planner.planDistributedSort(order, &large));
+}
+
+test "planDistributedUnion: strategy follows distinct and shard count" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const two = [_]ShardPlan{ testShardPlan(1, 100), testShardPlan(2, 100) };
+    const five = [_]ShardPlan{ testShardPlan(1, 100), testShardPlan(2, 100), testShardPlan(3, 100), testShardPlan(4, 100), testShardPlan(5, 100) };
+
+    // UNION DISTINCT requires batch merge for dedup.
+    var distinct_query = testQuery();
+    distinct_query.ret.distinct = true;
+    try std.testing.expectEqual(UnionStrategy.batch_merge, try planner.planDistributedUnion(&distinct_query, &two));
+
+    // Many shards: parallel union.
+    const plain = testQuery();
+    try std.testing.expectEqual(UnionStrategy.parallel_union, try planner.planDistributedUnion(&plain, &five));
+
+    // Default: streaming merge.
+    try std.testing.expectEqual(UnionStrategy.streaming_merge, try planner.planDistributedUnion(&plain, &two));
 }

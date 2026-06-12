@@ -96,8 +96,13 @@ fn parseHexKey(hex_str: []const u8) ![32]u8 {
 
 /// Backup configuration
 pub const BackupConfig = struct {
-    /// Compression for backup files
-    compression: CompressionType = .zstd,
+    /// Compression for backup files. Only `.none` and `.gzip` have encoders
+    /// wired in this release; requesting `.zstd`/`.lz4` fails with
+    /// `error.UnsupportedCompression` (GAP-0880: never record a codec that
+    /// was not actually applied). Default is `.none`; callers opt into
+    /// `.gzip` explicitly (the server maps the wire `compress=true` flag to
+    /// `.gzip`).
+    compression: CompressionType = .none,
 
     /// Encryption for backup files
     encryption: bool = false,
@@ -286,6 +291,65 @@ pub const BackupManager = struct {
             .checksum = checksum,
         };
 
+        try self.metadata_log.append(self.allocator, metadata);
+        try self.writeMetadata();
+        return metadata;
+    }
+
+    /// Ingest an uploaded backup artifact (the complete bytes of a
+    /// `full_*.backup` file: BackupHeader + payload) into this manager's
+    /// backup_dir and register it durably in the metadata log so it becomes
+    /// restorable via `restoreToPointInTime`.
+    ///
+    /// Verification BEFORE anything is written (GAP-0880: no empty-file
+    /// fake-success path):
+    ///   - header magic / version / backup_type must match this engine
+    ///   - header.payload_len must equal the actual payload byte count
+    ///   - header.checksum must match a recomputed CRC32 of the payload
+    ///   - if `expected_checksum` is provided (client-asserted, from the
+    ///     original BackupResponse), it must match the header checksum
+    // CANARY: REQ=REQ-BACKUP-UPLOAD-001; FEATURE="BackupUploadIngestion"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_gap0880_backup_upload.zig; OWNER=storage; UPDATED=2026-06-10
+    pub fn ingestUploadedBackup(self: *BackupManager, file_bytes: []const u8, expected_checksum: ?u64) !BackupMetadata {
+        if (file_bytes.len < @sizeOf(BackupHeader)) return error.InvalidBackupFile;
+
+        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+        @memcpy(&header_buf, file_bytes[0..@sizeOf(BackupHeader)]);
+        const header: BackupHeader = @bitCast(header_buf);
+        if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
+        if (header.backup_type != .full) return error.InvalidBackupFile;
+
+        const payload = file_bytes[@sizeOf(BackupHeader)..];
+        if (header.payload_len != payload.len) return error.InvalidBackupFile;
+        if (computeChecksum(payload) != header.checksum) return error.BackupChecksumMismatch;
+        if (expected_checksum) |expected| {
+            if (expected != header.checksum) return error.BackupChecksumMismatch;
+        }
+
+        // Merge with any registry already on disk before appending, so the
+        // persisted metadata log never loses prior entries.
+        if (self.metadata_log.items.len == 0) {
+            _ = try self.loadMetadata();
+        }
+
+        const backup_id = generateBackupId();
+        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
+        defer self.allocator.free(backup_path);
+
+        const io_ub = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_ub, backup_path, .{});
+        defer file.close(io_ub);
+        try file.writeStreamingAll(io_ub, file_bytes);
+        try file.sync(io_ub);
+
+        const metadata = BackupMetadata{
+            .backup_id = backup_id,
+            .timestamp = header.timestamp,
+            .backup_type = header.backup_type,
+            .size_bytes = file_bytes.len,
+            .compression = header.compression,
+            .encrypted = header.encrypted,
+            .checksum = header.checksum,
+        };
         try self.metadata_log.append(self.allocator, metadata);
         try self.writeMetadata();
         return metadata;
@@ -631,6 +695,9 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
 
         const io_ef = std.Io.Threaded.global_single_threaded.io();
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
+            // error-policy: A — ensure-parent-dirs is best-effort (the dir may
+            // already exist); a real failure surfaces as a proper error on the
+            // createFile immediately below.
             std.Io.Dir.cwd().createDirPath(io_ef, full_path[0..last_slash]) catch {};
         }
 
@@ -640,48 +707,74 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
     }
 }
 
-/// Result of compressData: the (possibly uncompressed) payload plus the
-/// compression type that was ACTUALLY applied to it. The caller MUST persist
-/// `effective` into the backup header, never the requested type — the stdlib
-/// zstd codec available in this toolchain is decompress-only, so a requested
-/// `.zstd`/`.lz4`/`.gzip` falls back to `.none` on disk. Recording the
-/// requested type while storing raw bytes was GAP-0862: it produced backups
-/// that could not be restored (decompress saw raw bytes -> error.BadMagic),
-/// and the DEFAULT BackupConfig requests `.zstd`, so every default backup was
-/// un-restorable.
+/// Result of compressData: the compressed payload plus the compression type
+/// that was ACTUALLY applied to it. The caller MUST persist `effective` into
+/// the backup header, never the requested type. Recording the requested type
+/// while storing raw bytes was GAP-0862: it produced backups that could not
+/// be restored (decompress saw raw bytes -> error.BadMagic).
+///
+/// GAP-0880: `.gzip` now has a real encoder (stdlib DEFLATE,
+/// `std.compress.flate.Compress` with the gzip container). `.zstd`/`.lz4`
+/// have no encoder in this toolchain and are rejected with
+/// `error.UnsupportedCompression` instead of silently falling back — a
+/// caller that asked for zstd must never receive a raw artifact labeled
+/// as anything it didn't get.
 const CompressResult = struct {
     data: []u8,
     effective: CompressionType,
 };
 
+// CANARY: REQ=REQ-BACKUP-COMPRESS-001; FEATURE="BackupGzipCompression"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_gap0880_backup_upload.zig; OWNER=storage; UPDATED=2026-06-10
 fn compressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) !CompressResult {
-    if (compression == .none) {
-        return .{ .data = try allocator.dupe(u8, data), .effective = .none };
-    }
+    switch (compression) {
+        .none => return .{ .data = try allocator.dupe(u8, data), .effective = .none },
+        .gzip => {
+            var out: std.Io.Writer.Allocating = try .initCapacity(allocator, 4096);
+            defer out.deinit();
 
-    // The stdlib zstd codec in this toolchain is decompress-only; no encoder is
-    // available for zstd/lz4/gzip. Store uncompressed and record the truthful
-    // on-disk format so the restore path reads the bytes correctly.
-    log.warn("compression encoder unavailable; storing uncompressed", &.{
-        Attr.string("requested", @tagName(compression)),
-    });
-    return .{ .data = try allocator.dupe(u8, data), .effective = .none };
+            const window = try allocator.alloc(u8, std.compress.flate.max_window_len);
+            defer allocator.free(window);
+
+            var compress: std.compress.flate.Compress = try .init(&out.writer, window, .gzip, .default);
+            try compress.writer.writeAll(data);
+            try compress.finish();
+
+            return .{ .data = try out.toOwnedSlice(), .effective = .gzip };
+        },
+        .zstd, .lz4 => {
+            log.err("requested compression codec has no encoder", &.{
+                Attr.string("requested", @tagName(compression)),
+                Attr.string("supported", "none, gzip"),
+            });
+            return error.UnsupportedCompression;
+        },
+    }
 }
 
 fn decompressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) ![]u8 {
-    if (compression == .none) return allocator.dupe(u8, data);
-
-    if (compression == .zstd) {
-        // Zig 0.15 zstd API
-        var out: std.Io.Writer.Allocating = .init(allocator);
-        defer out.deinit();
-        var in: std.Io.Reader = .fixed(data);
-        var zstd_stream: std.compress.zstd.Decompress = .init(&in, &.{}, .{});
-        _ = zstd_stream.reader.streamRemaining(&out.writer) catch |err| return err;
-        return try out.toOwnedSlice();
+    switch (compression) {
+        .none => return allocator.dupe(u8, data),
+        .gzip => {
+            var out: std.Io.Writer.Allocating = .init(allocator);
+            defer out.deinit();
+            var in: std.Io.Reader = .fixed(data);
+            var flate_stream: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+            _ = flate_stream.reader.streamRemaining(&out.writer) catch |err| return err;
+            return try out.toOwnedSlice();
+        },
+        .zstd => {
+            // Decompress-only support: no zstd encoder exists in this
+            // toolchain, but restore must still read any artifact whose
+            // header honestly records `.zstd`.
+            var out: std.Io.Writer.Allocating = .init(allocator);
+            defer out.deinit();
+            var in: std.Io.Reader = .fixed(data);
+            var zstd_stream: std.compress.zstd.Decompress = .init(&in, &.{}, .{});
+            _ = zstd_stream.reader.streamRemaining(&out.writer) catch |err| return err;
+            return try out.toOwnedSlice();
+        },
+        .lz4 => return error.UnsupportedCompression,
     }
-
-    return error.UnsupportedCompression;
 }
 
 fn encryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u8 {

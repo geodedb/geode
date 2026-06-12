@@ -181,13 +181,16 @@ pub const History = struct {
     }
 };
 
+/// Emit one prompt and consume one line of input. This is a launch-prompt
+/// helper used by the REPL canary tests; it intentionally does NOT parse or
+/// execute the line — the real REPL parse/dispatch loop lives in
+/// repl/repl_loop.zig + repl/repl_dispatch.zig (statement buffering for the
+/// facade is `Repl.ingest` above). (GAP-0875: previously mislabelled as a
+/// "future parsing" placeholder.)
 pub fn runOnce(in_stream: anytype, out_stream: anytype) !void {
-    // Emit prompt
     try out_stream.writeAll("geode> ");
-    // Read one line (discard content for now)
     var buf: [512]u8 = undefined;
-    const line_opt = try in_stream.readUntilDelimiterOrEof(buf[0..], '\n');
-    _ = line_opt; // placeholder; future parsing will go here
+    _ = try in_stream.readUntilDelimiterOrEof(buf[0..], '\n');
 }
 
 test "repl.runOnce prompt basic" {

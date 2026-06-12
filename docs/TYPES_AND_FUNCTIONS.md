@@ -331,13 +331,19 @@
 - **Tag**: `0x0E`
 - **Format**: Well-Known Binary (WKB)
 - **Output**: GeoJSON
-- **Constructor**: `GeometryFromText(wkt)`
+- **Constructor**: `GeometryFromText(wkt)` - parses WKT (POINT, LINESTRING,
+  POLYGON single exterior ring, MULTIPOINT, MULTILINESTRING/MULTIPOLYGON first
+  member) into real WKB; unparseable WKT is a stable error (GAP-0877, see
+  `tests/test_gap0877_advanced_types.zig`)
 - **Functions**:
   - `st_asText(geom)` - Convert to WKT
   - `st_asGeoJSON(geom)` - Convert to GeoJSON
-  - `st_contains(a, b)` - Containment test
-  - `st_intersects(a, b)` - Intersection test
-  - `st_within(a, b)` - Within test
+  - `st_contains(a, b)` - Containment test (Polygon⊇Point, Point=Point)
+  - `st_intersects(a, b)` - Intersection test (Point/Point, Point/Polygon,
+    LineString/LineString, Polygon/Polygon incl. edge crossings)
+  - `st_within(a, b)` - Within test (inverse of `st_contains(b, a)`)
+- **Unsupported relation combinations** return the stable
+  `error.UnsupportedGeometryRelation` - never a silent `false` (GAP-0877)
 
 ### Physical Quantities
 
@@ -423,7 +429,12 @@
 - **Limits**: Labels ≤63, total ≤253
 - **Constructor**: `Domain(text)`
 - **Functions**:
-  - `domain_root(domain)` - Get root domain
+  - `domain_root(domain)` - Registrable domain (eTLD+1) evaluated against a
+    bundled trimmed Public Suffix List snapshot
+    (`src/types/data/public_suffix_list.dat`): exact, wildcard (`*.ck`) and
+    exception (`!www.ck`) rules; unknown TLDs fall back to the last two
+    labels; a bare public suffix returns NULL (GAP-0877, verified by
+    `tests/test_gap0877_advanced_types.zig` / `zig build test-gap0877`)
   - `domain_labels(domain)` - Get label array
 
 #### UUID
@@ -630,6 +641,20 @@ distance_haversine(point1, point2)
 - Real → Double
 - Int → Decimal (scale 0)
 - Char → Varchar → Text
+
+### String Rendering (`stringify` / string comparison contexts)
+
+- Date/Time/TimeTZ/Timestamp/TimestampTZ/Interval render canonical ISO-8601
+  (`2026-06-10`, `13:45:30[.ffffff]`, `13:45:30+02:00`,
+  `2026-06-10T13:45:30`, `...Z`, `P1Y2M3DT4H5M6S`); Url/Domain render their
+  actual value; Bytea renders `\x`-prefixed hex (GAP-0877,
+  `tests/test_gap0877_advanced_types.zig`).
+- Values that do not fit the fixed 64-byte stringify buffer return a stable
+  `Unsupported` error - never a truncated or placeholder string.
+- **Still placeholder** (not canonical values): Enum stringifies as `"enum"`,
+  BitString as `"bitstring"`, VarBit as `"varbit"`, IntRange as `"range"`.
+  Use the dedicated functions (`enum_values`, `to_hex`, range accessors) for
+  real values.
 
 ### NULL Propagation
 

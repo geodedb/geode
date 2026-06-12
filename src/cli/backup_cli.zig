@@ -61,6 +61,8 @@ const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const stdio_util = @import("../utils/stdio.zig");
+// SEC-CLI-01: production-posture gate for --insecure-tls-skip-verify.
+const insecure_tls_gate = @import("insecure_tls_gate.zig");
 const zig_quic_bridge = geode.zig_quic_bridge;
 const zig_client = zig_quic_bridge.zig_client;
 
@@ -321,9 +323,11 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -823,9 +827,11 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             skip_confirmation = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -1275,9 +1281,11 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             allow_unsigned = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -1876,7 +1884,9 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
     }
 
     const config = backup_types.BackupConfig{
-        .compression = if (compress) .zstd else .none,
+        // GAP-0880: gzip is the only compression codec with a real encoder;
+        // never request zstd (no encoder — UnsupportedCompression).
+        .compression = if (compress) .gzip else .none,
         .encryption = false,
         .retention_days = 30,
     };
@@ -1933,8 +1943,18 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
 
 fn decompressData(data: []const u8, compression: backup_types.CompressionType, allocator: std.mem.Allocator) ![]u8 {
     if (compression == .none) return allocator.dupe(u8, data);
+    if (compression == .gzip) {
+        // GAP-0880: gzip backups are produced by the real DEFLATE encoder.
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        var in: std.Io.Reader = .fixed(data);
+        var flate_stream: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
+        _ = flate_stream.reader.streamRemaining(&out.writer) catch |err| return err;
+        return try out.toOwnedSlice();
+    }
     if (compression == .zstd) {
-        // Zig 0.15 zstd API - use Decompress struct with Io.Reader/Writer
+        // Decompress-only: no zstd encoder exists, but old artifacts whose
+        // header records .zstd must still restore.
         var out: std.Io.Writer.Allocating = .init(allocator);
         defer out.deinit();
         var in: std.Io.Reader = .fixed(data);

@@ -55,7 +55,7 @@ const high_fanout_poll_worker_cap = if (builtin.mode == .Debug) 4 else 64;
 // by the scheduler's one-message FIFO turn rather than one server thread per
 // active client.
 const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Debug) 64 else 512;
-// CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+// CANARY: REQ=REQ-QUIC-HC-118; FEATURE="High-Concurrency Test Harness"; ASPECT=BoundedDriverThreadStacks; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
 //
 // The E2E harness intentionally opens hundreds to thousands of clients in one
 // process. Use a bounded stack for those simple driver threads so the client
@@ -191,7 +191,7 @@ fn highFanoutMutationAdmissionCapDefault(worker_count: u32) u32 {
     return high_fanout_mutation_admission_cap;
 }
 
-// CANARY: REQ=REQ-QUIC-HC-128; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+// CANARY: REQ=REQ-QUIC-HC-128; FEATURE="High-Concurrency Test Harness"; ASPECT=CooperativeFirstStreamWorkerHeadroom; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
 //
 // Cooperative first-stream workers execute the persistent request loops. At
 // high fanout, leaving this at the debug default of 16 turns storage/transport
@@ -321,7 +321,7 @@ fn recordLatencySample(ctx: *WorkerCtx, latency_ns: u64) void {
     }
 }
 
-// CANARY: REQ=REQ-QUIC-HC-155; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ExecutePhaseAggregation; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+// CANARY: REQ=REQ-QUIC-HC-155; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ExecutePhaseAggregation; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
 //
 // Aggregate client-visible transport phases so failed ceiling probes can
 // distinguish local start-barrier/scheduler lag, request write cost, first
@@ -607,7 +607,7 @@ fn runtimeMetricMax(metrics: []const u8, name: []const u8) u64 {
 }
 
 fn printRuntimeMetricsSnapshot(allocator: std.mem.Allocator, metrics_port: u16) void {
-    // CANARY: REQ=REQ-QUIC-HC-172; FEATURE="High-Concurrency Diagnostics"; ASPECT=HarnessRuntimeMetricsScrape; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-172; FEATURE="High-Concurrency Diagnostics"; ASPECT=HarnessRuntimeMetricsScrape; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // The 4096x8+ ceiling is dominated by first-response tail. Scrape the
     // server-side runtime metrics while the child is still alive so failed
@@ -1078,7 +1078,7 @@ fn workerRun(ctx: *WorkerCtx) void {
         }
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-099; FEATURE="QUIC High-Concurrency Requests"; ASPECT=InWorkloadMutationVerifier; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-099; FEATURE="QUIC High-Concurrency Requests"; ASPECT=InWorkloadMutationVerifier; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // Keep all workload clients alive until the designated verifier has checked
     // mutation visibility over an already-authenticated connection. This avoids
@@ -1136,7 +1136,7 @@ fn workerRun(ctx: *WorkerCtx) void {
 
 pub fn main() !void {
     const allocator = std.heap.smp_allocator;
-    // CANARY: REQ=REQ-QUIC-HC-170; FEATURE="High-Concurrency Test Harness"; ASPECT=ObjectiveGateDefaults; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-170; FEATURE="High-Concurrency Test Harness"; ASPECT=ObjectiveGateDefaults; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // The objective gate is deliberately opt-in so the default build step stays
     // cheap. When enabled it turns the harness into the enterprise target
@@ -1182,7 +1182,7 @@ pub fn main() !void {
     const connect_attempts = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_ATTEMPTS", default_connect_attempts_for_run));
     const connect_backoff_ms = @max(@as(u32, 1), envU32("GEODE_HC_CONNECT_BACKOFF_MS", default_connect_backoff_ms));
     const handshake_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_HANDSHAKE_TIMEOUT_SECS", default_handshake_timeout_secs));
-    // CANARY: REQ=REQ-QUIC-HC-101; FEATURE="QUIC High-Concurrency Setup"; ASPECT=BoundedHelloRetryWindow; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-101; FEATURE="QUIC High-Concurrency Setup"; ASPECT=BoundedHelloRetryWindow; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // A 30s HELLO read deadline turns one lost server response during fan-out
     // into a 30s setup plateau before connectAndHelloWithRetry can open a fresh
@@ -1191,7 +1191,7 @@ pub fn main() !void {
     const hello_timeout_ms = @max(@as(u32, 1), envU32("GEODE_HC_HELLO_TIMEOUT_MS", default_hello_timeout_ms_for_run));
     const setup_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_SETUP_TIMEOUT_SECS", default_setup_timeout_secs_for_run));
     const setup_grace_secs = envU32("GEODE_HC_SETUP_GRACE_SECS", 30);
-    // CANARY: REQ=REQ-QUIC-HC-131; FEATURE="QUIC High-Concurrency Setup"; ASPECT=HardSetupTimeoutDiagnostics; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-131; FEATURE="QUIC High-Concurrency Setup"; ASPECT=HardSetupTimeoutDiagnostics; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // The soft setup timeout remains progress-sensitive so legitimate 512+
     // connection tails are not aborted while HELLOs are still completing.
@@ -1200,7 +1200,7 @@ pub fn main() !void {
     const default_setup_hard_timeout_secs = setup_timeout_secs + setup_grace_secs;
     const setup_hard_timeout_secs = @max(setup_timeout_secs, envU32("GEODE_HC_SETUP_HARD_TIMEOUT_SECS", default_setup_hard_timeout_secs));
     const connect_stagger_us = envU32("GEODE_HC_CONNECT_STAGGER_US", 0);
-    // CANARY: REQ=REQ-QUIC-HC-042; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RequestBurstShaping; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
+    // CANARY: REQ=REQ-QUIC-HC-042; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RequestBurstShaping; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // Release builds shape a target offered load across already-open parallel
     // connections by default. Setting GEODE_HC_REQUEST_STAGGER_US=0 keeps the
     // same-time microburst mode available when explicitly testing kernel queue
@@ -1208,7 +1208,7 @@ pub fn main() !void {
     const request_stagger_us = envU32("GEODE_HC_REQUEST_STAGGER_US", default_request_stagger_us_for_run);
     const execute_timeout_secs = @max(@as(u32, 1), envU32("GEODE_HC_EXEC_TIMEOUT_SECS", default_execute_timeout_secs));
     const execute_retries = envU32("GEODE_HC_EXEC_RETRIES", default_execute_retries);
-    // CANARY: REQ=REQ-QUIC-HC-085; FEATURE="QUIC High-Concurrency Requests"; ASPECT=HarnessConnectionHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-085; FEATURE="QUIC High-Concurrency Requests"; ASPECT=HarnessConnectionHeadroom; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // Connection setup stress intentionally permits retries. Size the server
     // logical connection cap above the worker count so retry churn does not
@@ -1223,7 +1223,7 @@ pub fn main() !void {
     const metrics_scrape = envBool("GEODE_HC_METRICS_SCRAPE", false);
     const client_diagnostics = envBool("GEODE_HC_CLIENT_DIAGNOSTICS", false);
     const cooperative_first_streams = envBool("GEODE_HC_COOPERATIVE_FIRST_STREAMS", true);
-    // CANARY: REQ=REQ-QUIC-HC-161; FEATURE="High-Concurrency Diagnostics"; ASPECT=ShortHeaderTimingHarness; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-161; FEATURE="High-Concurrency Diagnostics"; ASPECT=ShortHeaderTimingHarness; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // Upstream QUIC already exposes detailed short-header receive subphase
     // timing behind GEODE_QUIC_SHORT_HEADER_TIMING. Surface that flag through
@@ -1231,7 +1231,7 @@ pub fn main() !void {
     // decrypt, frame-processing, and ACK-send cost without adding Geode-side
     // per-packet instrumentation.
     const short_header_timing = envBool("GEODE_HC_SHORT_HEADER_TIMING", false);
-    // CANARY: REQ=REQ-QUIC-HC-156; FEATURE="High-Concurrency Test Client"; ASPECT=DeferredPostWriteFlush; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
+    // CANARY: REQ=REQ-QUIC-HC-156; FEATURE="High-Concurrency Test Client"; ASPECT=DeferredPostWriteFlush; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     //
     // At 1024+ same-process clients, immediate post-write poll calls can
     // dominate request start cost before the server is the limiting factor.
@@ -1256,7 +1256,7 @@ pub fn main() !void {
     util.progress("Starting server on port {d}...", .{port});
     const max_connections_arg = try std.fmt.allocPrint(allocator, "{d}", .{max_connections});
     defer allocator.free(max_connections_arg);
-    // CANARY: REQ=REQ-QUIC-HC-071; FEATURE="QUIC High-Concurrency Requests"; ASPECT=HarnessFirstStreamThreadCap; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-071; FEATURE="QUIC High-Concurrency Requests"; ASPECT=HarnessFirstStreamThreadCap; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // Match the server's bounded first-stream owner default. Setting this to
     // max_connections recreates a same-instant thread wake storm at the request
     // barrier and hides the actual QUIC/query throughput behind scheduler
@@ -1297,7 +1297,7 @@ pub fn main() !void {
         .{cooperative_first_stream_worker_count},
     );
     defer allocator.free(cooperative_first_stream_workers_env);
-    // CANARY: REQ=REQ-QUIC-HC-124; FEATURE="High-Concurrency Test Harness"; ASPECT=ConnectionWorkerHeadroom; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-124; FEATURE="High-Concurrency Test Harness"; ASPECT=ConnectionWorkerHeadroom; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // CANARY: REQ=REQ-QUIC-HC-132; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConnectionPoolCapCompatibility; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
     //
     // The child server gets an explicit environment, so parent-level
@@ -1601,7 +1601,7 @@ pub fn main() !void {
     }
     setup_elapsed_ns = monoNs() -| setup_start_ns;
 
-    // CANARY: REQ=REQ-QUIC-HC-072; FEATURE="QUIC High-Concurrency Setup"; ASPECT=TimeoutEdgeReadySettle; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-072; FEATURE="QUIC High-Concurrency Setup"; ASPECT=TimeoutEdgeReadySettle; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // At 512+ workers every client can authenticate before a few worker
     // threads get scheduled again to increment `ready`. Once hello_ok reaches
     // worker_count, the workers already own authenticated clients, so the start
@@ -1707,7 +1707,7 @@ pub fn main() !void {
     const first_op_avg_ms_x100: u64 = if (observed_first_ops == 0) 0 else counters.first_op_latency_ns.load(.acquire) / @as(u64, observed_first_ops) / (std.time.ns_per_ms / 100);
     const followup_op_avg_ms_x100: u64 = if (observed_followup_ops == 0) 0 else counters.followup_op_latency_ns.load(.acquire) / @as(u64, observed_followup_ops) / (std.time.ns_per_ms / 100);
     const max_ms_x100 = counters.max_latency_ns.load(.acquire) / (std.time.ns_per_ms / 100);
-    // CANARY: REQ=REQ-QUIC-HC-103; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RetryTailRegressionCounters; STATUS=IMPL; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-27
+    // CANARY: REQ=REQ-QUIC-HC-103; FEATURE="QUIC High-Concurrency Requests"; ASPECT=RetryTailRegressionCounters; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // Include user-visible operation latency, setup retry churn, and execute
     // retry churn in the summary so high-fanout runs can distinguish transport
     // loss tails from slow successful server-side query processing.

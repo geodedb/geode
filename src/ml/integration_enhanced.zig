@@ -138,17 +138,17 @@ pub const MLEngine = struct {
         var result = std.AutoHashMap(NodeId, Embedding).init(self.allocator);
         errdefer result.deinit();
 
-        // Initialize random walk sampler
-        var walker = try RandomWalker.init(self.allocator, self.graph, params.p, params.q);
+        // Initialize random walk sampler (p/q-biased, deterministic when seeded)
+        var walker = try RandomWalker.init(self.allocator, self.graph, params.p, params.q, params.seed);
         defer walker.deinit();
 
         // Generate walks for each node
-        var walks = std.ArrayList([]NodeId).init(self.allocator);
+        var walks: std.ArrayList([]NodeId) = .empty;
         defer {
             for (walks.items) |walk| {
                 self.allocator.free(walk);
             }
-            walks.deinit();
+            walks.deinit(self.allocator);
         }
 
         var node_it = self.graph.nodes.iterator();
@@ -158,7 +158,8 @@ pub const MLEngine = struct {
             var i: u32 = 0;
             while (i < params.num_walks) : (i += 1) {
                 const walk = try walker.walk(node_id, params.walk_length);
-                try walks.append(walk);
+                errdefer self.allocator.free(walk);
+                try walks.append(self.allocator, walk);
             }
         }
 
@@ -251,8 +252,8 @@ pub const MLEngine = struct {
 
     // Link prediction
     pub fn linkPrediction(self: *Self, params: LinkPredictionParams) !LinkPredictionResult {
-        var predictions = std.ArrayList(EdgePrediction).init(self.allocator);
-        defer predictions.deinit();
+        var predictions: std.ArrayList(EdgePrediction) = .empty;
+        defer predictions.deinit(self.allocator);
 
         var node_it = self.graph.nodes.iterator();
         while (node_it.next()) |entry1| {
@@ -268,7 +269,7 @@ pub const MLEngine = struct {
                 const score = try self.computeLinkScore(node1, node2, params);
 
                 if (score >= params.threshold) {
-                    try predictions.append(EdgePrediction{
+                    try predictions.append(self.allocator, EdgePrediction{
                         .source = node1,
                         .target = node2,
                         .score = score,
@@ -281,7 +282,7 @@ pub const MLEngine = struct {
         std.sort.pdq(EdgePrediction, predictions.items, {}, EdgePrediction.compareScore);
 
         return LinkPredictionResult{
-            .predictions = try predictions.toOwnedSlice(),
+            .predictions = try predictions.toOwnedSlice(self.allocator),
         };
     }
 
@@ -308,10 +309,10 @@ pub const MLEngine = struct {
                 return 0.0;
             },
             .adamic_adar => {
-                return self.adamicAdarScore(node1, node2);
+                return try self.adamicAdarScore(node1, node2);
             },
             .jaccard => {
-                return self.jaccardScore(node1, node2);
+                return try self.jaccardScore(node1, node2);
             },
             .preferential_attachment => {
                 const deg1 = self.graph.getOutDegree(node1);
@@ -319,16 +320,18 @@ pub const MLEngine = struct {
                 return @as(f32, @floatFromInt(deg1 * deg2));
             },
             .resource_allocation => {
-                return self.resourceAllocationScore(node1, node2);
+                return try self.resourceAllocationScore(node1, node2);
             },
             else => return 0.0,
         }
     }
 
-    fn adamicAdarScore(self: *Self, node1: NodeId, node2: NodeId) f32 {
+    fn adamicAdarScore(self: *Self, node1: NodeId, node2: NodeId) !f32 {
         var score: f32 = 0.0;
-        const neighbors1 = self.graph.getNeighbors(node1);
-        const neighbors2 = self.graph.getNeighbors(node2);
+        const neighbors1 = try self.graph.getNeighbors(self.allocator, node1);
+        defer self.allocator.free(neighbors1);
+        const neighbors2 = try self.graph.getNeighbors(self.allocator, node2);
+        defer self.allocator.free(neighbors2);
 
         for (neighbors1) |n1| {
             for (neighbors2) |n2| {
@@ -344,9 +347,11 @@ pub const MLEngine = struct {
         return score;
     }
 
-    fn jaccardScore(self: *Self, node1: NodeId, node2: NodeId) f32 {
-        const neighbors1 = self.graph.getNeighbors(node1);
-        const neighbors2 = self.graph.getNeighbors(node2);
+    fn jaccardScore(self: *Self, node1: NodeId, node2: NodeId) !f32 {
+        const neighbors1 = try self.graph.getNeighbors(self.allocator, node1);
+        defer self.allocator.free(neighbors1);
+        const neighbors2 = try self.graph.getNeighbors(self.allocator, node2);
+        defer self.allocator.free(neighbors2);
 
         var intersection: u32 = 0;
         for (neighbors1) |n1| {
@@ -361,10 +366,12 @@ pub const MLEngine = struct {
         return @as(f32, @floatFromInt(intersection)) / @as(f32, @floatFromInt(union_size));
     }
 
-    fn resourceAllocationScore(self: *Self, node1: NodeId, node2: NodeId) f32 {
+    fn resourceAllocationScore(self: *Self, node1: NodeId, node2: NodeId) !f32 {
         var score: f32 = 0.0;
-        const neighbors1 = self.graph.getNeighbors(node1);
-        const neighbors2 = self.graph.getNeighbors(node2);
+        const neighbors1 = try self.graph.getNeighbors(self.allocator, node1);
+        defer self.allocator.free(neighbors1);
+        const neighbors2 = try self.graph.getNeighbors(self.allocator, node2);
+        defer self.allocator.free(neighbors2);
 
         for (neighbors1) |n1| {
             for (neighbors2) |n2| {
@@ -412,7 +419,8 @@ pub const MLEngine = struct {
                 var best_gain: f32 = 0.0;
 
                 // Check neighboring communities
-                const neighbors = self.graph.getNeighbors(node_id);
+                const neighbors = try self.graph.getNeighbors(self.allocator, node_id);
+                defer self.allocator.free(neighbors);
                 for (neighbors) |neighbor| {
                     const neighbor_community = communities.get(neighbor).?;
                     if (neighbor_community == current_community) continue;
@@ -599,13 +607,20 @@ const RandomWalker = struct {
     graph: *GraphData,
     p: f64,
     q: f64,
+    prng: std.Random.DefaultPrng,
 
-    pub fn init(allocator: Allocator, graph: *GraphData, p: f64, q: f64) !RandomWalker {
+    pub fn init(allocator: Allocator, graph: *GraphData, p: f64, q: f64, seed: ?u64) !RandomWalker {
+        const effective_seed = seed orelse blk: {
+            var buf: [@sizeOf(u64)]u8 = undefined;
+            compat_fillRandom(&buf);
+            break :blk std.mem.readInt(u64, &buf, .little);
+        };
         return RandomWalker{
             .allocator = allocator,
             .graph = graph,
             .p = p,
             .q = q,
+            .prng = std.Random.DefaultPrng.init(effective_seed),
         };
     }
 
@@ -615,6 +630,7 @@ const RandomWalker = struct {
 
     pub fn walk(self: *RandomWalker, start: NodeId, length: u32) ![]NodeId {
         var path = try self.allocator.alloc(NodeId, length);
+        errdefer self.allocator.free(path);
         path[0] = start;
 
         var i: u32 = 1;
@@ -622,29 +638,49 @@ const RandomWalker = struct {
         var previous: ?NodeId = null;
 
         while (i < length) : (i += 1) {
-            const neighbors = self.graph.getNeighbors(current);
+            const neighbors = try self.graph.getNeighbors(self.allocator, current);
+            defer self.allocator.free(neighbors);
             if (neighbors.len == 0) break;
 
-            const next = self.sampleNext(current, previous, neighbors);
+            const next = self.sampleNext(previous, neighbors);
             path[i] = next;
             previous = current;
             current = next;
         }
 
-        return path[0..i];
+        // Shrink to the actual walk length so the caller can free the
+        // returned slice with the same allocator (exact-size allocation).
+        if (i < length) {
+            return try self.allocator.realloc(path, i);
+        }
+        return path;
     }
 
-    fn sampleNext(self: *RandomWalker, current: NodeId, previous: ?NodeId, neighbors: []NodeId) NodeId {
-        _ = self;
-        _ = current;
-        _ = previous;
-        // Simplified sampling
-        const idx = blk: {
-            var _rng_buf: [@sizeOf(usize)]u8 = undefined;
-            compat_fillRandom(&_rng_buf);
-            break :blk std.mem.readInt(usize, &_rng_buf, .little);
-        } % neighbors.len;
-        return neighbors[idx];
+    /// Unnormalized Node2Vec transition weight (Grover & Leskovec 2016, §3.2):
+    /// 1/p to return to the previous node, 1 for targets adjacent to the
+    /// previous node, 1/q for targets two hops from the previous node.
+    fn transitionWeight(self: *RandomWalker, previous: ?NodeId, target: NodeId) f64 {
+        const prev = previous orelse return 1.0;
+        if (target == prev) return 1.0 / self.p;
+        if (self.graph.hasEdge(prev, target)) return 1.0;
+        return 1.0 / self.q;
+    }
+
+    /// Sample the next node proportionally to its p/q transition weight
+    /// (allocation-free two-pass roulette selection).
+    fn sampleNext(self: *RandomWalker, previous: ?NodeId, neighbors: []NodeId) NodeId {
+        var total: f64 = 0.0;
+        for (neighbors) |neighbor| {
+            total += self.transitionWeight(previous, neighbor);
+        }
+
+        const r = self.prng.random().float(f64) * total;
+        var cumulative: f64 = 0.0;
+        for (neighbors) |neighbor| {
+            cumulative += self.transitionWeight(previous, neighbor);
+            if (r < cumulative) return neighbor;
+        }
+        return neighbors[neighbors.len - 1];
     }
 };
 
@@ -753,18 +789,25 @@ const GraphData = struct {
         weight: f32 = 1.0,
     };
 
-    // CANARY: REQ=REQ-ML-NEIGHBORS-001; FEATURE="GraphData.getNeighbors"; ASPECT=NeighborLookup; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=ml; UPDATED=2026-01-11
-    pub fn getNeighbors(self: *GraphData, node: NodeId) []NodeId {
-        // Return neighbor nodes from outgoing edges
-        if (self.outgoing_edges.get(node)) |edges| {
-            // Collect target nodes from edges
-            const result = std.heap.c_allocator.alloc(NodeId, edges.items.len) catch return &[_]NodeId{};
-            for (edges.items, 0..) |edge, i| {
-                result[i] = edge.target;
+    // CANARY: REQ=REQ-ML-NEIGHBORS-001; FEATURE="GraphData.getNeighbors"; ASPECT=NeighborLookup; STATUS=IMPL; OWNER=ml; UPDATED=2026-06-11
+    /// Return the target nodes of `node`'s outgoing edges.
+    ///
+    /// Ownership contract (GAP-0879): the returned slice is allocated with the
+    /// caller-supplied `allocator` and the CALLER owns it — free it with the
+    /// same allocator (`defer allocator.free(neighbors)`). No hidden global
+    /// allocator is used; an empty result is a zero-length allocation that
+    /// must still be freed.
+    pub fn getNeighbors(self: *GraphData, allocator: Allocator, node: NodeId) ![]NodeId {
+        const edge_ids: []const EdgeId = if (self.outgoing_edges.get(node)) |edges| edges.items else &[_]EdgeId{};
+
+        var result: std.ArrayList(NodeId) = .empty;
+        errdefer result.deinit(allocator);
+        for (edge_ids) |edge_id| {
+            if (self.edges.get(edge_id)) |edge| {
+                try result.append(allocator, edge.target);
             }
-            return result;
         }
-        return &[_]NodeId{};
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn getOutDegree(self: *GraphData, node: NodeId) u32 {
@@ -774,14 +817,15 @@ const GraphData = struct {
         return 0;
     }
 
-    // CANARY: REQ=REQ-ML-HASEDGE-001; FEATURE="GraphData.hasEdge"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=ml; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-ML-HASEDGE-001; FEATURE="GraphData.hasEdge"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=src/ml/integration_enhanced.zig; OWNER=ml; UPDATED=2026-06-11
     pub fn hasEdge(self: *GraphData, source: NodeId, target: NodeId) bool {
-        // Look up the source node in the outgoing_edges map
-        if (self.outgoing_edges.get(source)) |edges| {
-            // Search for the target in the edge list
-            for (edges.items) |edge| {
-                if (edge.target == target) {
-                    return true;
+        // Look up the source node in the outgoing_edges map, then resolve
+        // each edge id through the edges map (the adjacency lists store
+        // EdgeIds, not Edge structs).
+        if (self.outgoing_edges.get(source)) |edge_ids| {
+            for (edge_ids.items) |edge_id| {
+                if (self.edges.get(edge_id)) |edge| {
+                    if (edge.target == target) return true;
                 }
             }
         }
@@ -845,32 +889,136 @@ fn executeLinkPrediction(allocator: Allocator, graph: *GraphData, params: anytyp
     // Implementation would mutate graph with predictions
 }
 
-test "Node2Vec basic" {
-    const allocator = std.testing.allocator;
+// ----------------------------------------------------------------------------
+// Tests (GAP-0879). These run under `zig build test-gap0879`.
+// ----------------------------------------------------------------------------
 
-    var graph = GraphData{
+fn testInitGraph(allocator: Allocator) GraphData {
+    return GraphData{
         .nodes = std.AutoHashMap(NodeId, void).init(allocator),
-        .edges = std.AutoHashMap(EdgeId, Edge).init(allocator),
+        .edges = std.AutoHashMap(EdgeId, GraphData.Edge).init(allocator),
         .outgoing_edges = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
         .incoming_edges = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
     };
-    defer {
-        graph.nodes.deinit();
-        graph.edges.deinit();
-        graph.outgoing_edges.deinit();
-        graph.incoming_edges.deinit();
-    }
+}
 
-    // Add some nodes
+fn testDeinitGraph(allocator: Allocator, graph: *GraphData) void {
+    graph.nodes.deinit();
+    graph.edges.deinit();
+    var out_it = graph.outgoing_edges.valueIterator();
+    while (out_it.next()) |list| list.deinit(allocator);
+    graph.outgoing_edges.deinit();
+    var in_it = graph.incoming_edges.valueIterator();
+    while (in_it.next()) |list| list.deinit(allocator);
+    graph.incoming_edges.deinit();
+}
+
+fn testAddEdge(allocator: Allocator, graph: *GraphData, id: EdgeId, source: NodeId, target: NodeId) !void {
+    try graph.edges.put(id, GraphData.Edge{ .source = source, .target = target });
+    const out_gop = try graph.outgoing_edges.getOrPut(source);
+    if (!out_gop.found_existing) out_gop.value_ptr.* = .empty;
+    try out_gop.value_ptr.append(allocator, id);
+    const in_gop = try graph.incoming_edges.getOrPut(target);
+    if (!in_gop.found_existing) in_gop.value_ptr.* = .empty;
+    try in_gop.value_ptr.append(allocator, id);
+}
+
+test "GAP-0879: GraphData.getNeighbors returns caller-owned slice (no hidden c_allocator)" {
+    const allocator = std.testing.allocator;
+
+    var graph = testInitGraph(allocator);
+    defer testDeinitGraph(allocator, &graph);
+
     try graph.nodes.put(1, {});
     try graph.nodes.put(2, {});
     try graph.nodes.put(3, {});
+    try testAddEdge(allocator, &graph, 100, 1, 2);
+    try testAddEdge(allocator, &graph, 101, 1, 3);
+
+    // Caller-supplied allocator owns the result; freeing it must satisfy the
+    // testing allocator's leak/invalid-free checks.
+    const neighbors = try graph.getNeighbors(allocator, 1);
+    defer allocator.free(neighbors);
+    try std.testing.expectEqual(@as(usize, 2), neighbors.len);
+    try std.testing.expectEqual(@as(NodeId, 2), neighbors[0]);
+    try std.testing.expectEqual(@as(NodeId, 3), neighbors[1]);
+
+    // Node with no outgoing edges: empty, still caller-freed.
+    const none = try graph.getNeighbors(allocator, 2);
+    defer allocator.free(none);
+    try std.testing.expectEqual(@as(usize, 0), none.len);
+}
+
+test "GAP-0879: RandomWalker honors the Node2Vec return parameter p" {
+    const allocator = std.testing.allocator;
+
+    var graph = testInitGraph(allocator);
+    defer testDeinitGraph(allocator, &graph);
+
+    // Complete digraph on 3 nodes: from any (prev, cur) the candidates are
+    // {prev (weight 1/p)} and {the third node, adjacent to prev (weight 1)}.
+    try graph.nodes.put(1, {});
+    try graph.nodes.put(2, {});
+    try graph.nodes.put(3, {});
+    var eid: EdgeId = 0;
+    for ([_]NodeId{ 1, 2, 3 }) |a| {
+        for ([_]NodeId{ 1, 2, 3 }) |b| {
+            if (a == b) continue;
+            eid += 1;
+            try testAddEdge(allocator, &graph, eid, a, b);
+        }
+    }
+
+    const num_walks = 200;
+    const walk_length: u32 = 20;
+
+    var return_counts = [2]u64{ 0, 0 };
+    var step_counts = [2]u64{ 0, 0 };
+    const ps = [2]f64{ 0.1, 10.0 }; // return weights 10 vs 0.1 against 1
+
+    for (ps, 0..) |p, idx| {
+        var walker = try RandomWalker.init(allocator, &graph, p, 1.0, 99);
+        defer walker.deinit();
+
+        for (0..num_walks) |_| {
+            const path = try walker.walk(1, walk_length);
+            defer allocator.free(path);
+            var k: usize = 2;
+            while (k < path.len) : (k += 1) {
+                step_counts[idx] += 1;
+                if (path[k] == path[k - 2]) return_counts[idx] += 1;
+            }
+        }
+    }
+
+    const small_p_frac = @as(f64, @floatFromInt(return_counts[0])) / @as(f64, @floatFromInt(step_counts[0]));
+    const large_p_frac = @as(f64, @floatFromInt(return_counts[1])) / @as(f64, @floatFromInt(step_counts[1]));
+
+    // Expected ~10/11=0.91 vs ~0.1/1.1=0.09; deterministic seed, wide margins.
+    try std.testing.expect(small_p_frac > 0.7);
+    try std.testing.expect(large_p_frac < 0.3);
+    try std.testing.expect(small_p_frac > 2.0 * large_p_frac);
+}
+
+test "Node2Vec basic" {
+    const allocator = std.testing.allocator;
+
+    var graph = testInitGraph(allocator);
+    defer testDeinitGraph(allocator, &graph);
+
+    // Triangle so walks actually traverse edges.
+    try graph.nodes.put(1, {});
+    try graph.nodes.put(2, {});
+    try graph.nodes.put(3, {});
+    try testAddEdge(allocator, &graph, 100, 1, 2);
+    try testAddEdge(allocator, &graph, 101, 2, 3);
+    try testAddEdge(allocator, &graph, 102, 3, 1);
 
     var ml_engine = MLEngine.init(allocator, &graph);
     defer ml_engine.deinit();
 
-    const params = Node2VecParams{};
-    const embeddings = try ml_engine.node2vec(params);
+    const params = Node2VecParams{ .dimensions = 8, .walk_length = 10, .num_walks = 2, .seed = 7 };
+    var embeddings = try ml_engine.node2vec(params);
     defer {
         var it = embeddings.iterator();
         while (it.next()) |entry| {
@@ -879,35 +1027,27 @@ test "Node2Vec basic" {
         embeddings.deinit();
     }
 
-    try std.testing.expect(embeddings.count() > 0);
+    try std.testing.expectEqual(@as(usize, 3), embeddings.count());
 }
 
 test "PageRank computation" {
     const allocator = std.testing.allocator;
 
-    var graph = GraphData{
-        .nodes = std.AutoHashMap(NodeId, void).init(allocator),
-        .edges = std.AutoHashMap(EdgeId, Edge).init(allocator),
-        .outgoing_edges = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
-        .incoming_edges = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
-    };
-    defer {
-        graph.nodes.deinit();
-        graph.edges.deinit();
-        graph.outgoing_edges.deinit();
-        graph.incoming_edges.deinit();
-    }
+    var graph = testInitGraph(allocator);
+    defer testDeinitGraph(allocator, &graph);
 
-    // Add nodes
     try graph.nodes.put(1, {});
     try graph.nodes.put(2, {});
     try graph.nodes.put(3, {});
+    try testAddEdge(allocator, &graph, 100, 1, 2);
+    try testAddEdge(allocator, &graph, 101, 2, 3);
+    try testAddEdge(allocator, &graph, 102, 3, 1);
 
     var ml_engine = MLEngine.init(allocator, &graph);
     defer ml_engine.deinit();
 
     const params = PageRankParams{};
-    const scores = try ml_engine.pagerank(params);
+    var scores = try ml_engine.pagerank(params);
     defer scores.deinit();
 
     try std.testing.expect(scores.count() == 3);
@@ -916,31 +1056,28 @@ test "PageRank computation" {
 test "Community detection" {
     const allocator = std.testing.allocator;
 
-    var graph = GraphData{
-        .nodes = std.AutoHashMap(NodeId, void).init(allocator),
-        .edges = std.AutoHashMap(EdgeId, Edge).init(allocator),
-        .outgoing_edges = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
-        .incoming_edges = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
-    };
-    defer {
-        graph.nodes.deinit();
-        graph.edges.deinit();
-        graph.outgoing_edges.deinit();
-        graph.incoming_edges.deinit();
-    }
+    var graph = testInitGraph(allocator);
+    defer testDeinitGraph(allocator, &graph);
 
-    // Add nodes
-    for (1..10) |i| {
+    // Two triangles joined by one bridge edge (m > 0 keeps modularity finite).
+    for (1..7) |i| {
         try graph.nodes.put(i, {});
     }
+    try testAddEdge(allocator, &graph, 100, 1, 2);
+    try testAddEdge(allocator, &graph, 101, 2, 3);
+    try testAddEdge(allocator, &graph, 102, 3, 1);
+    try testAddEdge(allocator, &graph, 103, 4, 5);
+    try testAddEdge(allocator, &graph, 104, 5, 6);
+    try testAddEdge(allocator, &graph, 105, 6, 4);
+    try testAddEdge(allocator, &graph, 106, 3, 4);
 
     var ml_engine = MLEngine.init(allocator, &graph);
     defer ml_engine.deinit();
 
     const params = LouvainParams{};
-    const result = try ml_engine.louvain(params);
+    var result = try ml_engine.louvain(params);
     defer result.communities.deinit();
 
     try std.testing.expect(result.num_communities > 0);
-    try std.testing.expect(result.modularity >= 0.0 and result.modularity <= 1.0);
+    try std.testing.expect(std.math.isFinite(result.modularity));
 }

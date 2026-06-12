@@ -233,9 +233,9 @@ pub fn createDiagnostics(gpu_used: bool, metrics: ?GPUPerfMetrics, fallback: ?[]
 }
 
 pub fn serializeToJson(diag: GPUDiagnostics, allocator: std.mem.Allocator) ![]u8 {
-    var list = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer list.deinit(allocator);
-    var writer = list.writer(allocator);
+    var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, 256);
+    errdefer aw.deinit();
+    const writer = &aw.writer;
     try writer.writeAll("{\"gpu_enabled\":");
     try writer.writeAll(if (diag.gpu_enabled) "true" else "false");
     try writer.writeAll(",\"gpu_used\":");
@@ -264,7 +264,7 @@ pub fn serializeToJson(diag: GPUDiagnostics, allocator: std.mem.Allocator) ![]u8
         try writer.writeAll("\"}");
     }
     try writer.writeAll("}");
-    return try list.toOwnedSlice(allocator);
+    return try aw.toOwnedSlice();
 }
 
 test "TestCANARY_REQ_GQL_051_GPUTelemetryStruct" {

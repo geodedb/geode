@@ -74,6 +74,20 @@ fn getBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
     return g_repl_background_pool.?;
 }
 
+/// Tear down the lazily-created background read pool. Idempotent; safe to
+/// call when the pool was never created. Used at REPL exit and by the
+/// GAP-0514 e2e regression so std.testing.allocator leak detection stays
+/// meaningful (the pool is allocated with the first caller's allocator).
+pub fn deinitBackgroundPool() void {
+    g_repl_background_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_repl_background_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (g_repl_background_pool) |pool| {
+        pool.deinit();
+        g_repl_background_pool = null;
+    }
+}
+
 /// Validate a graph name to prevent GQL injection (S5).
 /// Graph names must match [a-zA-Z_][a-zA-Z0-9_]*.
 fn isValidGraphName(name: []const u8) bool {
@@ -109,20 +123,26 @@ fn syncSessionStateFromResult(
     if (!result.indicatesFailure()) return;
 
     var root = @as(std.json.ObjectMap, .empty);
-    errdefer query_result_accumulator.freeJsonValue(session.allocator, .{ .object = root });
+    // The object (and every duped string in it) is only scaffolding for the
+    // stringified last_response below — free it on ALL exits.  This was an
+    // errdefer before GAP-0514, which leaked the whole error-meta object on
+    // every failed statement (caught by the gap0514 repl e2e leak check)
+    // and would have freed string-LITERAL keys on its error path —
+    // freeJsonValue frees keys, so every key below must be duped.
+    defer query_result_accumulator.freeJsonValue(session.allocator, .{ .object = root });
 
-    try root.put(session.allocator, "status_class", .{ .string = try session.allocator.dupe(u8, result.status_class) });
+    try root.put(session.allocator, try session.allocator.dupe(u8, "status_class"), .{ .string = try session.allocator.dupe(u8, result.status_class) });
     if (result.status_subclass.len > 0) {
-        try root.put(session.allocator, "status_subclass", .{ .string = try session.allocator.dupe(u8, result.status_subclass) });
+        try root.put(session.allocator, try session.allocator.dupe(u8, "status_subclass"), .{ .string = try session.allocator.dupe(u8, result.status_subclass) });
     }
     if (result.has_error) {
         if (result.error_message.len > 0) {
             const message = try session.allocator.dupe(u8, result.error_message);
-            try root.put(session.allocator, "error", .{ .string = message });
-            try root.put(session.allocator, "message", .{ .string = try session.allocator.dupe(u8, result.error_message) });
+            try root.put(session.allocator, try session.allocator.dupe(u8, "error"), .{ .string = message });
+            try root.put(session.allocator, try session.allocator.dupe(u8, "message"), .{ .string = try session.allocator.dupe(u8, result.error_message) });
         }
         if (result.error_status.len > 0) {
-            try root.put(session.allocator, "error_code", .{ .string = try session.allocator.dupe(u8, result.error_status) });
+            try root.put(session.allocator, try session.allocator.dupe(u8, "error_code"), .{ .string = try session.allocator.dupe(u8, result.error_status) });
         }
     }
 
@@ -130,13 +150,13 @@ fn syncSessionStateFromResult(
     for (result.additional_statuses.items) |item| {
         try additional.append(.{ .string = try session.allocator.dupe(u8, item) });
     }
-    try root.put(session.allocator, "additional_statuses", .{ .array = additional });
+    try root.put(session.allocator, try session.allocator.dupe(u8, "additional_statuses"), .{ .array = additional });
 
     var flagger = std.json.Array.init(session.allocator);
     for (result.flagger_findings.items) |item| {
         try flagger.append(.{ .string = try session.allocator.dupe(u8, item) });
     }
-    try root.put(session.allocator, "flagger_findings", .{ .array = flagger });
+    try root.put(session.allocator, try session.allocator.dupe(u8, "flagger_findings"), .{ .array = flagger });
 
     const root_value = std.json.Value{ .object = root };
     session.last_response = try std.json.Stringify.valueAlloc(
@@ -159,13 +179,13 @@ const LastPayloadKind = enum {
 // Made public so it can be used by other modules for interrupt handling
 // In raw terminal mode, Ctrl+C generates ASCII 3 which we poll for
 pub fn checkForInterrupt() bool {
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-036; FEATURE="SourceInterrupt"; ASPECT=SignalBasedInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-036; FEATURE="SourceInterrupt"; ASPECT=SignalBasedInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // First check the signal-based flag (most reliable for Ctrl+C in cooked terminal mode)
     if (platform.checkAndClearSigint()) {
         return true;
     }
 
-    // CANARY: REQ=REQ-SHELL-PLAIN-009; FEATURE="ShellPlainMode"; ASPECT=InterruptCheckTTY; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-SHELL-PLAIN-009; FEATURE="ShellPlainMode"; ASPECT=InterruptCheckTTY; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Only check stdin for Ctrl+C if it's a TTY. When stdin is piped (non-interactive/plain mode),
     // reading from stdin will consume actual command input, not just Ctrl+C signals.
     // In piped mode, rely on signal-based interrupt handling above.
@@ -583,7 +603,7 @@ fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json
             var out = @as(std.json.ObjectMap, .empty);
             var iter = obj.iterator();
             while (iter.next()) |entry| {
-                try out.put(try allocator.dupe(u8, entry.key_ptr.*), try cloneJsonValue(allocator, entry.value_ptr.*));
+                try out.put(allocator, try allocator.dupe(u8, entry.key_ptr.*), try cloneJsonValue(allocator, entry.value_ptr.*));
             }
             break :blk .{ .object = out };
         },
@@ -717,7 +737,7 @@ pub const ClientSession = struct {
     session_id: ?[]const u8 = null,
     last_columns: ?[]const ColumnInfo = null,
     last_payload_kind: LastPayloadKind = .none,
-    /// CANARY: REQ=REQ-INLINE-RESULTS-001; FEATURE="InlineResultsHandling"; ASPECT=SchemaResponseFlag; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+    /// CANARY: REQ=REQ-INLINE-RESULTS-001; FEATURE="InlineResultsHandling"; ASPECT=SchemaResponseFlag; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Tracks if last response was a schema (meaning inline page may follow)
     received_schema_response: bool = false,
     /// Cached inline page JSON emitted immediately after schema.
@@ -738,7 +758,7 @@ pub const ClientSession = struct {
     reconnect_count: u32 = 0,
     /// Last reconnection error (for diagnostics)
     last_reconnect_error: ?[]const u8 = null,
-    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-001; FEATURE="TransactionErrorDetails"; ASPECT=ErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-001; FEATURE="TransactionErrorDetails"; ASPECT=ErrorMessage; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Last transaction error message for better user feedback
     last_txn_error: ?[]const u8 = null,
 
@@ -760,7 +780,7 @@ pub const ClientSession = struct {
     }
 
     /// Disconnect from server (used on interrupt to let server rollback transaction)
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-035; FEATURE="SourceInterrupt"; ASPECT=DisconnectForRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-035; FEATURE="SourceInterrupt"; ASPECT=DisconnectForRollback; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     pub fn disconnect(self: *ClientSession) void {
         if (self.connection) |conn| {
             conn.deinit();
@@ -822,7 +842,7 @@ pub const ClientSession = struct {
             self.allocator.free(g);
             self.graph = null;
         }
-        // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=CacheCleanupOnExit; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=CacheCleanupOnExit; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
         // Issue #413: Clean up global file hash cache to prevent memory leaks on exit
         deinitSourcedFileCache();
     }
@@ -846,7 +866,7 @@ pub const ClientSession = struct {
         self.inline_page_final = false;
     }
 
-    /// CANARY: REQ=REQ-INLINE-RESULTS-003; FEATURE="InlineResultsHandling"; ASPECT=ConsumeInlinePage; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+    /// CANARY: REQ=REQ-INLINE-RESULTS-003; FEATURE="InlineResultsHandling"; ASPECT=ConsumeInlinePage; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Consume inline page response if the server sent one after a schema response.
     /// The server's inline_results_enabled feature sends both schema and page in sequence.
     /// This must be called after receiving a schema response to prevent protocol mismatch
@@ -1073,8 +1093,8 @@ pub const ClientSession = struct {
         }
     }
 
-    // CANARY: REQ=REQ-SHELL-AUTH-001; FEATURE="ShellAuthRequired"; ASPECT=HelloAuthCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-016; FEATURE="SourceInterrupt"; ASPECT=HelloInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-AUTH-001; FEATURE="ShellAuthRequired"; ASPECT=HelloAuthCheck; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-016; FEATURE="SourceInterrupt"; ASPECT=HelloInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Issue #387: HELLO handshake that checks if authentication is required
     pub fn hello(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
@@ -1139,7 +1159,7 @@ pub const ClientSession = struct {
         error_message: ?[]const u8,
     };
 
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-017; FEATURE="SourceInterrupt"; ASPECT=HelloAuthInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-017; FEATURE="SourceInterrupt"; ASPECT=HelloAuthInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     pub fn helloWithAuth(self: *ClientSession, username: []const u8, password: []const u8) !AuthHelloResult {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -1334,7 +1354,7 @@ pub const ClientSession = struct {
             }
         };
 
-        // CANARY: REQ=REQ-SHELL-INTERRUPT-039; FEATURE="SourceInterrupt"; ASPECT=ThreadedRead; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-039; FEATURE="SourceInterrupt"; ASPECT=ThreadedRead; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
         // Use a threaded approach: worker thread does blocking read, main thread checks for interrupts
         // This allows Ctrl+C to be detected even when QUIC readLine is blocking
         const ReadContext = struct {
@@ -1427,7 +1447,7 @@ pub const ClientSession = struct {
                 }
                 const raw = result_val orelse return error.InvalidResponse;
                 try ResponseHandler.handle(self, raw);
-                // CANARY: REQ=REQ-INLINE-RESULTS-006; FEATURE="InlineResultsHandling"; ASPECT=ConsumeAfterSchema; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+                // CANARY: REQ=REQ-INLINE-RESULTS-006; FEATURE="InlineResultsHandling"; ASPECT=ConsumeAfterSchema; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
                 self.consumeInlinePageIfNeeded();
                 return;
             }
@@ -1461,7 +1481,7 @@ pub const ClientSession = struct {
         try self.connection.?.writeAll(msg);
 
         // Read and check response with interrupt checking
-        // CANARY: REQ=REQ-SHELL-INTERRUPT-013; FEATURE="SourceInterrupt"; ASPECT=BeginInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-013; FEATURE="SourceInterrupt"; ASPECT=BeginInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
         var retry_count: usize = 0;
         const max_retries: usize = 100; // ~5 seconds with 50ms sleep
         while (retry_count < max_retries) : (retry_count += 1) {
@@ -1491,7 +1511,7 @@ pub const ClientSession = struct {
         return error.WouldBlock;
     }
 
-    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-002; FEATURE="TransactionErrorDetails"; ASPECT=CommitWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-002; FEATURE="TransactionErrorDetails"; ASPECT=CommitWithRetry; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Commit transaction with retry logic for WouldBlock and detailed error extraction
     /// Returns error.Interrupted if user pressed Ctrl+C during the operation
     pub fn commit(self: *ClientSession) !void {
@@ -1541,9 +1561,9 @@ pub const ClientSession = struct {
         }
     }
 
-    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-003; FEATURE="TransactionErrorDetails"; ASPECT=RollbackWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-003; FEATURE="TransactionErrorDetails"; ASPECT=RollbackWithRetry; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Rollback transaction with retry logic for WouldBlock and detailed error extraction
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-014; FEATURE="SourceInterrupt"; ASPECT=RollbackDoubleInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-014; FEATURE="SourceInterrupt"; ASPECT=RollbackDoubleInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Requires TWO Ctrl+C presses to cancel - first shows warning about data corruption
     pub fn rollback(self: *ClientSession) !void {
         // Default rollback with 10 second timeout
@@ -1551,7 +1571,7 @@ pub const ClientSession = struct {
     }
 
     /// Rollback with configurable timeout for large transactions
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-026; FEATURE="SourceInterrupt"; ASPECT=RollbackScaledTimeout; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-026; FEATURE="SourceInterrupt"; ASPECT=RollbackScaledTimeout; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// max_retries: number of 50ms retry intervals before timeout
     pub fn rollbackWithTimeout(self: *ClientSession, max_retries: usize) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
@@ -1687,7 +1707,7 @@ pub const ClientSession = struct {
         return error.WouldBlock;
     }
 
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-015; FEATURE="SourceInterrupt"; ASPECT=PullAllInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-015; FEATURE="SourceInterrupt"; ASPECT=PullAllInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     pub fn pullAll(self: *ClientSession, sink: anytype) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -1818,7 +1838,7 @@ pub const ClientSession = struct {
     }
 
     /// Drain any pending responses from the connection (cleanup after errors)
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-023; FEATURE="SourceInterrupt"; ASPECT=DrainWithTimeout; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-023; FEATURE="SourceInterrupt"; ASPECT=DrainWithTimeout; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Note: This function attempts to discard stale data with timeout
     /// Uses quick polling to avoid blocking on dead connections
     pub fn drain(self: *ClientSession) void {
@@ -1827,7 +1847,7 @@ pub const ClientSession = struct {
     }
 
     /// Drain pending responses with configurable limit and interrupt checking
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-024; FEATURE="SourceInterrupt"; ASPECT=DrainForRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-024; FEATURE="SourceInterrupt"; ASPECT=DrainForRollback; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Returns the number of messages drained, or 0 if interrupted
     pub fn drainWithLimit(self: *ClientSession, max_messages: usize, check_interrupts: bool) usize {
         if (!self.connected or self.connection == null) return 0;
@@ -1863,7 +1883,7 @@ pub const ClientSession = struct {
     }
 
     /// Aggressive drain for use before rollback of large transactions
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-025; FEATURE="SourceInterrupt"; ASPECT=DrainAllForRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-025; FEATURE="SourceInterrupt"; ASPECT=DrainAllForRollback; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Drains until no more data or timeout, scaled to expected transaction size
     /// Returns total messages drained, handles interrupt checking
     pub fn drainForRollback(self: *ClientSession, expected_statements: usize, stderr: anytype) !usize {
@@ -1923,7 +1943,7 @@ pub const ClientSession = struct {
     }
 
     /// Quick drain with spinner feedback for use before rollback
-    /// CANARY: REQ=REQ-SHELL-INTERRUPT-033; FEATURE="SourceInterrupt"; ASPECT=DrainWithSpinner; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-033; FEATURE="SourceInterrupt"; ASPECT=DrainWithSpinner; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     /// Time-limited drain (max 2 seconds) with spinner updates
     pub fn drainForRollbackWithSpinner(self: *ClientSession, expected_statements: usize, spinner: *spinner_mod.Spinner) !usize {
         _ = expected_statements; // No longer used - we use time-based limit
@@ -2483,7 +2503,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     var owned_scoped_gql: ?[]u8 = null;
     defer if (owned_scoped_gql) |buf| state.allocator.free(buf);
 
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-006; FEATURE="SourceChunkedExecution"; ASPECT=OutputSuppression; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-006; FEATURE="SourceChunkedExecution"; ASPECT=OutputSuppression; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Check if output should be suppressed (during chunked execution)
     const suppress = if (@hasField(@TypeOf(state.*), "suppress_output")) state.suppress_output else false;
 
@@ -2666,7 +2686,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     }
 }
 
-// CANARY: REQ=REQ-SOURCE-PERF-001; FEATURE="SourceFilePerformance"; ASPECT=FileHashCache; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-29
+// CANARY: REQ=REQ-SOURCE-PERF-001; FEATURE="SourceFilePerformance"; ASPECT=FileHashCache; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
 // Issue #391/#392: File hash cache to track sourced files and warn about re-sourcing
 var g_sourced_file_hashes: ?std.StringHashMap(u64) = null;
 
@@ -2677,7 +2697,7 @@ fn getSourcedFileCache(allocator: std.mem.Allocator) *std.StringHashMap(u64) {
     return &g_sourced_file_hashes.?;
 }
 
-// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=FileHashCacheCleanup; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=FileHashCacheCleanup; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
 // Issue #413: Cleanup function to free the global file hash cache on shutdown
 pub fn deinitSourcedFileCache() void {
     if (g_sourced_file_hashes) |*cache| {
@@ -2776,9 +2796,17 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             try stderr.writeStreamingAll(replIo(), "Note: File was previously sourced but content has changed.\r\n");
         }
     }
-    // Store/update the hash for this file path
-    const path_key = state.allocator.dupe(u8, resolved_path) catch resolved_path;
-    file_cache.put(path_key, content_hash) catch {};
+    // Store/update the hash for this file path.  getOrPut so a RE-source of
+    // an already-cached path only updates the value — the previous
+    // unconditional `dupe + put` orphaned a fresh key copy on every
+    // re-source (put keeps the existing equal key), leaking the path string
+    // (caught by the gap0514 repl e2e leak check).
+    if (file_cache.getOrPut(resolved_path) catch null) |gop| {
+        if (!gop.found_existing) {
+            gop.key_ptr.* = state.allocator.dupe(u8, resolved_path) catch resolved_path;
+        }
+        gop.value_ptr.* = content_hash;
+    }
 
     // Display source file info
     var info_buf: [512]u8 = undefined;
@@ -2818,7 +2846,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var batch_statements = try std.ArrayList(u8).initCapacity(state.allocator, contents.len);
     defer batch_statements.deinit(state.allocator);
 
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-001; FEATURE="SourceChunkedExecution"; ASPECT=StatementList; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-001; FEATURE="SourceChunkedExecution"; ASPECT=StatementList; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Collect individual statements for chunked execution when file is large
     var statement_list = try std.ArrayList([]const u8).initCapacity(state.allocator, 0);
     defer {
@@ -2844,7 +2872,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var line_number: usize = 0;
 
     // First pass: Parse file and collect statements
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-018; FEATURE="SourceInterrupt"; ASPECT=ParsingInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-018; FEATURE="SourceInterrupt"; ASPECT=ParsingInterrupt; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     while (line_iter.next()) |raw_line| {
         line_number += 1;
 
@@ -2929,7 +2957,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             }
             try batch_statements.appendSlice(state.allocator, current_statement.items);
 
-            // CANARY: REQ=REQ-SOURCE-CHUNKED-002; FEATURE="SourceChunkedExecution"; ASPECT=CollectStatements; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
+            // CANARY: REQ=REQ-SOURCE-CHUNKED-002; FEATURE="SourceChunkedExecution"; ASPECT=CollectStatements; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
             // Also save individual statement for chunked execution
             const stmt_copy = try state.allocator.dupe(u8, current_statement.items);
             try statement_list.append(state.allocator, stmt_copy);
@@ -2981,7 +3009,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     // CANARY: REQ=REQ-SOURCE-PERF-005; FEATURE="SourceFilePerformance"; ASPECT=SingleRequestExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-003; FEATURE="SourceChunkedExecution"; ASPECT=SizeCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-003; FEATURE="SourceChunkedExecution"; ASPECT=SizeCheck; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Issue #400: Execute in single request for small files, chunked for large files
     const max_single_batch_size: usize = 32 * 1024; // 32KB threshold for chunking
     const use_chunked = batch_statements.items.len > max_single_batch_size;
@@ -3000,7 +3028,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var was_interrupted = false;
 
     if (use_chunked) {
-        // CANARY: REQ=REQ-SOURCE-CHUNKED-004; FEATURE="SourceChunkedExecution"; ASPECT=ChunkedExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-06-10
+        // CANARY: REQ=REQ-SOURCE-CHUNKED-004; FEATURE="SourceChunkedExecution"; ASPECT=ChunkedExecution; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
         // Large file - execute statements in chunks to avoid server message size limit
         var chunk_msg_buf: [128]u8 = undefined;
         const chunk_msg = std.fmt.bufPrint(&chunk_msg_buf, "Large file ({d} bytes) - using chunked execution...", .{batch_statements.items.len}) catch "Chunked execution...";
@@ -3087,7 +3115,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         return;
     }
 
-    // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-001; FEATURE="SourceFileErrorDetails"; ASPECT=BatchErrorExtraction; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-001; FEATURE="SourceFileErrorDetails"; ASPECT=BatchErrorExtraction; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Check the server response for actual error details
     if (state.session.last_response) |response| {
         // Check for error status codes (4xxxx or 5xxxx)

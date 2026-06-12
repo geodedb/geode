@@ -50,46 +50,36 @@ pub fn initIndexCatalog(allocator: std.mem.Allocator) void {
     g_index_catalog_inited = true;
 }
 
-/// Choose optimal index for a predicate using cost-based analysis
-/// Returns null if table scan is more efficient or no suitable index exists
-pub fn chooseIndexForPredicate(allocator: std.mem.Allocator, predicate_expr: ?*const anyopaque, has_equality: bool, est_rows: usize) ?IndexStats {
-    _ = allocator; // currently unused for phase 2 stub
-    _ = predicate_expr; // future: inspect to derive property name
+/// Choose optimal index for a predicate using cost-based analysis.
+///
+/// GAP-0867: an index is only a candidate when the predicate actually
+/// references the indexed property. `predicate_prop` is the property name the
+/// equality predicate references (extracted by the caller from the predicate
+/// expression — e.g. `n.x = 5` yields "x"). Previously the predicate was
+/// ignored entirely and the lowest-selectivity index in the catalog was
+/// chosen regardless of whether the predicate could use it.
+///
+/// Returns null when no property is referenced (`predicate_prop == null`),
+/// when no index covers that property, or when a table scan is estimated to
+/// be cheaper (index must beat the scan by at least 10%).
+pub fn chooseIndexForPredicate(predicate_prop: ?[]const u8, has_equality: bool, est_rows: usize) ?IndexStats {
     if (g_disable_catalog or !has_equality) return null;
+    const prop = predicate_prop orelse return null;
+    const st = g_index_catalog_map.get(prop) orelse return null;
+
+    const scan_cost = @as(f64, @floatFromInt(est_rows)); // table scan cost
 
     // Use SelectivityEstimator if available for more sophisticated cost-based decision
     if (g_selectivity_estimator) |estimator| {
-        var best: ?IndexStats = null;
-        var best_cost: f64 = @as(f64, @floatFromInt(est_rows)); // table scan cost
-
-        var it = g_index_catalog_map.iterator();
-        while (it.next()) |entry| {
-            const st = entry.value_ptr.*;
-            const index_cost = estimator.estimateIndexCost(st.key, .Equality, est_rows);
-            if (index_cost < best_cost * 0.9) { // require at least 10% benefit
-                best = st;
-                best_cost = index_cost;
-            }
-        }
-        return best;
+        const index_cost = estimator.estimateIndexCost(st.key, .Equality, est_rows);
+        if (index_cost < scan_cost * 0.9) return st; // require at least 10% benefit
+        return null;
     }
 
-    // Fallback to original simple heuristic
-    var best: ?IndexStats = null;
-    var it = g_index_catalog_map.iterator();
-    while (it.next()) |entry| {
-        const st = entry.value_ptr.*;
-        if (best == null or st.eqSelectivity() < best.?.eqSelectivity()) best = st;
-    }
-    if (best) |b| {
-        // Very naive cost: full scan cost = est_rows, index cost = selectivity * total_rows + log(total_rows)
-        const scan_cost = @as(f64, @floatFromInt(est_rows));
-        const idx_rows = b.eqSelectivity() * @as(f64, @floatFromInt(b.total_rows));
-        const idx_cost = idx_rows + std.math.log(f64, 2, @as(f64, @floatFromInt(b.total_rows + 1)));
-        if (idx_cost < scan_cost * 0.9) { // require at least 10% benefit
-            return b;
-        }
-    }
+    // Fallback: naive cost — index cost = selectivity * total_rows + log(total_rows)
+    const idx_rows = st.eqSelectivity() * @as(f64, @floatFromInt(st.total_rows));
+    const idx_cost = idx_rows + std.math.log(f64, 2, @as(f64, @floatFromInt(st.total_rows + 1)));
+    if (idx_cost < scan_cost * 0.9) return st; // require at least 10% benefit
     return null;
 }
 

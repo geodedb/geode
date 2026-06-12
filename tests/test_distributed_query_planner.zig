@@ -3,7 +3,7 @@ const testing = std.testing;
 const geode = @import("geode");
 
 const qp = geode.distributed.query_planner;
-const cbo = geode.cbo_api_stub;
+const cbo = geode.cbo;
 
 // CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-001; FEATURE="Distributed Query Planning"; ASPECT=BasicPlanGeneration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration; OWNER=distributed; UPDATED=2026-04-05
 // CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-002; FEATURE="Distributed Query Planning"; ASPECT=FederationIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration; OWNER=distributed; UPDATED=2026-04-05

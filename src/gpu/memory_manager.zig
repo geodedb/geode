@@ -16,14 +16,14 @@ pub const MemoryManager = struct {
     loader: *const CudaLoader,
     allocator: std.mem.Allocator,
     pool: std.array_list.Managed(DeviceBuffer),
-    pinned_host_buffers: std.array_list.Managed([*]u8),
+    pinned_host_buffers: std.array_list.Managed([]u8),
 
     pub fn init(loader: *const CudaLoader, allocator: std.mem.Allocator) !MemoryManager {
         return MemoryManager{
             .loader = loader,
             .allocator = allocator,
             .pool = std.array_list.Managed(DeviceBuffer).init(allocator),
-            .pinned_host_buffers = std.array_list.Managed([*]u8).init(allocator),
+            .pinned_host_buffers = std.array_list.Managed([]u8).init(allocator),
         };
     }
 
@@ -35,8 +35,8 @@ pub const MemoryManager = struct {
         }
         self.pool.deinit();
 
-        for (self.pinned_host_buffers.items) |buf_ptr| {
-            self.allocator.free(buf_ptr[0..1]); // Simplified cleanup
+        for (self.pinned_host_buffers.items) |buf| {
+            self.allocator.free(buf);
         }
         self.pinned_host_buffers.deinit();
     }

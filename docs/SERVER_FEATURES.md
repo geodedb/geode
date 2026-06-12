@@ -2,12 +2,12 @@
 
 ## Overview
 
-Geode is a feature-complete single-tenant graph database server with industry-leading GQL compliance. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
+Geode is a single-tenant graph database server with strong ISO GQL alignment. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
 
-**Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production.
-**GQL Compliance**: 100% (70/70 ISO/IEC 39075:2024 tests)
-**Test Coverage**: 97.4% (1644/1688 geodetestlab tests)
-**CANARY Markers**: 2,200+ governance markers tracking 2,190+ requirements
+**Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
+**ISO Conformance Suite**: 96/96 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+**Test Baseline**: local per-step baseline in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical); a fresh geodetestlab harness run is owed — the prior ~97% (1644/1688) is a dated historical snapshot
+**CANARY Markers**: 5,094 governance markers (223 IMPL / 4.4%; run `make status-generate`)
 
 ---
 
@@ -164,7 +164,10 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 
 - Multipart upload for files >5MB (configurable)
 - Exponential backoff retry (base 100ms, max 3 retries)
-- Compression: zstd, gzip, lz4, snappy
+- Compression: `none` or `gzip` only (GAP-0880) — the backup engine applies a
+  real gzip/DEFLATE encoder when requested and records the codec actually
+  applied; `zstd`/`lz4`/`snappy` encoders are NOT bundled and are rejected
+  with `UnsupportedCompression`
 - Encryption: AES-256 with envelope encryption
 - Checksum validation: SHA-256
 
@@ -488,7 +491,7 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 
 **Planning Phases**:
 
-1. **Parse**: GQL → AST (100% ISO compliance)
+1. **Parse**: GQL → AST (96/96 named ISO conformance-suite cases; parse-only scope)
 2. **Validate**: Type checking, schema validation
 3. **Rewrite**: Predicate pushdown, constant folding
 4. **Enumerate**: Generate alternative plans
@@ -692,7 +695,7 @@ struct PathCacheEntry {
 **Core Features**:
 
 - Real-time change event streaming
-- Multiple sink support: Kafka, Kinesis, PubSub, Webhook, File
+- Multiple sink support: Kafka, Webhook, File (plus an in-memory sink for testing). Kinesis and Pub/Sub are **planned, not implemented** — configuring them fails loud at startup with `error.SinkNotImplemented` (GAP-0872)
 - Adaptive batching and backpressure
 - Guaranteed ordering per entity
 - Resume token support for fault tolerance
@@ -805,24 +808,14 @@ pub const KafkaConfig = struct {
 - Delivery guarantees: at-least-once (acks=all)
 - Idempotent producer support
 
-### 5.3 Kinesis Integration
+### 5.3 Kinesis / Pub/Sub (planned — fail-loud)
 
-**Configuration**:
-
-```zig
-pub const KinesisConfig = struct {
-    stream_name: []const u8,
-    region: []const u8,
-    partition_key: []const u8,
-    endpoint: ?[]const u8 = null,
-};
-```
-
-**Features**:
-
-- AWS SDK integration
-- Automatic retry with exponential backoff
-- Shard-level ordering by partition key
+AWS Kinesis and Google Pub/Sub sinks are **not implemented**. A `KinesisConfig`
+type exists for the planned surface, but there is no authenticated client
+behind it. As of GAP-0872, configuring a `kinesis` or `pubsub` CDC sink fails
+at engine construction with `error.SinkNotImplemented` (previously these sinks
+accepted events and silently discarded them). Regression:
+`tests/test_gap0872_cdc_sinks.zig` (`zig build test-gap0872`).
 
 ### 5.4 Webhook Sink
 
@@ -931,7 +924,8 @@ pub const Config = struct {
 
 **Flags**:
 
-- `0x01`: Compressed (zstd)
+- `0x01`: Compressed (reserved — no frame-level compression is implemented;
+  backup payload compression is gzip-only, see GAP-0880)
 - `0x02`: Encrypted (additional layer beyond TLS)
 - `0x04`: Fragmented (multi-frame message)
 - `0x08`: Priority (high-priority frame)
@@ -1095,19 +1089,24 @@ pub fn evaluatePolicy(
 
 **Supported Methods**:
 
-1. **TOTP**: Time-based one-time passwords (RFC 6238)
-2. **SMS**: Text message codes
-3. **Email**: Email verification codes
-4. **Hardware tokens**: U2F/FIDO2
+1. **TOTP**: Time-based one-time passwords (RFC 6238) — implemented (`src/security/mfa.zig`)
+2. **Recovery codes**: one-time backup codes — implemented
 
-**Risk-Based MFA**:
+Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 
-- Risk score calculation based on:
-  - Login location
-  - Device fingerprint
-  - Time of day
-  - Previous behavior
-- Adaptive MFA: require MFA only for high-risk requests
+**Step-Up MFA** (GAP-0884):
+
+- `SecurityManager.requireStepUp` decides elevation from an explicit
+  operation classification (read / write / admin / security_admin) of real
+  procedure and auth-DDL identifiers — `classifyOperation` in
+  `src/security/geode_auth_lib.zig`; unknown operations fail closed.
+- Note: this is a library-level policy API; wiring it into the statement /
+  procedure dispatch path as an enforcement gate is planned, not yet done.
+- Regression: `zig build test-gap0884`.
+
+**Risk-Based MFA** (scaffold only): `src/security/mfa_risk.zig` computes a
+risk score from deterministic placeholder factors. Real signals (login
+location, device fingerprint, behavioral history) are planned, not wired.
 
 **Recovery Codes**:
 
@@ -1406,7 +1405,7 @@ key_name = "geode-master-key"
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: October 2025
+**Document Version**: 1.1
+**Last Updated**: 2026-06-11 (GAP-0864 claim rebaseline)
 **Maintainer**: Geode Core Team
-**Status**: Production Ready
+**Status**: Development Ready (single-tenant) — see [Known Limitations](../CLAUDE.md#known-limitations) and [GAP_ANALYSIS.md](GAP_ANALYSIS.md)

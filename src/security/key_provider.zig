@@ -227,7 +227,7 @@ fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) void {
 // (Full CANARY test added via tests harness referencing this module.)
 
 test "key provider static env absent returns null" {
-    // Ensure variable not set (ignore error if not present)
+    // error-policy: A — test env setup; ignore error if variable not present.
     _ = std.os.unsetenvZ("GEODE_DISK_KEY_HEX") catch {};
     const p = Provider.init(.StaticEnv);
     // P2-3: Use testing allocator in tests instead of page_allocator
@@ -251,6 +251,8 @@ test "mock kms deterministic and distinct seeds differ" {
 }
 
 test "external kms provider generates non-deterministic envelopes but stable seed influences distribution" {
+    // error-policy: A — test env setup; a failed setenv surfaces as a test
+    // assertion failure on the very next fetch.
     std.os.setenvZ("GEODE_KMS_ENDPOINT", "https://kms.example.local") catch {};
     std.os.setenvZ("GEODE_KMS_API_KEY", "abc123") catch {};
     const p = Provider.init(.ExternalKms);
@@ -261,6 +263,7 @@ test "external kms provider generates non-deterministic envelopes but stable see
     const identical = std.mem.eql(u8, &km1.data_key, &km2.data_key) and std.mem.eql(u8, &km1.backup_key, &km2.backup_key);
     if (identical) std.debug.print("WARNING: identical keys generated twice; extremely low probability but acceptable for test rerun\n", .{});
     // Changing API key changes PRNG seed => distribution changes (not directly testable without internal stats)
+    // error-policy: A — test env setup (see above).
     std.os.setenvZ("GEODE_KMS_API_KEY", "def456") catch {};
     const km3 = (try p.fetch(std.testing.allocator)).?;
     // Highly likely to differ from first fetch

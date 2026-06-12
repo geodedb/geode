@@ -198,6 +198,11 @@ pub const Chain = struct {
     // CANARY: REQ=REQ-GQL-PATH-MODES-002; FEATURE="GQL Path Mode AST"; ASPECT=Chain; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
     // Path mode specifier for variable-length path traversal semantics
     path_mode: PathMode = .walk,
+    // GAP-0514 P3: true only when the query SPELLED a path-mode keyword
+    // (WALK/TRAIL/ACYCLIC/SIMPLE). Execution honors explicit modes; a bare
+    // pattern keeps the engine's historical ACYCLIC default (ISO GQL's WALK
+    // default cannot terminate on cyclic graphs with unbounded quantifiers).
+    path_mode_explicit: bool = false,
 };
 
 pub const GraphPattern = struct { chains: []Chain };

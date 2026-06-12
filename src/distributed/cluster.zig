@@ -545,6 +545,13 @@ pub const ClusterCoordinator = struct {
     /// ever elected" that Task A6 (2026-05-25 plan) is closing.
     raft_transport: raft_consensus.Transport,
 
+    /// GAP-0870: applied cluster membership view, mutated by committed
+    /// `config_change` Raft entries (registered with raft_apply at init).
+    applied_cluster_config: *raft_apply.AppliedClusterConfig,
+    /// GAP-0870: 2PC coordinator that committed `txn_prepare` / `txn_decide`
+    /// Raft entries route into (registered with raft_apply at init).
+    txn_coord: *raft_consensus.TxnCoordinator,
+
     /// owed item (4) — frozen-term pre-vote VISIBILITY: tracks whether this node
     /// has been wedged as a CANDIDATE at an UNCHANGING term past the warn
     /// threshold. `pre_vote = true` freezes the term while a node is wedged as a
@@ -766,6 +773,26 @@ pub const ClusterCoordinator = struct {
         raft_apply.setGlobalStore(store);
         raft.apply_callback = &raft_apply.applyCallbackFn;
 
+        // GAP-0870: register the applied-membership view and the 2PC
+        // coordinator so committed config_change / txn_prepare / txn_decide
+        // entries have a real apply target (raft_apply fails loud otherwise).
+        const applied_cfg = try allocator.create(raft_apply.AppliedClusterConfig);
+        errdefer allocator.destroy(applied_cfg);
+        applied_cfg.* = raft_apply.AppliedClusterConfig.init(allocator);
+        errdefer applied_cfg.deinit();
+        // Seed with bootstrap membership (self + static peers) so committed
+        // config_change deltas apply on top of the configured topology.
+        try applied_cfg.upsertMember(node_id, config.listen_address, config.cluster_port);
+        for (config.peers) |pc| {
+            try applied_cfg.upsertMember(pc.id, pc.address, pc.port);
+        }
+        const txn_coord = try allocator.create(raft_consensus.TxnCoordinator);
+        errdefer allocator.destroy(txn_coord);
+        txn_coord.* = try raft_consensus.TxnCoordinator.init(allocator, store);
+        errdefer txn_coord.deinit();
+        raft_apply.setGlobalClusterConfig(applied_cfg);
+        raft_apply.setGlobalTxnCoordinator(txn_coord);
+
         var cluster_state = try initClusterState(allocator);
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
         // so the network transport's findNodeEndpoint() lookup works from
@@ -810,6 +837,8 @@ pub const ClusterCoordinator = struct {
             .node_id = node_id,
             .raft = raft,
             .store = store,
+            .applied_cluster_config = applied_cfg,
+            .txn_coord = txn_coord,
             .replication_factor = config.replication_factor,
             .sharding_strategy = config.sharding_strategy,
             .failover_config = config.failover_config,
@@ -843,6 +872,19 @@ pub const ClusterCoordinator = struct {
         self.stop();
         self.raft_nonce_tracker.deinit();
         self.replay_guard.deinit();
+        // GAP-0870: unregister + free the applied-config / 2PC apply targets.
+        // Only reset the module-level registration if it is still ours (an
+        // in-process multi-coordinator test may have re-registered).
+        if (raft_apply.getGlobalClusterConfig() == self.applied_cluster_config) {
+            raft_apply.resetGlobalClusterConfig();
+        }
+        if (raft_apply.getGlobalTxnCoordinator() == self.txn_coord) {
+            raft_apply.resetGlobalTxnCoordinator();
+        }
+        self.applied_cluster_config.deinit();
+        self.allocator.destroy(self.applied_cluster_config);
+        self.txn_coord.deinit();
+        self.allocator.destroy(self.txn_coord);
         // resolvePeers duped each peer.endpoint into self.allocator; raft's
         // own deinit doesn't reclaim them, so free them here before the
         // backing slice goes away.
@@ -1420,10 +1462,10 @@ pub const ClusterCoordinator = struct {
     /// cluster RPC frame yet (tracked under task S2 in the plan).
     /// JOIN_CLUSTER / LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST
     /// arriving on this path are rejected with ERR so the originator
-    /// surfaces a clear failure rather than silently no-op'ing — the
-    /// pre-A3e handlers for those message types live in
-    /// `handleJoinCluster` / `handleLeaveCluster` / etc. and have
-    /// Zig 0.16 ArrayList API drift that is out of scope here.
+    /// surfaces a clear failure rather than silently no-op'ing. The
+    /// dead pre-A3e leave/replicate/failover stubs were removed
+    /// (GAP-0889); `handleJoinCluster` is retained for the planned
+    /// dynamic-join wire-up but has no caller on this path yet.
     fn handleClusterRpcLocal(self: *ClusterCoordinator, msg: Message) !Response {
         switch (msg.msg_type) {
             .READ => return self.executeLocalRead(msg),
@@ -1621,14 +1663,26 @@ pub const ClusterCoordinator = struct {
                 try self.promoteReplica(shard);
             }
 
-            // Remove from replica list
-            const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - 1);
+            // Remove the failed node from the replica list (GAP-0889: the old
+            // unconditional `len - 1` alloc underflowed when the list was
+            // empty, sized the slice wrong when the node wasn't a replica,
+            // and leaked the previous slice on every pass).
+            var occurrences: usize = 0;
+            for (shard.replica_nodes) |replica| {
+                if (replica == failed_node) occurrences += 1;
+            }
+            if (occurrences == 0) continue;
+
+            const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - occurrences);
             var idx: usize = 0;
             for (shard.replica_nodes) |replica| {
                 if (replica != failed_node) {
                     new_replicas[idx] = replica;
                     idx += 1;
                 }
+            }
+            if (shard.replica_nodes.len > 0) {
+                self.allocator.free(shard.replica_nodes);
             }
             shard.replica_nodes = new_replicas;
         }
@@ -1669,15 +1723,17 @@ pub const ClusterCoordinator = struct {
         });
         shard.primary_node = best_replica;
 
-        // Remove from replica list
+        // Remove the promoted replica from the replica list (GAP-0889: free
+        // the previous slice — it was leaked on every promotion).
         const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - 1);
         var idx: usize = 0;
         for (shard.replica_nodes) |replica| {
-            if (replica != best_replica) {
+            if (replica != best_replica and idx < new_replicas.len) {
                 new_replicas[idx] = replica;
                 idx += 1;
             }
         }
+        self.allocator.free(shard.replica_nodes);
         shard.replica_nodes = new_replicas;
     }
 
@@ -1688,6 +1744,9 @@ pub const ClusterCoordinator = struct {
             if (current_replicas < self.replication_factor) {
                 const needed = self.replication_factor - current_replicas;
                 const available_nodes = try self.getAvailableNodes(shard);
+                // GAP-0889: this slice was leaked on every path (including
+                // the happy path).
+                defer self.allocator.free(available_nodes);
 
                 if (available_nodes.len < needed) {
                     log.warn("Insufficient nodes to maintain replication factor for shard", &.{
@@ -1698,6 +1757,9 @@ pub const ClusterCoordinator = struct {
 
                 // Add new replicas
                 const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len + needed);
+                // GAP-0889: don't leak the new slice if startReplication fails
+                // mid-loop (ownership only transfers at the assignment below).
+                errdefer self.allocator.free(new_replicas);
                 // Zig 0.16: std.mem.copy was removed; use @memcpy.
                 @memcpy(new_replicas[0..shard.replica_nodes.len], shard.replica_nodes);
 
@@ -1706,7 +1768,9 @@ pub const ClusterCoordinator = struct {
                     try self.startReplication(shard.id, available_nodes[i]);
                 }
 
-                self.allocator.free(shard.replica_nodes);
+                if (shard.replica_nodes.len > 0) {
+                    self.allocator.free(shard.replica_nodes);
+                }
                 shard.replica_nodes = new_replicas;
             }
         }
@@ -2148,17 +2212,11 @@ pub const ClusterCoordinator = struct {
         self.message_callback = callback;
     }
 
-    fn handleLeaveCluster(self: *ClusterCoordinator, msg: Message) !Response {
-        _ = self;
-        _ = msg;
-        return Response{ .status = .OK };
-    }
-
-    fn handleReplicateData(self: *ClusterCoordinator, msg: Message) !Response {
-        _ = self;
-        _ = msg;
-        return Response{ .status = .OK };
-    }
+    // GAP-0889: the dead `handleLeaveCluster` / `handleReplicateData` /
+    // `handleFailoverRequest` stubs (zero callers, arg-discard, fake OK)
+    // were removed. The live RPC dispatch (`handleClusterRpcLocal`)
+    // rejects LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST with ERR
+    // so originators see a clear failure instead of a lying no-op ack.
 
     fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
         // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
@@ -2463,12 +2521,6 @@ pub const ClusterCoordinator = struct {
         var reader: std.Io.Reader = .fixed(resp_payload);
         const decoded = try protobuf.decode(Response, &reader, self.allocator);
         return decoded;
-    }
-
-    fn handleFailoverRequest(self: *ClusterCoordinator, msg: Message) !Response {
-        _ = self;
-        _ = msg;
-        return Response{ .status = .OK };
     }
 
     pub const Config = struct {

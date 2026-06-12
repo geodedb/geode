@@ -158,6 +158,9 @@ pub const Server = struct {
 pub const RemoteKmsServer = struct {
     allocator: std.mem.Allocator,
     quic_transport: ?*quic.QuicTransport = null,
+    /// GAP-0514 P3: persistent accepted connection (one client at a time);
+    /// previously serveOnce closed the connection after every request.
+    active_conn: ?*quic.QuicConnection = null,
     server: Server,
     port: u16 = 0,
 
@@ -195,30 +198,49 @@ pub const RemoteKmsServer = struct {
         std.debug.print("KMS_SERVER: Listening on port {d}\n", .{port});
     }
 
-    pub fn serveOnce(self: *RemoteKmsServer) !void {
+    /// Serve at most one request. Returns true when a request was processed
+    /// (or a reply attempt was made), false when nothing was pending.
+    pub fn serveOnce(self: *RemoteKmsServer) !bool {
         const qt = self.quic_transport orelse return error.NotStarted;
 
         // Poll for events
         try qt.poll(100);
 
-        // Try to accept a connection
-        const conn = qt.tryAccept() orelse return;
-        defer conn.close();
+        // GAP-0514 P3 FIX: keep the accepted connection alive across requests.
+        // The old code closed the connection after EVERY request (defer
+        // conn.close()), so a client issuing a second request on the same
+        // connection (e.g. generate then privUnwrap) timed out — the
+        // multi-request KMS round-trip never worked. One QUIC stream per
+        // request; the connection persists until transport shutdown.
+        if (self.active_conn == null) {
+            self.active_conn = qt.tryAccept() orelse return false;
+            std.debug.print("KMS_SERVER: Accepted connection\n", .{});
+        }
+        const conn = self.active_conn.?;
 
-        std.debug.print("KMS_SERVER: Accepted connection\n", .{});
-
-        // Accept stream
-        const stream = conn.acceptStream() catch |err| {
-            std.debug.print("KMS_SERVER: Failed to accept stream: {}\n", .{err});
-            return;
-        };
+        // Accept the next request stream; no pending stream is not an error.
+        const stream = conn.tryAcceptStream() orelse return false;
         defer stream.close();
 
-        // Read request line
-        const request = stream.readLine(4096) catch |err| {
-            if (err == error.WouldBlock) return;
-            std.debug.print("KMS_SERVER: Failed to read request: {}\n", .{err});
-            return;
+        // Read request line. GAP-0514 P3 FIX: a stream can be accepted before
+        // its request bytes arrive; the old code abandoned (and closed) the
+        // stream on the first WouldBlock, silently losing the request. Retry
+        // with polling for a bounded window instead.
+        const request = blk: {
+            var attempts: usize = 0;
+            while (attempts < 100) : (attempts += 1) {
+                const line = stream.readLine(4096) catch |err| {
+                    if (err == error.WouldBlock) {
+                        qt.poll(10) catch {};
+                        continue;
+                    }
+                    std.debug.print("KMS_SERVER: Failed to read request: {}\n", .{err});
+                    return false;
+                };
+                break :blk line;
+            }
+            // Quiet stream: give up on this request without killing the server.
+            return false;
         };
         defer self.allocator.free(request);
 
@@ -229,14 +251,17 @@ pub const RemoteKmsServer = struct {
         const response = self.processRequest(request, &response_buf) catch |err| {
             std.debug.print("KMS_SERVER: Failed to process request: {}\n", .{err});
             const err_response = "{\"status\":\"ERR\",\"code\":\"InternalError\"}\n";
+            // error-policy: A — best-effort error reply on an already-logged
+            // failure; if the peer is gone there is nothing further to do.
             stream.writeAll(err_response) catch {};
-            return;
+            return true;
         };
 
         // Send response
         stream.writeAll(response) catch |err| {
             std.debug.print("KMS_SERVER: Failed to send response: {}\n", .{err});
         };
+        return true;
     }
 
     fn processRequest(self: *RemoteKmsServer, request: []const u8, response_buf: []u8) ![]const u8 {
@@ -349,11 +374,30 @@ pub const RemoteKmsServer = struct {
     pub fn serveLoop(self: *RemoteKmsServer, iterations: usize) !void {
         var i: usize = 0;
         while (i < iterations) : (i += 1) {
-            self.serveOnce() catch |err| {
+            _ = self.serveOnce() catch |err| {
                 if (err != error.NotStarted) {
                     std.debug.print("KMS_SERVER: serveOnce error: {}\n", .{err});
                 }
+                continue;
             };
+        }
+    }
+
+    /// GAP-0514 P3: serve until `want` requests have been processed or
+    /// `max_iterations` idle/serve cycles elapse. Replaces fixed-iteration
+    /// serveLoop in tests, where a slow TLS handshake could exhaust the
+    /// serve window before the first request arrived (flaky timeout).
+    pub fn serveUntil(self: *RemoteKmsServer, want: usize, max_iterations: usize) !void {
+        var served: usize = 0;
+        var i: usize = 0;
+        while (i < max_iterations and served < want) : (i += 1) {
+            const did = self.serveOnce() catch |err| blk: {
+                if (err != error.NotStarted) {
+                    std.debug.print("KMS_SERVER: serveOnce error: {}\n", .{err});
+                }
+                break :blk false;
+            };
+            if (did) served += 1;
         }
     }
 };

@@ -455,6 +455,8 @@ test "TenantQuotaManager: concurrent acquire/release is thread-safe" {
         t.* = try std.Thread.spawn(.{}, struct {
             fn run(m: *TenantQuotaManager) void {
                 for (0..ops_per_thread) |_| {
+                    // error-policy: A — concurrency stress test; quota-exceeded
+                    // rejections are an expected outcome being exercised.
                     m.acquireConnection("concurrent") catch {};
                     m.acquireQuery("concurrent") catch {};
                     m.releaseQuery("concurrent");

@@ -2238,6 +2238,9 @@ pub const CryptoOp = enum { encrypt, decrypt, rotate, derive };
 const SecurityMetrics = struct {
     // geode.security.authentication.attempt.count
     auth_attempt_count: otel.api.metrics.Counter,
+    // geode.security.authentication.duration (GAP-0874: real histogram,
+    // previously a counter-only stub that discarded the duration)
+    auth_duration: otel.api.metrics.Histogram,
     // geode.security.session.count (up-down, +1 on open, -1 on close)
     session_count: otel.api.metrics.UpDownCounter,
     // geode.security.authorization.check.count
@@ -2272,6 +2275,13 @@ fn ensureSecurity() !*SecurityMetrics {
             .unit = "{attempt}",
             .kind = .counter,
             .description = "Authentication attempts by method and outcome",
+        }),
+        .auth_duration = try m.histogram(.{
+            .name = "geode.security.authentication.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Authentication latency in seconds by method and outcome",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
         }),
         .session_count = try m.upDownCounter(.{
             .name = "geode.security.session.count",
@@ -2369,17 +2379,19 @@ pub fn recordAuthAttempt(method: AuthMethod, outcome: Outcome, error_type: ?[]co
 /// Record authentication duration (histogram companion to recordAuthAttempt).
 /// Kept separate so callers that only want the attempt count need not measure
 /// the wall-clock duration.
+///
+/// GAP-0874: records `duration_s` into the real
+/// `geode.security.authentication.duration` histogram (previously a stub
+/// that discarded the duration and double-bumped the attempt counter).
+/// Callers measuring an auth attempt should call BOTH recordAuthAttempt
+/// (count) and recordAuthDuration (latency) — this function no longer
+/// bumps the attempt counter.
 pub fn recordAuthDuration(method: AuthMethod, duration_s: f64, outcome: Outcome) void {
-    // Re-use the auth_attempt_count instrument's enum path — no histogram
-    // allocated here; callers that want a histogram can layer one via the
-    // meter() API directly. This stub satisfies the spec function signature
-    // without allocating a separate instrument for a path that maps to the
-    // existing counter semantics.
-    //
-    // TODO(otel-wire): if per-method auth latency SLOs are needed, promote
-    // this to a separate geode.security.authentication.duration histogram.
-    _ = duration_s;
-    recordAuthAttempt(method, outcome, null);
+    const s = ensureSecurity() catch return;
+    s.auth_duration.record(duration_s, &.{
+        .{ .key = "geode.auth.method", .value = .{ .string = @tagName(method) } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
 }
 
 /// Increment the session count for a given state. Call once when a session

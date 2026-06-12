@@ -332,7 +332,7 @@ The LSP server uses Geode's existing GQL parser (`parseGql` from `src/lib.zig`) 
 
 - Detect syntax errors in real-time
 - Generate accurate diagnostics with line/column information
-- Leverage the 100% ISO/IEC 39075:2024 compliant parser (70/70 tests)
+- Leverage the ISO/IEC 39075:2024-aligned parser (96/96 named conformance-suite cases; parse-only scope)
 
 ### Performance
 

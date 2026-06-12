@@ -461,6 +461,17 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+// CANARY: REQ=REQ-CLI-SESSION-001; FEATURE="CLISession"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_sec_sess_log.zig; OWNER=cli; UPDATED=2026-06-10
+/// SEC-SESS-LOG-01: all user-facing `session rotate` result output flows
+/// through this function so the no-token-in-output contract is testable
+/// (tests/test_sec_sess_log.zig). The rotated token is persisted to the
+/// credentials file only — it must NEVER be written here (stderr/stdout).
+pub fn writeRotateResult(writer: *std.Io.Writer, new_token: []const u8) !void {
+    // SEC-SESS-LOG-01: deliberately unused — no token material in CLI output.
+    _ = new_token;
+    try writer.writeAll("Session token rotated successfully.\n");
+}
+
 fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -566,8 +577,10 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.debug.print("Warning: Token not found in credentials file.\n", .{});
     }
 
-    std.debug.print("Session token rotated successfully.\n", .{});
-    std.debug.print("new token: {s}\n", .{&new_token});
+    var rotate_out_buf: [256]u8 = undefined;
+    var rotate_writer = std.Io.Writer.fixed(&rotate_out_buf);
+    writeRotateResult(&rotate_writer, &new_token) catch {};
+    std.debug.print("{s}", .{rotate_writer.buffered()});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 

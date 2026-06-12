@@ -111,6 +111,9 @@ const type_promotion = @import("eval/type_promotion.zig");
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // Import call handlers module for function call evaluation helpers
 const call_handlers = @import("eval/call_handlers.zig");
+// GAP-0537: dedicated handler modules extracted from the fallback .Call branch
+const ts_call_handlers = @import("eval/ts_call_handlers.zig");
+const quantifier_call_handlers = @import("eval/quantifier_call_handlers.zig");
 
 // CANARY: REQ=REQ-REFACTOR-EVAL-002; FEATURE="EvalRefactoring"; ASPECT=LogicHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 // Import logic helpers module for three-valued logic and regex functions
@@ -881,44 +884,13 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call result;
             }
 
-            // Time-series value lookup function
-            // GAP-0280: Resolve the store from (1) per-Env pointer, or (2) the global
-            // server-wide store set during startup.  This ensures timeseries.value()
-            // returns real data whether called from the CLI path (env.timeseries_store)
-            // or the QUIC/gRPC server path (g_timeseries_store).
-            if (std.ascii.eqlIgnoreCase(function_name, "timeseries.value")) {
-                if (call.args.len != 3) return EvalError.InvalidArgs;
-                const maybe_store: ?*TimeseriesStore = resolveTimeseriesStore(env, null);
-
-                if (maybe_store) |store| {
-                    const device_id_val = try evalExpr(allocator, call.args[0].*, env);
-                    const metric_val = try evalExpr(allocator, call.args[1].*, env);
-                    const ts_val = try evalExpr(allocator, call.args[2].*, env);
-
-                    if (device_id_val != .Int or metric_val != .Str or ts_val != .Int) {
-                        return EvalError.TypeMismatch;
-                    }
-
-                    const ts_module = @import("timeseries/timeseries.zig");
-                    const key = ts_module.SeriesKey{
-                        .device_id = device_id_val.Int,
-                        .metric = metric_val.Str,
-                    };
-
-                    if (store.getSeries(key)) |series| {
-                        if (series.valueAt(ts_val.Int)) |pt| {
-                            break :blk_call .{ .Int = pt.value };
-                        }
-                    }
-                    break :blk_call .{ .Null = {} };
-                } else {
-                    break :blk_call .{ .Null = {} };
-                }
+            // GAP-0537: timeseries.value + the remaining timeseries.* GQL
+            // functions are dispatched by the dedicated handler module
+            // (src/eval/ts_call_handlers.zig; was inline here pre-GAP-0537).
+            if (try ts_call_handlers.evalTimeseriesValue(allocator, function_name, call.args, env)) |result| {
+                break :blk_call result;
             }
-
-            // GAP-0282: Dispatch remaining 7 timeseries GQL functions
-            // Pattern: timeseries.<fn_name>(device_id, metric, ...fn-specific args)
-            if (try evalTimeseriesFunction(allocator, function_name, call.args, env)) |result| {
+            if (try ts_call_handlers.evalTimeseriesFunction(allocator, function_name, call.args, env)) |result| {
                 break :blk_call result;
             }
 
@@ -929,148 +901,14 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // value function (which returned a List the caller had to UNWIND —
             // a Cypher construct, not GQL) was retired in favor of that surface.
 
-            // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-14
-            // Handle all(x IN list WHERE condition) - returns true if all elements match the condition
-            if (std.ascii.eqlIgnoreCase(function_name, "all")) {
-                if (call.args.len != 1) break :blk_call .{ .Null = {} };
-                const arg = call.args[0].*;
-
-                if (arg == .ListComprehension) {
-                    const comp = arg.ListComprehension;
-                    const source_val = try evalExpr(allocator, comp.source.*, env);
-
-                    const list = switch (source_val) {
-                        .List => |l| l,
-                        else => break :blk_call .{ .Bool = true }, // Empty or non-list -> vacuously true
-                    };
-
-                    // Iterate through each element
-                    for (list) |item| {
-                        // Create new environment with variable binding
-                        const new_env = try env.withBinding(allocator, comp.variable, item);
-
-                        // Evaluate filter condition if present
-                        if (comp.filter) |filter| {
-                            const filter_result = try evalExpr(allocator, filter.*, new_env);
-                            const matches = switch (filter_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                else => false,
-                            };
-
-                            if (!matches) {
-                                break :blk_call .{ .Bool = false };
-                            }
-                        }
-                    }
-
-                    break :blk_call .{ .Bool = true };
-                } else {
-                    // Fallback: all(list) - returns true if all elements are truthy
-                    const list_val = try evalExpr(allocator, call.args[0].*, env);
-                    const list = switch (list_val) {
-                        .List => |l| l,
-                        else => break :blk_call .{ .Bool = false },
-                    };
-
-                    for (list) |item| {
-                        const is_truthy = switch (item) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            else => true,
-                        };
-                        if (!is_truthy) break :blk_call .{ .Bool = false };
-                    }
-                    break :blk_call .{ .Bool = true };
-                }
+            // GAP-0537: all()/any() quantified list predicates and char(N)
+            // are dispatched by the dedicated handler module
+            // (src/eval/quantifier_call_handlers.zig; was inline here pre-GAP-0537).
+            if (try quantifier_call_handlers.evalQuantifierFunction(allocator, function_name, call.args, env)) |result| {
+                break :blk_call result;
             }
-
-            // Handle any(x IN list WHERE condition) - returns true if any element matches the condition
-            if (std.ascii.eqlIgnoreCase(function_name, "any")) {
-                if (call.args.len != 1) break :blk_call .{ .Null = {} };
-                const arg = call.args[0].*;
-
-                if (arg == .ListComprehension) {
-                    const comp = arg.ListComprehension;
-                    const source_val = try evalExpr(allocator, comp.source.*, env);
-
-                    const list = switch (source_val) {
-                        .List => |l| l,
-                        else => break :blk_call .{ .Bool = false },
-                    };
-
-                    // Iterate through each element
-                    for (list) |item| {
-                        // Create new environment with variable binding
-                        const new_env = try env.withBinding(allocator, comp.variable, item);
-
-                        // Evaluate filter condition if present
-                        if (comp.filter) |filter| {
-                            const filter_result = try evalExpr(allocator, filter.*, new_env);
-                            const matches = switch (filter_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                else => false,
-                            };
-
-                            if (matches) {
-                                break :blk_call .{ .Bool = true };
-                            }
-                        }
-                    }
-
-                    break :blk_call .{ .Bool = false };
-                } else {
-                    // Fallback: any(list) - returns true if any element is truthy
-                    const list_val = try evalExpr(allocator, call.args[0].*, env);
-                    const list = switch (list_val) {
-                        .List => |l| l,
-                        else => break :blk_call .{ .Bool = false },
-                    };
-
-                    for (list) |item| {
-                        const is_truthy = switch (item) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            else => true,
-                        };
-                        if (is_truthy) break :blk_call .{ .Bool = true };
-                    }
-                    break :blk_call .{ .Bool = false };
-                }
-            }
-
-            // Handle Char function - converts string to fixed-length char with length validation
-            if (std.ascii.eqlIgnoreCase(function_name, "char") or std.ascii.eqlIgnoreCase(function_name, "Char")) {
-                if (call.args.len != 2) break :blk_call .{ .Null = {} };
-                const str_arg = try evalExpr(allocator, call.args[0].*, env);
-                const len_arg = try evalExpr(allocator, call.args[1].*, env);
-
-                const str = switch (str_arg) {
-                    .Str => |s| s,
-                    else => break :blk_call .{ .Null = {} },
-                };
-
-                const max_len = switch (len_arg) {
-                    .Int => |i| if (i > 0) @as(usize, @intCast(i)) else break :blk_call .{ .Null = {} },
-                    else => break :blk_call .{ .Null = {} },
-                };
-
-                // Validate length constraint - throw error if exceeded
-                if (str.len > max_len) {
-                    return error.CharLengthExceeded;
-                }
-
-                // Pad with spaces if shorter than max_len
-                if (str.len < max_len) {
-                    var padded = try allocator.alloc(u8, max_len);
-                    @memcpy(padded[0..str.len], str);
-                    @memset(padded[str.len..], ' ');
-                    break :blk_call .{ .Str = padded };
-                } else {
-                    // Exact length match
-                    break :blk_call .{ .Str = try allocator.dupe(u8, str) };
-                }
+            if (try quantifier_call_handlers.evalCharFunction(allocator, function_name, call.args, env)) |result| {
+                break :blk_call result;
             }
 
             // Try to use the extended function registry for advanced type functions
@@ -3781,48 +3619,13 @@ fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env
 }
 
 // ---------------------------------------------------------------------------
-// GAP-0282: Timeseries GQL function dispatch
+// GAP-0282 / GAP-0537: the scalar timeseries.* GQL function dispatch
+// (tsValueToCanonical, resolveTimeseriesStore, evalTimeseriesFunction,
+// parseAggregation, evalArrayBasedTsFunction) moved to the dedicated handler
+// module src/eval/ts_call_handlers.zig. The global-store accessors
+// (setGlobalTimeseriesStore / getGlobalTimeseriesStore /
+// getTimeseriesStoreForGraph) stay here as the public wiring surface.
 // ---------------------------------------------------------------------------
-const ts_gql = @import("timeseries/gql_functions.zig");
-
-/// Convert a timeseries gql_functions.Value to the canonical value_types.Value.
-/// Only the subset used by timeseries is converted (Null, Int, Double, Str, Bool, List, Map).
-fn tsValueToCanonical(tv: ts_gql.Value, allocator: std.mem.Allocator) EvalError!Value {
-    return switch (tv) {
-        .Null => .{ .Null = {} },
-        .Int => |v| .{ .Int = v },
-        .Double => |v| .{ .Double = v },
-        .Str => |v| .{ .Str = v },
-        .Bool => |v| .{ .Bool = v },
-        .List => |arr| blk: {
-            const out = allocator.alloc(Value, arr.len) catch return EvalError.OutOfMemory;
-            for (arr, 0..) |item, idx| {
-                out[idx] = try tsValueToCanonical(item, allocator);
-            }
-            break :blk .{ .List = out };
-        },
-        .Map => |map| blk: {
-            var out = std.StringHashMap(Value).init(allocator);
-            var it = map.iterator();
-            while (it.next()) |entry| {
-                out.put(entry.key_ptr.*, try tsValueToCanonical(entry.value_ptr.*, allocator)) catch
-                    return EvalError.OutOfMemory;
-            }
-            break :blk .{ .Map = out };
-        },
-    };
-}
-
-/// Resolve the timeseries store from the Env, per-graph store, or global.
-/// Priority: (1) per-Env pointer, (2) per-graph store via adapter, (3) global.
-fn resolveTimeseriesStore(env: Env, graph_name: ?[]const u8) ?*TimeseriesStore {
-    // Safety: @constCast is required because the external timeseries
-    // library's getSeries/hashKey methods take *Store (mutable pointer)
-    // even though they only perform read operations.  The Store is
-    // effectively read-only at query time.
-    if (env.timeseries_store) |ptr| return @constCast(ptr);
-    return getTimeseriesStoreForGraph(graph_name);
-}
 
 // RETIRED (2026-05-31): the scalar `fulltext_search(index, query [, max])` value
 // function lived here. It returned a `List` of `Map{node_id, score}` records the
@@ -3833,360 +3636,6 @@ fn resolveTimeseriesStore(env: Env, graph_name: ?[]const u8) ?*TimeseriesStore {
 // routed by execution/procedure_registry.zig. The adapter resolution
 // (`getGlobalAdapter().getFulltextIndexNamed(DEFAULT_GRAPH_NAME, index).search`)
 // moved verbatim into that handler. See .migration/GQL-SPEC-set-return.md.
-
-/// GAP-0282/0290: Dispatch timeseries.* GQL function calls.
-/// Series-based: last_value, value_at, sample_by, time_bucket, interpolate, moving_avg,
-///   rate, derivative, change_points, extract_features, matrix_profile, z_normalize, invariants.
-/// Array-based (delegated to evalArrayBasedTsFunction): dtw, dtw_derivative, dtw_open_end,
-///   dtw_shape, dtw_soft, cosine_similarity, cross_correlate, sbd.
-fn evalTimeseriesFunction(
-    allocator: std.mem.Allocator,
-    function_name: []const u8,
-    args: []*ast.Expr,
-    env: Env,
-) EvalError!?Value {
-    const ts_module = @import("timeseries/timeseries.zig");
-
-    // All timeseries functions start with "timeseries." prefix (except timeseries.value handled above).
-    // Per ISO/IEC 39075:2024 RQ-0022 the prefix match is case-insensitive.
-    if (!std.ascii.startsWithIgnoreCase(function_name, "timeseries.")) return null;
-    const suffix = function_name["timeseries.".len..];
-
-    // Skip "value" -- already handled in the main dispatch above
-    if (std.ascii.eqlIgnoreCase(suffix, "value")) return null;
-
-    // GAP-0290: Array-based functions take f64 list args directly (no device_id/metric)
-    if (try evalArrayBasedTsFunction(allocator, suffix, args, env)) |result| {
-        return result;
-    }
-
-    const maybe_store = resolveTimeseriesStore(env, null);
-    const store = maybe_store orelse return @as(?Value, .{ .Null = {} });
-
-    // All timeseries functions require at least 2 args: (device_id, metric)
-    if (args.len < 2) return EvalError.InvalidArgs;
-
-    const device_id_val = try evalExpr(allocator, args[0].*, env);
-    const metric_val = try evalExpr(allocator, args[1].*, env);
-
-    if (device_id_val != .Int or metric_val != .Str) return EvalError.TypeMismatch;
-
-    const key = ts_module.SeriesKey{
-        .device_id = device_id_val.Int,
-        .metric = metric_val.Str,
-    };
-
-    // Build the TSFunctionCall based on the suffix
-    var call: ts_gql.TSFunctionCall = undefined;
-    call.series_key = key;
-
-    if (std.mem.eql(u8, suffix, "last_value")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
-        call.function_type = .last_value;
-        call.params = .{ .last_value = {} };
-    } else if (std.mem.eql(u8, suffix, "value_at")) {
-        if (args.len != 3) return EvalError.InvalidArgs;
-        const ts_val = try evalExpr(allocator, args[2].*, env);
-        if (ts_val != .Int) return EvalError.TypeMismatch;
-        call.function_type = .value_at;
-        call.params = .{ .value_at = .{ .timestamp = ts_val.Int } };
-    } else if (std.mem.eql(u8, suffix, "sample_by")) {
-        // sample_by(device_id, metric, interval_ms, start_ts, end_ts, aggregation)
-        if (args.len != 6) return EvalError.InvalidArgs;
-        const interval = try evalExpr(allocator, args[2].*, env);
-        const start = try evalExpr(allocator, args[3].*, env);
-        const end = try evalExpr(allocator, args[4].*, env);
-        const agg_str = try evalExpr(allocator, args[5].*, env);
-        if (interval != .Int or start != .Int or end != .Int or agg_str != .Str)
-            return EvalError.TypeMismatch;
-        const agg = parseAggregation(agg_str.Str) orelse return EvalError.InvalidArgs;
-        call.function_type = .sample_by;
-        call.params = .{ .sample_by = .{
-            .interval_ms = interval.Int,
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-            .aggregation = agg,
-        } };
-    } else if (std.mem.eql(u8, suffix, "time_bucket")) {
-        // time_bucket(device_id, metric, bucket_ms, start_ts, end_ts)
-        if (args.len != 5) return EvalError.InvalidArgs;
-        const bucket = try evalExpr(allocator, args[2].*, env);
-        const start = try evalExpr(allocator, args[3].*, env);
-        const end = try evalExpr(allocator, args[4].*, env);
-        if (bucket != .Int or start != .Int or end != .Int)
-            return EvalError.TypeMismatch;
-        call.function_type = .time_bucket;
-        call.params = .{ .time_bucket = .{
-            .bucket_ms = bucket.Int,
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-        } };
-    } else if (std.mem.eql(u8, suffix, "interpolate")) {
-        // interpolate(device_id, metric, timestamp, method)
-        if (args.len != 4) return EvalError.InvalidArgs;
-        const ts_val = try evalExpr(allocator, args[2].*, env);
-        const method_val = try evalExpr(allocator, args[3].*, env);
-        if (ts_val != .Int or method_val != .Str) return EvalError.TypeMismatch;
-        const method_str = method_val.Str;
-        call.function_type = .interpolate;
-        call.params = .{ .interpolate = .{
-            .timestamp = ts_val.Int,
-            .method = if (std.mem.eql(u8, method_str, "linear"))
-                .linear
-            else if (std.mem.eql(u8, method_str, "step"))
-                .step
-            else if (std.mem.eql(u8, method_str, "nearest"))
-                .nearest
-            else
-                return EvalError.InvalidArgs,
-        } };
-    } else if (std.mem.eql(u8, suffix, "moving_avg")) {
-        // moving_avg(device_id, metric, window_ms, step_ms)
-        if (args.len != 4) return EvalError.InvalidArgs;
-        const window = try evalExpr(allocator, args[2].*, env);
-        const step = try evalExpr(allocator, args[3].*, env);
-        if (window != .Int or step != .Int) return EvalError.TypeMismatch;
-        call.function_type = .moving_avg;
-        call.params = .{ .moving_avg = .{
-            .window_ms = window.Int,
-            .step_ms = step.Int,
-        } };
-    } else if (std.mem.eql(u8, suffix, "rate")) {
-        // rate(device_id, metric, interval_ms)
-        if (args.len != 3) return EvalError.InvalidArgs;
-        const interval = try evalExpr(allocator, args[2].*, env);
-        if (interval != .Int) return EvalError.TypeMismatch;
-        call.function_type = .rate;
-        call.params = .{ .rate = .{ .interval_ms = interval.Int } };
-    } else if (std.mem.eql(u8, suffix, "derivative")) {
-        // derivative(device_id, metric, order)
-        if (args.len != 3) return EvalError.InvalidArgs;
-        const order_val = try evalExpr(allocator, args[2].*, env);
-        if (order_val != .Int) return EvalError.TypeMismatch;
-        if (order_val.Int < 0 or order_val.Int > 255) return EvalError.InvalidArgs;
-        call.function_type = .derivative;
-        call.params = .{ .derivative = .{ .order = @intCast(order_val.Int) } };
-    } else if (std.mem.eql(u8, suffix, "change_points")) {
-        // GAP-0290: change_points(device_id, metric, start_ts, end_ts, penalty, min_size)
-        if (args.len != 6) return EvalError.InvalidArgs;
-        const start = try evalExpr(allocator, args[2].*, env);
-        const end = try evalExpr(allocator, args[3].*, env);
-        const penalty_val = try evalExpr(allocator, args[4].*, env);
-        const min_size_val = try evalExpr(allocator, args[5].*, env);
-        if (start != .Int or end != .Int or min_size_val != .Int)
-            return EvalError.TypeMismatch;
-        const penalty = switch (penalty_val) {
-            .Double => |d| d,
-            .Int => |i| @as(f64, @floatFromInt(i)),
-            else => return EvalError.TypeMismatch,
-        };
-        if (min_size_val.Int < 1) return EvalError.InvalidArgs;
-        call.function_type = .change_points;
-        call.params = .{ .change_points = .{
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-            .penalty = penalty,
-            .min_size = @intCast(min_size_val.Int),
-        } };
-    } else if (std.mem.eql(u8, suffix, "extract_features")) {
-        // GAP-0290: extract_features(device_id, metric, start_ts, end_ts)
-        if (args.len != 4) return EvalError.InvalidArgs;
-        const start = try evalExpr(allocator, args[2].*, env);
-        const end = try evalExpr(allocator, args[3].*, env);
-        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
-        call.function_type = .extract_features;
-        call.params = .{ .extract_features = .{
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-        } };
-    } else if (std.mem.eql(u8, suffix, "matrix_profile")) {
-        // GAP-0290: matrix_profile(device_id, metric, start_ts, end_ts, subseq_len)
-        if (args.len != 5) return EvalError.InvalidArgs;
-        const start = try evalExpr(allocator, args[2].*, env);
-        const end = try evalExpr(allocator, args[3].*, env);
-        const subseq = try evalExpr(allocator, args[4].*, env);
-        if (start != .Int or end != .Int or subseq != .Int)
-            return EvalError.TypeMismatch;
-        if (subseq.Int < 1) return EvalError.InvalidArgs;
-        call.function_type = .matrix_profile;
-        call.params = .{ .matrix_profile = .{
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-            .subseq_len = @intCast(subseq.Int),
-        } };
-    } else if (std.mem.eql(u8, suffix, "z_normalize")) {
-        // GAP-0290: z_normalize(device_id, metric, start_ts, end_ts)
-        if (args.len != 4) return EvalError.InvalidArgs;
-        const start = try evalExpr(allocator, args[2].*, env);
-        const end = try evalExpr(allocator, args[3].*, env);
-        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
-        call.function_type = .z_normalize;
-        call.params = .{ .z_normalize = .{
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-        } };
-    } else if (std.mem.eql(u8, suffix, "invariants")) {
-        // GAP-0290: invariants(device_id, metric, start_ts, end_ts)
-        if (args.len != 4) return EvalError.InvalidArgs;
-        const start = try evalExpr(allocator, args[2].*, env);
-        const end = try evalExpr(allocator, args[3].*, env);
-        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
-        call.function_type = .invariants;
-        call.params = .{ .invariants = .{
-            .start_ts = start.Int,
-            .end_ts = end.Int,
-        } };
-    } else {
-        return null; // Unknown timeseries function
-    }
-
-    const ts_result = ts_gql.executeFunction(store, call, allocator) catch return EvalError.OutOfMemory;
-    return try tsValueToCanonical(ts_result, allocator);
-}
-
-fn parseAggregation(s: []const u8) ?@import("timeseries/timeseries.zig").lib.store.Aggregation {
-    if (std.mem.eql(u8, s, "avg")) return .avg;
-    if (std.mem.eql(u8, s, "sum")) return .sum;
-    if (std.mem.eql(u8, s, "min")) return .min;
-    if (std.mem.eql(u8, s, "max")) return .max;
-    if (std.mem.eql(u8, s, "count")) return .count;
-    if (std.mem.eql(u8, s, "first")) return .first;
-    if (std.mem.eql(u8, s, "last")) return .last;
-    return null;
-}
-
-/// GAP-0290: Dispatch array-based timeseries functions that take f64 list arguments
-/// directly (no series key). Returns null if the suffix doesn't match any array-based function.
-fn evalArrayBasedTsFunction(
-    allocator: std.mem.Allocator,
-    suffix: []const u8,
-    args: []*ast.Expr,
-    env: Env,
-) EvalError!?Value {
-    // Helper: evaluate a Value and extract []f64 from a List of Int/Double values.
-    const extractF64List = struct {
-        fn run(alloc: std.mem.Allocator, val: Value) EvalError!?[]f64 {
-            if (val != .List) return null;
-            const list = val.List;
-            const out = alloc.alloc(f64, list.len) catch return EvalError.OutOfMemory;
-            for (list, 0..) |item, i| {
-                out[i] = switch (item) {
-                    .Double => |d| d,
-                    .Int => |n| @as(f64, @floatFromInt(n)),
-                    else => {
-                        alloc.free(out);
-                        return EvalError.TypeMismatch;
-                    },
-                };
-            }
-            return out;
-        }
-    }.run;
-
-    if (std.mem.eql(u8, suffix, "dtw")) {
-        // dtw(vals_a, vals_b, window)
-        if (args.len != 3) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const w_val = try evalExpr(allocator, args[2].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        if (w_val != .Int) return EvalError.TypeMismatch;
-        const ts_result = ts_gql.executeDTW(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "dtw_derivative")) {
-        // dtw_derivative(vals_a, vals_b, window)
-        if (args.len != 3) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const w_val = try evalExpr(allocator, args[2].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        if (w_val != .Int) return EvalError.TypeMismatch;
-        const ts_result = ts_gql.executeDTWDerivative(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "dtw_open_end")) {
-        // dtw_open_end(vals_a, vals_b)
-        if (args.len != 2) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        const ts_result = ts_gql.executeDTWOpenEnd(allocator, a_arr, b_arr) catch return EvalError.OutOfMemory;
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "dtw_shape")) {
-        // dtw_shape(vals_a, vals_b, reach)
-        if (args.len != 3) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const r_val = try evalExpr(allocator, args[2].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        if (r_val != .Int) return EvalError.TypeMismatch;
-        const ts_result = ts_gql.executeDTWShape(allocator, a_arr, b_arr, @intCast(r_val.Int)) catch return EvalError.OutOfMemory;
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "dtw_soft")) {
-        // dtw_soft(vals_a, vals_b, gamma)
-        if (args.len != 3) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const g_val = try evalExpr(allocator, args[2].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        const gamma = switch (g_val) {
-            .Double => |d| d,
-            .Int => |i| @as(f64, @floatFromInt(i)),
-            else => return EvalError.TypeMismatch,
-        };
-        const ts_result = ts_gql.executeDTWSoft(allocator, a_arr, b_arr, gamma) catch return EvalError.OutOfMemory;
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "cosine_similarity")) {
-        // cosine_similarity(vals_a, vals_b)
-        if (args.len != 2) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        const ts_result = ts_gql.executeCosineSimilarity(a_arr, b_arr);
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "cross_correlate")) {
-        // cross_correlate(vals_a, vals_b)
-        if (args.len != 2) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        const ts_result = ts_gql.executeCrossCorrelate(allocator, a_arr, b_arr);
-        return try tsValueToCanonical(ts_result, allocator);
-    } else if (std.mem.eql(u8, suffix, "sbd")) {
-        // sbd(vals_a, vals_b)
-        if (args.len != 2) return null;
-        const a_val = try evalExpr(allocator, args[0].*, env);
-        const b_val = try evalExpr(allocator, args[1].*, env);
-        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(a_arr);
-        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
-        defer allocator.free(b_arr);
-        const ts_result = ts_gql.executeSBD(a_arr, b_arr);
-        return try tsValueToCanonical(ts_result, allocator);
-    }
-
-    return null; // Not an array-based function
-}
 
 test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     const allocator = std.testing.allocator;
@@ -4427,14 +3876,24 @@ test "eval: CASE 3VL searched and simple with NULLs" {
 }
 
 test "eval: icontains case-insensitive string matching" {
-    const allocator = std.testing.allocator;
+    // GAP-0888 review follow-up: icontains allocates case-folding
+    // temporaries it does not free (per-request arena contract, GAP-0755),
+    // so evaluate under an arena.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape
+    // ({ callee, args }); the old { name, distinct, namespace } form
+    // bit-rotted while these inline tests were not rooted by any step.
+    var icontains_callee = ast.Expr{ .Ident = .{ .orig = "icontains", .cnf = "ICONTAINS" } };
 
     // icontains('Hello World', 'hello') -> true
     var arg1 = ast.Expr{ .String = "Hello World" };
     var arg2 = ast.Expr{ .String = "hello" };
     var args1 = [_]*ast.Expr{ &arg1, &arg2 };
-    const call1 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args1, .distinct = false, .namespace = null } };
+    const call1 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args1 } };
     const v1 = try evalExpr(allocator, call1, env);
     try std.testing.expect(v1 == .Bool and v1.Bool == true);
 
@@ -4442,7 +3901,7 @@ test "eval: icontains case-insensitive string matching" {
     var arg3 = ast.Expr{ .String = "Hello World" };
     var arg4 = ast.Expr{ .String = "WORLD" };
     var args2 = [_]*ast.Expr{ &arg3, &arg4 };
-    const call2 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args2, .distinct = false, .namespace = null } };
+    const call2 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args2 } };
     const v2 = try evalExpr(allocator, call2, env);
     try std.testing.expect(v2 == .Bool and v2.Bool == true);
 
@@ -4450,7 +3909,7 @@ test "eval: icontains case-insensitive string matching" {
     var arg5 = ast.Expr{ .String = "Hello World" };
     var arg6 = ast.Expr{ .String = "xyz" };
     var args3 = [_]*ast.Expr{ &arg5, &arg6 };
-    const call3 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args3, .distinct = false, .namespace = null } };
+    const call3 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args3 } };
     const v3 = try evalExpr(allocator, call3, env);
     try std.testing.expect(v3 == .Bool and v3.Bool == false);
 
@@ -4458,7 +3917,7 @@ test "eval: icontains case-insensitive string matching" {
     var arg7 = ast.Expr{ .String = "Hello World" };
     var arg8 = ast.Expr{ .String = "" };
     var args4 = [_]*ast.Expr{ &arg7, &arg8 };
-    const call4 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args4, .distinct = false, .namespace = null } };
+    const call4 = ast.Expr{ .Call = .{ .callee = &icontains_callee, .args = &args4 } };
     const v4 = try evalExpr(allocator, call4, env);
     try std.testing.expect(v4 == .Bool and v4.Bool == true);
 }
@@ -4467,18 +3926,25 @@ test "eval: tolower and toupper aliases" {
     const allocator = std.testing.allocator;
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape;
+    // tolower/toupper return freshly-allocated strings, so free them.
+    var tolower_callee = ast.Expr{ .Ident = .{ .orig = "tolower", .cnf = "TOLOWER" } };
+    var toupper_callee = ast.Expr{ .Ident = .{ .orig = "toupper", .cnf = "TOUPPER" } };
+
     // tolower('HELLO') -> 'hello'
     var arg1 = ast.Expr{ .String = "HELLO" };
     var args1 = [_]*ast.Expr{&arg1};
-    const call1 = ast.Expr{ .Call = .{ .name = "tolower", .args = &args1, .distinct = false, .namespace = null } };
+    const call1 = ast.Expr{ .Call = .{ .callee = &tolower_callee, .args = &args1 } };
     const v1 = try evalExpr(allocator, call1, env);
+    defer if (v1 == .Str) allocator.free(v1.Str);
     try std.testing.expect(v1 == .Str and std.mem.eql(u8, v1.Str, "hello"));
 
     // toupper('hello') -> 'HELLO'
     var arg2 = ast.Expr{ .String = "hello" };
     var args2 = [_]*ast.Expr{&arg2};
-    const call2 = ast.Expr{ .Call = .{ .name = "toupper", .args = &args2, .distinct = false, .namespace = null } };
+    const call2 = ast.Expr{ .Call = .{ .callee = &toupper_callee, .args = &args2 } };
     const v2 = try evalExpr(allocator, call2, env);
+    defer if (v2 == .Str) allocator.free(v2.Str);
     try std.testing.expect(v2 == .Str and std.mem.eql(u8, v2.Str, "HELLO"));
 }
 
@@ -4509,12 +3975,9 @@ test "eval: timeseries.value uses global store fallback" {
     var arg_metric = ast.Expr{ .String = "temperature" };
     var arg_ts = ast.Expr{ .Int = 1000 };
     var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
-    const call_expr = ast.Expr{ .Call = .{
-        .name = "timeseries.value",
-        .args = &args,
-        .distinct = false,
-        .namespace = null,
-    } };
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape.
+    var ts_value_callee = ast.Expr{ .Ident = .{ .orig = "timeseries.value", .cnf = "TIMESERIES.VALUE" } };
+    const call_expr = ast.Expr{ .Call = .{ .callee = &ts_value_callee, .args = &args } };
 
     const result = try evalExpr(allocator, call_expr, env);
     // Must return 72, NOT Null.
@@ -4535,12 +3998,9 @@ test "eval: timeseries.value returns null without store" {
     var arg_metric = ast.Expr{ .String = "cpu" };
     var arg_ts = ast.Expr{ .Int = 100 };
     var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
-    const call_expr = ast.Expr{ .Call = .{
-        .name = "timeseries.value",
-        .args = &args,
-        .distinct = false,
-        .namespace = null,
-    } };
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape.
+    var ts_value_callee = ast.Expr{ .Ident = .{ .orig = "timeseries.value", .cnf = "TIMESERIES.VALUE" } };
+    const call_expr = ast.Expr{ .Call = .{ .callee = &ts_value_callee, .args = &args } };
 
     const result = try evalExpr(allocator, call_expr, env);
     try std.testing.expect(result == .Null);
@@ -4570,15 +4030,22 @@ test "eval: timeseries.value prefers env store over global" {
     var arg_metric = ast.Expr{ .String = "x" };
     var arg_ts = ast.Expr{ .Int = 10 };
     var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
-    const call_expr = ast.Expr{ .Call = .{
-        .name = "timeseries.value",
-        .args = &args,
-        .distinct = false,
-        .namespace = null,
-    } };
+    // GAP-0888 review follow-up: rebuilt against the current Call AST shape.
+    var ts_value_callee = ast.Expr{ .Ident = .{ .orig = "timeseries.value", .cnf = "TIMESERIES.VALUE" } };
+    const call_expr = ast.Expr{ .Call = .{ .callee = &ts_value_callee, .args = &args } };
 
     const result = try evalExpr(allocator, call_expr, env);
     // Must return 999 from env store, not 100 from global.
     try std.testing.expect(result == .Int);
     try std.testing.expectEqual(@as(i64, 999), result.Int);
+}
+
+test {
+    // GAP-0888 review follow-up: pull the extracted call-handler modules'
+    // inline unit tests into this file's test reference graph — Zig 0.16
+    // only discovers tests reachable from the test ROOT file, and no other
+    // named step roots src/eval/*.zig. `zig build test-gap0866` roots this
+    // file (see build.zig "EVAL CALL-HANDLER UNIT TESTS").
+    _ = ts_call_handlers;
+    _ = quantifier_call_handlers;
 }

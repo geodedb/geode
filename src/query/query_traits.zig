@@ -35,6 +35,14 @@ pub const ProgramAnalysis = struct {
     /// `QueryReadSession` for isolation. False positives are correctness
     /// bugs, so this flag is deliberately conservative.
     is_point_read: bool = false,
+    /// GAP-0892: True iff the program contains any statement OTHER than the
+    /// fast-path `target` and bare transaction control (START TRANSACTION /
+    /// COMMIT / ROLLBACK). Handler fast paths that execute only `target`
+    /// (count pushdown, node-scan streaming) MUST bail when this is set:
+    /// skipping a preamble like `SESSION SET PROPERTY GRAPH "G1"` both
+    /// evaluates the target against the request-start session graph and
+    /// silently drops the skipped statement's side effects.
+    has_effectful_preamble: bool = false,
 };
 
 pub const NormalizedQuery = struct {
@@ -78,6 +86,7 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
     var analysis = ProgramAnalysis{};
     if (program.statements.len == 0) return analysis;
 
+    var target_idx: ?usize = null;
     var idx: usize = program.statements.len;
     while (idx > 0) : (idx -= 1) {
         const stmt = &program.statements[idx - 1];
@@ -86,22 +95,47 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
                 analysis.kind = .explain;
                 analysis.target = exp.query;
                 analyzeStatement(exp.query, &analysis);
-                return analysis;
+                target_idx = idx - 1;
+                break;
             },
             .Profile => |prof| {
                 analysis.kind = .profile;
                 analysis.target = prof.query;
                 analyzeStatement(prof.query, &analysis);
-                return analysis;
+                target_idx = idx - 1;
+                break;
             },
             .Query, .Union => {
                 analysis.kind = .rows;
                 analysis.target = stmt;
                 analyzeStatement(stmt, &analysis);
-                return analysis;
+                target_idx = idx - 1;
+                break;
             },
             .StartTransaction, .Commit, .Rollback => continue,
             else => continue,
+        }
+    }
+
+    // GAP-0892: flag programs whose execution is more than `target` plus
+    // bare transaction control. A fast path that runs only `target` would
+    // evaluate it against the request-start session state and silently skip
+    // the other statements' side effects (e.g. `SESSION SET PROPERTY GRAPH
+    // "G1"; MATCH (n) RETURN count(*)` counted the wrong graph —
+    // gql_conformance T11/T12/T14).
+    for (program.statements, 0..) |*stmt, i| {
+        if (target_idx) |t| {
+            if (i == t) continue;
+        }
+        switch (stmt.*) {
+            // A braced `START TRANSACTION { ... }` carries a parsed body
+            // whose statements (e.g. SESSION SET) escape this loop —
+            // treat it as effectful unless the body is absent.
+            .StartTransaction => |txn| {
+                if (txn.body != null) analysis.has_effectful_preamble = true;
+            },
+            .Commit, .Rollback => {},
+            else => analysis.has_effectful_preamble = true,
         }
     }
     return analysis;

@@ -6,6 +6,43 @@ coordination, sharding, federation, and distributed query execution.
 > Distributed mode activates when `GEODE_CLUSTER_TOKEN` is set.
 > All inter-node communication is authenticated and encrypted via QUIC+TLS.
 
+## Cluster Token Rotation (SEC-INFRA-03)
+
+The cluster bearer token supports zero-downtime rotation via a dual-token
+overlap window (`src/distributed/cluster_auth.zig`):
+
+- `GEODE_CLUSTER_TOKEN` — the **primary** token. Required to activate
+  distributed mode; always the token **sent** on outbound inter-node
+  traffic (federation HELLO, Raft envelopes, 2PC messages, cluster RPC).
+- `GEODE_CLUSTER_TOKEN_PREVIOUS` — optional **secondary** token. During a
+  rotation overlap window, inbound validation accepts **either** token
+  (both compared constant-time). It never authenticates on its own: if
+  `GEODE_CLUSTER_TOKEN` is unset the node stays in standalone mode and
+  rejects everything, regardless of `GEODE_CLUSTER_TOKEN_PREVIOUS`.
+
+Rotation procedure (no flag-day, no quorum loss). A running process only
+sees the env values it started with, so the accept-both phase must complete
+on **every** node before any node starts *sending* the new token:
+
+1. On every node set `GEODE_CLUSTER_TOKEN=<old-token>` (unchanged) and
+   `GEODE_CLUSTER_TOKEN_PREVIOUS=<new-token>`, then rolling-restart.
+   All nodes still send the old token; restarted nodes additionally
+   accept the new one. No auth failures at any point during the roll.
+2. On every node swap to `GEODE_CLUSTER_TOKEN=<new-token>` and
+   `GEODE_CLUSTER_TOKEN_PREVIOUS=<old-token>`, then rolling-restart.
+   Restarted nodes send the new token; every node (restarted or not)
+   accepts both, so mixed-version traffic stays authenticated.
+3. Once all nodes run with the new primary, remove
+   `GEODE_CLUSTER_TOKEN_PREVIOUS` and rolling-restart again. The old token
+   is now rejected cluster-wide.
+
+Keep the overlap window short — while `GEODE_CLUSTER_TOKEN_PREVIOUS` is
+set, the old (presumed compromised-or-stale) token still grants cluster
+access. Validation applies uniformly to federation HELLOs (QUIC + gRPC
+handlers), Raft frames, 2PC messages, and cluster RPC frames — all routes
+go through `cluster_auth.validateClusterToken`. Regression:
+`zig build test-sec-infra03` (`tests/test_sec_infra03_token_rotation.zig`).
+
 ## Layer Diagram
 
 ```

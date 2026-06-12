@@ -79,7 +79,7 @@ Additive JSON payload describing per-operator performance & memory. Clients SHOU
   - `time_ns` (S): wall clock duration for the op
   - `cpu_time_ns`: CPU approximation (prototype = same as `time_ns` until multi-threading lands)
   - `bytes_out`: approximate payload bytes produced (JSON row bytes heuristic)
-  - `bytes_alloc`: attributed allocated bytes (heuristic; will shift to counting allocator)
+  - `bytes_alloc`: attributed allocated bytes (deterministic synthetic model, NOT measured — GAP-0874 decision; see docs/EXPLAIN_PROFILE.md Current Limitations)
   - `estimate_bytes`: planner estimate (0 when estimates disabled)
   - `estimate_vs_actual`: `(actual/estimate * 100)` when estimate available
   - `percent_peak`: share of peak bytes attributable to this op

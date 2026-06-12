@@ -648,6 +648,12 @@ pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8
     const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
 
     // Build info string: "geode/tde/tenant/{tenant_id}" or "geode/tde/tenant/{tenant_id}:v{version}"
+    // error-policy: D — the inner `catch unreachable` covers the fixed-literal
+    // fallback, which always fits info_buf. KNOWN RESIDUAL (documented in
+    // docs/ERROR_HANDLING_POLICY.md): tenant ids > ~490 bytes collapse to the
+    // shared "truncated" info string, weakening per-tenant domain separation;
+    // real tenant ids are far below that bound and changing the derivation
+    // would break at-rest compatibility.
     var info_buf: [512]u8 = undefined;
     const info = if (version <= 1)
         std.fmt.bufPrint(&info_buf, "geode/tde/tenant/{s}", .{tenant_id}) catch

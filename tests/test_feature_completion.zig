@@ -115,14 +115,16 @@ test "CBO: advanced features" {
     const estimate = hll.estimate();
     try std.testing.expect(estimate > 0);
 
-    // Test CBO initialization
-    var optimizer = try cbo.CostBasedOptimizer.init(allocator);
-    defer optimizer.deinit();
+    // GAP-0867: the dead CostBasedOptimizer struct was deleted (it referenced
+    // nonexistent planner.PlanNode types and never compiled). StatsRegistry
+    // is the surviving live CBO surface.
+    try registry_smoke(&stats_registry);
+}
 
-    try std.testing.expect(optimizer.enabled);
-    try std.testing.expect(optimizer.stats_registry != null);
-    try std.testing.expect(optimizer.cardinality_estimator != null);
-    try std.testing.expect(optimizer.cost_model != null);
+fn registry_smoke(registry: *cbo.StatsRegistry) !void {
+    try registry.injectTableStats("fc_users", 42, 1, 0);
+    const st = registry.getTableStats("fc_users") orelse return error.StatsMissing;
+    try std.testing.expectEqual(@as(u64, 42), st.row_count);
 }
 
 test "parallel pipeline execution" {
@@ -158,6 +160,6 @@ test "integration: all features compile and link" {
     try std.testing.expect(@sizeOf(parallel.Pool) > 0);
     try std.testing.expect(@sizeOf(fts.AdvancedSearch) > 0);
     try std.testing.expect(@sizeOf(bm25.BM25F) > 0);
-    try std.testing.expect(@sizeOf(cbo.CardinalityEstimator) > 0);
+    try std.testing.expect(@sizeOf(cbo.StatsRegistry) > 0);
     try std.testing.expect(@sizeOf(builtin_algos.BuiltinAlgorithms) > 0);
 }

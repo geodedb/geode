@@ -1,7 +1,7 @@
 # MFA Security Implementation
 
 **Last Updated**: January 29, 2026
-**Status**: Production Ready
+**Status**: TOTP + recovery codes implemented and tested; step-up uses explicit operation classification (GAP-0884). SMS/email/hardware methods and real risk signals are planned (see SERVER_FEATURES.md §7.4).
 **Security Audit**: Passed (January 2026)
 
 ## Overview

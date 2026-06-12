@@ -34,9 +34,27 @@ fn compat_microTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
+// Zig 0.16 compat: std.time.Timer removed; benchmark sections time with the
+// monotonic clock directly.
+fn compat_monotonicNanos() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-MMAP-001; FEATURE="MemoryMappedIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_MemoryMappedIO; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-MMAP-001; FEATURE="MemoryMappedIO"; ASPECT=Performance; STATUS=TESTED; TEST=tests/test_gap0875_stubs.zig; OWNER=performance; UPDATED=2026-06-11
+// GAP-0875: the previously claimed TestCANARY_MemoryMappedIO never existed;
+// the write-benchmark path is now covered by tests/test_gap0875_stubs.zig
+// (zig build test-gap0875), and the write numbers are measured (previously
+// copied verbatim from the read totals).
 
 /// High-performance memory-mapped file I/O system for large dataset access
 /// Addresses file I/O bottlenecks by providing zero-copy access to persistent data
@@ -70,14 +88,15 @@ pub const MemoryMappedFile = struct {
 
     /// Initialize memory-mapped file with advanced options
     pub fn init(allocator: Allocator, file_path: []const u8, options: MappingOptions) !Self {
+        const io = std.Io.Threaded.global_single_threaded.io();
         const file = if (options.read_only)
-            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{})
+            try std.Io.Dir.cwd().openFile(io, file_path, .{})
         else
-            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(io, file_path, .{ .mode = .read_write });
 
-        const file_size = try file.getEndPos();
+        const file_size = try file.length(io);
         if (file_size == 0) {
-            file.close();
+            file.close(io);
             return error.EmptyFile;
         }
 
@@ -86,10 +105,10 @@ pub const MemoryMappedFile = struct {
         const mapping = try allocator.alloc(u8, file_size);
         errdefer allocator.free(mapping);
 
-        const bytes_read = try file.readAll(mapping);
+        const bytes_read = try file.readPositionalAll(io, mapping, 0);
         if (bytes_read != file_size) {
             allocator.free(mapping);
-            file.close();
+            file.close(io);
             return error.IncompleteRead;
         }
 
@@ -115,7 +134,7 @@ pub const MemoryMappedFile = struct {
             self.sync() catch {}; // Best effort
         }
 
-        self.file.close();
+        self.file.close(std.Io.Threaded.global_single_threaded.io());
         self.allocator.free(self.mapping);
     }
 
@@ -153,9 +172,9 @@ pub const MemoryMappedFile = struct {
     pub fn sync(self: *Self) !void {
         if (self.read_only) return;
 
-        try self.file.seekTo(0);
-        _ = try self.file.writeAll(self.mapping);
-        try self.file.sync();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        try self.file.writePositionalAll(io, self.mapping, 0);
+        try self.file.sync(io);
     }
 
     /// Asynchronous sync (non-blocking)
@@ -502,11 +521,12 @@ pub const CacheStats = struct {
 /// Benchmark memory-mapped file performance
 pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations: u32) !struct { mmap_read_ns: u64, regular_read_ns: u64, mmap_write_ns: u64, regular_write_ns: u64, mmap_advantage: f64 } {
     const test_file = "benchmark_mmap_test.dat";
+    const io = std.Io.Threaded.global_single_threaded.io();
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().createFile(io, test_file, .{});
+        defer file.close(io);
 
         const test_data = try allocator.alloc(u8, file_size);
         defer allocator.free(test_data);
@@ -515,28 +535,27 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
             byte.* = @intCast(i % 256);
         }
 
-        _ = try file.writeAll(test_data);
-        try file.sync();
+        try file.writePositionalAll(io, test_data, 0);
+        try file.sync(io);
     }
 
-    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, test_file) catch {};
 
     // Benchmark memory-mapped reads
-    var timer = try std.time.Timer.start();
     var mmap_read_total: u64 = 0;
 
     for (0..iterations) |_| {
         var mapped_file = try MemoryMappedFile.init(allocator, test_file, .{ .read_only = true });
         defer mapped_file.deinit();
 
-        timer.reset();
+        const t0 = compat_monotonicNanos();
         const mapping = mapped_file.getMapping();
         var checksum: u64 = 0;
         for (mapping) |byte| {
             checksum +%= byte;
         }
         std.mem.doNotOptimizeAway(checksum);
-        mmap_read_total += timer.read();
+        mmap_read_total += compat_monotonicNanos() - t0;
     }
 
     // Benchmark regular file reads
@@ -545,22 +564,51 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
     defer allocator.free(buffer);
 
     for (0..iterations) |_| {
-        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().openFile(io, test_file, .{});
+        defer file.close(io);
 
-        timer.reset();
-        _ = try file.readAll(buffer);
+        const t0 = compat_monotonicNanos();
+        _ = try file.readPositionalAll(io, buffer, 0);
         var checksum: u64 = 0;
         for (buffer) |byte| {
             checksum +%= byte;
         }
         std.mem.doNotOptimizeAway(checksum);
-        regular_read_total += timer.read();
+        regular_read_total += compat_monotonicNanos() - t0;
     }
 
-    // Benchmark writes (simplified for testing)
-    const mmap_write_ns = mmap_read_total; // Placeholder
-    const regular_write_ns = regular_read_total; // Placeholder
+    // Benchmark memory-mapped writes (GAP-0875: measured, not copied from
+    // the read totals). Times writeAt over the full mapping plus the sync
+    // that makes the write durable, mirroring what a real write costs.
+    var mmap_write_total: u64 = 0;
+    for (0..iterations) |_| {
+        var mapped_file = try MemoryMappedFile.init(allocator, test_file, .{
+            .read_only = false,
+            .access_pattern = .write_heavy,
+            .advise_sequential = false,
+        });
+        defer mapped_file.deinit();
+
+        const t0 = compat_monotonicNanos();
+        try mapped_file.writeAt(0, buffer);
+        try mapped_file.sync();
+        mmap_write_total += compat_monotonicNanos() - t0;
+    }
+
+    // Benchmark regular file writes (write + sync for parity).
+    var regular_write_total: u64 = 0;
+    for (0..iterations) |_| {
+        const file = try std.Io.Dir.cwd().createFile(io, test_file, .{});
+        defer file.close(io);
+
+        const t0 = compat_monotonicNanos();
+        try file.writePositionalAll(io, buffer, 0);
+        try file.sync(io);
+        regular_write_total += compat_monotonicNanos() - t0;
+    }
+
+    const mmap_write_ns = mmap_write_total;
+    const regular_write_ns = regular_write_total;
 
     const mmap_read_avg = mmap_read_total / iterations;
     const regular_read_avg = regular_read_total / iterations;

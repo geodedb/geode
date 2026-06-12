@@ -19,6 +19,7 @@ const ast = @import("../gql/ast.zig");
 const evaluator_functions = @import("../types/evaluator_functions.zig");
 const datetime = @import("../types/datetime.zig");
 const bitstring = @import("../types/bitstring.zig");
+const public_suffix = @import("../types/public_suffix.zig");
 const type_promotion = @import("type_promotion.zig");
 
 pub const Value = value_types.Value;
@@ -1965,9 +1966,13 @@ pub fn evalAdvancedTypeFunction(
             },
             else => return Value{ .Null = {} },
         };
-        if (domain.labels.len == 0) return Value{ .Null = {} };
-        if (domain.labels.len == 1) return Value{ .Text = try allocator.dupe(u8, domain.labels[0]) };
-        return Value{ .Text = try std.mem.join(allocator, ".", domain.labels[domain.labels.len - 2 ..]) };
+        // GAP-0877: real eTLD+1 via the bundled public-suffix snapshot
+        // (multi-label suffixes like co.uk, wildcard and exception rules;
+        // unknown TLDs fall back to the last two labels). A domain that IS a
+        // public suffix has no registrable part and returns Null.
+        const root = try public_suffix.registrableDomain(allocator, domain.labels);
+        if (root) |r| return Value{ .Text = r };
+        return Value{ .Null = {} };
     }
 
     if (std.mem.eql(u8, function_name, "uuid_v4")) {

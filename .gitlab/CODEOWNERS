@@ -1,0 +1,20 @@
+# CODEOWNERS — GitLab Code Owners (SEC-SUPPLY-01 / SEC-MIG-02, GAP-0882)
+#
+# Approval ENFORCEMENT is a GitLab project setting, not a file property.
+# Required operator action (documented in docs/GAP_ANALYSIS_RESOLVED.md):
+#   Settings > Repository > Protected branches > main:
+#     - enable "Require approval from code owners"
+#   Settings > Merge requests > Approval rules:
+#     - add a "Supply chain" rule with approvals required = 2 covering
+#       the [Supply chain] section paths below (SEC-SUPPLY-01).
+
+# Supply-chain-sensitive files: dependency pins, CI pipeline, release config.
+[Supply chain]
+/build.zig.zon @benjiv
+/.gitlab-ci.yml @benjiv
+/.goreleaser.yaml @benjiv
+
+# GQL migration files and the CI guard that lints them (SEC-MIG-02).
+[Migrations]
+/migrations/ @benjiv
+/scripts/ci/check_migrations.py @benjiv

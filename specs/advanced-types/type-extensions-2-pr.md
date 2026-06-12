@@ -63,7 +63,7 @@ Allocate tags **≥0x20** (legacy 0x00–0x03 intact). Endianness: **LE** for nu
 
 - **XML**: `xml_is_well_formed(text)`; (no XPath in MVP).
 
-- **URL/Domain**: `url_host/url_scheme/url_path/url_query/url_origin`, `domain_root(domain)` (eTLD+1 not implemented), `domain_labels(domain)` (array).
+- **URL/Domain**: `url_host/url_scheme/url_path/url_query/url_origin`, `domain_root(domain)` (eTLD+1 implemented 2026-06-11 via bundled public-suffix snapshot, GAP-0877), `domain_labels(domain)` (array).
 
 - **UUID**: `uuid_v4()`, `uuid_v7()`; `uuid_equal(a,b)` (bytewise).
 

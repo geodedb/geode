@@ -300,6 +300,10 @@ fn deriveTenantFileKey(master_key: [KEY_BYTES]u8, tenant_id: []const u8) [KEY_BY
     const salt = "geode-tde-tenant-salt-v1";
 
     // Build info string
+    // error-policy: D — the inner `catch unreachable` covers the fixed-literal
+    // fallback, which always fits info_buf. KNOWN RESIDUAL (documented in
+    // docs/ERROR_HANDLING_POLICY.md): tenant ids > ~490 bytes collapse to the
+    // shared "truncated" info string; see tde_key_manager.deriveTenantTdeKey.
     var info_buf: [512]u8 = undefined;
     const info = std.fmt.bufPrint(&info_buf, "geode/tde/tenant/{s}", .{tenant_id}) catch
         std.fmt.bufPrint(&info_buf, "geode/tde/tenant/truncated", .{}) catch unreachable;

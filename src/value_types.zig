@@ -480,11 +480,15 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
     };
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-011; FEATURE="Value Helpers"; ASPECT=Stringify; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-011; FEATURE="Value Helpers"; ASPECT=Stringify; STATUS=TESTED; TEST=tests/test_gap0877_advanced_types.zig; OWNER=value_types; UPDATED=2026-06-11
 /// Convert a value to its string representation (for comparison and display)
 ///
 /// Uses a provided buffer for string formatting to avoid allocations.
-/// Handles: Int, Bool, Str, Null, Decimal
+/// GAP-0877: Date/Time/TimeTZ/Timestamp/TimestampTZ/Interval render canonical
+/// ISO-8601; Url/Domain/Bytea render their actual value. Values that do not
+/// fit the 64-byte buffer return EvalError.Unsupported (stable error, never a
+/// placeholder). Enum/BitString/VarBit/IntRange still stringify as type-name
+/// placeholders (documented in docs/TYPES_AND_FUNCTIONS.md).
 /// Returns error for unsupported types.
 pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
     return switch (v) {
@@ -535,18 +539,65 @@ pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
         .Char => |c| c.data,
         .Varchar => |vc| vc.data,
         .Text => |t| t,
-        .Date => "date", // Todo: implement formatting
-        .Time => "time",
-        .TimeTZ => "timetz",
-        .Timestamp => "timestamp",
-        .TimestampTZ => "timestamptz",
-        .Interval => "interval",
-        .Bytea => "bytea",
+        // GAP-0877: canonical ISO-8601 / RFC-3986 rendering into the caller's
+        // buffer. Values that cannot fit return EvalError.Unsupported (a
+        // stable error) instead of a placeholder string.
+        .Date => |d| blk_date: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeDateIso(&w, d.days_since_epoch) catch return EvalError.Unsupported;
+            break :blk_date w.buffered();
+        },
+        .Time => |t| blk_time: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeTimeIso(&w, t.micros_since_midnight) catch return EvalError.Unsupported;
+            break :blk_time w.buffered();
+        },
+        .TimeTZ => |t| blk_timetz: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeTimeIso(&w, t.time.micros_since_midnight) catch return EvalError.Unsupported;
+            writeUtcOffset(&w, t.offset_seconds) catch return EvalError.Unsupported;
+            break :blk_timetz w.buffered();
+        },
+        .Timestamp => |ts| blk_ts: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeTimestampIso(&w, ts.micros_since_epoch) catch return EvalError.Unsupported;
+            break :blk_ts w.buffered();
+        },
+        .TimestampTZ => |ts| blk_tstz: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeTimestampIso(&w, ts.micros_since_epoch_utc) catch return EvalError.Unsupported;
+            w.writeByte('Z') catch return EvalError.Unsupported;
+            break :blk_tstz w.buffered();
+        },
+        .Interval => |iv| blk_iv: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeIntervalIso(&w, iv) catch return EvalError.Unsupported;
+            break :blk_iv w.buffered();
+        },
+        .Bytea => |bytes| blk_bytea: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            w.writeAll("\\x") catch return EvalError.Unsupported;
+            for (bytes) |byte| {
+                w.print("{x:0>2}", .{byte}) catch return EvalError.Unsupported;
+            }
+            break :blk_bytea w.buffered();
+        },
         .Json => |j| j,
         .Jsonb => |j| j.data,
         .Xml => |x| x.data,
-        .Url => "url", // Todo: call toString
-        .Domain => "domain",
+        .Url => |u| blk_url: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            writeUrl(&w, u) catch return EvalError.Unsupported;
+            break :blk_url w.buffered();
+        },
+        .Domain => |d| blk_domain: {
+            var w: std.Io.Writer = .fixed(buf[0..]);
+            for (d.labels, 0..) |label, i| {
+                if (i > 0) w.writeByte('.') catch return EvalError.Unsupported;
+                w.writeAll(label) catch return EvalError.Unsupported;
+            }
+            break :blk_domain w.buffered();
+        },
         .UUID => |u| blk3: {
             const s = std.fmt.bufPrint(buf[0..], "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ u.bytes[0], u.bytes[1], u.bytes[2], u.bytes[3], u.bytes[4], u.bytes[5], u.bytes[6], u.bytes[7], u.bytes[8], u.bytes[9], u.bytes[10], u.bytes[11], u.bytes[12], u.bytes[13], u.bytes[14], u.bytes[15] }) catch return EvalError.Unsupported;
             break :blk3 s;
@@ -557,6 +608,79 @@ pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
         .IntRange => "range",
         else => return EvalError.TypeMismatch,
     };
+}
+
+// ============================================================================
+// GAP-0877: canonical ISO-8601 / RFC-3986 writer helpers for stringify
+// ============================================================================
+
+fn writeDateIso(w: *std.Io.Writer, days_since_epoch: i32) !void {
+    const ymd = datetime.Date.dateFromDays(days_since_epoch);
+    if (ymd.year < 0) {
+        try w.print("-{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u32, @intCast(-ymd.year)), ymd.month, ymd.day });
+    } else {
+        try w.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u32, @intCast(ymd.year)), ymd.month, ymd.day });
+    }
+}
+
+fn writeTimeIso(w: *std.Io.Writer, micros_since_midnight: i64) !void {
+    if (micros_since_midnight < 0) return error.InvalidTime;
+    const h: u32 = @intCast(@divFloor(micros_since_midnight, 3600_000_000));
+    const m: u32 = @intCast(@divFloor(@rem(micros_since_midnight, 3600_000_000), 60_000_000));
+    const s: u32 = @intCast(@divFloor(@rem(micros_since_midnight, 60_000_000), 1_000_000));
+    const us: u32 = @intCast(@rem(micros_since_midnight, 1_000_000));
+    if (us == 0) {
+        try w.print("{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s });
+    } else {
+        try w.print("{d:0>2}:{d:0>2}:{d:0>2}.{d:0>6}", .{ h, m, s, us });
+    }
+}
+
+fn writeUtcOffset(w: *std.Io.Writer, offset_seconds: i32) !void {
+    const sign: u8 = if (offset_seconds < 0) '-' else '+';
+    const abs_off: u32 = @abs(offset_seconds);
+    try w.print("{c}{d:0>2}:{d:0>2}", .{ sign, abs_off / 3600, (abs_off % 3600) / 60 });
+}
+
+fn writeTimestampIso(w: *std.Io.Writer, micros_since_epoch: i64) !void {
+    const day_us: i64 = 24 * 3600 * 1_000_000;
+    const days = @divFloor(micros_since_epoch, day_us);
+    const time_of_day = @mod(micros_since_epoch, day_us);
+    try writeDateIso(w, @intCast(days));
+    try w.writeByte('T');
+    try writeTimeIso(w, time_of_day);
+}
+
+fn writeIntervalIso(w: *std.Io.Writer, iv: datetime.Interval) !void {
+    if (iv.months == 0 and iv.days == 0 and iv.micros == 0) {
+        try w.writeAll("PT0S");
+        return;
+    }
+    try w.writeByte('P');
+    if (iv.months != 0) {
+        const years = @divTrunc(iv.months, 12);
+        const months = @rem(iv.months, 12);
+        if (years != 0) try w.print("{d}Y", .{years});
+        if (months != 0) try w.print("{d}M", .{months});
+    }
+    if (iv.days != 0) try w.print("{d}D", .{iv.days});
+    if (iv.micros != 0) {
+        try w.writeByte('T');
+        const hours = @divTrunc(iv.micros, 3600 * 1_000_000);
+        const minutes = @divTrunc(@rem(iv.micros, 3600 * 1_000_000), 60 * 1_000_000);
+        const seconds = @divTrunc(@rem(iv.micros, 60 * 1_000_000), 1_000_000);
+        if (hours != 0) try w.print("{d}H", .{hours});
+        if (minutes != 0) try w.print("{d}M", .{minutes});
+        if (seconds != 0) try w.print("{d}S", .{seconds});
+    }
+}
+
+fn writeUrl(w: *std.Io.Writer, u: url.Url) !void {
+    try w.print("{s}://{s}", .{ u.scheme, u.host });
+    if (u.port) |p| try w.print(":{d}", .{p});
+    try w.writeAll(u.path);
+    if (u.query) |q| try w.print("?{s}", .{q});
+    if (u.fragment) |f| try w.print("#{s}", .{f});
 }
 
 // ============================================================================

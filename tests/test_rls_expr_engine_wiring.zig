@@ -289,3 +289,220 @@ test "QUIC-HC-158: empty RLS engines do not force authenticated read snapshots" 
     try expr_engine.createPolicy(policy);
     try testing.expect(execution.wouldEvaluateRLS());
 }
+
+// ─── PERF-A / #808: RLS row-rebuild elimination ──────────────────────────────
+//
+// The match loop (passesRLSExprFilter) skips nodePropertiesToRLSRowInto when
+// engine.needsRowDataForTable() reports that no applicable compiled policy
+// contains a `load_row` opcode. These tests pin:
+//   1. the bytecode pre-scan (operand bytes never misread as opcodes),
+//   2. flag computation in compileExpression AND for pinned pre-compiled
+//      expressions registered through createPolicy,
+//   3. the load-bearing invariant that makes the skip sound: a row-free
+//      policy evaluates to the correct verdict against an EMPTY row that
+//      the engine never populates (no row build happened, scratch stays
+//      empty).
+
+test "PERF-A: bytecodeNeedsRowData detects load_row and skips operand bytes" {
+    // Row-free: push_const 0, push_const 1, eq, ret → no load_row.
+    try testing.expect(!CompiledExpression.bytecodeNeedsRowData(&.{ 0x01, 0x00, 0x01, 0x01, 0x20, 0xFF }));
+
+    // Row-reading: load_row 0, push_const 1, neq, ret.
+    try testing.expect(CompiledExpression.bytecodeNeedsRowData(&.{ 0x10, 0x00, 0x01, 0x01, 0x21, 0xFF }));
+
+    // Operand byte equal to the load_row opcode value (0x10) must NOT be
+    // misread as load_row: push_const with arg 0x10, then ret.
+    try testing.expect(!CompiledExpression.bytecodeNeedsRowData(&.{ 0x01, 0x10, 0xFF }));
+
+    // Unknown opcode → conservative true.
+    try testing.expect(CompiledExpression.bytecodeNeedsRowData(&.{ 0x77, 0xFF }));
+
+    // Empty bytecode reads nothing.
+    try testing.expect(!CompiledExpression.bytecodeNeedsRowData(&.{}));
+}
+
+test "PERF-A: compileExpression computes needs_row_data from the raw expression" {
+    // Arena: createPolicy with .compiled = null runs compileExpression,
+    // whose allocations the engine does not free on deinit (pre-existing
+    // engine behavior — production engines live for the process lifetime).
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    const base = Policy{
+        .id = 0,
+        .name = "",
+        .description = "",
+        .graph = "perf_graph",
+        .table = "Doc",
+        .operation = .select,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = null,
+        .check_expr = null,
+        .enabled = true,
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+
+    // Row-free raw expression → compiled with needs_row_data = false.
+    var row_free = base;
+    row_free.id = 1;
+    row_free.name = "row_free";
+    row_free.table = "RowFree";
+    row_free.using_expr = Expression{
+        .raw = "current_user = current_user",
+        .parsed = null,
+        .compiled = null, // force compileExpression
+        .parameters = &.{},
+    };
+    try engine.createPolicy(row_free);
+    try testing.expect(!engine.needsRowDataForTable(.select, "perf_graph", "RowFree"));
+
+    // Row-reading raw expression → compiled with needs_row_data = true.
+    var row_reading = base;
+    row_reading.id = 2;
+    row_reading.name = "row_reading";
+    row_reading.table = "RowReading";
+    row_reading.using_expr = Expression{
+        .raw = "row.owner = 'alice'",
+        .parsed = null,
+        .compiled = null,
+        .parameters = &.{},
+    };
+    try engine.createPolicy(row_reading);
+    try testing.expect(engine.needsRowDataForTable(.select, "perf_graph", "RowReading"));
+
+    // No policies registered for a table → no row data needed (the
+    // default-allow path never reads the row either).
+    try testing.expect(!engine.needsRowDataForTable(.select, "perf_graph", "NoPolicies"));
+}
+
+test "PERF-A: row-free pinned policy filters correctly against an empty, never-built row" {
+    const allocator = testing.allocator;
+
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    // Pinned pre-compiled DENY-all policy with no row references:
+    //   push_false ; ret
+    // createPolicy must compute needs_row_data=false for the pinned form.
+    const deny_bytecode = [_]u8{ 0x03, 0xFF };
+    var deny_compiled = CompiledExpression{
+        .bytecode = &deny_bytecode,
+        .constants = &.{},
+        .jump_table = &.{},
+        // deliberately rely on createPolicy to overwrite the conservative
+        // default for pinned expressions
+    };
+    try testing.expect(deny_compiled.needs_row_data); // default is conservative
+
+    const deny_policy = Policy{
+        .id = 808,
+        .name = "deny_all_row_free",
+        .description = "restrictive policy with no load_row opcode",
+        .graph = "perf_graph",
+        .table = "Pinned",
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = Expression{
+            .raw = "false",
+            .parsed = null,
+            .compiled = &deny_compiled,
+            .parameters = &.{},
+        },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+    try engine.createPolicy(deny_policy);
+
+    // createPolicy computed the real flag for the pinned expression.
+    try testing.expect(!deny_compiled.needs_row_data);
+    try testing.expect(!engine.needsRowDataForTable(.select, "perf_graph", "Pinned"));
+
+    // The skip contract: the match loop passes an EMPTY scratch row when
+    // needsRowDataForTable is false. The verdict must match what a fully
+    // built row would produce (deny), and the engine must never populate
+    // the scratch row (no row build happened anywhere).
+    var empty_scratch = std.StringHashMap(Value).init(allocator);
+    defer empty_scratch.deinit();
+
+    const allowed = try engine.checkRowAccessByUsername(
+        &empty_scratch,
+        .select,
+        "alice",
+        "perf_graph",
+        "Pinned",
+    );
+    try testing.expect(!allowed);
+    try testing.expectEqual(@as(usize, 0), empty_scratch.count());
+}
+
+test "PERF-A: row-reading pinned policy still requires the row (no false skip)" {
+    const allocator = testing.allocator;
+
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    // Same classification != 'secret' policy as the GAP-0510 test above.
+    const constants = [_]Value{
+        .{ .string = "classification" },
+        .{ .string = "secret" },
+    };
+    const bytecode = [_]u8{
+        0x10, 0x00, // load_row 0
+        0x01, 0x01, // push_const 1
+        0x21, // neq
+        0xFF, // ret
+    };
+    var compiled = CompiledExpression{
+        .bytecode = &bytecode,
+        .constants = &constants,
+        .jump_table = &.{},
+    };
+
+    const policy = Policy{
+        .id = 809,
+        .name = "deny_secret_row_reading",
+        .description = "policy whose bytecode reads row data",
+        .graph = "perf_graph",
+        .table = "Classified",
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = Expression{
+            .raw = "classification != 'secret'",
+            .parsed = null,
+            .compiled = &compiled,
+            .parameters = &.{},
+        },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+    try engine.createPolicy(policy);
+
+    // The pre-scan must demand the row — skipping here would evaluate
+    // load_row against an empty map (null) and wrongly ALLOW secret rows.
+    try testing.expect(compiled.needs_row_data);
+    try testing.expect(engine.needsRowDataForTable(.select, "perf_graph", "Classified"));
+}

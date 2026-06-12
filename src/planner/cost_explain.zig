@@ -97,12 +97,11 @@ pub fn explainChainWithCalibration(allocator: std.mem.Allocator, ops: []const se
     var base = try buildOpsJson(allocator, "cost_explain.v2", ops);
     if (base.len == 0 or base[base.len - 1] != '}') return base;
     if (actual_rows == null or actual_rows.?.len != ops.len or ops.len == 0) {
-        const stub = " ,\"calibration\":{\"mape\":0,\"entries\":[]}}";
-        var extended_stub = try allocator.alloc(u8, (base.len - 1) + stub.len);
-        std.mem.copyForwards(u8, extended_stub, base[0 .. base.len - 1]);
-        std.mem.copyForwards(u8, extended_stub[base.len - 1 ..], stub);
-        allocator.free(base);
-        return extended_stub;
+        // GAP-0867: no runtime row counts -> no calibration object. The old
+        // behavior appended a stub {"mape":0,"entries":[]} that looked like a
+        // computed (perfect) calibration; omitting it is the truthful signal
+        // that no actuals were supplied.
+        return base;
     }
     const acts = actual_rows.?;
     // Re-run estimation to parallel buildOpsJson

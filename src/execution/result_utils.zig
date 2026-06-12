@@ -9,6 +9,7 @@ const Value = value_types.Value;
 // Import ExecutionResult from execution module
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
+const value_utilities = @import("value_utilities.zig");
 
 // NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
 // Output write failures are non-critical — the query result is correct
@@ -292,6 +293,12 @@ pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !vo
         } else {
             // Duplicate - free the key immediately since we don't need it
             allocator.free(key);
+            // GAP-0535: free the dropped row's values when the result owns them
+            if (result.owns_value_memory) {
+                for (row) |val| {
+                    value_utilities.freeValue(allocator, val);
+                }
+            }
             allocator.free(row);
         }
     }

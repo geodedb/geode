@@ -1079,6 +1079,74 @@ pub const QuicProtoClient = struct {
         return msg.rollback.success;
     }
 
+    /// GAP-0514: drive the QUIC SAVEPOINT dispatch lane
+    /// (quic_connection_handler.zig REQ-TXN-SAVEPOINT-004).
+    pub fn savepoint(self: *QuicProtoClient, allocator: std.mem.Allocator, name: []const u8) !bool {
+        const req = schema.SavepointRequest{ .name = name, .session_id = "" };
+        try self.writeMessage(.{ .savepoint = req });
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .savepoint) return error.InvalidMessage;
+        return msg.savepoint.success;
+    }
+
+    /// GAP-0514: drive the QUIC ROLLBACK TO dispatch lane
+    /// (quic_connection_handler.zig REQ-TXN-SAVEPOINT-005).
+    pub fn rollbackTo(self: *QuicProtoClient, allocator: std.mem.Allocator, name: []const u8) !bool {
+        const req = schema.RollbackToRequest{ .name = name, .session_id = "" };
+        try self.writeMessage(.{ .rollback_to = req });
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .rollback_to) return error.InvalidMessage;
+        return msg.rollback_to.success;
+    }
+
+    /// GAP-0514: HELLO carrying a graph binding — drives the QUIC graph
+    /// resolution + graph-RBAC bind lanes (REQ-DSN-GRAPH-BIND-003,
+    /// REQ-MULTI-GRAPH-RBAC-WIRE-002).
+    pub fn helloWithGraph(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        graph: ?[]const u8,
+    ) !HelloResult {
+        const req = schema.HelloRequest{
+            .username = username,
+            .password = password,
+            .tenant_id = null,
+            .client_name = "geode-test",
+            .client_version = "0.0.0",
+            .wanted_conformance = "min",
+            .graph = graph,
+        };
+        try self.writeMessage(.{ .hello = req });
+
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .hello) return error.InvalidMessage;
+
+        const resp = msg.hello;
+        const session_id = try allocator.dupe(u8, resp.session_id);
+        const error_message = try allocator.dupe(u8, resp.error_message);
+        var caps = try allocator.alloc([]const u8, resp.capabilities.items.len);
+        for (resp.capabilities.items, 0..) |cap, i| {
+            caps[i] = try allocator.dupe(u8, cap);
+        }
+        if (self.session_id.len > 0) self.allocator.free(self.session_id);
+        self.session_id = try self.allocator.dupe(u8, session_id);
+        return .{
+            .success = resp.success,
+            .session_id = session_id,
+            .error_message = error_message,
+            .capabilities = caps,
+        };
+    }
+
     fn copyStatus(allocator: std.mem.Allocator, status: schema.Status) !struct {
         status_class: []const u8,
         additional: [][]const u8,

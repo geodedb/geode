@@ -296,6 +296,10 @@ pub const Statistics = struct {
     entries_applied: u64,
     // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ApplyErrorCount; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
     apply_errors: u64,
+    // GAP-0889 (F1): committed entries whose command bytes failed to decode.
+    // These entries are NOT applied (no silent `.write` fabrication) — a
+    // non-zero count means a poisoned/future-format entry reached commit.
+    decode_errors: u64,
     snapshots_sent: u64,
     snapshots_received: u64,
 };
@@ -2022,7 +2026,18 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             for (items, 0..) |pe, i| {
                 const dup = try allocator.dupe(u8, pe.command_bytes);
                 errdefer allocator.free(dup);
-                const cmd = deserializeCommand(dup) catch Command{ .write = dup };
+                // GAP-0889 (F1): transit path — keep the raw bytes moving as an
+                // opaque `.write` (owned_wire_bytes preserves the exact wire
+                // encoding for storage/forwarding) but make the decode failure
+                // visible. The apply site (decodeCommittedCommand) is the
+                // enforcement point that refuses to apply such an entry.
+                const cmd = deserializeCommand(dup) catch |err| fallback: {
+                    log.warn("Raft inbound entry decode failed — forwarding raw bytes", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("entry_index", pe.index),
+                    });
+                    break :fallback Command{ .write = dup };
+                };
                 entries[i] = .{
                     .term = pe.term,
                     .index = pe.index,
@@ -2126,6 +2141,51 @@ const CMD_TAG_CONFIG_CHANGE: u8 = 4;
 const CMD_TAG_SNAPSHOT_POINTER: u8 = 5;
 const CMD_TAG_TXN_PREPARE: u8 = 6;
 const CMD_TAG_TXN_DECIDE: u8 = 7;
+
+/// Proposal-time command validation (GAP-0870).
+///
+/// Commands that can never be applied meaningfully are REJECTED here, at
+/// propose time, instead of being skipped at apply time.  Apply-time skips
+/// are silent divergence hazards: the entry is committed cluster-wide and
+/// every node pays the replication cost for a no-op.  `proposeCommand`
+/// calls this before the leader check so callers get a deterministic
+/// rejection regardless of raft role.
+pub fn validateCommand(cmd: Command) !void {
+    switch (cmd) {
+        .schema_change => |sc| {
+            if (sc.graph.len == 0) return error.InvalidSchemaChange;
+            // Geode has no ALTER GRAPH semantics anywhere (no GQL surface,
+            // no GraphStore handler).  Until those land, an alter_graph
+            // entry can never be applied — refuse to replicate it.
+            if (sc.operation == .alter_graph) return error.UnsupportedSchemaOperation;
+        },
+        .config_change => |cc| switch (cc.change_type) {
+            // add/update must carry a non-empty endpoint — a member without
+            // an address can never be contacted.
+            .add_server, .update_server => {
+                const ep = cc.server_endpoint orelse return error.InvalidConfigChange;
+                if (ep.len == 0) return error.InvalidConfigChange;
+            },
+            .remove_server => {},
+        },
+        .snapshot_pointer => |sp| {
+            // Index/term 0 is "no snapshot" — recording it would licence
+            // truncating the whole log against a snapshot that doesn't exist.
+            if (sp.last_included_index == 0 or sp.last_included_term == 0)
+                return error.InvalidSnapshotPointer;
+        },
+        .txn_prepare => |tp| {
+            // An empty write set has nothing to prepare; the decide that
+            // follows would commit nothing.  Reject the pointless round.
+            if (tp.write_set.len == 0) return error.EmptyWriteSet;
+            // The write set must carry the native G2PC codec magic — any
+            // other payload (e.g. the blocked protobuf TwoPhaseMessage wire
+            // format) can never be applied by TxnCoordinator.
+            if (!txn_coordinator.isWriteSetPayload(tp.write_set)) return error.InvalidWriteSet;
+        },
+        .noop, .write, .graph_mutation, .txn_decide => {},
+    }
+}
 
 /// Serialize a Command into a tag-prefixed byte array.
 /// Caller owns the returned slice and must free with the same allocator.
@@ -2243,6 +2303,24 @@ pub fn serializeCommand(allocator: Allocator, cmd: Command) ![]u8 {
     }
 }
 
+/// GAP-0889 (F1): decode a committed entry's command bytes for apply.
+/// On decode failure the entry is reported loudly (log.err + dedicated
+/// `decode_errors` counter) and `null` is returned so the caller SKIPS the
+/// entry instead of fabricating an inert `.write` command from poisoned or
+/// future-format bytes. Pulled out of `drainReady` so it is unit-testable
+/// without standing up a full RaftNode.
+fn decodeCommittedCommand(stats: *Statistics, data: []const u8, entry_index: u64, term: u64) ?Command {
+    return deserializeCommand(data) catch |err| {
+        log.err("Raft committed entry decode failed — entry NOT applied", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.uint("entry_index", entry_index),
+            Attr.uint("term", term),
+        });
+        stats.decode_errors += 1;
+        return null;
+    };
+}
+
 /// Deserialize a tag-prefixed byte array back into a Command.
 /// The returned Command borrows slices from `data` (zero-copy for the payload).
 pub fn deserializeCommand(data: []const u8) !Command {
@@ -2306,12 +2384,68 @@ pub fn deserializeCommand(data: []const u8) !Command {
                 .txn_id = txn_id,
             } };
         },
+        CMD_TAG_CONFIG_CHANGE => {
+            // Wire format mirrors serializeCommand:
+            //   1B change_type | 8B server_id(BE) | 4B ep_len(BE) | ep | 1B has_port [| 2B port(BE)]
+            // GAP-0870: without this case a replicated config_change fell into
+            // the legacy `.write` fallback and was applied as an inert no-op.
+            if (payload.len < 1 + 8 + 4 + 1) return error.InvalidData;
+            const change_type: @FieldType(ConfigChange, "change_type") = @enumFromInt(payload[0]);
+            const server_id = std.mem.readInt(u64, payload[1..][0..8], .big);
+            const ep_len = std.mem.readInt(u32, payload[9..][0..4], .big);
+            var pos: usize = 13;
+            if (pos + ep_len + 1 > payload.len) return error.InvalidData;
+            const ep = payload[pos .. pos + ep_len];
+            pos += ep_len;
+            const has_port = payload[pos];
+            pos += 1;
+            var port: ?u16 = null;
+            if (has_port != 0) {
+                if (pos + 2 > payload.len) return error.InvalidData;
+                port = std.mem.readInt(u16, payload[pos..][0..2], .big);
+            }
+            return .{ .config_change = .{
+                .change_type = change_type,
+                .server_id = server_id,
+                .server_endpoint = if (ep.len > 0) ep else null,
+                .server_port = port,
+            } };
+        },
+        CMD_TAG_SNAPSHOT_POINTER => {
+            if (payload.len < 8 * 4) return error.InvalidData;
+            return .{ .snapshot_pointer = .{
+                .last_included_index = std.mem.readInt(u64, payload[0..8], .big),
+                .last_included_term = std.mem.readInt(u64, payload[8..16], .big),
+                .size_bytes = std.mem.readInt(u64, payload[16..24], .big),
+                .checksum = std.mem.readInt(u64, payload[24..32], .big),
+            } };
+        },
+        CMD_TAG_TXN_PREPARE => {
+            // 8B xid(BE) | 8B shard_id(BE) | 4B ws_len(BE) | ws | 4B md_len(BE) | md
+            if (payload.len < 8 + 8 + 4) return error.InvalidData;
+            const xid = std.mem.readInt(u64, payload[0..8], .big);
+            const shard_id = std.mem.readInt(u64, payload[8..16], .big);
+            const ws_len = std.mem.readInt(u32, payload[16..20], .big);
+            var pos: usize = 20;
+            if (pos + ws_len + 4 > payload.len) return error.InvalidData;
+            const write_set = payload[pos .. pos + ws_len];
+            pos += ws_len;
+            const md_len = std.mem.readInt(u32, payload[pos..][0..4], .big);
+            pos += 4;
+            if (pos + md_len > payload.len) return error.InvalidData;
+            const metadata = payload[pos .. pos + md_len];
+            return .{ .txn_prepare = .{
+                .xid = xid,
+                .shard_id = shard_id,
+                .write_set = write_set,
+                .metadata = metadata,
+            } };
+        },
         else => {
-            // For complex types we have not yet wired a deserializer for
-            // (config_change/snapshot_pointer/txn_prepare), surface them as a
-            // generic write so the apply callback sees a recognisable variant
-            // rather than losing the payload entirely.
-            return .{ .write = data };
+            // GAP-0870: an unknown tag is NOT silently downgraded to a `.write`
+            // any more — fail loud so a mixed-version cluster surfaces the
+            // incompatibility instead of replicating inert payloads.
+            return error.UnknownCommandTag;
         },
     }
 }
@@ -2718,6 +2852,11 @@ pub const RaftNode = struct {
         // count of all entries ever applied -- which was unusable as a
         // wait condition.  All existing internal callers ignore the
         // return value with `_ = try ...`, so the change is local.
+        //
+        // GAP-0870: validate BEFORE the leader check so invalid commands get
+        // a deterministic rejection on any node — they must never reach the
+        // log only to be skipped at apply time.
+        try validateCommand(cmd);
         const cmd_bytes = try serializeCommand(self.allocator, cmd);
         defer self.allocator.free(cmd_bytes);
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -2803,7 +2942,10 @@ pub const RaftNode = struct {
         for (rd.committed_entries) |entry| {
             if (entry.kind == .normal and entry.data.len > 0) {
                 if (self.apply_callback) |callback| {
-                    const cmd = deserializeCommand(entry.data) catch Command{ .write = entry.data };
+                    // GAP-0889 (F1): a committed entry that fails to decode is
+                    // skipped loudly — fabricating an inert `.write` here would
+                    // silently degrade poisoned/future-format entries.
+                    const cmd = decodeCommittedCommand(&self.stats, entry.data, entry.index, self.current_term) orelse continue;
                     // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ErrorLogging; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
                     // Pass the committed entry's globally-unique, cross-node-identical
                     // log index so the apply layer can derive a deterministic,
@@ -3048,8 +3190,17 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
             for (ae.entries, 0..) |e, i| {
                 const owned: ?[]u8 = if (e.data.len > 0) try allocator.dupe(u8, e.data) else null;
                 errdefer if (owned) |b| allocator.free(b);
+                // GAP-0889 (F1): outbound transit — same posture as the inbound
+                // path above: forward the raw bytes verbatim, but log so a
+                // poisoned entry in the log is visible while replicating.
                 const cmd = if (owned) |b|
-                    (deserializeCommand(b) catch Command{ .write = b })
+                    (deserializeCommand(b) catch |err| fallback: {
+                        log.warn("Raft outbound entry decode failed — forwarding raw bytes", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.uint("entry_index", e.index),
+                        });
+                        break :fallback Command{ .write = b };
+                    })
                 else
                     Command{ .write = e.data };
                 entries[i] = .{
@@ -3212,6 +3363,131 @@ test "serializeCommand: txn_decide round-trips" {
     const restored = try deserializeCommand(bytes);
     try std.testing.expectEqual(@as(u64, 42), restored.txn_decide.xid);
     try std.testing.expectEqual(true, restored.txn_decide.commit);
+}
+
+// CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=WireRoundTrip; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
+test "serializeCommand: config_change round-trips (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    const cmd = Command{ .config_change = .{
+        .change_type = .add_server,
+        .server_id = 7,
+        .server_endpoint = "10.1.2.3",
+        .server_port = 4242,
+    } };
+    const bytes = try serializeCommand(allocator, cmd);
+    defer allocator.free(bytes);
+    try std.testing.expectEqual(CMD_TAG_CONFIG_CHANGE, bytes[0]);
+
+    const restored = try deserializeCommand(bytes);
+    try std.testing.expectEqual(@as(u64, 7), restored.config_change.server_id);
+    try std.testing.expectEqual(@as(@FieldType(ConfigChange, "change_type"), .add_server), restored.config_change.change_type);
+    try std.testing.expectEqualStrings("10.1.2.3", restored.config_change.server_endpoint.?);
+    try std.testing.expectEqual(@as(?u16, 4242), restored.config_change.server_port);
+}
+
+test "serializeCommand: snapshot_pointer round-trips (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    const cmd = Command{ .snapshot_pointer = .{
+        .last_included_index = 100,
+        .last_included_term = 3,
+        .size_bytes = 8192,
+        .checksum = 0xDEADBEEF,
+    } };
+    const bytes = try serializeCommand(allocator, cmd);
+    defer allocator.free(bytes);
+    try std.testing.expectEqual(CMD_TAG_SNAPSHOT_POINTER, bytes[0]);
+
+    const restored = try deserializeCommand(bytes);
+    try std.testing.expectEqual(@as(u64, 100), restored.snapshot_pointer.last_included_index);
+    try std.testing.expectEqual(@as(u64, 3), restored.snapshot_pointer.last_included_term);
+    try std.testing.expectEqual(@as(u64, 8192), restored.snapshot_pointer.size_bytes);
+    try std.testing.expectEqual(@as(u64, 0xDEADBEEF), restored.snapshot_pointer.checksum);
+}
+
+test "serializeCommand: txn_prepare round-trips (GAP-0870)" {
+    const allocator = std.testing.allocator;
+    const cmd = Command{ .txn_prepare = .{
+        .xid = 99,
+        .shard_id = 2,
+        .write_set = "ws-bytes",
+        .metadata = "md",
+    } };
+    const bytes = try serializeCommand(allocator, cmd);
+    defer allocator.free(bytes);
+    try std.testing.expectEqual(CMD_TAG_TXN_PREPARE, bytes[0]);
+
+    const restored = try deserializeCommand(bytes);
+    try std.testing.expectEqual(@as(u64, 99), restored.txn_prepare.xid);
+    try std.testing.expectEqual(@as(u64, 2), restored.txn_prepare.shard_id);
+    try std.testing.expectEqualStrings("ws-bytes", restored.txn_prepare.write_set);
+    try std.testing.expectEqualStrings("md", restored.txn_prepare.metadata);
+}
+
+test "deserializeCommand: unknown tag fails loud (GAP-0870)" {
+    const bogus = [_]u8{ 0xFF, 1, 2, 3 };
+    try std.testing.expectError(error.UnknownCommandTag, deserializeCommand(&bogus));
+}
+
+test "decodeCommittedCommand: poisoned entry skipped + counted, valid entry decoded (GAP-0889 F1)" {
+    var stats = std.mem.zeroes(Statistics);
+
+    // Poisoned/future-format entry: no fabricated `.write`, returns null and
+    // bumps the dedicated decode_errors counter.
+    const bogus = [_]u8{ 0xFF, 1, 2, 3 };
+    try std.testing.expect(decodeCommittedCommand(&stats, &bogus, 7, 2) == null);
+    try std.testing.expectEqual(@as(u64, 1), stats.decode_errors);
+
+    // Empty payload is also a decode failure, not an inert write.
+    try std.testing.expect(decodeCommittedCommand(&stats, &.{}, 8, 2) == null);
+    try std.testing.expectEqual(@as(u64, 2), stats.decode_errors);
+
+    // A valid encoding still decodes and does not touch the counter.
+    var buf: [64]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const bytes = try serializeCommand(fba.allocator(), .{ .txn_decide = .{ .xid = 42, .commit = true } });
+    const cmd = decodeCommittedCommand(&stats, bytes, 9, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 42), cmd.txn_decide.xid);
+    try std.testing.expect(cmd.txn_decide.commit);
+    try std.testing.expectEqual(@as(u64, 2), stats.decode_errors);
+}
+
+test "validateCommand: rejects invalid variants at proposal time (GAP-0870)" {
+    // alter_graph has no semantics anywhere in geode — refuse to replicate.
+    try std.testing.expectError(error.UnsupportedSchemaOperation, validateCommand(.{ .schema_change = .{
+        .operation = .alter_graph,
+        .graph = "g",
+        .schema = "",
+    } }));
+    // schema change with empty graph name.
+    try std.testing.expectError(error.InvalidSchemaChange, validateCommand(.{ .schema_change = .{
+        .operation = .create_graph,
+        .graph = "",
+        .schema = "",
+    } }));
+    // add_server without an endpoint.
+    try std.testing.expectError(error.InvalidConfigChange, validateCommand(.{ .config_change = .{
+        .change_type = .add_server,
+        .server_id = 1,
+        .server_endpoint = null,
+    } }));
+    // snapshot pointer at index/term 0 ("no snapshot").
+    try std.testing.expectError(error.InvalidSnapshotPointer, validateCommand(.{ .snapshot_pointer = .{
+        .last_included_index = 0,
+        .last_included_term = 0,
+        .size_bytes = 0,
+        .checksum = 0,
+    } }));
+    // empty write set has nothing to prepare.
+    try std.testing.expectError(error.EmptyWriteSet, validateCommand(.{ .txn_prepare = .{
+        .xid = 1,
+        .shard_id = 0,
+        .write_set = "",
+        .metadata = "",
+    } }));
+    // valid variants pass.
+    try validateCommand(.noop);
+    try validateCommand(.{ .config_change = .{ .change_type = .remove_server, .server_id = 1, .server_endpoint = null } });
+    try validateCommand(.{ .txn_decide = .{ .xid = 1, .commit = false } });
 }
 
 test "serializeCommand: write data is not empty" {

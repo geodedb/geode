@@ -825,7 +825,14 @@ pub const ManagedGraph = struct {
         // (`ManagedGraph.deinit` → `fts_adapter.deinit`), mirroring the lazy-open
         // already performed by `createFulltextIndexNamed`.
         if (fa.getIndex(index_name) == null) {
-            fa.openIndex(index_name) catch {};
+            fa.openIndex(index_name) catch |err| switch (err) {
+                // error-policy: A — no on-disk dir: "unknown name → no facade"
+                // contract, handled by the null return below.
+                adapter_mod.Error.IndexNotFound => {},
+                // error-policy: B — a real open failure (corrupt WAL/segments)
+                // silently degrading to "zero hits" would mask data loss; warn.
+                else => log.warn("fts lazy re-open failed for index '{s}': {s}", .{ index_name, @errorName(err) }),
+            };
         }
         // Only build a facade for an engine that actually exists on the adapter.
         if (fa.getIndex(index_name) == null) return null;
@@ -945,6 +952,8 @@ pub const ManagedGraph = struct {
             if (list.items.len == 0) {
                 // Defer key removal until after iteration to avoid mutating the
                 // map while iterating it.
+                // error-policy: A — OOM here leaves an empty list entry in the
+                // map until shutdown (tiny leak); correctness unaffected.
                 to_remove.append(allocator, entry.key_ptr.*) catch {};
             }
         }
@@ -1066,6 +1075,8 @@ pub const ManagedGraph = struct {
             allocator.destroy(al);
             self.audit_logger = null;
         }
+        // error-policy: A — best-effort close during teardown; WAL recovery
+        // handles anything a failed close left behind.
         self.engine.close() catch {};
         self.exact_node_property_index.deinit();
         allocator.free(self.merge_tuple_locks);
@@ -1170,6 +1181,8 @@ fn removeCrossShardEdge(mg: *ManagedGraph, from_id: u64, to_id: u64, edge_id: u6
     // Source shard: drop the outgoing entry + edge_index entry.
     const src_txn = try src.beginTxn();
     var src_done = false;
+    // error-policy: A — best-effort rollback on an already-failing path; the
+    // primary error propagates and WAL recovery supersedes a failed abort.
     errdefer if (!src_done) src.abortTxn(src_txn) catch {};
 
     const from_rec = (try src.node_store.getNode(from_id)) orelse return error.NodeNotFound;
@@ -1193,6 +1206,7 @@ fn removeCrossShardEdge(mg: *ManagedGraph, from_id: u64, to_id: u64, edge_id: u6
     // `crossShardRemoveEdge` symmetric-2PC primitive in the vendor.
     const dst_txn = try dst.beginTxn();
     var dst_done = false;
+    // error-policy: A — best-effort rollback (see src_txn errdefer above).
     errdefer if (!dst_done) dst.abortTxn(dst_txn) catch {};
 
     const to_rec = (try dst.node_store.getNode(to_id)) orelse return error.NodeNotFound;
@@ -1346,6 +1360,8 @@ pub const StatementTxn = struct {
     /// Safe to call from `errdefer`.
     pub fn abort(self: *StatementTxn) void {
         t_current_statement_txn = null;
+        // error-policy: A — abort() is documented errdefer-safe; a failed
+        // engine abort is superseded by WAL recovery.
         self.mg.engine.abortTxn(self.txn_id) catch {};
     }
 };
@@ -1766,6 +1782,7 @@ pub const StorageAdapter = struct {
             try node_shard.beginTxn();
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
         errdefer if (own_txn) {
+            // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
 
@@ -2025,6 +2042,7 @@ pub const StorageAdapter = struct {
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
         const own_txn = stmt_local == null;
         errdefer if (own_txn) {
+            // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
 
@@ -2061,6 +2079,7 @@ pub const StorageAdapter = struct {
 
         rec = (try node_shard.getNode(slot_id)) orelse return error.NodeNotFound;
         var id_buf: [16]u8 = undefined;
+        // error-policy: D — "{x:0>16}" of a u64 is exactly 16 bytes; id_buf is [16]u8.
         const id_text = std.fmt.bufPrint(&id_buf, "{x:0>16}", .{reserved_id}) catch unreachable;
         const prop_head = try node_shard.putPropertyTxn(
             rec.prop_head,
@@ -2955,6 +2974,7 @@ pub const StorageAdapter = struct {
         const shard_count = gs.sharded_engine.SHARD_COUNT;
         var shard_txns: [shard_count]?gs.TxnId = [_]?gs.TxnId{null} ** shard_count;
         errdefer for (mg.engine.shards, 0..) |shard, si| {
+            // error-policy: A — best-effort rollback on an already-failing path.
             if (shard_txns[si]) |t| shard.abortTxn(t) catch {};
         };
 
@@ -2999,6 +3019,7 @@ pub const StorageAdapter = struct {
         // mutation are on the same single-threaded engine (ShardedGraphEngine
         // migration: Task 7).
         const txn = try shard.beginTxn();
+        // error-policy: A — best-effort rollback on an already-failing path.
         errdefer shard.abortTxn(txn) catch {};
         try shard.deleteNodeTxn(node_id, txn);
         try shard.commitTxn(txn);
@@ -3249,6 +3270,7 @@ pub const StorageAdapter = struct {
             try node_shard.beginTxn();
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
         errdefer if (own_txn) {
+            // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
 
@@ -3295,6 +3317,7 @@ pub const StorageAdapter = struct {
             try node_shard.beginTxn();
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
         errdefer if (own_txn) {
+            // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
 
@@ -3362,6 +3385,7 @@ pub const StorageAdapter = struct {
 
         // R7: batch putProperty + putNode into one txn on the node's shard.
         const txn = try node_shard.beginTxn();
+        // error-policy: A — best-effort rollback on an already-failing path.
         errdefer node_shard.abortTxn(txn) catch {};
 
         const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
@@ -3610,6 +3634,7 @@ pub const StorageAdapter = struct {
             // Use shard-local txn from the statement txn if shards match.
             const local_txn = shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn();
             const own_txn = shardLocalTxnForNode(s.txn_id, from_id) == null;
+            // error-policy: A — best-effort rollback on an already-failing path.
             errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
 
             const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, found_prop_head), key, storage_val, local_txn);
@@ -3653,6 +3678,7 @@ pub const StorageAdapter = struct {
         const fb_found_prop_head = fb_edge_entry.prop_head;
 
         const fb_local_txn = try from_shard.beginTxn();
+        // error-policy: A — best-effort rollback on an already-failing path.
         errdefer from_shard.abortTxn(fb_local_txn) catch {};
 
         const fb_new_head_u64 = try from_shard.putPropertyTxn(@as(u64, fb_found_prop_head), key, storage_val, fb_local_txn);
@@ -3729,6 +3755,7 @@ pub const StorageAdapter = struct {
             try from_shard.beginTxn();
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, from_id) == null;
         errdefer if (own_txn) {
+            // error-policy: A — best-effort rollback on an already-failing path.
             from_shard.abortTxn(local_txn) catch {};
         };
 
@@ -4250,52 +4277,50 @@ pub const StorageAdapter = struct {
         return al;
     }
 
-    /// Attempt to create a per-graph timeseries store. Returns null on failure
-    /// (soft failure — the graph remains usable without per-graph timeseries).
-    fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ?*ts_mod.Store {
-        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
-            log.warn("failed to build graph dir path for timeseries: {}", .{err});
-            return null;
+    /// Create the per-graph timeseries store.
+    ///
+    /// GAP-0865 (a): durability is FAIL-CLOSED by default — any error
+    /// (path/mkdir/alloc/engine open, including the engine's fail-closed
+    /// WAL-replay and segment-verification errors on corrupt data)
+    /// propagates and the graph open/create fails, so corruption is
+    /// surfaced to the operator instead of silently dropping persistence.
+    /// `GEODE_TS_DURABILITY=best_effort` opts back into the legacy soft
+    /// behaviour: engine errors degrade to an in-memory store (inside the
+    /// wrapper) and adapter-level errors degrade to `null`.
+    ///
+    /// Also wires retention (`GEODE_TS_RETENTION_DAYS`) and TDE
+    /// (`GEODE_TS_TDE=1` + `GEODE_TDE_KEY`) into the engine (GAP-0865 c/e).
+    fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*ts_mod.Store {
+        const durability = ts_mod.durabilityFromEnv();
+        return initTimeseriesForGraphInner(allocator, data_dir, graph_uuid, durability) catch |err| switch (durability) {
+            .fail_closed => err,
+            .best_effort => blk: {
+                log.warn("per-graph timeseries init failed ({}); GEODE_TS_DURABILITY=best_effort — graph continues without persistent timeseries", .{err});
+                break :blk null;
+            },
         };
+    }
+
+    fn initTimeseriesForGraphInner(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, durability: ts_mod.Durability) !?*ts_mod.Store {
+        const graph_dir = try graphDirPath(allocator, data_dir, graph_uuid);
         defer allocator.free(graph_dir);
 
-        // The new ts_storage engine refuses to mkdir its data_dir; we have to
-        // ensure both the graph_dir AND the /timeseries subdir exist before
-        // calling initWithConfig. Without this, every initTimeseriesForGraph
-        // call surfaces error.FileNotFound and tests in shard 3 fail with
-        // "per-graph timeseries store is created and accessible".
-        const tio = std.Io.Threaded.global_single_threaded.io();
-        std.Io.Dir.cwd().createDirPath(tio, graph_dir) catch |err| {
-            log.warn("failed to mkdir graph_dir for timeseries: {}", .{err});
-            return null;
-        };
-        const ts_subdir = std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir}) catch |err| {
-            log.warn("failed to format ts subdir path: {}", .{err});
-            return null;
-        };
-        defer allocator.free(ts_subdir);
-        std.Io.Dir.cwd().createDirPath(tio, ts_subdir) catch |err| {
-            log.warn("failed to mkdir ts subdir for timeseries: {}", .{err});
-            return null;
-        };
+        const store = try allocator.create(ts_mod.Store);
+        errdefer allocator.destroy(store);
 
-        const store = allocator.create(ts_mod.Store) catch |err| {
-            log.warn("failed to allocate per-graph timeseries store: {}", .{err});
-            return null;
-        };
-        store.* = ts_mod.Store.initWithConfig(allocator, .{
+        // The wrapper creates `{graph_dir}/timeseries` itself (the engine
+        // refuses to mkdir its own data_dir) and replays the engine WAL /
+        // verifies segments during init — `loadFromDisk` is a no-op kept
+        // for API compatibility.
+        store.* = try ts_mod.Store.initWithConfig(allocator, .{
             .data_dir = graph_dir,
-        }) catch |err| {
-            log.warn("failed to init per-graph timeseries store: {}", .{err});
-            allocator.destroy(store);
-            return null;
-        };
+            .durability = durability,
+            .retention_max_age_ms = ts_mod.retentionMsFromEnv(),
+            .encryption_key = try ts_mod.encryptionKeyFromEnv(),
+        });
+        errdefer store.deinit();
 
-        store.loadFromDisk() catch |err| {
-            log.warn("failed to load per-graph timeseries data from disk: {}", .{err});
-            // Store is still usable in-memory, continue with it.
-        };
-
+        try store.loadFromDisk();
         return store;
     }
 
@@ -4376,6 +4401,7 @@ pub const StorageAdapter = struct {
             log.err("failed to create ShardedGraphEngine for graph '{s}': {}", .{ name, err });
             return err;
         };
+        // error-policy: A — best-effort close on an already-failing path.
         errdefer engine.close() catch {};
 
         const mg = try self.allocator.create(ManagedGraph);
@@ -4404,7 +4430,7 @@ pub const StorageAdapter = struct {
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
-            .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
         // Initialise per-graph FTS (fresh index for new graphs).
@@ -4419,6 +4445,9 @@ pub const StorageAdapter = struct {
         {
             const runtime_metrics = @import("runtime_metrics");
             if (runtime_metrics.globalRegistry()) |reg| {
+                // error-policy: A (whole block) — metric registration is
+                // best-effort observability; duplicate-name or OOM failures
+                // must never block graph creation.
                 reg.register("mg_rwlock_shared_acquired_total", &mg.rwlock_shared_acquired_total) catch {};
                 reg.register("mg_rwlock_shared_wait_ns_total", &mg.rwlock_shared_wait_ns_total) catch {};
                 reg.register("mg_rwlock_exclusive_wait_ns_total", &mg.rwlock_exclusive_wait_ns_total) catch {};
@@ -4469,6 +4498,7 @@ pub const StorageAdapter = struct {
             log.err("failed to open ShardedGraphEngine for graph '{s}': {}", .{ name, err });
             return err;
         };
+        // error-policy: A — best-effort close on an already-failing path.
         errdefer engine.close() catch {};
 
         const mg = try self.allocator.create(ManagedGraph);
@@ -4489,7 +4519,7 @@ pub const StorageAdapter = struct {
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
-            .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
         // Load per-graph FTS from disk (existing graphs may have persisted data).
@@ -5173,6 +5203,8 @@ pub const StorageAdapter = struct {
         _ = self;
         const txn = t_session_engine_txn orelse return;
         t_session_engine_txn = null;
+        // error-policy: A — best-effort session rollback; WAL recovery
+        // supersedes a failed abort.
         txn.mg.engine.abortTxn(txn.txn_id) catch {};
     }
 
@@ -5495,6 +5527,8 @@ fn monoNanosNow() u64 {
 // ============================================================================
 
 fn generateUuid() [16]u8 {
+    // error-policy: D — newV7's only error is InvalidTimestamp (system clock
+    // before 1970 or beyond i64 milliseconds); impossible on a sane clock.
     return (uuid.newV7() catch unreachable).bytes;
 }
 

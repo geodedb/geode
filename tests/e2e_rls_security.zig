@@ -1,5 +1,17 @@
 const std = @import("std");
 const testing = std.testing;
+
+// Zig 0.16 compat: std.time.milliTimestamp removed; use clock_gettime(REALTIME).
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 const auth = @import("auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
@@ -136,7 +148,7 @@ test "Attribute-Based Access Control (ABAC)" {
         .session_attributes = std.StringHashMap([]const u8).init(allocator),
         .request_attributes = std.StringHashMap([]const u8).init(allocator),
         .environment = auth.EnvironmentInfo{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .ip_address = "192.168.1.100",
             .user_agent = "test-client",
             .location = null,
@@ -189,8 +201,8 @@ test "Row-Level Security (RLS) policies" {
         },
         .check_expr = null,
         .enabled = true,
-        .created_at = std.time.milliTimestamp(),
-        .updated_at = std.time.milliTimestamp(),
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
         .created_by = 0,
         .temporal = null,
         .data_classification = null,
@@ -212,8 +224,8 @@ test "Row-Level Security (RLS) policies" {
         .username = "testuser",
         .email = "test@example.com",
         .password_hash = undefined,
-        .created_at = std.time.milliTimestamp(),
-        .updated_at = std.time.milliTimestamp(),
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
         .last_login = null,
         .is_active = true,
         .is_superuser = false,
@@ -228,7 +240,7 @@ test "Row-Level Security (RLS) policies" {
         .name = "user",
         .description = "Default user role",
         .permissions = std.ArrayList(auth.PermissionId).initCapacity(allocator, 0) catch unreachable,
-        .created_at = std.time.milliTimestamp(),
+        .created_at = compat_milliTimestamp(),
         .is_system = true,
         .priority = 100,
         .parent_role = null,
@@ -240,7 +252,7 @@ test "Row-Level Security (RLS) policies" {
         .session_attributes = std.StringHashMap([]const u8).init(allocator),
         .request_attributes = std.StringHashMap([]const u8).init(allocator),
         .environment = auth.EnvironmentInfo{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .ip_address = "127.0.0.1",
             .user_agent = "test",
             .location = null,
@@ -282,7 +294,7 @@ test "Temporal constraints in RLS policies" {
     var rls_engine = try rls.RLSEngine.init(allocator);
     defer rls_engine.deinit();
 
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
 
     // Create policy with temporal constraint
     const policy = rls.RLSEngine.Policy{
@@ -536,8 +548,8 @@ test "Multi-tenant row isolation" {
             },
         },
         .enabled = true,
-        .created_at = std.time.milliTimestamp(),
-        .updated_at = std.time.milliTimestamp(),
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
         .created_by = 0,
         .temporal = null,
         .data_classification = .confidential,

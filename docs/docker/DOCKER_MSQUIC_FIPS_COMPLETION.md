@@ -334,5 +334,5 @@ The Docker infrastructure has been successfully updated to include:
 ---
 
 *Completed: November 16, 2025*
-*Geode Version: Production Ready*
+*Geode Version: development build (status: see docs/GAP_ANALYSIS.md)*
 *Docker Support: Enterprise-Grade with FIPS and MsQUIC*

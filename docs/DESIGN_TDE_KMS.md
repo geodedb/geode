@@ -1,8 +1,18 @@
-# DESIGN_TDE_KMS.md - TDE Key Management & External KMS Stub
+# DESIGN_TDE_KMS.md - TDE Key Management & External KMS
+
+> **2026-06-11 update (GAP-0864):** the "stub" framing below is historical.
+> Real external-KMS network clients now exist in
+> `src/security/external_kms_client.zig`: `VaultTransitClient` (Vault Transit
+> encrypt/decrypt/rotate over `std.http`) and `AwsKmsClient` (AWS KMS
+> Encrypt/Decrypt/GenerateDataKey), with production-safety guards
+> (`KmsBackend.isProductionSafe`, `KmsConfig.validateForProduction`) covered by
+> `tests/test_key_rotation_kms_envelopes.zig`, and a QUIC remote-KMS round-trip
+> suite (`zig build test-remote-kms`). The Status Summary table at the bottom
+> has been rebaselined; the design narrative is kept as written for history.
 
 ## Scope
 
-This document captures the current (v0.18 -> v0.19 work-in-progress) design for Transparent Data Encryption (TDE) key hierarchy, rotation, persistence, and planned external KMS integration. It reflects the implemented mock/static providers plus the new ExternalKms stub.
+This document captures the current (v0.18 -> v0.19 work-in-progress) design for Transparent Data Encryption (TDE) key hierarchy, rotation, persistence, and planned external KMS integration. It reflects the implemented mock/static providers plus the new ExternalKms stub. (Historical — see the 2026-06-11 update note above.)
 
 ## Goals
 
@@ -76,12 +86,15 @@ Master (provider source) -> Derivation -> { data_key, wal_key }
 
 ## Status Summary
 
+(Rebaselined 2026-06-11 — GAP-0864.)
+
 | Component                    | Status                   |
 | ---------------------------- | ------------------------ |
 | StaticEnv Provider           | Stable                   |
 | MockKms Provider             | Stable (test-only)       |
-| ExternalKms Stub             | Partial                  |
+| ExternalKms Providers        | Implemented — `VaultTransitClient` + `AwsKmsClient` in `src/security/external_kms_client.zig` (`tests/test_key_rotation_kms_envelopes.zig`) |
 | Rotation Persistence         | Implemented              |
 | Real-Path Overhead Benchmark | Partial (XOR stream sim) |
-| External KMS Network         | Not Started              |
+| External KMS Network         | Implemented — real HTTP (Vault Transit, AWS KMS) + QUIC remote-KMS path (`zig build test-remote-kms`) |
 | Backup Key Workflow          | Not Started              |
+| Per-Tenant Keys              | Deferred (GAP-0873; see `docs/design/TDE_PER_TENANT_KEYS_DEFERRED.md`) |

@@ -4,6 +4,7 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const execution = @import("../execution.zig");
 const result_utils = @import("result_utils.zig");
+const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const value_types = @import("../value_types.zig");
@@ -421,6 +422,14 @@ pub fn executeProfiledIfSupported(
         const input_rows = result.rows.len;
         const start_ns = nowNs();
         var projected = try transformResultRowsWithParams(allocator, result, return_stage, return_group_by, return_having, param_names, param_values);
+        // GAP-0535: the final projection is the result handed to the caller —
+        // make it fully OWN its row values (adopt provably-fresh call results,
+        // deep-duplicate everything else) so ExecutionResult.deinit is
+        // leak-free and dangle-free under a strict allocator. Intermediate
+        // WITH-stage results above stay borrowed (legacy semantics) because
+        // later stages read them as Env values.
+        // CANARY: REQ=REQ-EXEC-RESULT-OWNERSHIP-001; FEATURE="ExecutionResultOwnership"; ASPECT=PlannedFinalProjection; STATUS=TESTED; TEST=tests/test_gap0535_result_ownership.zig; OWNER=execution; UPDATED=2026-06-11
+        try value_utilities.adoptProjectionRowValues(allocator, &projected, q.ret.items);
         transferOwnedGraphEntities(&result, &projected);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 

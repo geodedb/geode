@@ -1,5 +1,16 @@
-// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-001; FEATURE="Distributed Query Transport"; ASPECT=QueryTransport; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
-// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-002; FEATURE="Remote Query Execution"; ASPECT=RemoteExecution; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-001; FEATURE="Distributed Query Transport"; ASPECT=QueryTransport; STATUS=EXEMPT; OWNER=dist; UPDATED=2026-06-11
+// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-002; FEATURE="Remote Query Execution"; ASPECT=RemoteExecution; STATUS=EXEMPT; OWNER=dist; UPDATED=2026-06-11
+
+// GAP-0514 Phase 6 P3 (2026-06-11): EVERY marker in this file is EXEMPT —
+// query_transport.zig is OUTSIDE the build graph. Its only importer is
+// enhanced_query_coordinator.zig, whose only importer is distributed/mod.zig,
+// which has ZERO compiled importers (the geode root module imports the
+// distributed files individually via src/lib.zig and never pulls mod.zig).
+// Code that is never compiled cannot be honestly verified by a test; the
+// testable NodeRegistry half was already extracted to node_registry.zig
+// (GAP-0889) and is covered by test_query_transport_node_registry.zig.
+// Promoting these requires either wiring the mod.zig subtree into the build
+// or porting the remaining wire surface to compiled modules.
 
 const std = @import("std");
 
@@ -38,7 +49,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const protocol = @import("../protocol.zig");
-const quic = @import("../transport/quic.zig");
+const quic = @import("transport/quic");
 const federation = @import("federation.zig");
 // GAP-0856: distributed EXPLAIN/PROFILE are node-local only.
 const distributed_explain = @import("distributed_explain.zig");
@@ -118,7 +129,7 @@ pub const QueryTransport = struct {
     }
 
     /// Execute query on remote node
-    // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=DbClientMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+    // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=DbClientMetrics; STATUS=EXEMPT; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-06-11
     pub fn executeRemoteQuery(
         self: *QueryTransport,
         node_id: u32,
@@ -127,7 +138,7 @@ pub const QueryTransport = struct {
         return self.executeRemoteQueryWithEnvelope(node_id, query, null);
     }
 
-    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ExecuteRemoteQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ExecuteRemoteQuery; STATUS=EXEMPT; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-6: envelope-aware variant used by executeBatchQueries
     // when the NodeQuery carries a principal_envelope_bytes blob.
     pub fn executeRemoteQueryWithEnvelope(
@@ -165,7 +176,7 @@ pub const QueryTransport = struct {
     }
 
     /// Send batch of queries to multiple nodes in parallel
-    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=BatchQueries; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=BatchQueries; STATUS=EXEMPT; OWNER=security; UPDATED=2026-06-11
     pub fn executeBatchQueries(
         self: *QueryTransport,
         queries: []const NodeQuery,
@@ -309,7 +320,7 @@ const ConnectionPool = struct {
     }
 };
 
-// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-06-11
 /// Individual connection to a remote node
 const Connection = struct {
     allocator: std.mem.Allocator,
@@ -381,7 +392,7 @@ const Connection = struct {
         return self.executeQueryWithEnvelope(allocator, query, timeout_ms, page_size, null);
     }
 
-    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ConnectionExecuteQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ConnectionExecuteQuery; STATUS=EXEMPT; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-6: envelope-aware variant. When principal_envelope_bytes
     // is non-null it is forwarded to the QueryOptions so the server receives it
     // in ExecuteRequest field 4 and can reconstruct the caller's Principal.
@@ -585,7 +596,7 @@ const Connection = struct {
     }
 
     // GAP-0144: Secure TLS connections for distributed queries
-    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-06-11
     fn connect(self: *Connection, timeout_ms: u32) !void {
         // Get node address from registry if available, otherwise use default pattern
         const node_info = self.getNodeAddress();
@@ -658,64 +669,11 @@ const Connection = struct {
     }
 };
 
-/// Node registry for distributed cluster - tracks node addresses
-// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
-pub const NodeRegistry = struct {
-    allocator: std.mem.Allocator,
-    nodes: std.AutoHashMap(u32, NodeInfo),
-
-    pub const NodeInfo = struct {
-        node_id: u32,
-        host: []const u8,
-        port: u16,
-        status: NodeStatus,
-        last_heartbeat: i64,
-    };
-
-    pub const NodeStatus = enum {
-        active,
-        inactive,
-        unknown,
-    };
-
-    pub fn init(allocator: std.mem.Allocator) !NodeRegistry {
-        return NodeRegistry{
-            .allocator = allocator,
-            .nodes = std.AutoHashMap(u32, NodeInfo).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *NodeRegistry) void {
-        self.nodes.deinit();
-    }
-
-    pub fn registerNode(self: *NodeRegistry, node_id: u32, host: []const u8, port: u16) !void {
-        try self.nodes.put(node_id, NodeInfo{
-            .node_id = node_id,
-            .host = host,
-            .port = port,
-            .status = .active,
-            .last_heartbeat = compat_milliTimestamp(),
-        });
-    }
-
-    pub fn getNodeInfo(self: *NodeRegistry, node_id: u32) ?NodeInfo {
-        return self.nodes.get(node_id);
-    }
-
-    pub fn updateHeartbeat(self: *NodeRegistry, node_id: u32) void {
-        if (self.nodes.getPtr(node_id)) |info| {
-            info.last_heartbeat = compat_milliTimestamp();
-            info.status = .active;
-        }
-    }
-
-    pub fn markInactive(self: *NodeRegistry, node_id: u32) void {
-        if (self.nodes.getPtr(node_id)) |info| {
-            info.status = .inactive;
-        }
-    }
-};
+/// Node registry for distributed cluster - tracks node addresses.
+/// GAP-0889: canonical definition extracted to node_registry.zig so the
+/// standalone unit tests exercise the real type (no drift-prone copy).
+// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD; OWNER=distributed; UPDATED=2026-06-11
+pub const NodeRegistry = @import("node_registry.zig").NodeRegistry;
 
 /// Result chunk for streaming
 const ResultChunk = struct {
@@ -729,7 +687,7 @@ const ResultChunk = struct {
 pub const NodeQuery = struct {
     node_id: u32,
     query: federation.FederatedQuery,
-    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=NodeQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=NodeQuery; STATUS=EXEMPT; OWNER=security; UPDATED=2026-06-11
     // GPS Phase 7 Task 7-6: optional serialised principal_envelope blob produced
     // by the coordinator calling distributed.principal_envelope.serialize().
     // When present, the shard worker unpacks it and uses the forwarded identity

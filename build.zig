@@ -333,7 +333,7 @@ pub fn build(b: *std.Build) void {
     const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
 
     // QUIC v1/v2 protocol - RFC 9000
-    // CANARY: REQ=REQ-QUIC-HC-003; FEATURE="QUIC High-Concurrency Requests"; ASPECT=VendorParallelPoolGating; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+    // CANARY: REQ=REQ-QUIC-HC-003; FEATURE="QUIC High-Concurrency Requests"; ASPECT=VendorParallelPoolGating; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-11
     // Disable the QUIC package's hidden global thread pool for batch crypto
     // and recovery. Geode already owns bounded server/client worker pools, and
     // the package pool uses raw defaults plus page_allocator lifetime. QUIC
@@ -614,7 +614,7 @@ pub fn build(b: *std.Build) void {
 
     // Modules - Level 0 (No dependencies on other internal modules)
 
-    // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+    // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=EXEMPT; OWNER=core; UPDATED=2026-06-11
     // Centralized logging module using external slog library
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
     logging_mod.addImport("slog", slog_mod);
@@ -634,16 +634,16 @@ pub fn build(b: *std.Build) void {
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
-    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=build; UPDATED=2026-06-11
     const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
     thread_pool_mod.addImport("thread_pool", thread_pool_ext_mod);
     const query_work_item_mod = b.createModule(.{ .root_source_file = b.path("src/transport/query_work_item.zig"), .target = target, .optimize = optimize });
 
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
-    // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-perf-optimizations; OWNER=build; UPDATED=2026-06-11
     const stream_scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/transport/stream_scheduler.zig"), .target = target, .optimize = optimize });
 
-    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="ParallelWrapperModule"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="ParallelWrapperModule"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Shared parallel wrapper module backed by thread_pool.
     const parallel_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/parallel/thread_pool_parallel.zig"), .target = target, .optimize = optimize });
     parallel_wrapper_mod.addImport("transport/thread_pool", thread_pool_mod);
@@ -780,7 +780,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("geode_client_zig", zig_client_real_mod);
 
     // Main unified CLI binary with server and client capabilities
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=build; UPDATED=2026-06-11
     // Uses unified_entry.zig as root to allow both cli/main.zig and server/main.zig imports
     const geode_exe = b.addExecutable(.{
         .name = "geode",
@@ -1091,7 +1091,8 @@ pub fn build(b: *std.Build) void {
     // GAP-0862: restore data-integrity regression — drives the REAL backup
     // engine (BackupManager) against the REAL GraphStore and asserts that
     // node/edge counts and sampled properties round-trip through backup+restore
-    // (uncompressed, zstd-compressed, and a checksum-rejection negative path).
+    // (uncompressed round-trip, zstd-rejection — see GAP-0880 — and a
+    // checksum-rejection negative path).
     const gap0862_backup_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_gap0862_backup_integrity.zig"),
         .target = target,
@@ -1102,6 +1103,39 @@ pub fn build(b: *std.Build) void {
     const run_gap0862_backup_tests = b.addRunArtifact(gap0862_backup_tests);
     const gap0862_backup_step = b.step("test-gap0862", "Run GAP-0862 backup/restore data-integrity regression");
     gap0862_backup_step.dependOn(&run_gap0862_backup_tests.step);
+
+    // GAP-0871: GQL BACKUP/RESTORE stable refusal — the parser accepts the
+    // forms but the executor refuses with the named, documented
+    // error.GqlBackupRestoreUnsupported (wire: SQLSTATE 0A000 + a message
+    // naming the supported `geode backup create` / `geode restore` CLI).
+    const gap0871_refusal_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0871_gql_backup_refusal.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0871_refusal_tests.root_module.addImport("geode", root_mod);
+    const run_gap0871_refusal_tests = b.addRunArtifact(gap0871_refusal_tests);
+    const gap0871_refusal_step = b.step("test-gap0871", "Run GAP-0871 GQL BACKUP/RESTORE stable-refusal regression");
+    gap0871_refusal_step.dependOn(&run_gap0871_refusal_tests.step);
+
+    // GAP-0880: backup protocol upload ingestion + honest compression codec.
+    // Drives the REAL BackupManager paths the QUIC/gRPC upload handlers call:
+    // ingestUploadedBackup (verify -> persist -> durable registration), the
+    // real gzip encoder round-trip with truthful manifest codec, the
+    // UnsupportedCompression rejection for zstd, and the new
+    // UploadBackupRequest.payload wire field.
+    const gap0880_upload_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0880_backup_upload.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0880_upload_tests.root_module.addImport("geode", root_mod);
+    gap0880_upload_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    gap0880_upload_tests.root_module.addImport("protobuf", protobuf_mod);
+    gap0880_upload_tests.root_module.addImport("schema", schema_mod);
+    const run_gap0880_upload_tests = b.addRunArtifact(gap0880_upload_tests);
+    const gap0880_upload_step = b.step("test-gap0880", "Run GAP-0880 backup upload ingestion + compression truth regression");
+    gap0880_upload_step.dependOn(&run_gap0880_upload_tests.step);
 
     // GAP-0855a: webhook CDC sink real HTTP delivery + retries + auth header.
     // Drives the REAL WebhookSink (std.http.Client) against an in-test loopback
@@ -1130,6 +1164,20 @@ pub fn build(b: *std.Build) void {
     const run_gap0855_kafka_tests = b.addRunArtifact(gap0855_kafka_tests);
     const gap0855_kafka_step = b.step("test-gap0855-kafka", "Run GAP-0855b Kafka CDC sink produce-only delivery regression");
     gap0855_kafka_step.dependOn(&run_gap0855_kafka_tests.step);
+
+    // GAP-0872: CDC cloud sinks (Kinesis/PubSub) must fail LOUD at construction
+    // (error.SinkNotImplemented) instead of silently discarding events. Also
+    // guards that real sinks (memory/webhook/file) still construct and that a
+    // FileSink round-trip persists events to disk.
+    const gap0872_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0872_cdc_sinks.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gap0872_tests.root_module.addImport("geode", root_mod);
+    const run_gap0872_tests = b.addRunArtifact(gap0872_tests);
+    const gap0872_step = b.step("test-gap0872", "Run GAP-0872 CDC Kinesis/PubSub fail-loud regression");
+    gap0872_step.dependOn(&run_gap0872_tests.step);
 
     const is_windows = target.result.os.tag == .windows;
 
@@ -1191,10 +1239,26 @@ pub fn build(b: *std.Build) void {
     gap0844_test_mod.addImport("fle_key_types", fle_key_types_mod);
     gap0844_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
     gap0844_test_mod.link_libc = true; // setenv/unsetenv + std.c.getenv
-    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{"GAP-0844"} });
+    // GAP-0886 (#813): the REQ-FLE-ENFORCE-030 flag-invariant regression also
+    // lives inline in fle_integration.zig; run it through this same step.
+    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{ "GAP-0844", "GAP-0886" } });
     const run_gap0844_tests = b.addRunArtifact(gap0844_tests);
-    const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role)");
+    const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role) + GAP-0886 FLE flag invariant");
     gap0844_step.dependOn(&run_gap0844_tests.step);
+
+    // Quality #733 (2026-06-11): focused runner for the hot-path inline test
+    // backfill — deep-nesting parse in src/gql/parser.zig, the tenant-filter
+    // path (passesTenantFilter) in src/execution/match_operations.zig, and the
+    // validateGroupBy error branch in src/execution.zig. Those files cannot be
+    // module roots themselves (their `../` imports escape their directories),
+    // so this test reuses the geode lib module (root_mod, src/lib.zig) — whose
+    // import graph reaches all three files — and filters to the "#733" tests.
+    // Reusing root_mod avoids re-wiring its ~40 named imports and cannot trip
+    // the Zig 0.16 "file exists in modules X and X0" diamond (same module).
+    const quality733_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"#733"} });
+    const run_quality733_tests = b.addRunArtifact(quality733_tests);
+    const quality733_step = b.step("test-quality733", "Run quality #733 hot-path inline tests (parser deep nesting, passesTenantFilter, validateGroupBy)");
+    quality733_step.dependOn(&run_quality733_tests.step);
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
@@ -1807,6 +1871,61 @@ pub fn build(b: *std.Build) void {
     const ts_ingest_step = b.step("test-ts-ingest", "Run only the native geode.ts.* round-trip tests");
     ts_ingest_step.dependOn(&run_ts_ingest_tests.step);
 
+    // ----- TS SCALAR FUNCTION EVAL (GAP-0866) -----
+    // Drives the scalar `timeseries.*` GQL function family (value, last_value,
+    // value_at, sample_by, time_bucket, interpolate, moving_avg, rate,
+    // derivative, change_points, extract_features, matrix_profile, z_normalize,
+    // invariants, dtw*, cosine_similarity, cross_correlate, sbd) through the
+    // full parse → executeStatementWithContext → eval path against the real
+    // Store. Closes the "parallel TSFunctionCall system independent from GQL
+    // eval" inventory claim with execution-path evidence.
+    const ts_scalar_eval_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0866_ts_scalar_eval.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    ts_scalar_eval_tests.root_module.addImport("geode", root_mod);
+    const run_ts_scalar_eval_tests = b.addRunArtifact(ts_scalar_eval_tests);
+    const ts_scalar_eval_step = b.step("test-gap0866", "Run GAP-0866 scalar timeseries.* GQL function eval integration tests");
+    ts_scalar_eval_step.dependOn(&run_ts_scalar_eval_tests.step);
+
+    // ----- EXECUTION RESULT OWNERSHIP (GAP-0535) -----
+    // Regression for ExecutionResult.deinit value-memory ownership: bare-RETURN
+    // projections fully own their row values (owns_value_memory = true), the
+    // UNION/INTERSECT/EXCEPT combiners deep-copy values out of owned part
+    // results, and dropped rows free their owned values. Runs the real parse →
+    // executeStatementWithContext path under std.testing.allocator — the zig
+    // test runner's leak detection is the assertion.
+    const gap0535_ownership_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0535_result_ownership.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0535_ownership_tests.root_module.addImport("geode", root_mod);
+    const run_gap0535_ownership_tests = b.addRunArtifact(gap0535_ownership_tests);
+    const gap0535_ownership_step = b.step("test-gap0535", "Run GAP-0535 ExecutionResult value-ownership regression (strict-allocator leak gate)");
+    gap0535_ownership_step.dependOn(&run_gap0535_ownership_tests.step);
+
+    // ----- TS DURABILITY (GAP-0865) -----
+    // Regression suite for the time-series durability contract: fail-closed
+    // open on corrupt artefacts (with explicit best_effort opt-out),
+    // hard-kill WAL crash recovery, retention pruning that actually deletes
+    // expired segments from disk, backup->wipe->restore round-trip of the
+    // timeseries tree, and TDE (encryption_key) wiring.
+    const ts_durability_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/ts_durability.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    ts_durability_tests.root_module.addImport("geode", root_mod);
+    ts_durability_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    const run_ts_durability_tests = b.addRunArtifact(ts_durability_tests);
+    const ts_durability_step = b.step("test-ts-durability", "Run GAP-0865 time-series durability regression (fail-closed open, WAL crash recovery, retention, backup, TDE)");
+    ts_durability_step.dependOn(&run_ts_durability_tests.step);
+
     // GAP-0811 Task 2.2: property-aggregate fast-path for
     // `MATCH (p:Label) RETURN sum|avg|min|max(p.key)` — iterates the label
     // posting list and calls `getNodeProperty(node_id, key)` per slot, so
@@ -1929,6 +2048,61 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
+    // GAP-0514 Phase 6: named step so the graph_store.zig inline tests are
+    // runnable outside the (blocked) monolithic `zig build test` shard sweep.
+    const graph_store_unit_step = b.step("test-graph-store", "Run graph_store.zig inline unit tests (label index, tenant isolation, refcounts, adapter reload)");
+    graph_store_unit_step.dependOn(&run_graph_store_unit_tests.step);
+
+    // ----- GAP-0892: count-pushdown effectful-preamble gate unit tests -----
+    // src/query/query_traits.zig uses relative imports, so it cannot root its
+    // own test module; the regression tests live in tests/ and reach the
+    // classifier through the geode lib module.
+    const gap0892_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_gap0892_count_pushdown_preamble.zig"), .target = target, .optimize = optimize }) });
+    gap0892_tests.root_module.addImport("geode", root_mod);
+    const run_gap0892_tests = b.addRunArtifact(gap0892_tests);
+    const gap0892_step = b.step("test-gap0892", "GAP-0892 regression: count-pushdown fast path bails on effectful preamble (SESSION SET ...; MATCH count(*))");
+    gap0892_step.dependOn(&run_gap0892_tests.step);
+
+    // ----- EVAL CALL-HANDLER UNIT TESTS (GAP-0888 review follow-up) -----
+    // The inline unit tests in src/eval/ts_call_handlers.zig and
+    // src/eval/quantifier_call_handlers.zig are not discovered by any other
+    // named step (Zig 0.16 only collects tests reachable from the test ROOT
+    // file, and the handler files cannot themselves be module roots — their
+    // `../` imports escape src/eval/). Root src/eval.zig, whose trailing
+    // `test { _ = ts_call_handlers; ... }` block pulls both handler files
+    // (plus eval.zig's own inline tests) into the reference graph, and hang
+    // it off `test-gap0866` alongside the scalar timeseries.* eval
+    // integration tests.
+    const eval_handler_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/eval.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    const eval_handler_mod = eval_handler_tests.root_module;
+    eval_handler_mod.addImport("logging", logging_mod);
+    eval_handler_mod.addImport("json", json_mod);
+    eval_handler_mod.addImport("graph_storage", graph_storage_mod);
+    eval_handler_mod.addImport("fle_aead", fle_aead_mod);
+    eval_handler_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    eval_handler_mod.addImport("fle_key_types", fle_key_types_mod);
+    eval_handler_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    eval_handler_mod.addImport("uuid", uuid_ext_mod);
+    eval_handler_mod.addImport("wal", wal_ext_mod);
+    eval_handler_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
+    eval_handler_mod.addImport("timeseries_lib", timeseries_ext_mod);
+    eval_handler_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    eval_handler_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+    eval_handler_mod.addImport("schema", schema_mod);
+    eval_handler_mod.addImport("rtree_lib", rtree_ext_mod);
+    eval_handler_mod.addImport("hnsw_lib", hnsw_ext_mod);
+    eval_handler_mod.addImport("transport/thread_pool", thread_pool_mod);
+    eval_handler_mod.addImport("thread_pool", thread_pool_ext_mod);
+    eval_handler_mod.addImport("otel", otel_mod);
+    eval_handler_mod.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
+    eval_handler_mod.addImport("runtime_metrics", runtime_metrics_module);
+    const run_eval_handler_tests = b.addRunArtifact(eval_handler_tests);
+    ts_scalar_eval_step.dependOn(&run_eval_handler_tests.step);
 
     // Graph algorithm unit tests for centrality_algorithms.zig and graph_algorithms.zig helpers
     const algo_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_algo_unit.zig"), .target = target, .optimize = optimize }) });
@@ -1946,6 +2120,15 @@ pub fn build(b: *std.Build) void {
     const run_fts_e2e_tests = b.addRunArtifact(fts_e2e_tests);
     const fts_e2e_step = b.step("test-fts-e2e", "FTS end-to-end: CREATE INDEX (nodes-first AND index-first) + CALL geode.fts.search");
     fts_e2e_step.dependOn(&run_fts_e2e_tests.step);
+
+    // GAP-0869: phrase/proximity over the real persisted positional index,
+    // driven through GQL (CALL geode.fts.phrase / geode.fts.proximity).
+    const gap0869_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_gap0869_fts_advanced.zig"), .target = target, .optimize = optimize }) });
+    gap0869_tests.root_module.addImport("geode", root_mod);
+    gap0869_tests.root_module.link_libc = true;
+    const run_gap0869_tests = b.addRunArtifact(gap0869_tests);
+    const gap0869_step = b.step("test-gap0869", "GAP-0869: FTS phrase/proximity/highlight over the real positional index");
+    gap0869_step.dependOn(&run_gap0869_tests.step);
 
     // Cluster-write-gates slice 3 (RED until the apply-side FTS hook lands):
     // follower raft apply must maintain the fulltext index like the executor path.
@@ -2079,6 +2262,10 @@ pub fn build(b: *std.Build) void {
     const iso_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_iso_conformance.zig"), .target = target, .optimize = optimize }) });
     iso_conformance_tests.root_module.addImport("geode", root_mod);
     const run_iso_conformance_tests = b.addRunArtifact(iso_conformance_tests);
+    // GAP-0514 Phase 6: named step so the 70/70 ISO suite is runnable outside
+    // the (blocked) monolithic `zig build test` shard sweep.
+    const iso_conformance_step = b.step("test-iso-conformance", "Run the ISO/IEC 39075:2024 GQL conformance suite (tests/gql_iso_conformance.zig)");
+    iso_conformance_step.dependOn(&run_iso_conformance_tests.step);
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
@@ -2777,6 +2964,24 @@ pub fn build(b: *std.Build) void {
     });
     const run_dist_query_planner_tests = b.addRunArtifact(dist_query_planner_tests);
     shardDep(test_step, &run_dist_query_planner_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: named step so the distributed query planner suites
+    // run outside the blocked monolithic `zig build test`. Two halves:
+    // tests/test_distributed_query_planner.zig (geode-module API surface) and
+    // src/distributed/query_planner.zig rooted directly so its INLINE tests
+    // (which exercise private fns like generateShardQuery / planDistributed*)
+    // are actually discovered — tests in a different module (geode root_mod)
+    // are not collected by the test runner.
+    const qp_inline_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/query_planner_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const qp_inline_tests = b.addTest(.{ .root_module = qp_inline_test_mod });
+    const run_qp_inline_tests = b.addRunArtifact(qp_inline_tests);
+    shardDep(test_step, &run_qp_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    const dist_query_planner_step = b.step("test-dist-query-planner", "Run distributed query planner unit tests (GAP-D007 + inline query_planner.zig tests)");
+    dist_query_planner_step.dependOn(&run_dist_query_planner_tests.step);
+    dist_query_planner_step.dependOn(&run_qp_inline_tests.step);
 
     // SEC-D009: Nonce tracker unit tests
     const nonce_tracker_tests = b.addTest(.{
@@ -2914,6 +3119,12 @@ pub fn build(b: *std.Build) void {
     const sharding_tests = b.addTest(.{ .root_module = sharding_test_mod });
     const run_sharding_tests = b.addRunArtifact(sharding_tests);
     shardDep(test_step, &run_sharding_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: named step so the sharding.zig inline suite
+    // (ShardManager add/merge/transport-callback/key-lookup + migration,
+    // split-point, range/graph/geo routing) runs outside the blocked
+    // monolithic `zig build test`.
+    const sharding_step = b.step("test-sharding", "Run sharding.zig inline unit tests (ShardManager, migration, split, range/graph/geo routing)");
+    sharding_step.dependOn(&run_sharding_tests.step);
 
     // GAP-0513: federation_merge pure-helper unit tests (standalone, no distributed module import)
     const federation_merge_tests = b.addTest(.{
@@ -2971,6 +3182,55 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_raft_apply_tests.step, 1, test_shard_loads, test_shard_index);
     const raft_apply_step = b.step("test-raft-apply", "Run Raft apply callback command-routing tests (GAP-0520 + slice-A edge create)");
     raft_apply_step.dependOn(&run_raft_apply_tests.step);
+
+    // GAP-0870: Raft command variants (config_change / snapshot_pointer /
+    // txn_prepare / txn_decide / alter_graph rejection) + enhanced query
+    // transport dispatch honesty (route-or-fail-loud handlers).
+    const gap0870_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0870_raft_command_variants.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gap0870_test_mod.addImport("geode", root_mod);
+    const gap0870_tests = b.addTest(.{ .root_module = gap0870_test_mod });
+    const run_gap0870_tests = b.addRunArtifact(gap0870_tests);
+    shardDep(test_step, &run_gap0870_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0870 (transport half): enhanced_query_transport compiles as its own
+    // standalone test root — it cannot live inside the geode lib graph
+    // (query_coordinator/federation pull server-module files like
+    // rls_filter.zig into the lib, conflicting with the exe's module map).
+    const gap0870_eqt_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/enhanced_query_transport.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gap0870_eqt_test_mod.addImport("protobuf", protobuf_mod);
+    gap0870_eqt_test_mod.addImport("distributed_schema", distributed_schema_mod);
+    gap0870_eqt_test_mod.addImport("transport/quic", transport_quic_mod);
+    gap0870_eqt_test_mod.addImport("logging", logging_mod);
+    const gap0870_eqt_tests = b.addTest(.{ .root_module = gap0870_eqt_test_mod });
+    const run_gap0870_eqt_tests = b.addRunArtifact(gap0870_eqt_tests);
+    shardDep(test_step, &run_gap0870_eqt_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0870_step = b.step("test-gap0870", "GAP-0870: Raft command variants applied + transport handlers route or fail loud");
+    gap0870_step.dependOn(&run_gap0870_tests.step);
+    gap0870_step.dependOn(&run_gap0870_eqt_tests.step);
+
+    // GAP-0889: distributed quality batch. Named step so the 2PC
+    // commit-delivery honesty regression (tests/test_twophase_unit.zig) and
+    // the raft_persistent fail-loud tests run outside the blocked monolithic
+    // `zig build test` (test_twophase_unit was previously only reachable
+    // through all_tests.zig there).
+    const gap0889_twophase_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_twophase_unit.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gap0889_twophase_test_mod.addImport("geode", root_mod);
+    const gap0889_twophase_tests = b.addTest(.{ .root_module = gap0889_twophase_test_mod });
+    const run_gap0889_twophase_tests = b.addRunArtifact(gap0889_twophase_tests);
+    const gap0889_step = b.step("test-gap0889", "GAP-0889: distributed quality batch — 2PC delivery honesty + raft persistent fail-loud");
+    gap0889_step.dependOn(&run_gap0889_twophase_tests.step);
+    gap0889_step.dependOn(&run_raft_persistent_tests.step);
 
     // MATCH…CREATE summary-counter mislabel regression: the implicit summary
     // row must report nodes_created and relationships_created SEPARATELY (the
@@ -3171,6 +3431,10 @@ pub fn build(b: *std.Build) void {
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
     test_e2e_step.dependOn(&run_gql_conformance_tests.step);
+    // GAP-0892: named step so the conformance suite (incl. the T11/T12/T14
+    // count-pushdown regressions) can run without the rest of test-e2e.
+    const gql_conformance_step = b.step("test-gql-conformance", "Run GQL conformance e2e suite (spawns QUIC servers; GAP-0892 T11/T12/T14 acceptance)");
+    gql_conformance_step.dependOn(&run_gql_conformance_tests.step);
 
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
@@ -3266,6 +3530,9 @@ pub fn build(b: *std.Build) void {
         test_e2e_step.dependOn(&run_planner_prune_fuzz.step);
 
         const hnsw_snapshot_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_snapshot_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        // tde_file_encryption.zig reaches std.c.getenv on the Zig 0.16 compat
+        // path, so this fuzz target must link libc like the other tde consumers.
+        hnsw_snapshot_fuzz_tests.root_module.link_libc = true;
         const hnsw_persist_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw_persist.zig"), .target = target, .optimize = optimize });
         // TDE module for file-level encryption (REQ-TDE-FILELEVEL-001)
         const tde_fuzz_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
@@ -3280,13 +3547,17 @@ pub fn build(b: *std.Build) void {
         // Legacy WAL fuzz target removed (GraphStore-only storage).
 
         // GAP-0201: Transport layer performance fuzz tests
-        // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+        // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-transport-fuzz; OWNER=build; UPDATED=2026-06-11
         const transport_perf_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/transport_perf_fuzz.zig"), .target = target, .optimize = .Debug }) });
         transport_perf_fuzz_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
         transport_perf_fuzz_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
         transport_perf_fuzz_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
         const run_transport_perf_fuzz = b.addRunArtifact(transport_perf_fuzz_tests);
         test_e2e_step.dependOn(&run_transport_perf_fuzz.step);
+        // GAP-0514 Phase 6: named step so the transport fuzz target is
+        // runnable on its own (test-e2e carries unrelated known failures).
+        const transport_fuzz_step = b.step("test-transport-fuzz", "Run transport layer performance fuzz tests (thread pool, work item, DRR scheduler)");
+        transport_fuzz_step.dependOn(&run_transport_perf_fuzz.step);
     }
 
     // Attach physiological redo canary tests after test_step defined
@@ -3398,14 +3669,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &tde_published_sync_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0201: Performance optimization tests (thread pool, DRR scheduler, adaptive backoff)
-    // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-perf-optimizations; OWNER=build; UPDATED=2026-06-11
     const perf_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_performance_optimizations.zig"), .target = target, .optimize = optimize }) });
     perf_opt_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     perf_opt_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
     perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
+    // GAP-0514 Phase 6: named step so the thread-pool/DRR/backoff suite is
+    // runnable outside the (blocked) monolithic `zig build test` shard sweep.
+    const run_perf_opt_tests = b.addRunArtifact(perf_opt_tests);
+    const perf_opt_test_step = b.step("test-perf-optimizations", "Run performance optimization unit tests (thread pool, DRR scheduler, adaptive backoff)");
+    perf_opt_test_step.dependOn(&run_perf_opt_tests.step);
     shardDep(test_step, &perf_opt_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperTests"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Dedicated tests for the thread-pool-backed parallel wrapper.
     const parallel_wrapper_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_thread_pool_parallel.zig"), .target = target, .optimize = optimize }) });
     parallel_wrapper_tests.root_module.addImport("geode", root_mod);
@@ -3418,7 +3694,7 @@ pub fn build(b: *std.Build) void {
     // Also add to main test step
     shardDep(test_step, &parallel_wrapper_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
+    // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=TESTED; TEST=test-quic-streams; OWNER=build; UPDATED=2026-06-11
     const quic_stream_registry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_stream_registry.zig"), .target = target, .optimize = optimize }) });
     quic_stream_registry_tests.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = optimize }));
     quic_stream_registry_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
@@ -3535,7 +3811,7 @@ pub fn build(b: *std.Build) void {
     // contract that `finish()` must join the watchdog thread before
     // returning, so callers (cmdQuery) are safe to free the state (e.g. by
     // popping a stack frame) immediately after `finish()`.
-    // CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=cli; UPDATED=2026-04-16
+    // CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=LifetimeRegressionBuild; STATUS=TESTED; TEST=test-deadline-watchdog; OWNER=cli; UPDATED=2026-06-11
     // Issue #746: the fix switched the watchdog off the shared CLI thread
     // pool and onto a direct `std.Thread.spawn`, so the module no longer
     // needs the `transport/thread_pool` import.  The test binary only needs
@@ -3554,7 +3830,7 @@ pub fn build(b: *std.Build) void {
     // N-way parallel across the default-lane workers, rather than
     // serialized behind the 1-wide blocking lane.  See
     // docs/audit/bugfix-session-contention-triage.md for the root cause.
-    // CANARY: REQ=REQ-PERF-SESSION-ADMISSION-003; FEATURE="ConnectionAdmissionLaneAPI"; ASPECT=LaneParallelismBuild; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-16
+    // CANARY: REQ=REQ-PERF-SESSION-ADMISSION-003; FEATURE="ConnectionAdmissionLaneAPI"; ASPECT=LaneParallelismBuild; STATUS=TESTED; TEST=test-thread-pool-lane-parallelism; OWNER=transport; UPDATED=2026-06-11
     const thread_pool_lane_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_thread_pool_lane_parallelism.zig"), .target = target, .optimize = optimize }) });
     thread_pool_lane_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_thread_pool_lane_tests = b.addRunArtifact(thread_pool_lane_tests);
@@ -3579,7 +3855,7 @@ pub fn build(b: *std.Build) void {
     // is idempotent across a re-start.  Build-wired identically to the
     // deadline-watchdog test above: its own module pair (no `geode` root),
     // its own `test-metrics-server` step, fold into the main test step.
-    // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-04-16
+    // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=LifetimeRegressionBuild; STATUS=TESTED; TEST=test-metrics-server; OWNER=monitoring; UPDATED=2026-06-11
     const prometheus_mod_for_metrics_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/prometheus.zig"), .target = target, .optimize = optimize });
     // otel_prometheus_responder is imported by metrics_server.serveMetrics.
     // All three monitoring modules use named imports and are wired as separate
@@ -3611,7 +3887,7 @@ pub fn build(b: *std.Build) void {
     metrics_server_lifetime_test_step.dependOn(&run_metrics_server_lifetime_tests.step);
     shardDep(test_step, &metrics_server_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=BENCHED; BENCH=bench-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Thread-pool parallel wrapper benchmarks.
     const parallel_wrapper_bench = b.addExecutable(.{ .name = "bench_thread_pool_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_thread_pool_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
     parallel_wrapper_bench.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
@@ -3620,7 +3896,7 @@ pub fn build(b: *std.Build) void {
     parallel_wrapper_bench_step.dependOn(&run_parallel_wrapper_bench.step);
 
     // GAP-0201: Transport throughput benchmark for performance optimization validation
-    // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=BENCHED; BENCH=bench-transport; OWNER=build; UPDATED=2026-06-11
     const transport_throughput_bench = b.addExecutable(.{ .name = "bench_transport_throughput", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_transport_throughput.zig"), .target = target, .optimize = optimize }) });
     transport_throughput_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
     transport_throughput_bench.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
@@ -3629,7 +3905,7 @@ pub fn build(b: *std.Build) void {
     const run_transport_bench = b.addRunArtifact(transport_throughput_bench);
     transport_bench_step.dependOn(&run_transport_bench.step);
 
-    // CANARY: REQ=REQ-QUIC-MUX-009; FEATURE="StreamRegistryBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
+    // CANARY: REQ=REQ-QUIC-MUX-009; FEATURE="StreamRegistryBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=BENCHED; BENCH=bench-quic-streams; OWNER=build; UPDATED=2026-06-11
     const quic_stream_registry_bench = b.addExecutable(.{ .name = "bench_quic_stream_registry", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_quic_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }) });
     quic_stream_registry_bench.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }));
     quic_stream_registry_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
@@ -3744,7 +4020,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
     geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=build; UPDATED=2026-06-11
     // Add server-required modules for unified binary (server/main.zig imports)
     geode_exe.root_module.addImport("txn", txn_mod);
     // Create and add index_selectivity module for server
@@ -3804,6 +4080,13 @@ pub fn build(b: *std.Build) void {
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     remote_kms_tests.root_module.link_libc = true;
     shardDep(test_step, &remote_kms_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: these tests were COMPILE-ONLY (shardDep got the
+    // Compile step, never a run artifact). Named step actually RUNS the
+    // remote-KMS QUIC round trip — the only live exerciser of
+    // QuicClient.connect/connectInsecure + QuicClientStream.readLine.
+    const run_remote_kms_tests = b.addRunArtifact(remote_kms_tests);
+    const remote_kms_step = b.step("test-remote-kms", "Run remote KMS QUIC round-trip tests (generate/attest/unwrap over real QUIC)");
+    remote_kms_step.dependOn(&run_remote_kms_tests.step);
 
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
     const remote_kms_hardening_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms_hardening.zig"), .target = target, .optimize = optimize }) });
@@ -3932,7 +4215,17 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("distributed_schema", distributed_schema_mod);
     graph_store_unit_tests.root_module.addImport("protobuf", protobuf_mod);
     graph_store_unit_tests.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
-    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // GAP-0888 review follow-up: the eval call-handler test root (rooted at
+    // src/eval.zig, declared near graph_store_unit_tests) reaches the same
+    // execution.zig → raft_consensus.zig / user_management.zig closure, so it
+    // needs the identical late-wired module set.
+    eval_handler_mod.addImport("raft", raft_ext_mod);
+    eval_handler_mod.addImport("geode_auth", auth_mod);
+    eval_handler_mod.addImport("raft_schema", raft_schema_mod);
+    eval_handler_mod.addImport("distributed_schema", distributed_schema_mod);
+    eval_handler_mod.addImport("protobuf", protobuf_mod);
+    eval_handler_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=build; UPDATED=2026-06-11
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
     geode_exe.root_module.addImport("feature_flags", runtime_flags_mod);
@@ -3977,7 +4270,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_rls_injection_tests.step, 1, test_shard_loads, test_shard_index);
 
     // S1: RLS filter engine unit tests (label-based post-execution row filtering)
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-005; FEATURE="RLS Query Enforcement"; ASPECT=UnitTests; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-005; FEATURE="RLS Query Enforcement"; ASPECT=UnitTests; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-06-11
     const rls_filter_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/server/rls_filter.zig"),
@@ -3990,6 +4283,24 @@ pub fn build(b: *std.Build) void {
     rls_filter_tests.root_module.addImport("rls_types", rls_types_mod);
     const run_rls_filter_tests = b.addRunArtifact(rls_filter_tests);
     shardDep(test_step, &run_rls_filter_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6: named step so the RLS label-filter unit tests are
+    // runnable as CANARY evidence outside the (blocked) monolithic test root.
+    const rls_filter_step = b.step("test-rls-filter", "Run RLS label-filter engine unit tests (deny policies, algorithm filter, global setter)");
+    rls_filter_step.dependOn(&run_rls_filter_tests.step);
+
+    // GAP-0514 Phase 6: per-IP auth rate limiter unit tests (lockout
+    // threshold, expiry, reset, eviction) — previously not wired to any step.
+    const auth_rate_limiter_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server/auth_rate_limiter.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_auth_rate_limiter_tests = b.addRunArtifact(auth_rate_limiter_tests);
+    shardDep(test_step, &run_auth_rate_limiter_tests.step, 1, test_shard_loads, test_shard_index);
+    const auth_rate_limiter_step = b.step("test-auth-rate-limiter", "Run per-IP auth rate limiter unit tests (S6 brute-force lockout)");
+    auth_rate_limiter_step.dependOn(&run_auth_rate_limiter_tests.step);
 
     // GAP-0510 Task 1: RLS value bridge — standalone module + unit tests
     // Converts execution Value / PropertyValue → rls_core.Value for checkRowAccess().
@@ -4007,6 +4318,20 @@ pub fn build(b: *std.Build) void {
     const rls_value_bridge_tests = b.addTest(.{ .root_module = rls_value_bridge_mod });
     const run_rls_value_bridge_tests = b.addRunArtifact(rls_value_bridge_tests);
     shardDep(test_step, &run_rls_value_bridge_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // PERF-A / #808: RLS row-rebuild elimination micro-benchmark. Measures the
+    // old unconditional nodePropertiesToRLSRowInto + checkRowAccessByUsername
+    // per-row path against the new needsRowDataForTable-gated path (skip for
+    // row-free policies, build for row-reading policies). VarianceEnvelope
+    // JSON + VARIANCE_OK/VARIANCE_FAIL tokens + PERF_A_SPEEDUP summary line.
+    // Run with: zig build bench-rls-row-skip -Doptimize=ReleaseFast
+    const rls_row_skip_bench_exe = b.addExecutable(.{ .name = "benchmark_rls_row_skip", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_rls_row_skip.zig"), .target = target, .optimize = optimize }) });
+    rls_row_skip_bench_exe.root_module.addImport("rls", rls_mod);
+    rls_row_skip_bench_exe.root_module.addImport("geode", root_mod);
+    rls_row_skip_bench_exe.root_module.addImport("rls_value_bridge", rls_value_bridge_mod);
+    const run_rls_row_skip_bench = b.addRunArtifact(rls_row_skip_bench_exe);
+    const rls_row_skip_bench_step = b.step("bench-rls-row-skip", "Run the PERF-A/#808 RLS row-build skip micro-benchmark");
+    rls_row_skip_bench_step.dependOn(&run_rls_row_skip_bench.step);
 
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
@@ -4316,7 +4641,12 @@ pub fn build(b: *std.Build) void {
     test_e2e_step.dependOn(&e2e_security_tde_mfa_test.step);
     const e2e_fts_advanced_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_fts_advanced.zig"), .target = target, .optimize = optimize }) });
     e2e_fts_advanced_test.root_module.addImport("geode", root_mod);
+    e2e_fts_advanced_test.root_module.link_libc = true;
     test_e2e_step.dependOn(&e2e_fts_advanced_test.step);
+    // GAP-0869: the facade-level phrase/proximity/highlight tests RUN under
+    // the dedicated test-gap0869 step (test-e2e only compiles them).
+    const run_e2e_fts_advanced = b.addRunArtifact(e2e_fts_advanced_test);
+    gap0869_step.dependOn(&run_e2e_fts_advanced.step);
     const e2e_parallel_execution_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_parallel_execution.zig"), .target = target, .optimize = optimize }) });
     e2e_parallel_execution_test.root_module.addImport("geode", root_mod);
     test_e2e_step.dependOn(&e2e_parallel_execution_test.step);
@@ -4325,7 +4655,10 @@ pub fn build(b: *std.Build) void {
     test_e2e_step.dependOn(&e2e_cbo_v0_test.step);
     const e2e_graph_algos_new_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_graph_algos_new.zig"), .target = target, .optimize = optimize }) });
     e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
-    test_e2e_step.dependOn(&e2e_graph_algos_new_test.step);
+    // GAP-0863a: actually RUN these tests (pure in-memory community-detection
+    // assertions, no server) instead of compile-only like the stub-era wiring.
+    const run_e2e_graph_algos_new_test = b.addRunArtifact(e2e_graph_algos_new_test);
+    test_e2e_step.dependOn(&run_e2e_graph_algos_new_test.step);
 
     // October 2025 feature integration tests
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
@@ -4361,10 +4694,10 @@ pub fn build(b: *std.Build) void {
     tde_file_encryption_test.root_module.addImport("logging", logging_mod);
     shardDep(test_step, &tde_file_encryption_test.step, 1, test_shard_loads, test_shard_index);
 
-    const ml_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration.zig"), .target = target, .optimize = optimize }),
-    });
-    shardDep(test_step, &ml_test.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
+    // and an embedding-sign "community detection" hack) was dead code — no
+    // production importer; superseded by src/ml/integration_enhanced.zig.
+    // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize }),
@@ -4451,11 +4784,20 @@ pub fn build(b: *std.Build) void {
     });
     gpu_module_loader_test.root_module.link_libc = true;
 
-    // GPU tests (optional, requires Vulkan - not run by default)
+    // GPU acceleration (device detection/status) test -- GAP-0878: honest
+    // device reporting; dlopen-based, compiles and self-skips on GPU-less hosts
+    const gpu_accel_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize }),
+    });
+    gpu_accel_test.root_module.link_libc = true;
+
+    // GPU tests (optional; CUDA paths self-skip without a driver, Vulkan
+    // tests self-skip without a Vulkan loader)
     // Run with: zig build test-gpu
     // Note: On macOS, requires MoltenVK (brew install molten-vk)
-    const test_gpu_step = b.step("test-gpu", "Run GPU/Vulkan tests (requires Vulkan)");
+    const test_gpu_step = b.step("test-gpu", "Run GPU/Vulkan tests (self-skip without GPU toolchain/hardware)");
     test_gpu_step.dependOn(&run_vulkan_tests.step);
+    test_gpu_step.dependOn(&gpu_accel_test.step);
     test_gpu_step.dependOn(&gpu_test.step);
     test_gpu_step.dependOn(&gpu_phase1_test.step);
     test_gpu_step.dependOn(&gpu_phase2_test.step);
@@ -4722,6 +5064,20 @@ pub fn build(b: *std.Build) void {
     const run_insecure_gate_tests = b.addRunArtifact(insecure_gate_tests);
     shardDep(test_step, &run_insecure_gate_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // SEC-INFRA-03 regression: dual-token (primary + previous) cluster
+    // bearer rotation. Inbound validation accepts GEODE_CLUSTER_TOKEN or
+    // GEODE_CLUSTER_TOKEN_PREVIOUS during the overlap window; outbound
+    // always sends the primary. Reuses cluster_auth_test_mod (libc for
+    // getenv/setenv).
+    const sec_infra03_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec_infra03_token_rotation.zig"), .target = target, .optimize = optimize });
+    sec_infra03_test_mod.addImport("cluster_auth", cluster_auth_test_mod);
+    sec_infra03_test_mod.link_libc = true;
+    const sec_infra03_tests = b.addTest(.{ .root_module = sec_infra03_test_mod });
+    const run_sec_infra03_tests = b.addRunArtifact(sec_infra03_tests);
+    shardDep(test_step, &run_sec_infra03_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_infra03_step = b.step("test-sec-infra03", "SEC-INFRA-03: cluster bearer token rotation (primary + previous overlap window)");
+    sec_infra03_step.dependOn(&run_sec_infra03_tests.step);
+
     // GAP-0741 / SEC-KMS-01 regression: vault_kms_provider.validateVaultPath
     // unit tests (inline in the module).  Run the tests that live inside the
     // module itself; the file is not yet wired into production but the
@@ -4752,6 +5108,26 @@ pub fn build(b: *std.Build) void {
     // `getNodesByLabels(..., filter_tenant)`.
     const gap0509_step = b.step("test-gap0509-tenant-isolation", "GAP-0509 regression (tenant isolation for MATCH and SHOW TABLES)");
     gap0509_step.dependOn(&run_gap0509_tests.step);
+
+    // GAP-0879 regression: ML embeddings truth. Node2Vec walks honor the
+    // p/q transition bias (Grover & Leskovec 2016) with deterministic
+    // seeding, and trainEmbeddings records a REAL per-epoch skip-gram loss
+    // (never simulated) that decreases on a tiny deterministic graph.
+    const gap0879_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_ml_graph_embeddings_integration.zig"), .target = target, .optimize = optimize });
+    gap0879_test_mod.addImport("geode", root_mod);
+    const gap0879_tests = b.addTest(.{ .root_module = gap0879_test_mod });
+    const run_gap0879_tests = b.addRunArtifact(gap0879_tests);
+    shardDep(test_step, &run_gap0879_tests.step, 1, test_shard_loads, test_shard_index);
+    // Also compile+run the in-module tests of src/ml/integration_enhanced.zig
+    // (caller-owned getNeighbors allocation contract, p/q-biased RandomWalker).
+    const gap0879_ie_tests = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration_enhanced.zig"), .target = target, .optimize = optimize }),
+    });
+    const run_gap0879_ie_tests = b.addRunArtifact(gap0879_ie_tests);
+    shardDep(test_step, &run_gap0879_ie_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0879_step = b.step("test-gap0879", "GAP-0879 regression (Node2Vec p/q bias + real training loss + ML allocator ownership)");
+    gap0879_step.dependOn(&run_gap0879_tests.step);
+    gap0879_step.dependOn(&run_gap0879_ie_tests.step);
 
     // GAP-0891 regression suite (native-tenant write tagging + edge reads).
     const gap0891_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0891_repro.zig"), .target = target, .optimize = optimize });
@@ -4821,6 +5197,43 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0843_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0843_step = b.step("test-gap0843-tenant-tde", "GAP-0843 regression (per-tenant TDE key isolation + real page encrypt)");
     gap0843_step.dependOn(&run_gap0843_tests.step);
+
+    // GAP-0881: crypto truth — real HMAC-SHA3 (FIPS 198-1 via stdlib, not the
+    // old SHA3(key||data) placeholder) + TDE status() derives loaded/key_id
+    // from an actual key-manager load instead of a hardcoded dummy. Needs libc
+    // for the std.c.setenv/getenv that install/read GEODE_TDE_KEY.
+    const gap0881_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0881_crypto_truth.zig"), .target = target, .optimize = optimize });
+    gap0881_test_mod.addImport("geode", root_mod);
+    gap0881_test_mod.link_libc = true; // std.c.setenv / std.c.getenv for GEODE_TDE_KEY
+    const gap0881_tests = b.addTest(.{ .root_module = gap0881_test_mod });
+    const run_gap0881_tests = b.addRunArtifact(gap0881_tests);
+    shardDep(test_step, &run_gap0881_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0881_step = b.step("test-gap0881", "GAP-0881 regression (real HMAC-SHA3 construction + TDE status key-material truth)");
+    gap0881_step.dependOn(&run_gap0881_tests.step);
+
+    // GAP-0890: rotation policy enforced + scheduler tick. rotateNow refuses
+    // (error.RotationPolicyRefused) while the active key is younger than
+    // min_interval_secs; max_age_secs forces rotation; rotateIfDue is the
+    // operator-invoked scheduler tick with an injected clock; the lazy
+    // re-wrap path (reencryptPage) is proven a real AES-256-GCM round-trip.
+    const gap0890_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0890_rotation_policy.zig"), .target = target, .optimize = optimize });
+    gap0890_test_mod.addImport("geode", root_mod);
+    const gap0890_tests = b.addTest(.{ .root_module = gap0890_test_mod });
+    const run_gap0890_tests = b.addRunArtifact(gap0890_tests);
+    shardDep(test_step, &run_gap0890_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0890_step = b.step("test-gap0890", "GAP-0890 regression (rotation policy enforced: min-interval refusal, max-age force, scheduler tick, real lazy re-wrap)");
+    gap0890_step.dependOn(&run_gap0890_tests.step);
+
+    // GAP-0890: real key-rotation micro-benchmark (ReleaseSafe, standalone
+    // step — not part of the test gate). Replaces the old stub simulation in
+    // tests/benchmark_tde_key_rotate.zig with measured getrandom keygen and
+    // AES-256-GCM 4KiB lazy re-wrap latency.
+    const tde_keyrot_bench_mod = b.createModule(.{ .root_source_file = b.path("tests/benchmark_tde_key_rotate.zig"), .target = target, .optimize = .ReleaseSafe });
+    tde_keyrot_bench_mod.addImport("geode", root_mod);
+    const tde_keyrot_bench = b.addTest(.{ .root_module = tde_keyrot_bench_mod });
+    const run_tde_keyrot_bench = b.addRunArtifact(tde_keyrot_bench);
+    const tde_keyrot_bench_step = b.step("bench-tde-key-rotate", "GAP-0890 real TDE key-rotation micro-benchmark (rotation latency + 4KiB lazy re-wrap)");
+    tde_keyrot_bench_step.dependOn(&run_tde_keyrot_bench.step);
 
     // GAP-0842: prominent --insecure-allow-all startup banner contract.
     const gap0842_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0842_insecure_allow_all_banner.zig"), .target = target, .optimize = optimize });
@@ -4932,6 +5345,7 @@ pub fn build(b: *std.Build) void {
     // PERF-C (issue #814): LSP introspection label/property/edge-type index.
     const perf_c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_c_lsp_introspection_index.zig"), .target = target, .optimize = optimize });
     perf_c_test_mod.addImport("geode", root_mod);
+    perf_c_test_mod.link_libc = true; // setenv/unsetenv shim for the GAP-0863b FLE leak regression
     const perf_c_tests = b.addTest(.{ .root_module = perf_c_test_mod });
     const run_perf_c_tests = b.addRunArtifact(perf_c_tests);
     shardDep(test_step, &run_perf_c_tests.step, 1, test_shard_loads, test_shard_index);
@@ -5178,6 +5592,28 @@ pub fn build(b: *std.Build) void {
     const test_lsp_embedded_e2e_step = b.step("test-lsp-embedded-e2e", "Run LSP embedded-TCP listener end-to-end auth-rejection test");
     test_lsp_embedded_e2e_step.dependOn(&run_lsp_embedded_e2e_tests.step);
 
+    // LSP-F-02 / #770: per-document AST cache regression. Same wiring shape
+    // as the embedded-e2e block directly above — one `lsp_server` module
+    // rooted at src/cli/lsp/server.zig (its own test executable, so no
+    // file-diamond with lsp_tests), with `geode` + `schema_introspection`
+    // surfaced for server.zig's transitive imports. The test reaches the
+    // cache through server.zig's `pub const ast_cache` re-export and the
+    // Transport type via `@TypeOf` on the Server.transport field. libc for
+    // lspMonoNanos (std.c.clock_gettime) as in the e2e block.
+    const lsp_server_ast_cache_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    lsp_server_ast_cache_mod.addImport("geode", root_mod);
+    lsp_server_ast_cache_mod.addImport("schema_introspection", schema_introspection_mod);
+    lsp_server_ast_cache_mod.link_libc = true;
+
+    const lsp_ast_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_lsp_ast_cache.zig"), .target = target, .optimize = optimize });
+    lsp_ast_cache_test_mod.addImport("lsp_server", lsp_server_ast_cache_mod);
+    lsp_ast_cache_test_mod.link_libc = true;
+    const lsp_ast_cache_tests = b.addTest(.{ .root_module = lsp_ast_cache_test_mod });
+    const run_lsp_ast_cache_tests = b.addRunArtifact(lsp_ast_cache_tests);
+    shardDep(test_step, &run_lsp_ast_cache_tests.step, 1, test_shard_loads, test_shard_index);
+    const test_lsp_ast_cache_step = b.step("test-lsp-ast-cache", "LSP-F-02/#770: per-document AST cache for LSP parse paths");
+    test_lsp_ast_cache_step.dependOn(&run_lsp_ast_cache_tests.step);
+
     // GAP-0818: LSP feature providers must enforce caller tenant identity.
     // We root a single module at features.zig (exposed as `lsp_features`)
     // so the tests/ regression file can construct Document / SchemaProvider
@@ -5200,6 +5636,26 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0818_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0818_step = b.step("test-gap0818", "GAP-0818: LSP providers enforce caller tenant identity (cross-tenant leak regression)");
     gap0818_step.dependOn(&run_gap0818_tests.step);
+
+    // GAP-0818 enforcement gate: no VERIFIED principal -> no tenant-scoped
+    // schema/RLS-filtered data from LSP/MCP. Roots the regression through a
+    // single module at server.zig (exposed as `lsp_server`, same diamond
+    // rationale as gap0832) so the test reaches `Server.callerContext`,
+    // `Server.publishVerifiedState`, and the re-exported auth/features/
+    // schema_provider modules.
+    const gap0818_gate_server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0818_gate_server_mod.addImport("geode", root_mod);
+    gap0818_gate_server_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0818_gate_server_mod.link_libc = true;
+    const gap0818_gate_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0818_gate.zig"), .target = target, .optimize = optimize });
+    gap0818_gate_test_mod.addImport("lsp_server", gap0818_gate_server_mod);
+    gap0818_gate_test_mod.addImport("geode", root_mod);
+    gap0818_gate_test_mod.link_libc = true;
+    const gap0818_gate_tests = b.addTest(.{ .root_module = gap0818_gate_test_mod });
+    const run_gap0818_gate_tests = b.addRunArtifact(gap0818_gate_tests);
+    shardDep(test_step, &run_gap0818_gate_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0818_gate_step = b.step("test-gap0818-gate", "GAP-0818 enforcement gate: unverified principal gets no tenant-scoped LSP data");
+    gap0818_gate_step.dependOn(&run_gap0818_gate_tests.step);
 
     // GAP-0832: validated decode for the LSP JSON-RPC request envelope.
     // Roots the regression file through a single module at server.zig
@@ -5288,6 +5744,267 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0516_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
+
+    // GAP-0875: residual local stubs batch. Two test modules under one step:
+    //  - tests/test_gap0875_stubs.zig (via the `geode` module; lib.zig exports
+    //    constraint_manager + memory_mapped_io for it): unique-constraint
+    //    index consultation, printer IN/NOT IN subquery round-trip +
+    //    temporal-walker descent, measured mmap write benchmark.
+    //  - tests/test_gap0875_stubs_mcp.zig (rooted module at src/mcp/tools.zig
+    //    exposed as `mcp_tools`, mirroring the gap0516 import set): MCP
+    //    cancellation-token propagation in tools.callTool.
+    const gap0875_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0875_stubs.zig"), .target = target, .optimize = optimize });
+    gap0875_test_mod.addImport("geode", root_mod);
+    gap0875_test_mod.link_libc = true;
+    const gap0875_tests = b.addTest(.{ .root_module = gap0875_test_mod });
+    const run_gap0875_tests = b.addRunArtifact(gap0875_tests);
+    const gap0875_tools_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/tools.zig"), .target = target, .optimize = optimize });
+    gap0875_tools_mod.addImport("mcp", mcp_mod);
+    gap0875_tools_mod.addImport("geode", root_mod);
+    gap0875_tools_mod.addImport("json", json_mod);
+    gap0875_tools_mod.addImport("schema", schema_mod);
+    gap0875_tools_mod.addImport("protobuf", protobuf_mod);
+    gap0875_tools_mod.addImport("transport/quic", transport_quic_mod);
+    gap0875_tools_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    gap0875_tools_mod.addImport("build_options", build_options_mod);
+    gap0875_tools_mod.link_libc = true;
+    const gap0875_mcp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0875_stubs_mcp.zig"), .target = target, .optimize = optimize });
+    gap0875_mcp_test_mod.addImport("mcp", mcp_mod);
+    gap0875_mcp_test_mod.addImport("mcp_tools", gap0875_tools_mod);
+    gap0875_mcp_test_mod.addImport("geode", root_mod);
+    gap0875_mcp_test_mod.link_libc = true;
+    const gap0875_mcp_tests = b.addTest(.{ .root_module = gap0875_mcp_test_mod });
+    const run_gap0875_mcp_tests = b.addRunArtifact(gap0875_mcp_tests);
+    shardDep(test_step, &run_gap0875_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_gap0875_mcp_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0875_step = b.step("test-gap0875", "GAP-0875: residual stubs batch (unique-index check, printer subqueries, MCP cancellation, measured write bench)");
+    gap0875_step.dependOn(&run_gap0875_tests.step);
+    gap0875_step.dependOn(&run_gap0875_mcp_tests.step);
+
+    // GAP-0884: MFA step-up operation classification. Pins the explicit
+    // OperationClass mapping (read/write/admin/security_admin) inside
+    // requireStepUp(), replacing the substring "admin"/"write" heuristic:
+    // read ops containing "admin" must NOT step up, and privileged ops with
+    // bland names (geode.fle.configureField, geode.auth.*) MUST. Unknown
+    // identifiers fail closed (write class => step-up).
+    const gap0884_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0884_stepup_classification.zig"), .target = target, .optimize = optimize });
+    gap0884_test_mod.addImport("geode_auth", auth_mod);
+    gap0884_test_mod.link_libc = true;
+    const gap0884_tests = b.addTest(.{ .root_module = gap0884_test_mod });
+    const run_gap0884_tests = b.addRunArtifact(gap0884_tests);
+    shardDep(test_step, &run_gap0884_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0884_step = b.step("test-gap0884", "GAP-0884: MFA step-up explicit operation classification (no substring heuristics)");
+    gap0884_step.dependOn(&run_gap0884_tests.step);
+
+    // GAP-0514 Phase 6 P1: real e2e regression coverage for the
+    // repl_dispatch.zig CANARY hotspot — drives the public ClientSession
+    // surface (hello/begin/commit/rollback/drain/pullAll interrupt + error
+    // lanes) and executeSourceFile (small-batch, chunked >32KB, re-source
+    // cache, batch error extraction) against a spawned real server.
+    const gap0514_repl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_repl_dispatch.zig"), .target = target, .optimize = optimize });
+    gap0514_repl_test_mod.addImport("geode", root_mod);
+    gap0514_repl_test_mod.addImport("protobuf", protobuf_mod);
+    gap0514_repl_test_mod.addImport("schema", schema_mod);
+    gap0514_repl_test_mod.addImport("transport/quic", transport_quic_mod);
+    gap0514_repl_test_mod.link_libc = true;
+    const gap0514_repl_tests = b.addTest(.{ .root_module = gap0514_repl_test_mod });
+    const run_gap0514_repl_tests = b.addRunArtifact(gap0514_repl_tests);
+    run_gap0514_repl_tests.step.dependOn(&install_geode_exe.step);
+    const gap0514_repl_step = b.step("test-gap0514-repl", "GAP-0514: repl_dispatch e2e CANARY regression (interrupt/txn-error/drain/source-chunked lanes)");
+    gap0514_repl_step.dependOn(&run_gap0514_repl_tests.step);
+
+    // GAP-0514 Phase 6 P1: quic_connection_handler hotspot lanes the repl e2e
+    // does not reach — QUIC savepoint/rollback_to dispatch, HELLO graph
+    // resolution (DSN binding), and the graph-RBAC bind check.  Spawns the
+    // real server binary; speaks the real protobuf protocol.
+    const gap0514_quic_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_quic_handler.zig"), .target = target, .optimize = optimize });
+    gap0514_quic_test_mod.addImport("geode", root_mod);
+    gap0514_quic_test_mod.addImport("protobuf", protobuf_mod);
+    gap0514_quic_test_mod.addImport("schema", schema_mod);
+    gap0514_quic_test_mod.addImport("transport/quic", transport_quic_mod);
+    gap0514_quic_test_mod.link_libc = true;
+    const gap0514_quic_tests = b.addTest(.{ .root_module = gap0514_quic_test_mod });
+    const run_gap0514_quic_tests = b.addRunArtifact(gap0514_quic_tests);
+    run_gap0514_quic_tests.step.dependOn(&install_geode_exe.step);
+    const gap0514_quic_step = b.step("test-gap0514-quic", "GAP-0514: quic_connection_handler e2e CANARY regression (savepoint/rollback_to, HELLO graph binding)");
+    gap0514_quic_step.dependOn(&run_gap0514_quic_tests.step);
+
+    // GAP-0883: server-level coverage for the documented `CALL algo.*` graph
+    // algorithm procedures through the real parse → dispatch → executor path
+    // over a real GraphStore (two directed triangles + bridge, plus the
+    // usage-guide social-network fixture). Pins non-degenerate community
+    // detection (two communities for two triangles — NOT one-per-node) and
+    // verifies every output table published in
+    // docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md.
+    const gap0883_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0883_algo_procedures.zig"), .target = target, .optimize = optimize });
+    gap0883_test_mod.addImport("geode", root_mod);
+    gap0883_test_mod.link_libc = true;
+    const gap0883_tests = b.addTest(.{ .root_module = gap0883_test_mod });
+    const run_gap0883_tests = b.addRunArtifact(gap0883_tests);
+    shardDep(test_step, &run_gap0883_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0883_step = b.step("test-gap0883", "GAP-0883: CALL algo.* procedures over real fixture graphs (non-degenerate community detection)");
+    gap0883_step.dependOn(&run_gap0883_tests.step);
+
+    // GAP-0878: honest GPU device reporting. Pins that GPUAccelerator never
+    // fabricates a device: backend .none (and any backend without a working
+    // driver) reports zero devices and available=false -- no "Mock GPU
+    // Device". CUDA detection is dlopen-based (cuda_loader.zig), so this
+    // compiles and self-skips cleanly on GPU-less hosts.
+    const gap0878_accel_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize });
+    gap0878_accel_mod.link_libc = true;
+    const gap0878_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0878_gpu_truth.zig"), .target = target, .optimize = optimize });
+    gap0878_test_mod.addImport("gpu_acceleration", gap0878_accel_mod);
+    gap0878_test_mod.link_libc = true;
+    const gap0878_tests = b.addTest(.{ .root_module = gap0878_test_mod });
+    const run_gap0878_tests = b.addRunArtifact(gap0878_tests);
+    shardDep(test_step, &run_gap0878_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0878_step = b.step("test-gap0878", "GAP-0878: honest GPU device reporting (backend .none => zero devices, available=false)");
+    gap0878_step.dependOn(&run_gap0878_tests.step);
+
+    // GAP-0876: exact-match materialized view rewrite (API level). Pins the
+    // enhanced view manager's rewrite path: a query structurally identical
+    // to a view definition rewrites to the view (complete_replacement) and
+    // the served rows come from the materialized snapshot — proven by
+    // mutating base data without refreshing and asserting the snapshot is
+    // returned. Also pins the negatives: same-label/different-projection,
+    // different literal/limit/order-by, and unparseable input never rewrite
+    // (the old label-overlap heuristic that claimed complete_replacement is
+    // gone). The manager is reached through the public `geode` module
+    // (lib.zig re-export); it is NOT yet consulted by the execution path.
+    const gap0876_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_materialized_views_enhanced.zig"), .target = target, .optimize = optimize });
+    gap0876_test_mod.addImport("geode", root_mod);
+    gap0876_test_mod.link_libc = true;
+    const gap0876_tests = b.addTest(.{ .root_module = gap0876_test_mod });
+    const run_gap0876_tests = b.addRunArtifact(gap0876_tests);
+    shardDep(test_step, &run_gap0876_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0876_step = b.step("test-gap0876", "GAP-0876: exact-match materialized view rewrite served from the view snapshot");
+    gap0876_step.dependOn(&run_gap0876_tests.step);
+
+    // GAP-0877: advanced-type semantics. Pins (a) canonical ISO-8601 /
+    // actual-value stringify for Date/Time/TimeTZ/Timestamp/TimestampTZ/
+    // Interval/Url/Domain/Bytea (previously placeholder strings like "date"),
+    // (b) stable error.UnsupportedGeometryRelation for unimplemented geometry
+    // relation combinations (previously silent false) plus real LineString-
+    // LineString and polygon edge-crossing intersection, (c) domain_root
+    // eTLD+1 via the bundled public-suffix snapshot (exact + wildcard +
+    // exception rules, last-2-labels fallback for unknown TLDs), and (d)
+    // GeometryFromText producing real WKB instead of raw WKT bytes.
+    const gap0877_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0877_advanced_types.zig"), .target = target, .optimize = optimize });
+    gap0877_test_mod.addImport("geode", root_mod);
+    gap0877_test_mod.link_libc = true;
+    const gap0877_tests = b.addTest(.{ .root_module = gap0877_test_mod });
+    const run_gap0877_tests = b.addRunArtifact(gap0877_tests);
+    shardDep(test_step, &run_gap0877_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0877_step = b.step("test-gap0877", "GAP-0877: canonical advanced-type serialization, eTLD+1 domain_root, honest geometry errors");
+    gap0877_step.dependOn(&run_gap0877_tests.step);
+
+    // GAP-0867: real statistics into the CBO + truthful EXPLAIN estimates.
+    // Pins (a) StatsRegistry.analyzeTable collecting live row counts from the
+    // graph store (was error.FeatureDisabled), (b) explainEstimateJSON
+    // deriving per-scan-node estimated_rows from those statistics (was a
+    // canned skeleton), and (c) chooseIndexForPredicate only selecting an
+    // index when the predicate references the indexed property (the
+    // predicate was previously ignored).
+    const gap0867_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/server/index_catalog.zig"), .target = target, .optimize = optimize });
+    gap0867_catalog_mod.addImport("index_selectivity", index_selectivity_mod);
+    const gap0867_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0867_cbo_estimates.zig"), .target = target, .optimize = optimize });
+    gap0867_test_mod.addImport("geode", root_mod);
+    gap0867_test_mod.addImport("index_catalog", gap0867_catalog_mod);
+    gap0867_test_mod.link_libc = true;
+    const gap0867_tests = b.addTest(.{ .root_module = gap0867_test_mod });
+    const run_gap0867_tests = b.addRunArtifact(gap0867_tests);
+    shardDep(test_step, &run_gap0867_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0867_step = b.step("test-gap0867", "GAP-0867: real CBO statistics + truthful EXPLAIN estimates + predicate-aware index choice");
+    gap0867_step.dependOn(&run_gap0867_tests.step);
+
+    // GAP-0868: PROFILE runtime telemetry. The statement-level PROFILE
+    // fallback (non-Query statements and concrete-tenant demoted reads) now
+    // measures real CLOCK_MONOTONIC wall-clock around the wrapped statement
+    // and reports `time_ms`, replacing the hard-coded `time = 1` placeholder.
+    // Planned reads keep the richer planned_query_profile (per-operator
+    // time_ns via RuntimeTrace) — unchanged.
+    const gap0868_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0868_profile_timing.zig"), .target = target, .optimize = optimize });
+    gap0868_test_mod.addImport("geode", root_mod);
+    gap0868_test_mod.link_libc = true;
+    const gap0868_tests = b.addTest(.{ .root_module = gap0868_test_mod });
+    const run_gap0868_tests = b.addRunArtifact(gap0868_tests);
+    shardDep(test_step, &run_gap0868_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0868_step = b.step("test-gap0868", "GAP-0868: real wall-clock PROFILE timing (no placeholder)");
+    gap0868_step.dependOn(&run_gap0868_tests.step);
+
+    // GAP-0885b: LSP/MCP hardening batch (LSP-SEC-002/005/008). Roots the
+    // regression file through src/cli/lsp/server.zig (exposed as
+    // `lsp_server`, same wiring rationale as gap0831/gap0832) for the URI
+    // percent-encoding + bind-policy helpers, and through src/mcp/server.zig
+    // (exposed as `mcp_server`, mirroring the gap0516 import set) for the
+    // .none-auth loopback hard-assert and the loopback-default pin that
+    // bounds the vendored timing-unsafe bearer compare.
+    const gap0885_lsp_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    gap0885_lsp_mod.addImport("geode", root_mod);
+    gap0885_lsp_mod.addImport("schema_introspection", schema_introspection_mod);
+    gap0885_lsp_mod.link_libc = true;
+    const gap0885_mcp_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/server.zig"), .target = target, .optimize = optimize });
+    gap0885_mcp_mod.addImport("mcp", mcp_mod);
+    gap0885_mcp_mod.addImport("geode", root_mod);
+    gap0885_mcp_mod.addImport("json", json_mod);
+    gap0885_mcp_mod.addImport("schema", schema_mod);
+    gap0885_mcp_mod.addImport("protobuf", protobuf_mod);
+    gap0885_mcp_mod.addImport("transport/quic", transport_quic_mod);
+    gap0885_mcp_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    gap0885_mcp_mod.addImport("build_options", build_options_mod);
+    gap0885_mcp_mod.link_libc = true;
+    const gap0885_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0885_lsp_hardening.zig"), .target = target, .optimize = optimize });
+    gap0885_test_mod.addImport("lsp_server", gap0885_lsp_mod);
+    gap0885_test_mod.addImport("mcp_server", gap0885_mcp_mod);
+    gap0885_test_mod.link_libc = true;
+    const gap0885_tests = b.addTest(.{ .root_module = gap0885_test_mod });
+    const run_gap0885_tests = b.addRunArtifact(gap0885_tests);
+    shardDep(test_step, &run_gap0885_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0885_step = b.step("test-gap0885-lsp", "GAP-0885b: LSP/MCP hardening (URI percent-encoding, bind policy, .none-auth loopback assert)");
+    gap0885_step.dependOn(&run_gap0885_tests.step);
+
+    // SEC-SESS-LOG-01: `session rotate` must never write the session token to
+    // stderr/stdout. All user-facing rotate output flows through
+    // session_cli.writeRotateResult, pinned token-free by tests/test_sec_sess_log.zig.
+    const sec_sess_log_cli_mod = b.createModule(.{ .root_source_file = b.path("src/cli/session_cli.zig"), .target = target, .optimize = optimize });
+    sec_sess_log_cli_mod.addImport("geode", root_mod);
+    sec_sess_log_cli_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sec_sess_log_cli_mod.link_libc = true;
+    const sec_sess_log_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec_sess_log.zig"), .target = target, .optimize = optimize });
+    sec_sess_log_test_mod.addImport("session_cli", sec_sess_log_cli_mod);
+    sec_sess_log_test_mod.link_libc = true;
+    const sec_sess_log_tests = b.addTest(.{ .root_module = sec_sess_log_test_mod });
+    const run_sec_sess_log_tests = b.addRunArtifact(sec_sess_log_tests);
+    shardDep(test_step, &run_sec_sess_log_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_sess_log_step = b.step("test-sec-sess-log", "SEC-SESS-LOG-01: session rotate must not print the token to stderr");
+    sec_sess_log_step.dependOn(&run_sec_sess_log_tests.step);
+
+    // GAP-0885d: SEC-S3-SIGV2-01 + SEC-CLI-01. AWS SigV4 known-answer tests
+    // against the published AWS documentation vectors (replacing the legacy
+    // SigV2 HMAC-SHA1 signing in src/storage/s3_backup.zig), plus the
+    // --insecure-tls-skip-verify production-posture gate (GAP-0850 pattern).
+    // s3_backup.zig is rooted as its own module (same rationale as
+    // storage_backup_mod above) so the previously-orphaned manager compiles
+    // again and the SigV4 request path stays semantically analyzed.
+    const s3_sigv4_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_sigv4.zig"), .target = target, .optimize = optimize });
+    const s3_backup_sig_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_backup.zig"), .target = target, .optimize = optimize });
+    s3_backup_sig_mod.addImport("logging", logging_mod);
+    s3_backup_sig_mod.addImport("geode", root_mod);
+    s3_backup_sig_mod.addImport("storage/backup", storage_backup_mod);
+    s3_backup_sig_mod.addImport("s3_sigv4", s3_sigv4_mod);
+    s3_backup_sig_mod.link_libc = true;
+    const insecure_tls_gate_mod = b.createModule(.{ .root_source_file = b.path("src/cli/insecure_tls_gate.zig"), .target = target, .optimize = optimize });
+    insecure_tls_gate_mod.link_libc = true;
+    const s3_sigv4_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_s3_sigv4.zig"), .target = target, .optimize = optimize });
+    s3_sigv4_test_mod.addImport("s3_sigv4", s3_sigv4_mod);
+    s3_sigv4_test_mod.addImport("s3_backup", s3_backup_sig_mod);
+    s3_sigv4_test_mod.addImport("insecure_tls_gate", insecure_tls_gate_mod);
+    s3_sigv4_test_mod.link_libc = true;
+    const s3_sigv4_tests = b.addTest(.{ .root_module = s3_sigv4_test_mod });
+    const run_s3_sigv4_tests = b.addRunArtifact(s3_sigv4_tests);
+    shardDep(test_step, &run_s3_sigv4_tests.step, 1, test_shard_loads, test_shard_index);
+    const s3_sigv4_step = b.step("test-s3-sigv4", "SEC-S3-SIGV2-01 + SEC-CLI-01: S3 SigV4 KATs + insecure-TLS flag gate");
+    s3_sigv4_step.dependOn(&run_s3_sigv4_tests.step);
 
     // GAP-0830: MCP/LSP bridge governance test. Exercises the four bridge
     // entry points (lsp.validateQuery / getCompletions / getHover /
@@ -6017,6 +6734,11 @@ pub fn build(b: *std.Build) void {
     const gap0514_bfs_tests = b.addTest(.{ .root_module = gap0514_bfs_test_mod });
     const run_gap0514_bfs_tests = b.addRunArtifact(gap0514_bfs_tests);
     shardDep(test_step, &run_gap0514_bfs_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6 P3: named step — also carries the path-mode
+    // (WALK/TRAIL/ACYCLIC), reverse variable-length traversal, and catalog
+    // fast-path tests added in P3.
+    const path_iterator_step = b.step("test-path-iterator", "Run PathIterator regression tests (BFS dequeue, path modes, reverse traversal, catalog fast path)");
+    path_iterator_step.dependOn(&run_gap0514_bfs_tests.step);
 
     // GAP-0514 Phase 1A: graph_store.zig regression tests
     const gap0514_gs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_graph_store_regression.zig"), .target = target, .optimize = optimize });
@@ -6024,6 +6746,9 @@ pub fn build(b: *std.Build) void {
     const gap0514_gs_tests = b.addTest(.{ .root_module = gap0514_gs_test_mod });
     const run_gap0514_gs_tests = b.addRunArtifact(gap0514_gs_tests);
     shardDep(test_step, &run_gap0514_gs_tests.step, 1, test_shard_loads, test_shard_index);
+    // GAP-0514 Phase 6: named step for the Phase 1A graph_store regression suite.
+    const gap0514_gs_step = b.step("test-gap0514-graph-store", "Run GAP-0514 graph_store regression tests (dirty tracking, saveToFile, adjacency, multi-graph)");
+    gap0514_gs_step.dependOn(&run_gap0514_gs_tests.step);
 
     // GAP-0516: MCP server handler behaviour tests are colocated with
     // the source in `src/mcp/server.zig`. Wiring them into `zig build
@@ -6058,6 +6783,11 @@ pub fn build(b: *std.Build) void {
     wal_tests.root_module.addImport("geode", root_mod);
     wal_tests.root_module.addImport("logging", logging_mod);
     shardDep(test_step, &wal_tests.step, 1, test_shard_loads, test_shard_index);
+    // #812 (GAP-0886a): named step so the WAL unit suite is runnable outside
+    // the blocked monolithic `test` step (per-step sweep is the canonical gate).
+    const run_wal_tests = b.addRunArtifact(wal_tests);
+    const wal_test_step = b.step("test-wal", "Run WAL unit tests (append, deprecated no-op replay, checkpoint, CRC)");
+    wal_test_step.dependOn(&run_wal_tests.step);
 
     // Issue #460: Shared cross-connection optimizer unit tests
     const shared_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_shared_optimizer.zig"), .target = target, .optimize = optimize }) });
@@ -6377,6 +7107,21 @@ pub fn build(b: *std.Build) void {
     const run_otel_prom_parity_tests = b.addRunArtifact(otel_prom_parity_tests);
     shardDep(test_step, &run_otel_prom_parity_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // GAP-0874: histogram sum regression — legacy registry query-latency
+    // `_sum` tracks real cumulative ms, and recordAuthDuration records into
+    // a real geode.security.authentication.duration histogram.
+    const gap0874_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0874_metrics_sums.zig"), .target = target, .optimize = optimize });
+    gap0874_test_mod.addImport("monitoring_registry", b.createModule(.{ .root_source_file = b.path("src/monitoring/registry.zig"), .target = target, .optimize = optimize }));
+    gap0874_test_mod.addImport("otel", otel_mod);
+    gap0874_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    gap0874_test_mod.addImport("otel_prometheus_responder", otel_prometheus_responder_mod);
+    const gap0874_tests = b.addTest(.{ .root_module = gap0874_test_mod });
+    gap0874_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_gap0874_tests = b.addRunArtifact(gap0874_tests);
+    shardDep(test_step, &run_gap0874_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0874_step = b.step("test-gap0874", "Run GAP-0874 metric histogram sum regression tests");
+    gap0874_step.dependOn(&run_gap0874_tests.step);
+
     // Task 7 (GQL auth DDL): parser unit tests for CREATE/ALTER/DROP USER,
     // CREATE/DROP ROLE, GRANT, REVOKE, SHOW auth variants.
     const auth_ddl_parser_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_ddl_parser.zig"), .target = target, .optimize = optimize });
@@ -6508,6 +7253,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_persistence_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_policy_persistence_step = b.step("test-gps-policy-persistence", "Run GPS policy persistence round-trip tests (persist/drop/hydrate in __geode_security)");
     gps_policy_persistence_step.dependOn(&run_gps_policy_persistence_tests.step);
+
+    // GAP-0514 Phase 6 P2: AuthGraphManager unit tests (global accessor,
+    // periodic HMAC verification thread lifecycle, login-state persistence,
+    // coarse LSP graph-visibility gate).
+    const agm_unit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_graph_manager_unit.zig"), .target = target, .optimize = optimize });
+    agm_unit_test_mod.addImport("geode", root_mod);
+    agm_unit_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const agm_unit_tests = b.addTest(.{ .root_module = agm_unit_test_mod });
+    const run_agm_unit_tests = b.addRunArtifact(agm_unit_tests);
+    shardDep(test_step, &run_agm_unit_tests.step, 0, test_shard_loads, test_shard_index);
+    const agm_unit_step = b.step("test-auth-graph-manager", "Run AuthGraphManager unit tests (global accessor, HMAC verify thread, login state, graph visibility gate)");
+    agm_unit_step.dependOn(&run_agm_unit_tests.step);
 
     // GAP-0854: FLE configureField must not corrupt the __geode_security HMAC
     // chain. Needs auth_graph_manager (named module) like the GPS persistence

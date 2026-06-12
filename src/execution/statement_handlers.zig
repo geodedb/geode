@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
@@ -31,6 +32,18 @@ const executeStatementWithContext = execution.executeStatementWithContext;
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
+
+/// CLOCK_MONOTONIC nanoseconds (GAP-0868: real PROFILE wall-clock timing).
+/// Same compat pattern as graph_storage_adapter.monoNanosNow.
+fn monoNanosNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-007; FEATURE="ExecutionRefactoring"; ASPECT=STATEMENT_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted statement handlers (SHOW, FOR, VALUES, EXPLAIN, PROFILE) from execution.zig for better modularity (M1 Phase 7)
@@ -1062,10 +1075,21 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
     };
 }
 
+// CANARY: REQ=GAP-0868; FEATURE="PROFILE runtime telemetry"; ASPECT=WallClockTiming; STATUS=TESTED; TEST=tests/test_gap0868_profile_timing.zig; OWNER=execution; UPDATED=2026-06-10
+// PROFILE executes the wrapped statement and returns execution statistics.
+//
+// Two result shapes:
+//   - planned_query_profile: storage-native reads carry a RuntimeTrace with
+//     REAL per-operator timing (time_ns, input_rows, rows per RuntimeOp) —
+//     see planned_read_runtime.executeProfiledIfSupported.
+//   - query_profile (fallback): non-Query statements (SHOW, DDL, ...) and
+//     reads demoted by the concrete-tenant guard (GAP-0846/GAP-0509) are
+//     executed through the generic dispatcher; GAP-0868 wraps that execution
+//     in a CLOCK_MONOTONIC window and reports real statement-level `time_ms`
+//     (previously a hard-coded `time = 1` placeholder). Per-operator timing
+//     is NOT available on this path — the generic dispatcher exposes no
+//     operator hooks; that residual is documented in docs/EXPLAIN_PROFILE.md.
 pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, context: ExecutionContext) anyerror!ExecutionResult {
-    // PROFILE executes the query and returns execution statistics
-    // For now, execute the query and add basic profiling information
-
     switch (prof.query.*) {
         .Query => |q| {
             var planned_query = q;
@@ -1086,8 +1110,12 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
         else => {},
     }
 
-    // Execute the wrapped query
+    // Execute the wrapped statement under a real monotonic wall-clock window
+    // (GAP-0868). The window covers exactly the statement's execution — not
+    // parse (already done by the caller) and not profile-row construction.
+    const profile_start_ns = monoNanosNow();
     var query_result = try executeStatementWithContext(allocator, prof.query.*, context);
+    const profile_elapsed_ns = monoNanosNow() -| profile_start_ns;
     defer query_result.deinit(allocator);
 
     // Return profiling statistics
@@ -1123,11 +1151,12 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
         try stats.append(allocator, row);
     }
 
-    // Execution time (placeholder - would need real timing)
+    // Execution time: real wall-clock milliseconds measured around the
+    // wrapped statement (GAP-0868; replaces the old `time = 1` placeholder).
     {
         const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try allocator.dupe(u8, "time") };
-        row[1] = Value{ .Int = 1 }; // Placeholder
+        row[0] = Value{ .Str = try allocator.dupe(u8, "time_ms") };
+        row[1] = Value{ .Int = @intCast(profile_elapsed_ns / std.time.ns_per_ms) };
         try stats.append(allocator, row);
     }
 
@@ -1135,6 +1164,11 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
         .columns = columns,
         .rows = try stats.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
+        // GAP-0535: every row value above is a fresh dupe (metric-name
+        // strings) or a scalar — the result fully owns its value memory, so
+        // deinit is leak-free under a strict allocator (this was the leak
+        // the GAP-0868 test originally had to hide behind an arena).
+        .owns_value_memory = true,
     };
 }
 
@@ -1256,6 +1290,8 @@ fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_ru
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        // GAP-0535: all row values are fresh dupes — fully owned.
+        .owns_value_memory = true,
     };
 }
 
@@ -1291,6 +1327,8 @@ fn buildPlannedProfileResult(allocator: std.mem.Allocator, planned: planned_read
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        // GAP-0535: all row values are fresh dupes or scalars — fully owned.
+        .owns_value_memory = true,
     };
 }
 

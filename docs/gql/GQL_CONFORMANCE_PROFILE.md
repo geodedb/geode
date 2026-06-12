@@ -5,7 +5,7 @@
 
 This document captures Geode's conformance to the ISO/IEC 39075:2024 Graph Query Language (GQL) standard with comprehensive feature coverage and test evidence.
 
-**Conformance Status**: 70/70 ISO tests passing (100%)
+**Conformance Status**: 96/96 named ISO conformance-suite cases passing (`zig build test-iso-conformance`; parse-only scope)
 
 ## 1. Pattern Matching (ISO 15.1–15.3)
 

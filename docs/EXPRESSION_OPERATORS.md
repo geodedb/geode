@@ -233,4 +233,4 @@ Potential improvements for future versions:
 ---
 
 *Last Updated: October 2025*
-*Implementation Status: Production Ready*
+*Implementation Status: Implemented and regression-tested (see [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for open gaps)*

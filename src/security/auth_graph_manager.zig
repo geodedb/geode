@@ -114,7 +114,7 @@ pub const AuthGraphManager = struct {
     allocator: Allocator,
     storage: UserStorageBackend,
     next_user_id: u64, // track next available user ID
-    // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-001; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-001; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     shutdown: std.atomic.Value(bool),
     verify_pool: ?*pooled.ThreadPool = null,
     /// Owned copy of the HMAC key for the periodic verification thread.
@@ -132,7 +132,7 @@ pub const AuthGraphManager = struct {
 
     const Self = @This();
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-GLOBAL-001; FEATURE="AuthGraphManagerGlobal"; ASPECT=GlobalAccessor; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-GLOBAL-001; FEATURE="AuthGraphManagerGlobal"; ASPECT=GlobalAccessor; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     /// Global singleton. Null in CLI/test contexts — every caller must handle null.
     var g_instance: ?*Self = null;
     pub fn setGlobal(p: ?*Self) void {
@@ -168,7 +168,7 @@ pub const AuthGraphManager = struct {
 
     // -- Periodic HMAC Verification --
 
-    // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-002; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-002; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     /// Spawn a background thread that periodically re-verifies the HMAC chain
     /// to detect runtime tampering.
     ///
@@ -846,7 +846,7 @@ pub const AuthGraphManager = struct {
 
     // -- Runtime Mutation Persistence (called via SecurityManager callbacks) --
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-006; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-006; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     /// Update a user record's login state (failed_attempts, lockout_until) in the graph store.
     /// Recomputes the record HMAC and reseals the chain.
     pub fn updateUserLoginState(self: *Self, hmac_key: *const [32]u8, user_id: u64, failed_attempts: u16, lockout_until: i64) !void {
@@ -860,7 +860,7 @@ pub const AuthGraphManager = struct {
         try self.sealChain(hmac_key);
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-007; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-007; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Update a user record's password hash in the graph store.
     /// Recomputes the record HMAC and reseals the chain.
     pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
@@ -879,7 +879,7 @@ pub const AuthGraphManager = struct {
 
     // -- P2 Write Wrappers --
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-010; FEATURE="AuthDDLPersistence"; ASPECT=RemoveUser; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-010; FEATURE="AuthDDLPersistence"; ASPECT=RemoveUser; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Remove a user from the security graph and reseal the chain.
     pub fn removeUser(self: *Self, hmac_key: *const [32]u8, user_id: u64) !void {
         try self.storage.removeUser(user_id);
@@ -888,7 +888,7 @@ pub const AuthGraphManager = struct {
         self.logSecurityGraphMutation(.configuration_change, "REMOVE_USER", user_id, "", null);
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-011; FEATURE="AuthDDLPersistence"; ASPECT=SetUserActive; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-011; FEATURE="AuthDDLPersistence"; ASPECT=SetUserActive; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Set a user's active state. Bumps auth_version so existing sessions are
     /// invalidated when a user is disabled. Reseals the chain.
     pub fn setUserActive(self: *Self, hmac_key: *const [32]u8, user_id: u64, active: bool) !u64 {
@@ -900,7 +900,7 @@ pub const AuthGraphManager = struct {
         return v;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-023; FEATURE="AuthDDLPersistence"; ASPECT=ListRoles; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-023; FEATURE="AuthDDLPersistence"; ASPECT=ListRoles; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// Return a slice of all persisted roles. Each entry holds slices into the
     /// in-memory fixed-size arrays (no heap allocation per record beyond the
     /// outer slice). Caller must free the returned slice with `allocator.free`.
@@ -925,21 +925,21 @@ pub const AuthGraphManager = struct {
         return entries[0..i];
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-012; FEATURE="AuthDDLPersistence"; ASPECT=FindRoleIdByName; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-012; FEATURE="AuthDDLPersistence"; ASPECT=FindRoleIdByName; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Look up a role id by name (case-sensitive). Returns null if not found.
     pub fn findRoleIdByName(self: *Self, name: []const u8) !?u64 {
         const record = self.storage.getRoleByName(name) orelse return null;
         return record.id;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-013; FEATURE="AuthDDLPersistence"; ASPECT=FindUserIdByName; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-013; FEATURE="AuthDDLPersistence"; ASPECT=FindUserIdByName; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Look up a user id by username. Returns null if not found.
     pub fn findUserIdByName(self: *Self, username: []const u8) !?u64 {
         const record = self.storage.getUserByUsername(username) orelse return null;
         return record.id;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-014; FEATURE="AuthDDLPersistence"; ASPECT=CreateRole; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-014; FEATURE="AuthDDLPersistence"; ASPECT=CreateRole; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// Create a named role, persisting it to the security graph. Idempotent —
     /// if a role with the same name already exists, return its id without
     /// writing or resealing.
@@ -965,7 +965,7 @@ pub const AuthGraphManager = struct {
         return role_id;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-015; FEATURE="AuthDDLPersistence"; ASPECT=RemoveRole; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-015; FEATURE="AuthDDLPersistence"; ASPECT=RemoveRole; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Remove a role from the security graph and reseal the chain.
     pub fn removeRole(self: *Self, hmac_key: *const [32]u8, role_id: u64) !void {
         try self.storage.removeRole(role_id);
@@ -1099,7 +1099,7 @@ pub const AuthGraphManager = struct {
         try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-016; FEATURE="AuthDDLPersistence"; ASPECT=GrantUserGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-016; FEATURE="AuthDDLPersistence"; ASPECT=GrantUserGraphPermission; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Persist a graph-level permission grant for a user. The grant_id is
     /// derived deterministically from the (user_id, graph_name, action) triple
     /// using Wyhash so duplicate calls are idempotent at the storage level.
@@ -1110,7 +1110,7 @@ pub const AuthGraphManager = struct {
         self.logSecurityGraphMutation(.configuration_change, "GRANT_GRAPH_PERMISSION", user_id, graph_name, null);
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-017; FEATURE="AuthDDLPersistence"; ASPECT=RevokeUserGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-017; FEATURE="AuthDDLPersistence"; ASPECT=RevokeUserGraphPermission; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Revoke a graph-level permission grant for a user. Returns true if a
     /// matching grant was found and removed.
     pub fn revokeUserGraphPermission(self: *Self, hmac_key: *const [32]u8, user_id: u64, graph_name: []const u8, action: u8) !bool {
@@ -1122,13 +1122,13 @@ pub const AuthGraphManager = struct {
         return removed;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// List all persisted graph grants. Caller owns the returned slice.
     pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.UserStorageBackend.GraphGrantRecord {
         return self.storage.listGraphGrants(allocator);
     }
 
-    // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=CoarseGraphVisibilityGate; STATUS=IMPL; OWNER=security; UPDATED=2026-05-14
+    // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=CoarseGraphVisibilityGate; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     /// Returns true if `user` is a superuser (admin) or holds at least one
     /// persisted grant of any action on `graph_name`. Intended as a COARSE
     /// visibility gate for the LSP schema completion path — it answers
@@ -1416,10 +1416,14 @@ fn sortHmacs(hmacs: [][32]u8) void {
 }
 
 fn computeChainHashChecked(hmac_key: *const [32]u8, record_hmacs: []const [32]u8, record_count: u64) [32]u8 {
+    // error-policy: D — computeChainHash's only error is RecordCountMismatch;
+    // every call site passes record_count == record_hmacs.len by construction.
     return auth_hmac.computeChainHash(hmac_key, record_hmacs, record_count) catch unreachable;
 }
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
+    // error-policy: D — computeRecordHmac's only error is TooManyProperties
+    // (>128 props); every call site passes a fixed-size props array well under that.
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
 }
 
@@ -1493,6 +1497,7 @@ test "resolveHmacKey auto-generates key file when data_dir exists but key file m
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
+    // error-policy: A — test setup; a failure here crashes the test, which is the desired signal.
     const dir_path = tmpDirRealpathAlloc(testing.allocator, &tmp_dir.sub_path) catch unreachable;
     defer testing.allocator.free(dir_path);
 

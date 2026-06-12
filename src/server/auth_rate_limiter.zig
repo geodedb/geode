@@ -279,13 +279,23 @@ test "auth_rate_limiter: different IPs are independent" {
     try std.testing.expect(!limiter.isLocked("2.2.2.2"));
 }
 
+// Zig 0.16: std.Thread.sleep was removed — linux nanosleep compat shim
+// (test-only; mirrors the shape used by repl_dispatch.zig / proto_test_util.zig).
+fn testSleepNs(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.os.linux.nanosleep(&req, null);
+}
+
 test "auth_rate_limiter: lockout expires after duration" {
     // Use a very short lockout (1 nanosecond) so it expires immediately.
     var limiter = AuthRateLimiter.initWithConfig(std.testing.allocator, 1, 1);
     defer limiter.deinit();
     limiter.recordFailure("10.0.0.4");
     // The lockout is 1ns; by the time we check it should have expired.
-    std.Thread.sleep(1000); // sleep 1 microsecond to be safe
+    testSleepNs(1000); // sleep 1 microsecond to be safe
     try std.testing.expect(!limiter.isLocked("10.0.0.4"));
 }
 
@@ -293,7 +303,7 @@ test "auth_rate_limiter: evictExpired removes stale entries" {
     var limiter = AuthRateLimiter.initWithConfig(std.testing.allocator, 1, 1);
     defer limiter.deinit();
     limiter.recordFailure("10.0.0.5");
-    std.Thread.sleep(1000);
+    testSleepNs(1000);
     limiter.evictExpired();
     try std.testing.expectEqual(@as(usize, 0), limiter.count());
 }

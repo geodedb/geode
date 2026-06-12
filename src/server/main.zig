@@ -155,7 +155,7 @@ const leaked_conn_reaper = @import("leaked_conn_reaper.zig");
 const acceptor_watchdog = @import("acceptor_watchdog.zig");
 const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 const quic_response_metrics = @import("quic_response_metrics");
-// CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+// CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
 
@@ -202,7 +202,7 @@ const lsp_transport_mod = @import("../cli/lsp/transport.zig");
 const lsp_auth_mod = @import("../cli/lsp/auth.zig");
 const authn_mod = geode.security.authn;
 
-// CANARY: REQ=REQ-QUIC-HC-009; FEATURE="High-Concurrency Allocator"; ASPECT=ServerAllocator; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+// CANARY: REQ=REQ-QUIC-HC-009; FEATURE="High-Concurrency Allocator"; ASPECT=ServerAllocator; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=transport; UPDATED=2026-06-11
 //
 // Debug builds keep DebugAllocator leak detection. Optimized server builds use
 // the libc allocator (glibc malloc).
@@ -343,7 +343,7 @@ fn listPersistentAuthUsers(_: ?*anyopaque, allocator: std.mem.Allocator) anyerro
     return users;
 }
 
-// CANARY: REQ=REQ-PERF-ASYNC-CONN-001; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPool; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+// CANARY: REQ=REQ-PERF-ASYNC-CONN-001; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPool; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=server; UPDATED=2026-06-11
 // GAP-0202: Async connection handling context for thread pool execution
 // This struct holds all parameters needed by handleQuicConnection for async execution
 const ConnectionContext = struct {
@@ -369,7 +369,7 @@ const ConnectionContext = struct {
     admission_gate: ?*ConnectionAdmissionGate = null,
 };
 
-// CANARY: REQ=REQ-QUIC-HC-012; FEATURE="DetachedConnectionAdmission"; ASPECT=HelloFanout; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-26
+// CANARY: REQ=REQ-QUIC-HC-012; FEATURE="DetachedConnectionAdmission"; ASPECT=HelloFanout; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=transport; UPDATED=2026-06-11
 //
 // The external thread_pool dependency is intentionally capped at 64 workers.
 // That is acceptable for long-lived stream loops, but it becomes a HELLO
@@ -519,6 +519,25 @@ const LspListenerArgs = struct {
 
 fn runLspListener(args: LspListenerArgs) void {
     const host: []const u8 = if (args.loopback_only) "127.0.0.1" else "0.0.0.0";
+
+    // LSP-SEC-008 / SEC-LSP-BIND-01: hard-assert the bind policy at the
+    // layer that knows both the bind scope and the auth wiring. Embedded
+    // sessions always run with allow_unauth=false; a non-loopback bind
+    // (`--lsp-bind-all`) additionally requires a real verifier — refusing
+    // here means no future caller can wire an unauthenticated bind-all
+    // listener without tripping this guard (and its regression test,
+    // tests/test_gap0885_lsp_hardening.zig).
+    lsp_server.validateBindPolicy(.{
+        .loopback_only = args.loopback_only,
+        .allow_unauth = false,
+        .has_verifier = args.verifier != null,
+    }) catch {
+        log.err("LSP listener: refusing non-loopback bind without an authentication verifier (LSP-SEC-008)", &.{
+            Attr.string("host", host),
+            Attr.int("port", @as(i64, args.port)),
+        });
+        return;
+    };
 
     // Each accept loop and every per-session reader needs to share one
     // `std.Io` vtable for the lifetime of the listener. A dedicated
@@ -713,11 +732,10 @@ const F_UNION_PHASES = server_flags.F_UNION_PHASES;
 const F_ADAPT_EST = server_flags.F_ADAPT_EST;
 const F_HEUR_INDEX = server_flags.F_HEUR_INDEX;
 const nullsFlag = server_flags.nullsFlag;
-const paginationStreamScaffold = server_flags.paginationStreamScaffold;
 const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
-// CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+// CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
 // Note: JSON Lines persistence (tryLoadGraphFromDir, saveGraphToDir) removed - using binary persistence via graph_store
 const graph_store = geode.graph_store;
 // Import protocol handler functions (M3.2 Phase 3 backup protocol extraction)
@@ -738,9 +756,6 @@ fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
 
 const DEBUG_PROFILE = false; // default off; enable locally when investigating PROFILE frame assembly
 
-// Tracking allocator (existing) provides basic net/peak metrics for PROFILE.
-const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
-
 // Removed: Flag constants and utilities now in server_flags module (M3.1 Phase 3 flag utilities extraction)
 // Original code was at lines 202-236 (~35 lines), now extracted to server_flags.zig
 // Includes: Flag constants (F_ILLEGAL, F_PROPERTY_ORDER, F_NULLS_FIRST, F_NULLS_LAST, F_TIEBREAK,
@@ -760,8 +775,9 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 
 // Removed: Implementation-defined flag cache and related functions now in server_flags module
 // Original: g_impl_defined_codes, g_impl_defined_inited variables (~2 lines)
-// Original: paginationStreamScaffold() function (~6 lines)
 // Original: initImplDefinedFlags() function (~14 lines)
+// (paginationStreamScaffold was extracted too, then deleted as a dead
+// intent-stub in GAP-0875 — streaming pagination is NOT implemented.)
 // Total extracted: ~22 lines to server_flags.zig module
 
 // Removed: server_utilities.getOrCreateMVCCManager() function (~10 lines) now in server_utilities module (M3.3 Phase 3 server utilities extraction)
@@ -802,7 +818,17 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Removed: writeBindingsAdaptive() function (~30 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
 // Removed: StageTimings struct (~46 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
-// TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
+// GAP-0874 (2026-06-10) alloc-metrics decision: the deferred counting-allocator
+// integration was RESOLVED as "won't wire". The PROFILE fallback's per-op
+// bytes_alloc/memory block is a deterministic synthetic model pinned as a wire
+// contract by the e2e_protocol_profile_* test battery and documented as such in
+// docs/EXPLAIN_PROFILE.md and docs/BINARY_PROTOCOL.md; real per-op attribution
+// would require per-operator allocator threading (a PROFILE redesign, tracked
+// separately if ever needed). Real process-level memory telemetry exists via
+// the OTel `process.runtime.zig.memory.resident_set` gauge (otel_metrics.zig
+// registerRuntimeMetrics, /proc/self-backed). The bit-rotted dead wrappers
+// (src/util/counting_allocator.zig pre-0.14 vtable, src/util/tracking_alloc.zig)
+// were deleted — neither had a live caller.
 
 // Value-based canonical key: encodes row values directly to avoid JSON reparsing.
 // Removed: canonicalValuesKey() function (~34 lines) now in query_executor module (M3.3 Phase 3 second increment)
@@ -1322,7 +1348,7 @@ pub fn main() !void {
             .list_fn = listPersistentAuthUsers,
             .auth_version_fn = lookupPersistentAuthVersion,
         });
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-06-11
         // P7: Install write-through callbacks for user/role/grant DDL and hydrate
         // in-memory state from __geode_security.
         server_init.wireAuthDDLCallbacks(agm, gpa);
@@ -1386,7 +1412,7 @@ pub fn main() !void {
 
     const node_role: otel_resource_mod.NodeRole = if (cluster_token != null) .leader else .standalone;
 
-    // CANARY: REQ=REQ-GAP-0503-DIST-BOOT; FEATURE="DistributedMode"; ASPECT=ClusterBootstrap; STATUS=IMPL; OWNER=core; UPDATED=2026-05-25
+    // CANARY: REQ=REQ-GAP-0503-DIST-BOOT; FEATURE="DistributedMode"; ASPECT=ClusterBootstrap; STATUS=TESTED; TEST=tests/test_cluster_bootstrap.zig; OWNER=core; UPDATED=2026-06-11
     // Cluster bootstrap (Tasks A2/A4 of the 2026-05-25 distributed
     // cluster testing plan).  Reads GEODE_CLUSTER_TOKEN/NODE_ID/NAME/
     // PEERS/CLUSTER_PORT (plus --cluster-port / --peers CLI overrides)
@@ -1548,7 +1574,7 @@ pub fn main() !void {
     bindLib(@import("vulkan").observability, "vulkan");
     bindLib(@import("thread_pool").observability, "thread_pool");
     bindLib(@import("protobuf").observability, "protobuf");
-    // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+    // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-06-11
     otel_metrics_facade.registerRuntimeMetrics() catch |err| {
         log.warn("Failed to register runtime process metrics", &.{
             Attr.string("error", @errorName(err)),
@@ -1613,7 +1639,7 @@ pub fn main() !void {
     // property-based and temporal RLS policies are evaluated during query
     // execution.  The engine lives on the main thread's stack; connection
     // handlers access it via rls_types.getGlobalExprRLSEngine().
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitExprEngine; STATUS=IMPL; OWNER=security; UPDATED=2026-06-09
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitExprEngine; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
     const rls_core_mod = @import("rls");
     const rls_types_mod_hoist = @import("rls_types");
     var expr_rls_engine = try rls_core_mod.RLSEngine.init(gpa);
@@ -1641,7 +1667,7 @@ pub fn main() !void {
     // or restored from the registry below — are enforced. Using the plain init()
     // (struct default 100/32) here would silently activate enforcement on every
     // existing deployment.
-    // CANARY: REQ=REQ-TENANT-LIFECYCLE-003; FEATURE="TenantRegistryServerWiring"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-06-09
+    // CANARY: REQ=REQ-TENANT-LIFECYCLE-003; FEATURE="TenantRegistryServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_gap0839_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-06-11
     var quota_manager = geode.tenant_quota.TenantQuotaManager.initUnlimited(gpa);
     defer quota_manager.deinit();
     geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
@@ -1785,7 +1811,7 @@ pub fn main() !void {
         }
 
         // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
-        // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+        // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
         const mtls_required_env = getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch null;
         defer if (mtls_required_env) |e| gpa.free(e);
         const mtls_required = if (mtls_required_env) |v| blk: {
@@ -1805,7 +1831,7 @@ pub fn main() !void {
         defer quic_connection_handler.setMtlsProvider(null);
 
         // S6: Initialize per-IP authentication rate limiter for brute-force protection.
-        // CANARY: REQ=REQ-SEC-RATE-LIMIT-007; FEATURE="AuthRateLimiting"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+        // CANARY: REQ=REQ-SEC-RATE-LIMIT-007; FEATURE="AuthRateLimiting"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
         const auth_rate_limiter_mod = @import("auth_rate_limiter.zig");
         // initFromEnv honors GEODE_AUTH_RATE_LOCKOUT_SECS / _MAX_ATTEMPTS so
         // the harness can exercise the lockout-expiry path with a short window.
@@ -1834,7 +1860,7 @@ pub fn main() !void {
         // S1: Initialize the global RLS filter engine for label-based row filtering.
         // The engine lives on the main thread's stack and is accessed by connection
         // handlers via the global singleton in rls_filter.zig.
-        // CANARY: REQ=REQ-SEC-RLS-WIRE-004; FEATURE="RLS Query Enforcement"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+        // CANARY: REQ=REQ-SEC-RLS-WIRE-004; FEATURE="RLS Query Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/rls_filter.zig; OWNER=security; UPDATED=2026-06-11
         const rls_filter_mod = @import("rls_filter.zig");
         var rls_engine = rls_filter_mod.RLSFilterEngine.init(gpa);
         defer rls_engine.deinit();
@@ -1845,7 +1871,7 @@ pub fn main() !void {
         // that match_operations.zig (part of the geode root module) can access it via
         // @import("rls_types").getGlobalRLSFilterEngine().  Both engines start empty;
         // policies added at runtime go to both through the procedure/admin API.
-        // CANARY: REQ=REQ-SEC-RLS-WIRE-012; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitLabelEngine; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+        // CANARY: REQ=REQ-SEC-RLS-WIRE-012; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitLabelEngine; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
         const rls_types_mod = @import("rls_types");
         var rls_types_engine = rls_types_mod.RLSFilterEngine.init(gpa);
         defer rls_types_engine.deinit();
@@ -1965,29 +1991,45 @@ pub fn main() !void {
         // timeseries.value() calls in the QUIC/gRPC execution path return
         // real data instead of NULL.  The store lives on the main thread's
         // stack and is published via eval.setGlobalTimeseriesStore().
-        // GAP-0292: Wire ChunkStorage persistence — pass data_dir so
-        // timeseries data survives server restarts.
+        // GAP-0865: FAIL-CLOSED by default — an engine open error (corrupt
+        // WAL/segments, wrong TDE key, unreadable dir) aborts server start
+        // instead of silently degrading to an empty in-memory store. The
+        // wrapper creates `{data_dir}/timeseries` itself, so a fresh data
+        // dir opens durably (the old code fell back to memory-only on every
+        // fresh dir because the engine refuses to mkdir). Opt back into the
+        // legacy soft behaviour with GEODE_TS_DURABILITY=best_effort (the
+        // wrapper then degrades internally with a warning). Retention is
+        // wired via GEODE_TS_RETENTION_DAYS and TDE via GEODE_TS_TDE=1 +
+        // GEODE_TDE_KEY.
         // CANARY: REQ=REQ-TIMESERIES-WIRE-003; FEATURE="TimeseriesServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/eval.zig; OWNER=server; UPDATED=2026-04-01
-        // CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-01
+        // CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=server; UPDATED=2026-06-10
         const ts_mod = geode.timeseries;
         var ts_store = ts_mod.Store.initWithConfig(gpa, .{
             .data_dir = data_dir,
-        }) catch blk: {
-            log.warn("timeseries.init_persist_fallback", &.{});
-            break :blk ts_mod.Store.init(gpa);
+            .durability = ts_mod.durabilityFromEnv(),
+            .retention_max_age_ms = ts_mod.retentionMsFromEnv(),
+            .encryption_key = ts_mod.encryptionKeyFromEnv() catch |err| {
+                log.err("timeseries.tde_key_invalid", &.{Attr.string("error", @errorName(err))});
+                return err;
+            },
+        }) catch |err| {
+            log.err("timeseries.open_failed_fail_closed", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("hint", "set GEODE_TS_DURABILITY=best_effort to degrade to in-memory"),
+            });
+            return err;
         };
         defer ts_store.deinit();
-        // Hydrate in-memory store from any previously persisted chunks.
-        ts_store.loadFromDisk() catch |err| {
-            log.warn("timeseries.load_from_disk_failed", &.{Attr.string("error", @errorName(err))});
-        };
+        // Engine init already replayed the WAL and verified segments;
+        // loadFromDisk is a no-op kept for API symmetry.
+        try ts_store.loadFromDisk();
         eval.setGlobalTimeseriesStore(&ts_store);
         defer eval.setGlobalTimeseriesStore(null);
 
         // GAP-0268: Wire WAL persistence hooks for checkpoint truncation.
         // The hooks allow the persistence loop to sync and truncate the WAL
         // after each successful checkpoint, preventing unbounded WAL growth.
-        // CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=ServerInit; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-27
+        // CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_wal.zig; OWNER=storage; UPDATED=2026-06-11
         const wal_mod = geode.wal;
         wal_mod.installPersistenceHooks();
         defer wal_mod.removePersistenceHooks();
@@ -2082,7 +2124,7 @@ pub fn main() !void {
         // Handlers parked in PollSync.waitForPoll need the producer to keep
         // delivering FIN/CONNECTION_CLOSE during SIGTERM shutdown.
         var poll_shutdown = std.atomic.Value(bool).init(false);
-        // CANARY: REQ=REQ-QUIC-HC-053; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiPollWorkers; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-053; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiPollWorkers; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-11
         //
         // Release builds use a small poll-worker set so high fan-out request
         // bursts do not stall behind one endpoint poll loop. Debug keeps a
@@ -2139,7 +2181,7 @@ pub fn main() !void {
             poll_pool.deinit();
         }
 
-        // CANARY: REQ=REQ-PERF-STREAM-POOL-001; FEATURE="SharedStreamPool"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-25
+        // CANARY: REQ=REQ-PERF-STREAM-POOL-001; FEATURE="SharedStreamPool"; ASPECT=ThreadPoolInit; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=server; UPDATED=2026-06-11
         // SP Tasks 2+3: Allocate shared stream + acceptor pools at server startup.
         // These live for the full server lifetime so connection-close is no longer
         // a pool-lifecycle event.  See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
@@ -2210,8 +2252,8 @@ pub fn main() !void {
         });
         defer acceptor_pool.deinit();
 
-        // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-05-25
-        // CANARY: REQ=REQ-QUIC-HC-132; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConnectionPoolCapCompatibility; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-28
+        // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=server; UPDATED=2026-06-11
+        // CANARY: REQ=REQ-QUIC-HC-132; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConnectionPoolCapCompatibility; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-11
         // GAP-0202: Initialize thread pool for async connection handling
         // This allows accepting new connections while previous ones are being
         // processed. QUIC connection handlers are long-lived socket loops, not
@@ -2302,7 +2344,7 @@ pub fn main() !void {
             max_global_stream_threads,
             @as(usize, std.math.maxInt(u32)),
         )));
-        // CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-044; FEATURE="QUIC High-Concurrency Requests"; ASPECT=BoundedDetachedFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-11
         //
         // Cap detached first-stream owners independently from stream admission.
         // Overflow first streams remain accepted and run on the shared stream
@@ -2328,7 +2370,7 @@ pub fn main() !void {
             });
         };
 
-        // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
+        // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-11
         //
         // In single-stream high-fanout mode, persistent first-stream owners pin
         // one worker or OS thread per live client. A bounded cooperative
@@ -2363,7 +2405,7 @@ pub fn main() !void {
             }
         }
 
-        // CANARY: REQ=REQ-PERF-METRICS-001; FEATURE="RuntimeMetrics"; ASPECT=RegistryInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-25
+        // CANARY: REQ=REQ-PERF-METRICS-001; FEATURE="RuntimeMetrics"; ASPECT=RegistryInit; STATUS=TESTED; TEST=src/server/runtime_metrics.zig; OWNER=server; UPDATED=2026-06-11
         // Task 4: Initialise the process-global runtime_metrics registry and spawn
         // the periodic-emit task onto the existing connection thread pool.
         // Access via geode module to avoid duplicate-module conflict (runtime_metrics.zig
@@ -2740,7 +2782,7 @@ pub fn main() !void {
             }
         }.run;
 
-        // CANARY: REQ=REQ-QUIC-HC-010; FEATURE="High-Concurrency Connection Admission"; ASPECT=MetricsPoolIsolation; STATUS=IMPL; OWNER=transport; UPDATED=2026-05-25
+        // CANARY: REQ=REQ-QUIC-HC-010; FEATURE="High-Concurrency Connection Admission"; ASPECT=MetricsPoolIsolation; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=transport; UPDATED=2026-06-11
         // Keep the long-running metrics/stall watchdog off the connection
         // handler pool. Otherwise it permanently consumes a worker before the
         // first client connects and lowers the hard HELLO-admission ceiling.

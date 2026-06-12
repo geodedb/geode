@@ -28,19 +28,19 @@ pub const ReplLoop = struct {
         show_timing: bool,
         allocator: std.mem.Allocator,
         transport: *const repl_dispatch.Transport,
-        // CANARY: REQ=REQ-SHELL-AUTH-002; FEATURE="ShellAuthCredentials"; ASPECT=OptionsFields; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-SHELL-AUTH-002; FEATURE="ShellAuthCredentials"; ASPECT=OptionsFields; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
         // Issue #387: Optional credentials for authenticated servers
         username: ?[]const u8 = null,
         password: ?[]const u8 = null,
         // Graph name from DSN path for HELLO handshake
         graph: ?[]const u8 = null,
-        // CANARY: REQ=REQ-SHELL-PLAIN-001; FEATURE="ShellPlainMode"; ASPECT=OptionsField; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+        // CANARY: REQ=REQ-SHELL-PLAIN-001; FEATURE="ShellPlainMode"; ASPECT=OptionsField; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
         // Plain mode disables terminal control sequences for automated testing
         plain_mode: bool = false,
     };
 
     pub fn run(opts: Options) !void {
-        // CANARY: REQ=REQ-SHELL-PLAIN-007; FEATURE="ShellPlainMode"; ASPECT=PlainModeRun; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+        // CANARY: REQ=REQ-SHELL-PLAIN-007; FEATURE="ShellPlainMode"; ASPECT=PlainModeRun; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
         // In plain mode, use a simpler REPL loop without fancy terminal control
         if (opts.plain_mode) {
             return runPlainMode(opts);
@@ -98,7 +98,7 @@ pub const ReplLoop = struct {
         const stdout_file = platform.getStdoutHandle();
         try stdout_file.writeStreamingAll(replIo(), "Connected!\r\n");
 
-        // CANARY: REQ=REQ-SHELL-AUTH-003; FEATURE="ShellAuthHandshake"; ASPECT=HelloWithCredentials; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-SHELL-AUTH-003; FEATURE="ShellAuthHandshake"; ASPECT=HelloWithCredentials; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
         // Issue #387: Use authenticated hello if credentials are provided, otherwise standard hello
         if (opts.username != null and opts.password != null) {
             const auth_result = try session.helloWithAuth(opts.username.?, opts.password.?);
@@ -169,7 +169,7 @@ pub const ReplLoop = struct {
         }
     }
 
-    /// CANARY: REQ=REQ-SHELL-PLAIN-008; FEATURE="ShellPlainMode"; ASPECT=PlainModeImpl; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    /// CANARY: REQ=REQ-SHELL-PLAIN-008; FEATURE="ShellPlainMode"; ASPECT=PlainModeImpl; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
     /// Plain mode REPL - simplified for automated testing without fancy terminal control
     fn runPlainMode(opts: Options) !void {
         const stdout_file = platform.getStdoutHandle();
@@ -295,7 +295,7 @@ pub const ReplLoop = struct {
 
             const line = line_buf[0..pos];
 
-            // CANARY: REQ=REQ-SHELL-PLAIN-012; FEATURE="ShellPlainMode"; ASPECT=MetaCommandDispatch; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+            // CANARY: REQ=REQ-SHELL-PLAIN-012; FEATURE="ShellPlainMode"; ASPECT=MetaCommandDispatch; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
             // Handle meta-commands - use full dispatch for all supported commands
             if (line.len > 0 and (line[0] == '/' or line[0] == '\\')) {
                 const cmd_part = std.mem.trim(u8, line[1..], " \t");
@@ -358,16 +358,13 @@ pub const ReplState = struct {
     last_visual_lines: usize = 0, // Track previous render's visual line count
     last_cursor_row: usize = 0, // Track which row the cursor was on (0 = first line)
     current_graph: ?[]const u8 = null, // Current graph context
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-001; FEATURE="SourceInterrupt"; ASPECT=StateFlag; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-    // Issue #390: Flag to signal interrupt during /source execution
-    interrupt_requested: bool = false,
     // CANARY: REQ=REQ-SHELL-RECONNECT-013; FEATURE="ShellAutoReconnect"; ASPECT=TxnStatementCount; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     // Track number of statements executed in current transaction for recovery info
     txn_statement_count: usize = 0,
-    // CANARY: REQ=REQ-SOURCE-CHUNKED-005; FEATURE="SourceChunkedExecution"; ASPECT=SuppressOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-005; FEATURE="SourceChunkedExecution"; ASPECT=SuppressOutput; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
     // Suppress output during chunked execution (only show final summary)
     suppress_output: bool = false,
-    // CANARY: REQ=REQ-SHELL-PLAIN-002; FEATURE="ShellPlainMode"; ASPECT=StateField; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-SHELL-PLAIN-002; FEATURE="ShellPlainMode"; ASPECT=StateField; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
     // Plain mode disables terminal control sequences for automated testing
     plain_mode: bool = false,
 
@@ -560,7 +557,7 @@ fn renderPrompt(state: *ReplState) !void {
         if (state.in_txn) "geode(txn)-> " else "geode-> "
     else if (state.in_txn) "geode(txn)> " else "geode> ";
 
-    // CANARY: REQ=REQ-SHELL-PLAIN-003; FEATURE="ShellPlainMode"; ASPECT=PlainPrompt; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-SHELL-PLAIN-003; FEATURE="ShellPlainMode"; ASPECT=PlainPrompt; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
     // In plain mode, just print prompt without terminal control sequences
     // This makes shell output predictable for automated testing
     if (state.plain_mode) {

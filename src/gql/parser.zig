@@ -2622,18 +2622,23 @@ pub const Parser = struct {
         // CANARY: REQ=REQ-GQL-PATH-MODES-003; FEATURE="GQL Path Mode Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
         // Check for path mode specifier (WALK, TRAIL, ACYCLIC, SIMPLE) before the pattern
         var path_mode: ast.PathMode = .walk;
+        var path_mode_explicit = false;
         if (self.cur.kind == .WALK) {
             self.advance();
             path_mode = .walk;
+            path_mode_explicit = true;
         } else if (self.cur.kind == .TRAIL) {
             self.advance();
             path_mode = .trail;
+            path_mode_explicit = true;
         } else if (self.cur.kind == .ACYCLIC) {
             self.advance();
             path_mode = .acyclic;
+            path_mode_explicit = true;
         } else if (self.cur.kind == .SIMPLE) {
             self.advance();
             path_mode = .simple;
+            path_mode_explicit = true;
         }
 
         while (true) {
@@ -2669,6 +2674,7 @@ pub const Parser = struct {
                             modified_chain.name = chain_name;
                             modified_chain.is_shortest = true;
                             modified_chain.path_mode = path_mode;
+                            modified_chain.path_mode_explicit = path_mode_explicit;
                             try chains.append(self.arena.allocator(), modified_chain);
                         }
 
@@ -2774,7 +2780,7 @@ pub const Parser = struct {
             if (owned_hops.len == 0) {
                 head = left;
             }
-            try chains.append(self.arena.allocator(), .{ .name = chain_name, .hops = owned_hops, .head = head, .path_mode = path_mode });
+            try chains.append(self.arena.allocator(), .{ .name = chain_name, .hops = owned_hops, .head = head, .path_mode = path_mode, .path_mode_explicit = path_mode_explicit });
             // comma-separated chains
             if (self.cur.kind != .comma) break;
             self.advance();
@@ -6381,19 +6387,31 @@ pub const Parser = struct {
         while (self.cur.kind == .TO or self.cur.kind == .identifier) {
             if (self.cur.kind == .TO) {
                 self.advance();
+                // GAP-0871: accept the documented `TO TIMESTAMP '<ts>'` form —
+                // TIMESTAMP lexes as a keyword token, skip it before the literal.
+                if (self.cur.kind == .TIMESTAMP) {
+                    self.advance();
+                }
                 // Expect timestamp
                 if (self.cur.kind == .string_lit) {
                     timestamp = self.cur.lexeme;
                     self.advance();
                 }
-            } else if (self.cur.kind == .identifier) {
+            } else {
                 const option = self.cur.lexeme;
                 if (std.ascii.eqlIgnoreCase(option, "VERIFY")) {
                     verify_only = true;
                     self.advance();
-                    if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "ONLY")) {
+                    // GAP-0871: ONLY lexes as a keyword token (.ONLY), not an
+                    // identifier — accept both so `VERIFY ONLY` parses and the
+                    // statement reaches the stable executor-level refusal.
+                    if (self.cur.kind == .ONLY or (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "ONLY"))) {
                         self.advance();
                     }
+                } else {
+                    // Unknown option identifier — consume to guarantee progress
+                    // (the loop previously spun forever on unrecognized options).
+                    self.advance();
                 }
             }
         }
@@ -7098,7 +7116,7 @@ pub const Parser = struct {
 
 test "parser - != operator in RETURN expression" {
     const allocator = std.testing.allocator;
-    var arena = try std.heap.ArenaAllocator.init(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var lx = Lexer{ .src = "RETURN 1 != 2 AS x" };
     var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
@@ -7111,7 +7129,7 @@ test "parser - != operator in RETURN expression" {
 
 test "parser - != operator in WHERE clause" {
     const allocator = std.testing.allocator;
-    var arena = try std.heap.ArenaAllocator.init(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var lx = Lexer{ .src = "MATCH (n:Group) WHERE n.trust_level != 'unknown' RETURN n" };
     var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
@@ -7124,7 +7142,7 @@ test "parser - != operator in WHERE clause" {
 
 test "parser - <> operator works" {
     const allocator = std.testing.allocator;
-    var arena = try std.heap.ArenaAllocator.init(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var lx = Lexer{ .src = "RETURN 1 <> 2 AS x" };
     var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
@@ -7133,4 +7151,75 @@ test "parser - <> operator works" {
         return err;
     };
     try std.testing.expect(program.statements.len > 0);
+}
+
+// Quality #733 (2026-06-11): hot-path inline test backfill. The deep-nesting
+// path through parseExpr/parseMap/parseList (Phase 2 "8+ level" claim) had no
+// inline coverage — the three tests above were also dormant (they failed to
+// compile under any test root) until this backfill fixed them and wired the
+// `zig build test-quality733` focused runner.
+test "#733 parser - 8-level nested map/list literal builds the exact AST shape" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    // Nesting (8 levels deep): l1>l2>l3>l4>[array]>l5>l6>[array]>l7>l8
+    // (bracket literals parse as .ArrayLit — see parsePrimary blk_pc)
+    const src =
+        "RETURN {l1: {l2: {l3: {l4: [1, {l5: {l6: [{l7: {l8: 42}}]}}]}}}} AS m";
+    var lx = Lexer{ .src = src };
+    var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try parser.parseProgram();
+
+    try std.testing.expectEqual(@as(usize, 1), program.statements.len);
+    const query = program.statements[0].Query;
+    try std.testing.expectEqual(@as(usize, 1), query.ret.items.len);
+    try std.testing.expectEqualStrings("m", query.ret.items[0].alias.?);
+
+    // Walk levels 1-3: single-key nested maps.
+    var expr: *const ast.Expr = &query.ret.items[0].expr;
+    inline for (.{ "l1", "l2", "l3" }) |key| {
+        try std.testing.expect(expr.* == .Map);
+        try std.testing.expectEqual(@as(usize, 1), expr.Map.len);
+        try std.testing.expectEqualStrings(key, expr.Map[0].key);
+        expr = expr.Map[0].value;
+    }
+
+    // Level 4: {l4: [1, {...}]} — list with a scalar and a nested map.
+    try std.testing.expect(expr.* == .Map);
+    try std.testing.expectEqualStrings("l4", expr.Map[0].key);
+    const l4_list = expr.Map[0].value;
+    try std.testing.expect(l4_list.* == .ArrayLit);
+    try std.testing.expectEqual(@as(usize, 2), l4_list.ArrayLit.len);
+    try std.testing.expectEqual(@as(i64, 1), l4_list.ArrayLit[0].Int);
+
+    // Levels 5-6: {l5: {l6: [...]}}.
+    const l5_map = l4_list.ArrayLit[1];
+    try std.testing.expect(l5_map.* == .Map);
+    try std.testing.expectEqualStrings("l5", l5_map.Map[0].key);
+    const l6_map = l5_map.Map[0].value;
+    try std.testing.expect(l6_map.* == .Map);
+    try std.testing.expectEqualStrings("l6", l6_map.Map[0].key);
+    const l6_list = l6_map.Map[0].value;
+    try std.testing.expect(l6_list.* == .ArrayLit);
+    try std.testing.expectEqual(@as(usize, 1), l6_list.ArrayLit.len);
+
+    // Levels 7-8: innermost {l7: {l8: 42}}.
+    const l7_map = l6_list.ArrayLit[0];
+    try std.testing.expect(l7_map.* == .Map);
+    try std.testing.expectEqualStrings("l7", l7_map.Map[0].key);
+    const l8_map = l7_map.Map[0].value;
+    try std.testing.expect(l8_map.* == .Map);
+    try std.testing.expectEqualStrings("l8", l8_map.Map[0].key);
+    try std.testing.expectEqual(@as(i64, 42), l8_map.Map[0].value.Int);
+}
+
+test "#733 parser - unterminated nested map literal is a clean parse error" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    // Error path: 3 opens, 2 closes — the parser must reject, not crash/hang.
+    var lx = Lexer{ .src = "RETURN {a: {b: {c: 1}} AS m" };
+    var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const result = parser.parseProgram();
+    try std.testing.expectError(error.UnexpectedToken, result);
 }

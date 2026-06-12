@@ -95,13 +95,18 @@ test "WAL: append and read back" {
     try testing.expect(w.bytesSinceCheckpoint() > 0);
 }
 
-test "WAL: replay on fresh store" {
+test "WAL: replay is a deprecated no-op (crash recovery owned by storage engine)" {
+    // Since commit a4f18bf4 (2026-03-31) the Geode WAL is a logical change
+    // feed for CDC/audit only; physical crash recovery is the graph-storage
+    // engine's WAL (engine.open()). replay() returns 0 and MUST NOT mutate
+    // the store. The legacy in-process replay path was removed entirely by
+    // #812 (GAP-0886a, 2026-06-10). This test pins the deprecation contract.
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
     defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
-    // Phase 1: Write some WAL records
+    // Phase 1: Write some WAL records (the logical feed still accepts them)
     {
         var w = try wal_mod.WriteAheadLog.init(allocator, path);
         defer w.deinit();
@@ -129,7 +134,7 @@ test "WAL: replay on fresh store" {
         try w.sync();
     }
 
-    // Phase 2: Replay onto a fresh store
+    // Phase 2: replay() onto a fresh store is a no-op — returns 0, store untouched.
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
@@ -137,21 +142,10 @@ test "WAL: replay on fresh store" {
     defer w2.deinit();
 
     const last_lsn = try w2.replay(&store);
-    try testing.expectEqual(@as(u64, 3), last_lsn);
-
-    // Verify node was created
-    try testing.expectEqual(@as(usize, 1), store.getNodeCount());
-    // Verify property was set
-    const prop = store.getNodeProperty(100, "age");
-    try testing.expect(prop != null);
-    if (prop) |pv| {
-        switch (pv) {
-            .Int => |i| try testing.expectEqual(@as(i64, 30), i),
-            else => return error.TestUnexpectedResult,
-        }
-    }
-    // Verify edge was created
-    try testing.expectEqual(@as(usize, 1), store.getEdgeCount());
+    try testing.expectEqual(@as(u64, 0), last_lsn);
+    try testing.expectEqual(@as(usize, 0), store.getNodeCount());
+    try testing.expectEqual(@as(usize, 0), store.getEdgeCount());
+    try testing.expect(store.getNodeProperty(100, "age") == null);
 }
 
 test "WAL: checkpoint and truncation" {
@@ -214,7 +208,9 @@ test "WAL: CRC32 integrity validation" {
         }
     }
 
-    // Replay should stop at corrupted record (CRC mismatch)
+    // The WAL re-opens cleanly despite corruption mid-file (the external wal
+    // library validates CRCs lazily on iteration, not on open), and replay()
+    // remains the deprecated no-op (returns 0).
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
@@ -222,74 +218,47 @@ test "WAL: CRC32 integrity validation" {
     defer w2.deinit();
 
     const last_lsn = try w2.replay(&store);
-    // Either 0 (no records replayed due to corruption) or partial replay
-    try testing.expect(last_lsn == 0); // The first record is corrupted
+    try testing.expect(last_lsn == 0);
 }
 
-test "WAL: multiple record types roundtrip" {
+test "WAL: multiple record types append (logical feed)" {
+    // All WalRecord variants serialize and append to the logical feed.
+    // (Replay-side assertions removed with the legacy replay path — #812.)
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
     defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
-    // Write various record types
-    {
-        var w = try wal_mod.WriteAheadLog.init(allocator, path);
-        defer w.deinit();
+    var w = try wal_mod.WriteAheadLog.init(allocator, path);
+    defer w.deinit();
 
-        _ = try w.appendRecord(1, .{ .CreateNode = .{
-            .node_id = 50,
-            .graph_name = "default",
-            .labels = &.{ "A", "B" },
-        } });
-        _ = try w.appendRecord(1, .{ .SetNodeProperty = .{
-            .node_id = 50,
-            .key = "flag",
-            .value = .{ .key = "flag", .value_type = 4, .bool_value = true },
-        } });
-        _ = try w.appendRecord(1, .{ .SetNodeProperty = .{
-            .node_id = 50,
-            .key = "score",
-            .value = .{ .key = "score", .value_type = 3, .float_value = 3.14 },
-        } });
-        _ = try w.appendRecord(1, .{ .AddNodeLabel = .{
-            .node_id = 50,
-            .label = "C",
-        } });
-        _ = try w.appendRecord(1, .{ .RemoveNodeProperty = .{
-            .node_id = 50,
-            .key = "score",
-        } });
+    _ = try w.appendRecord(1, .{ .CreateNode = .{
+        .node_id = 50,
+        .graph_name = "default",
+        .labels = &.{ "A", "B" },
+    } });
+    _ = try w.appendRecord(1, .{ .SetNodeProperty = .{
+        .node_id = 50,
+        .key = "flag",
+        .value = .{ .key = "flag", .value_type = 4, .bool_value = true },
+    } });
+    _ = try w.appendRecord(1, .{ .SetNodeProperty = .{
+        .node_id = 50,
+        .key = "score",
+        .value = .{ .key = "score", .value_type = 3, .float_value = 3.14 },
+    } });
+    _ = try w.appendRecord(1, .{ .AddNodeLabel = .{
+        .node_id = 50,
+        .label = "C",
+    } });
+    const last = try w.appendRecord(1, .{ .RemoveNodeProperty = .{
+        .node_id = 50,
+        .key = "score",
+    } });
 
-        try w.sync();
-    }
-
-    // Replay
-    var store = try graph_store.GraphStore.init(allocator);
-    defer store.deinit();
-
-    var w2 = try wal_mod.WriteAheadLog.init(allocator, path);
-    defer w2.deinit();
-
-    const last_lsn = try w2.replay(&store);
-    try testing.expectEqual(@as(u64, 5), last_lsn);
-
-    // Node should exist with labels A, B, C
-    try testing.expectEqual(@as(usize, 1), store.getNodeCount());
-
-    // Bool property should exist
-    const flag = store.getNodeProperty(50, "flag");
-    try testing.expect(flag != null);
-    if (flag) |pv| {
-        switch (pv) {
-            .Bool => |b| try testing.expect(b),
-            else => return error.TestUnexpectedResult,
-        }
-    }
-
-    // score should have been removed
-    const score = store.getNodeProperty(50, "score");
-    try testing.expect(score == null);
+    try w.sync();
+    try testing.expectEqual(@as(u64, 5), last);
+    try testing.expectEqual(@as(u64, 5), w.currentLsn());
 }
 
 test "WAL: needsCheckpoint respects byte threshold" {

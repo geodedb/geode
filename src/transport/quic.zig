@@ -402,7 +402,7 @@ pub const QuicTransport = struct {
         allow_insecure: bool = false,
         /// Require client certificates for mTLS authentication over QUIC.
         /// When true, connections without a valid client certificate will be rejected.
-        /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-002; FEATURE="mTLS over QUIC"; ASPECT=Config; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
+        /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-002; FEATURE="mTLS over QUIC"; ASPECT=Config; STATUS=TESTED; TEST=geodetestlab-cli/specs/authn_mtls_rejection_matrix.yml; OWNER=transport; UPDATED=2026-06-11
         require_client_cert: bool = false,
     };
 
@@ -1155,7 +1155,7 @@ pub const QuicConnection = struct {
 
     /// Retrieve the peer's leaf certificate in DER format from the TLS handshake.
     /// Returns null if no client certificate was presented or the TLS context is unavailable.
-    /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-001; FEATURE="mTLS over QUIC"; ASPECT=PeerCertExtraction; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
+    /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-001; FEATURE="mTLS over QUIC"; ASPECT=PeerCertExtraction; STATUS=TESTED; TEST=geodetestlab-cli/specs/authn_mtls_rejection_matrix.yml; OWNER=transport; UPDATED=2026-06-11
     pub fn getPeerCertificateDer(self: *QuicConnection) ?[]const u8 {
         const qc = self.quic_connection orelse return null;
         const tls_ctx = qc.tls_context orelse return null;
@@ -1167,7 +1167,7 @@ pub const QuicConnection = struct {
     /// Return a human-readable IP string for the peer (e.g. "192.168.1.1").
     /// Falls back to "unknown" when the underlying connection is closed or the
     /// address family is unrecognised.
-    /// CANARY: REQ=REQ-SEC-RATE-LIMIT-002; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-26
+    /// CANARY: REQ=REQ-SEC-RATE-LIMIT-002; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=TESTED; TEST=geodetestlab-cli/specs/authn_rate_limiter.yml; OWNER=transport; UPDATED=2026-06-11
     pub fn getPeerAddressString(self: *QuicConnection, allocator: std.mem.Allocator) []const u8 {
         const qc = self.quic_connection orelse return "unknown";
         const peer = &qc.peer;
@@ -1690,7 +1690,7 @@ pub const QuicClient = struct {
     }
 
     pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
-        // CANARY: REQ=REQ-QUIC-LOCALHOST-001; FEATURE="LocalhostNormalization"; ASPECT=ClientConnect; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-QUIC-LOCALHOST-001; FEATURE="LocalhostNormalization"; ASPECT=ClientConnect; STATUS=TESTED; TEST="QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)"; OWNER=transport; UPDATED=2026-06-11
         // Issue #382: Normalize "localhost" to "127.0.0.1" for consistent DNS/TLS handling
         const normalized_address = if (std.mem.eql(u8, address, "localhost"))
             "127.0.0.1"
@@ -1750,7 +1750,12 @@ pub const QuicClient = struct {
     }
 
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
-        // CANARY: REQ=REQ-QUIC-LOCALHOST-002; FEATURE="LocalhostNormalization"; ASPECT=ClientConnectEx; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-QUIC-LOCALHOST-002; FEATURE="LocalhostNormalization"; ASPECT=ClientConnectEx; STATUS=IMPL; OWNER=transport; UPDATED=2026-06-11
+        // NOTE(GAP-0514 P3): stays IMPL — connectEx is only exercised by the cluster
+        // CA-TLS path (cluster.zig / raft_consensus.zig), which always dials distinct
+        // IPs, never "localhost". The identical normalization in connectInsecure IS
+        // tested (REQ-QUIC-LOCALHOST-001, test-remote-kms); promoting this lane needs
+        // a CA-cert localhost connect harness.
         // Issue #382: Normalize "localhost" to "127.0.0.1" for consistent DNS/TLS handling
         const normalized_address = if (std.mem.eql(u8, address, "localhost"))
             "127.0.0.1"
@@ -1965,11 +1970,11 @@ pub const QuicClientStream = struct {
         return result;
     }
 
-    // CANARY: REQ=REQ-QUIC-CLIENT-READLINE-001; FEATURE="QuicClientReadLine"; ASPECT=RetryLogic; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-QUIC-CLIENT-READLINE-001; FEATURE="QuicClientReadLine"; ASPECT=RetryLogic; STATUS=TESTED; TEST="QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with armed callback (GAP-0514 P3)"; OWNER=transport; UPDATED=2026-06-11
     // Issue #413: Add retry logic for WouldBlock when partial data has been read
     // This matches the server-side QuicStream.readLine() behavior for consistency
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-034; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineTimeout; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
-    // CANARY: REQ=REQ-SHELL-INTERRUPT-038; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterrupt; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-034; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineTimeout; STATUS=TESTED; TEST="QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with armed callback (GAP-0514 P3)"; OWNER=transport; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-038; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterrupt; STATUS=TESTED; TEST="QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with armed callback (GAP-0514 P3)"; OWNER=transport; UPDATED=2026-06-11
     // Added interrupt callback to allow Ctrl+C detection during long server operations
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
         return self.readLineWithInterrupt(max_size, null);

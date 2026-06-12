@@ -449,7 +449,19 @@ pub const AuditLogger = struct {
         if (root.object.get("event_hash")) |val| {
             const hex = val.string;
             if (hex.len == 64) {
-                _ = std.fmt.hexToBytes(&self.last_hash, hex) catch {};
+                // Decode into a scratch buffer so a mid-decode failure cannot
+                // leave self.last_hash partially overwritten.
+                var decoded: [32]u8 = undefined;
+                if (std.fmt.hexToBytes(&decoded, hex)) |_| {
+                    self.last_hash = decoded;
+                } else |err| {
+                    // error-policy: B — a malformed tail anchor must not brick
+                    // startup, but silently restarting the hash chain would hide
+                    // tampering or corruption; warn loudly and keep the zero anchor.
+                    log.warn("audit tail event_hash undecodable; hash chain restarts from zero anchor", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                }
             }
         }
         // Note: Zig 0.16 removed seekFromEnd. File appends now use
@@ -1482,6 +1494,8 @@ pub const AuditLogger = struct {
             };
             const io_df = std.Io.Threaded.global_single_threaded.io();
             defer test_file.close(io_df);
+            // error-policy: A — best-effort cleanup of a diagnostic temp file;
+            // a leftover disk_test.tmp affects nothing but disk hygiene.
             defer std.Io.Dir.cwd().deleteFile(io_df, "disk_test.tmp") catch {};
 
             // Try to write large amount of data
@@ -1579,6 +1593,7 @@ pub const AuditLogger = struct {
             }
         }
         const io_val = std.Io.Threaded.global_single_threaded.io();
+        // error-policy: A — best-effort cleanup of a diagnostic temp file.
         defer std.Io.Dir.cwd().deleteFile(io_val, test_file_path) catch {};
 
         // Try to read and validate the file
@@ -1681,6 +1696,7 @@ pub const AuditLogger = struct {
             const recovery_info = try std.fmt.bufPrint(&recovery_buf, "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n", .{ compat_milliTimestamp(), total_expected, recovered, data_loss });
             try backup_file.writePositionalAll(io_bk, recovery_info, 0);
 
+            // error-policy: A — best-effort cleanup of a diagnostic recovery file.
             std.Io.Dir.cwd().deleteFile(io_bk, backup_path) catch {};
         }
 
@@ -1782,6 +1798,7 @@ pub const AuditLogger = struct {
         const report = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n", .{ compat_milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
         try report_file.writePositionalAll(io_rep, report, 0);
 
+        // error-policy: A — best-effort cleanup of a diagnostic report file.
         std.Io.Dir.cwd().deleteFile(io_rep, "config_validation.json") catch {};
 
         std.debug.print("CONFIG_VALIDATION validated={} errors={d} warnings={d} auto_fixed={d}\n", .{ config_validated, errors_found, warnings_found, auto_fixed });

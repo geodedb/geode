@@ -1213,20 +1213,14 @@ fn peerIpSlice(buf: *const [45]u8) []const u8 {
 /// Validate federation HELLO using GEODE_CLUSTER_TOKEN (parity with QUIC handler).
 /// GAP-0284 / GAP-0490: Both nodes must share the same cluster token.
 /// Returns true only if username is "geode-cluster" AND password matches token.
-// CANARY: REQ=REQ-GAP-0284-FEDERATION-GRPC-AUTH; FEATURE="FederationAuth"; ASPECT=GrpcServerValidation; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+/// SEC-INFRA-03: delegates to the shared cluster_auth validator (constant-time
+/// compare) so the dual-token rotation overlap window
+/// (GEODE_CLUSTER_TOKEN_PREVIOUS) applies to federation HELLOs too.
+// CANARY: REQ=REQ-GAP-0284-FEDERATION-GRPC-AUTH; FEATURE="FederationAuth"; ASPECT=GrpcServerValidation; STATUS=IMPL; OWNER=security; UPDATED=2026-06-10
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_CLUSTER_TOKEN") else null;
-    const expected_tok = expected orelse return false;
-    if (expected_tok.len == 0 or password.len == 0) return false;
-    // SEC-07: No early length check — pad both independently to prevent length-leak timing
-    var buf_a: [256]u8 = [_]u8{0} ** 256;
-    var buf_b: [256]u8 = [_]u8{0} ** 256;
-    const n_pw = @min(password.len, 256);
-    const n_ex = @min(expected_tok.len, 256);
-    @memcpy(buf_a[0..n_pw], password[0..n_pw]);
-    @memcpy(buf_b[0..n_ex], expected_tok[0..n_ex]);
-    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
+    if (comptime builtin.os.tag == .windows) return false;
+    return geode.distributed.cluster_auth.validateClusterToken(password);
 }
 
 /// Parse an ALTER USER <name> SET PASSWORD '<pwd>' statement from raw query text.
@@ -2383,7 +2377,10 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 },
                 .rows => {
                     const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
-                    if (!rls_active) {
+                    // GAP-0892: node-scan streaming executes only `analysis.target`;
+                    // bail when other statements (SESSION SET, DDL, ...) must run
+                    // (same gate as the QUIC handler).
+                    if (!rls_active and !analysis.has_effectful_preamble) {
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
@@ -2984,7 +2981,9 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
     const backup_dir = "./server_backups";
     var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
-        .compression = if (req.compress) .zstd else .none,
+        // GAP-0880: gzip is the only compression codec with a real encoder;
+        // never request zstd (no encoder — UnsupportedCompression).
+        .compression = if (req.compress) .gzip else .none,
         .encryption = false,
         .retention_days = 30,
     }) catch |err| {
@@ -3063,7 +3062,9 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     }
 
     var mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{
-        .compression = .zstd,
+        // Restore reads the codec from each backup file's header; keep the
+        // honest default (.none) — .zstd has no encoder (GAP-0880).
+        .compression = .none,
         .encryption = false,
         .retention_days = 30,
     }) catch |err| {
@@ -3136,6 +3137,9 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         },
     }
 
+    // GAP-0880: real upload ingestion (mirror of the QUIC handler). The
+    // request must carry the complete backup artifact bytes; the old
+    // metadata-only path created an EMPTY file and reported fake success.
     if (req.size_bytes == 0 or req.checksum.len == 0) {
         const resp = schema.UploadBackupResponse{
             .success = false,
@@ -3143,18 +3147,49 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         };
         return encodeMessage(allocator, resp);
     }
+    if (req.payload.len == 0) {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Upload payload required: metadata-only upload is not supported"),
+        };
+        return encodeMessage(allocator, resp);
+    }
+    if (req.payload.len != req.size_bytes) {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try std.fmt.allocPrint(allocator, "Upload size mismatch: declared {d} bytes, received {d}", .{ req.size_bytes, req.payload.len }),
+        };
+        return encodeMessage(allocator, resp);
+    }
+    const expected_checksum = std.fmt.parseInt(u64, req.checksum, 16) catch {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Invalid checksum: expected hex CRC32 from BackupResponse"),
+        };
+        return encodeMessage(allocator, resp);
+    };
 
-    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "./uploaded_backups") catch {};
-    const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
-    // Create empty placeholder file for upload slot
-    if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
-        file.close(std.Io.Threaded.global_single_threaded.io());
-    } else |_| {}
+    var upload_mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{}) catch |err| {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try std.fmt.allocPrint(allocator, "Upload init failed: {s}", .{@errorName(err)}),
+        };
+        return encodeMessage(allocator, resp);
+    };
+    defer upload_mgr.deinit();
+
+    const ingested = upload_mgr.ingestUploadedBackup(req.payload, expected_checksum) catch |err| {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try std.fmt.allocPrint(allocator, "Upload rejected: {s}", .{@errorName(err)}),
+        };
+        return encodeMessage(allocator, resp);
+    };
 
     const resp = schema.UploadBackupResponse{
         .success = true,
-        .message = try allocator.dupe(u8, "Upload slot ready"),
-        .upload_path = path,
+        .message = try allocator.dupe(u8, "Backup uploaded, verified, and registered"),
+        .upload_path = try std.fmt.allocPrint(allocator, "./server_backups/full_{x}.backup", .{ingested.backup_id}),
     };
     return encodeMessage(allocator, resp);
 }

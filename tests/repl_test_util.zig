@@ -4,8 +4,12 @@ const proto_util = @import("proto_test_util.zig");
 
 var port_counter: std.atomic.Value(u16) = std.atomic.Value(u16).init(20000);
 
+/// Prefer a kernel-assigned free port: the fixed 20000+ counter collides
+/// with orphaned servers from a previously killed test run (two QUIC
+/// servers on one UDP port split the packet stream and wedge the client).
+/// Falls back to the counter only if the OS probe fails.
 pub fn nextPort() u16 {
-    return port_counter.fetchAdd(1, .monotonic);
+    return proto_util.getRandomPort() catch port_counter.fetchAdd(1, .monotonic);
 }
 
 pub const ServerFixture = struct {
@@ -45,11 +49,22 @@ pub fn connectSession(allocator: std.mem.Allocator, addr: []const u8) !geode.rep
     return session;
 }
 
+// Zig 0.16: std.Thread.sleep was removed — same linux nanosleep compat shim
+// shape proto_test_util.zig uses.
+fn compatSleep(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 fn connectWithRetry(session: *geode.repl.repl_dispatch.ClientSession) !void {
     var attempts: usize = 0;
     while (attempts < 20) : (attempts += 1) {
         if (attempts > 0) {
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            compatSleep(50 * std.time.ns_per_ms);
         }
 
         session.connect() catch |err| {

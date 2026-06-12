@@ -9,7 +9,7 @@
 - `peak_contributors[]`: Top 3 allocation deltas (bytes_alloc) with op names.
 - `total_time_ns`: Wall-clock pipeline time.
 - `spills`: `{sort_spills, distinct_spills, union_spills}` plus optional `spill_reason` (`forced|threshold`).
-- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` from tracking allocator.
+- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — deterministic synthetic model on the fallback (v1) path, honest zeros on the trace-backed (v2) path; NOT measured allocations (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations).
 - `planner_estimates` (optional if estimates enabled):
   - `sum_estimate_bytes`
   - `sum_actual_bytes`

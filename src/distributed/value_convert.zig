@@ -187,15 +187,17 @@ fn freeJsonValue(allocator: Allocator, value: std.json.Value) void {
         .number_string => |s| allocator.free(s),
         .array => |arr| {
             for (arr.items) |item| freeJsonValue(allocator, item);
-            arr.deinit(allocator);
+            // std.json.Array is the allocator-managed ArrayList variant.
+            arr.deinit();
         },
         .object => |obj| {
-            var iter = obj.iterator();
+            var owned_obj = obj;
+            var iter = owned_obj.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);
                 freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj.deinit();
+            owned_obj.deinit(allocator);
         },
         else => {},
     }
