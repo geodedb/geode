@@ -1692,3 +1692,69 @@ PVCs were clean — but this stranded-term-behind repro is the same family and s
 the candidate-arming alone is insufficient. Owed **item 2** (genuine silent-blackhole
 recovery on a leader) likewise remains unexercised. prod remains UNTOUCHED
 (single-node 0.6.14).
+
+---
+
+## ✅ PER-DIRECTION LIVENESS FIX LANDED (2026-06-12) — response-only progress stamping (stranded-term-behind wedge; k8s re-verify owed)
+
+The "stranded a term behind despite both mechanisms firing" wedge above is
+**fixed on `main`** (commits `cc4b716c` red tests, fix on this commit). The
+tester's diagnosis was confirmed exactly in code:
+
+- The stamp at `cluster.zig:applyDecodedRaftFrame` fired for EVERY inbound
+  frame type. A stranded candidate re-sends RequestVote every 1–2 s
+  (election timeout [1.0 s, 2.0 s)); each vote stamped the LEADER's
+  outbound-to-that-peer clock, so the 15 s stall budget never elapsed and
+  the leader never evicted/rebuilt its genuinely-wedged outbound stream.
+  Meanwhile the stranded node's own candidate-armed detector evicted its own
+  (healthy) outbound streams — the wrong direction by construction (the
+  documented inbound/outbound asymmetry: a node cannot observe its own dead
+  INBOUND; only the sender can fix it).
+
+**The fix — per-direction liveness:** progress for peer X is now stamped
+ONLY by RESPONSE frames (`request_vote_response`,
+`append_entries_response`, `install_snapshot_response`) — a response can
+only exist if OUR outbound request reached X. Inbound REQUESTS
+(RequestVote/AppendEntries/InstallSnapshot, pre-vote included) prove only
+X's outbound path and no longer refresh our clock. Implemented as the pure
+classifier `frameProvesOurOutboundDelivered(body)` (raft_consensus.zig)
+gating the stamp site (cluster.zig), after the token+nonce gates as before.
+
+Why this is safe for healthy links: the leader heartbeats every ~10 ms and
+a caught-up follower acks EVERY AppendEntries (including empty heartbeats)
+with `append_entries_response` — verified in the lib (node.zig:949-953,
+:1034-1041) — so a healthy leader↔follower pair refreshes constantly. A
+candidate's clock refreshes on vote RESPONSES. Followers remain suppressed
+from eviction entirely. Expected k8s behavior for the stranded-term-behind
+scenario: the leader's clock for the wedged peer goes stale in 15 s, two
+strikes evict at ~18–21 s, the rebuilt stream delivers term-7 AppendEntries,
+and the stranded node steps down — bounded recovery instead of a 166 s+
+permanent strand.
+
+**Verification at closure:** `test-raft-stall-detector` 22/22 (2 new red →
+green: the 6-variant classification table and the transport-level
+"request does not refresh / response does" contract),
+`test-raft-divergent-state-recovery` green, distributed suite green
+(per-peer-drain, 3node-election, steady-state, propose-write,
+envelope-roundtrip, drainready-dispatch, replicable-mutations,
+hardstate-durability, apply-restart-idempotent). Full build + fmt clean.
+
+**New characterized residual — client-retry idempotency gap (from the same
+k8s run):** a write that COMMITS but exceeds the 5000 ms `waitForApplied`
+budget returns `Timeout` to the client (busy-poll wait at 2 ms granularity,
+`cluster.zig:waitForApplied`; budget hardcoded at the 7 `clusterReplicate*`
+call sites). The latency itself is the already-tracked QUIC poll-loop
+saturation work (`docs/bugs/2026-06-07-…liveness-kill-503.md`). The novel
+gap: a CLIENT RETRY of a timed-out-but-committed write mints a NEW raft
+index, which the index-keyed apply dedup (root cause #6) does NOT catch —
+a retried CREATE can double-insert. Needs a client-visible idempotency key
+or a propose-level dedup; until then operators should treat Timeout on
+cluster writes as "unknown outcome", not "failed".
+
+**Owed on real k8s (next dev build):** (1) the aggressive-churn repro
+(4 rapid leader kills) — the stranded node must rejoin within ~30 s with
+the leader logging a stall-evict for it; (2) owed item 2 (genuine leader
+silent-blackhole) remains unexercised; (3) reused-PVC rolling restart
+without a wipe (owed item 1) still to be retried directly.
+
+prod remains UNTOUCHED (single-node 0.6.14).
