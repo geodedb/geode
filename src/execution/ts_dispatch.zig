@@ -43,6 +43,7 @@ const eval = @import("../eval.zig");
 const ts = @import("../timeseries/timeseries.zig");
 
 const execution = @import("../execution.zig");
+const cluster_mod = @import("../distributed/cluster.zig");
 const execution_helpers = @import("execution_helpers.zig");
 const filterYieldColumns = execution_helpers.filterYieldColumns;
 const ExecutionResult = execution.ExecutionResult;
@@ -171,6 +172,11 @@ fn insertedTable(allocator: std.mem.Allocator, n: i64) !ExecutionResult {
 
 /// `geode.ts.insert(device_id, metric, ts, value)` → 1-row `inserted = 1`.
 fn handleInsert(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !ExecutionResult {
+    // Cluster fail-closed: ts points are durable (WAL) but have no Raft slice —
+    // an ungated ingest lands on ONE node and silently diverges. See
+    // docs/TIMESERIES.md (cluster limitation).
+    // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateTsIngest; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+    try cluster_mod.gateUnreplicatedWrite();
     const a = try args(call_stmt);
     if (a.len != 4) return error.InvalidArgs;
     const key = try keyOf(a);
@@ -185,6 +191,10 @@ fn handleInsert(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Exe
 /// of 2-element `[ts, value]` Int lists, e.g. `[[100, 72], [110, 73]]`. Returns
 /// 1-row `inserted = N`. One sort + one WAL append for the whole batch.
 fn handleInsertMany(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !ExecutionResult {
+    // Cluster fail-closed: ts points are durable (WAL) but have no Raft slice —
+    // an ungated ingest lands on ONE node and silently diverges. See
+    // docs/TIMESERIES.md (cluster limitation).
+    try cluster_mod.gateUnreplicatedWrite();
     const a = try args(call_stmt);
     if (a.len != 3) return error.InvalidArgs;
     const key = try keyOf(a);

@@ -1554,6 +1554,24 @@ pub fn build(b: *std.Build) void {
     const raft_per_peer_drain_step = b.step("test-raft-per-peer-drain", "Run per-peer non-blocking outbox drain isolation test (A2)");
     raft_per_peer_drain_step.dependOn(&run_raft_per_peer_drain_tests.step);
 
+    // k8s root cause #5 (transport wedge): stalled-stream liveness detector.
+    // A leader pod restart with a new IP strands a non-restarted third node as a
+    // silent stuck-candidate because the fire-and-forget transport never errors a
+    // send into the stale connection and the IP-change reaper declines (the
+    // victim's own IP never changed). These tests encode the desired stall
+    // detector (notePeerProgress + shouldEvictOnStall) and FAIL against the
+    // skeleton, proving they catch the wedge.
+    const raft_stall_detector_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_stall_detector.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_stall_detector_tests.root_module.addImport("geode", root_mod);
+    raft_stall_detector_tests.root_module.link_libc = true;
+    const run_raft_stall_detector_tests = b.addRunArtifact(raft_stall_detector_tests);
+    const raft_stall_detector_step = b.step("test-raft-stall-detector", "Run stalled-stream liveness detector regression tests (k8s root cause #5 transport wedge)");
+    raft_stall_detector_step.dependOn(&run_raft_stall_detector_tests.step);
+
     // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
     // distributed cluster testing plan).  Brings up two real
     // ClusterCoordinators with their QUIC listeners on loopback,
@@ -2111,6 +2129,15 @@ pub fn build(b: *std.Build) void {
     const run_gap0869_tests = b.addRunArtifact(gap0869_tests);
     const gap0869_step = b.step("test-gap0869", "GAP-0869: FTS phrase/proximity/highlight over the real positional index");
     gap0869_step.dependOn(&run_gap0869_tests.step);
+
+    // Cluster-write-gates slice 3 (RED until the apply-side FTS hook lands):
+    // follower raft apply must maintain the fulltext index like the executor path.
+    const fts_apply_symmetry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fts_apply_symmetry.zig"), .target = target, .optimize = optimize }) });
+    fts_apply_symmetry_tests.root_module.addImport("geode", root_mod);
+    fts_apply_symmetry_tests.root_module.link_libc = true;
+    const run_fts_apply_symmetry_tests = b.addRunArtifact(fts_apply_symmetry_tests);
+    const fts_apply_symmetry_step = b.step("test-fts-apply-symmetry", "Raft apply + snapshot install must maintain the fulltext index like the executor path (GNC2 create + GUPD update + snapshot rebuild)");
+    fts_apply_symmetry_step.dependOn(&run_fts_apply_symmetry_tests.step);
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
@@ -2881,6 +2908,9 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0810_cross_subsystem_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811_aggregation_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_fts_latency_tests.step, 1, test_shard_loads, test_shard_index);
+    // Task 13 (cluster FTS symmetry): raft apply + snapshot install must
+    // maintain fulltext indexes like the executor path.
+    shardDep(test_step, &run_fts_apply_symmetry_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_latency_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_ingest_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0811b_property_aggregate_tests.step, 1, test_shard_loads, test_shard_index);
@@ -3202,6 +3232,21 @@ pub fn build(b: *std.Build) void {
     gap0889_step.dependOn(&run_gap0889_twophase_tests.step);
     gap0889_step.dependOn(&run_raft_persistent_tests.step);
 
+    // MATCH…CREATE summary-counter mislabel regression: the implicit summary
+    // row must report nodes_created and relationships_created SEPARATELY (the
+    // bug reported a pure edge create as nodes_created: 1).
+    const match_create_counters_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_match_create_counters.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    match_create_counters_test_mod.addImport("geode", root_mod);
+    const match_create_counters_tests = b.addTest(.{ .root_module = match_create_counters_test_mod });
+    const run_match_create_counters_tests = b.addRunArtifact(match_create_counters_tests);
+    shardDep(test_step, &run_match_create_counters_tests.step, 1, test_shard_loads, test_shard_index);
+    const match_create_counters_step = b.step("test-match-create-counters", "Regression: MATCH…CREATE summary must report nodes_created and relationships_created separately");
+    match_create_counters_step.dependOn(&run_match_create_counters_tests.step);
+
     // Root cause #6 follow-up: durable raft hard-state (currentTerm/votedFor) +
     // log across a process restart. A FileStorage-backed RaftNode must restore
     // its term after deinit + re-init on the same dir. Regression for
@@ -3217,6 +3262,27 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_raft_hardstate_dur_tests.step, 1, test_shard_loads, test_shard_index);
     const raft_hardstate_dur_step = b.step("test-raft-hardstate-durability", "Regression: raft hard-state must be durable across a process restart (FileStorage)");
     raft_hardstate_dur_step.dependOn(&run_raft_hardstate_dur_tests.step);
+
+    // owed item (4): divergent durable raft state recovery. GREEN PIN — seeds 3
+    // FileStorage dirs at divergent high terms, boots an in-process 3-node
+    // cluster on them (reliable InProcessTransport, no QUIC), and asserts a leader
+    // elects and the term advances past the restored value. Proves the raft lib +
+    // geode recover divergent durable state when the transport is healthy (the
+    // wedge is a transport-delivery + leader-only-stall-gate bug, NOT a
+    // consensus-logic bug). Regression for
+    // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md.
+    const raft_divergent_recovery_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_divergent_state_recovery.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_divergent_recovery_test_mod.addImport("geode", root_mod);
+    raft_divergent_recovery_test_mod.link_libc = true;
+    const raft_divergent_recovery_tests = b.addTest(.{ .root_module = raft_divergent_recovery_test_mod });
+    const run_raft_divergent_recovery_tests = b.addRunArtifact(raft_divergent_recovery_tests);
+    shardDep(test_step, &run_raft_divergent_recovery_tests.step, 1, test_shard_loads, test_shard_index);
+    const raft_divergent_recovery_step = b.step("test-raft-divergent-state-recovery", "owed item (4) green pin: divergent durable raft state recovers a leader + advances term under reliable transport");
+    raft_divergent_recovery_step.dependOn(&run_raft_divergent_recovery_tests.step);
 
     // Root cause #6: restart re-apply idempotency — re-applying a committed
     // replicated create must NOT duplicate the node. Regression for
@@ -5063,6 +5129,14 @@ pub fn build(b: *std.Build) void {
     gap0879_step.dependOn(&run_gap0879_tests.step);
     gap0879_step.dependOn(&run_gap0879_ie_tests.step);
 
+    // GAP-0891 regression suite (native-tenant write tagging + edge reads).
+    const gap0891_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0891_repro.zig"), .target = target, .optimize = optimize });
+    gap0891_test_mod.addImport("geode", root_mod);
+    const gap0891_tests = b.addTest(.{ .root_module = gap0891_test_mod });
+    const run_gap0891_tests = b.addRunArtifact(gap0891_tests);
+    const gap0891_step = b.step("test-gap0891-repro", "GAP-0891 regression (native-tenant write tenant tagging + edge reads)");
+    gap0891_step.dependOn(&run_gap0891_tests.step);
+
     // GAP-0840 regression: opt-in strict-tenancy mode. The shared
     // tenancy.resolveTenantFilter decision (delegated to by both
     // crud_operations.tenantFilterFromContext and
@@ -6296,6 +6370,75 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_conn_pool_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
     const conn_pool_lifetime_step = b.step("test-handle-quic-connection-pool-lifetime", "Run pooled.ThreadPool init+deinit thread-leak regression test");
     conn_pool_lifetime_step.dependOn(&run_conn_pool_lifetime_tests.step);
+
+    // REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME — FirstStreamOwnerContext use-after-free.
+    //
+    // The reproduction tests are INLINE in src/server/quic_connection_handler.zig
+    // (named `first_stream_owner_*` / `first_stream_decode_*`), because the
+    // scheduler + owner-context + notifier internals are intentionally NOT
+    // exported through the `geode` root module (circular dependency — see
+    // src/lib.zig:652). The handler is reachable only through the full server
+    // graph (src/unified_entry.zig -> src/server/main.zig -> the handler), so we
+    // reuse the geode executable's fully-wired root module (`geode_exe`, defined
+    // above) as the test root and filter to these tests' names. This is the only
+    // way to compile + run the handler's inline tests with all ~50 server deps
+    // resolved without hand-replicating the import list.
+    //
+    // tests/test_first_stream_owner_lifetime.zig is the documented home for the
+    // test plan + CANARY and a geode-reachable supporting assertion; the
+    // deterministic-red repro lives inline and runs through this filtered step.
+    //
+    // 2026-06-10: the lifetime fix landed (refcount-gated free + notifier
+    // quiesce gate), so this is now GREEN and wired into the sharded
+    // `zig build test` aggregate via the `shardDep` calls below.
+    //
+    // We build a FRESH test module rooted at the same source as the executable
+    // (src/unified_entry.zig) and copy the executable module's fully-wired
+    // import table + link settings into it. A fresh module is required so the
+    // artifact is compiled in TEST mode (reusing geode_exe.root_module directly
+    // compiles the exe object, which discovers zero inline tests).
+    const first_stream_lifetime_mod = b.createModule(.{
+        .root_source_file = b.path("src/first_stream_owner_lifetime_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        var it = geode_exe.root_module.import_table.iterator();
+        while (it.next()) |entry| {
+            first_stream_lifetime_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    first_stream_lifetime_mod.link_libc = true;
+    if (enable_openssl) {
+        first_stream_lifetime_mod.linkSystemLibrary("ssl", .{});
+        first_stream_lifetime_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        first_stream_lifetime_mod.linkSystemLibrary("dl", .{});
+    }
+    first_stream_lifetime_mod.addOptions("openssl_config", openssl_options);
+    const first_stream_lifetime_tests = b.addTest(.{
+        .root_module = first_stream_lifetime_mod,
+        .filters = &.{ "first_stream_owner_", "first_stream_decode_" },
+    });
+    const run_first_stream_lifetime_tests = b.addRunArtifact(first_stream_lifetime_tests);
+    const first_stream_lifetime_step = b.step("test-first-stream-owner-lifetime", "Run FirstStreamOwnerContext use-after-free regression (REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME)");
+    first_stream_lifetime_step.dependOn(&run_first_stream_lifetime_tests.step);
+    // 2026-06-10: the lifetime fix landed (refcount-gated FirstStreamOwnerContext
+    // free + notifier quiesce gate), so the step is now GREEN and wired into the
+    // sharded `zig build test` aggregate. Weight 8 mirrors the other
+    // `geode_exe`-rooted test artifacts (exe unit tests) since this compiles the
+    // full server module in TEST mode.
+    shardDep(test_step, &run_first_stream_lifetime_tests.step, 8, test_shard_loads, test_shard_index);
+
+    // geode-reachable supporting suite for the same REQ (framing-pin lives here;
+    // imports only the public `geode` surface).
+    const first_stream_lifetime_doc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_first_stream_owner_lifetime.zig"), .target = target, .optimize = optimize });
+    first_stream_lifetime_doc_mod.addImport("geode", root_mod);
+    const first_stream_lifetime_doc_tests = b.addTest(.{ .root_module = first_stream_lifetime_doc_mod });
+    const run_first_stream_lifetime_doc_tests = b.addRunArtifact(first_stream_lifetime_doc_tests);
+    first_stream_lifetime_step.dependOn(&run_first_stream_lifetime_doc_tests.step);
+    shardDep(test_step, &run_first_stream_lifetime_doc_tests.step, 1, test_shard_loads, test_shard_index);
 
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in

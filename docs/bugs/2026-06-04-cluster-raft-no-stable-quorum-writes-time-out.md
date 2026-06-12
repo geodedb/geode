@@ -945,3 +945,661 @@ retry (above) bridges this. `assert_raft_state_persisted` (M1) verifies
 - Hung-SIGTERM-shutdown bug (separate issue — thread-pool `deinit` timeout on
   graceful stop; tracked in liveness-kill doc; the flock retry makes it safe but
   it should be fixed independently).
+
+---
+
+## ✅ VERIFIED on real Kubernetes (2026-06-10, `dev` = `v0.6.26-16-gd8c1adb`) — restart-survival + edge/merge/delete/SET replication all hold; ❌ ONE new silent-divergence hole found
+
+Clean-slate roll of the latest `dev` onto the real arda 3-pod StatefulSet
+(geode-2 leader, geode-0/geode-1 followers, `term=2`, stable). **All of the
+2026-06-09 fixes above now hold on real k8s** — this is the first build where the
+cluster both replicates AND survives restarts on a real cluster:
+
+- **`FileStorage` durable raft state on disk** — `/data/raft` (`hard_state` +
+  `entries.wal`) present on every pod.
+- **Edge CREATE replicates (create-pattern shape).** A leader
+  `CREATE (a:M5A {k:1})-[:M5L]->(b:M5B {k:2})` reads back `M5L=1` on **all three**
+  nodes. Restarting a follower (`kubectl delete pod geode-1`, PVC preserved) leaves
+  `M5L` **EXACTLY 1 on all three** — root-cause-#6 restart-no-dup holds for edges on
+  real k8s.
+- **Single-node CREATE / MERGE / MATCH…SET / DELETE** all replicate to all three
+  and survive an in-place restart with no duplication (re-confirmed this roll).
+- **Fail-closed gate works for the gated shapes.** A follower
+  `CREATE (x)-[:R]->(y)` correctly returns `58000 ClusterNotLeader`; MERGE/SET/
+  DELETE on a follower likewise reject.
+
+### ❌ NEW (uncovered write path) — `MATCH … CREATE (a)-[:R]->(b)` bypasses the cluster write-gate on EVERY node → silent divergence
+
+The fail-closed write-routing gate (`af5188cd`, "route every graph write through
+Raft on the leader; fail closed") is keyed on the **statement handler**: the gate
+(`clusterWriteRole()` → `clusterReplicate*`) is installed on the standalone
+`CREATE` handler (`crud_operations.zig:1201`, `:2101`), MERGE (`:2789`),
+`MATCH…SET` (`:3653`), and DELETE (`:3667`). The **`MATCH … CREATE`** path — a
+`CREATE` clause that adds a **relationship between variables already bound by a
+preceding `MATCH`** — is dispatched to a *different* executor path that reaches
+`store.createEdgeWithGraph` (`crud_operations.zig:764` / `:928`) **with no
+`clusterWriteRole()` guard at all.**
+
+Consequence (worst form of divergence — confirmed on the live 3-pod cluster, two
+`MT` nodes pre-seeded and replicated to all three first):
+
+```
+# on the LEADER (geode-2):
+MATCH (a:MT {id:1}),(b:MT {id:2}) CREATE (a)-[:MTL]->(b)
+  -> {"status_class":"00000", ... "nodes_created":1}        # SUCCESS, not ClusterWriteNotReplicable
+  read back:  geode-2(leader) MTL=1   geode-0 MTL=0   geode-1 MTL=0   # leader-only
+
+# on a FOLLOWER (geode-0) — the gate should reject, but:
+MATCH (a:MT {id:1}),(b:MT {id:2}) CREATE (a)-[:MTLF]->(b)
+  -> {"status_class":"00000", ... "nodes_created":1}        # SUCCESS on a FOLLOWER
+  read back:  geode-0 MTLF=1   geode-1 MTLF=0   geode-2(leader) MTLF=0  # follower-only
+# (contrast: a standalone `CREATE (x)-[:R]->(y)` on that same follower DOES return 58000 ClusterNotLeader)
+```
+
+So this single query shape:
+
+1. **Is not replicated** — the edge is written to one node's local store only, never
+   proposed to the Raft log; the other two never see it.
+2. **Does not fail closed** — it returns `00000` success on *both* a leader and a
+   follower, defeating the `ClusterNotLeader` / `ClusterWriteNotReplicable`
+   guarantee that every other write path enforces.
+3. **Diverges on whichever node received it** — leader-only OR follower-only,
+   permanently, with no error surfaced to the client.
+
+This is the same severity class as the original MATCH…SET silent-divergence finding
+(the highest-severity item of the write-routing audit) — just on a different
+uncovered clause. The `Edge CREATE (GNC2)` slice from the 2026-06-09 work covers the
+**standalone create-pattern** edge (`CREATE (a)-[:R]->(b)` minting both endpoints,
+verified above), but **not** the match-then-create-edge shape (endpoints bound by a
+preceding `MATCH`).
+
+Secondary anomaly: the result reports `nodes_created: 1` for a pure edge create
+between two already-matched nodes (should be `0` nodes / `1` edge) — the
+result-counter for the MATCH-bound CREATE-edge path is also wrong, independent of
+the replication hole. *(Fixed 2026-06-10, commits `1aa12b7e`/`758ecc7c` — see the
+closure note below; regression in `tests/test_match_create_counters.zig`.)*
+
+**Fix direction:** route the `MATCH…CREATE` path through the same
+`clusterWriteRole()` gate as the other handlers. On the leader, the CREATE clause's
+edges (and any nodes it creates) must propose through Raft against the
+MATCH-resolved **stable node ids** (resolve the binding on the leader, ship explicit
+endpoint ids exactly as the `GDEL`/`GUPD` slices already do — followers must NEVER
+re-run the MATCH); on a follower it must return `ClusterNotLeader`; any shape
+outside the replicable slice must return `ClusterWriteNotReplicable`. Until then, a
+3-node cluster silently diverges on any `MATCH … CREATE (a)-[:rel]->(b)` write —
+the single most common way an application attaches a relationship between two
+existing nodes.
+
+**Regression test:** extend `tests/test_cluster_replicable_mutations.zig` with a
+match-then-create-edge case (seed two nodes, `MATCH … CREATE` an edge between them
+on the leader, assert the edge reads back on all three) and a follower
+fail-closed case (same query on a follower → `ClusterNotLeader`). The netns churn
+harness should add an M8 phase asserting a match-created edge stays EXACTLY 1 on
+all three across an in-place restart.
+
+---
+
+## ✅ RESOLVED — verified on real Kubernetes (2026-06-11, `dev` = `a25a6f5`) — MATCH…CREATE-edge now replicates; ❌ #5 transport wedge is the sole remaining blocker
+
+The MATCH…CREATE-edge silent-divergence hole documented immediately above is
+**fixed and verified on the real arda 3-pod cluster** — and better than the
+"fail-closed" floor I suggested: the common single-edge shape now **replicates**.
+
+Tested with **fresh, never-before-used labels** (the QA PVCs retain prior-session
+state — the first pass read stale `MTL=1`/`MTLF=1` divergent rows left over from the
+2026-06-10 run, which is itself a reminder that the pre-fix divergence is *durable*
+until the data is wiped):
+
+- ✅ **Leader `MATCH (a:Q11A {k:1}),(b:Q11B {k:2}) CREATE (a)-[:Q11M]->(b)`** → `00000`
+  success and the edge reads back **`Q11M=1` on all three** nodes. The match-bound
+  CREATE-edge path now routes through Raft.
+- ✅ **Follower** same query → `58000 ClusterNotLeader`, and **nothing is written
+  anywhere** (`Q11N=0/0/0`). Fail-closed on followers.
+- ✅ **Ambiguous multi-match** (`MATCH {id:1},{id:2}` matching several stale nodes →
+  cross-product of edges) → `58000 ClusterWriteNotReplicable`, fail-closed (this is
+  why the polluted first pass returned `ClusterWriteNotReplicable` — correct, not a
+  regression).
+- ✅ **Restart-no-dup holds**: after restarting a node, the match-created `Q11M` and
+  create-pattern `Q11L` edges read back **EXACTLY 1** on every reachable node — no
+  duplication, no loss.
+- ✅ **create-pattern edge unregressed**: `CREATE (x)-[:R]->(y)` and three repeats
+  all replicate `1/1/1` (one transient first-write `Timeout` *response* whose write
+  nonetheless committed + replicated — a commit-ack latency blip, not divergence).
+
+With this, **every graph-write shape exercised now either replicates to all three or
+fails closed** — the silent-divergence class of bugs (the through-line of this entire
+report, from the original MATCH…SET hole to this match-create-edge hole) is closed on
+real k8s.
+
+### ❌ Sole remaining blocker — root cause #5 (transport): a leader restart can strand the third node as a silent stuck-candidate
+
+On this same run, restarting the leader pod (`kubectl delete pod geode-1`; it came
+back with a **new pod IP** `10.244.1.231` and won re-election as leader at `term=12`)
+left the third node **geode-2 stuck as a candidate at `term=12` indefinitely** (iter
+climbed past 51 800 over ~5+ minutes, never stepping down to follower, never
+self-healing within the observation window):
+
+- The leader (geode-1) logs **no** send failures to peer=3, and considers itself a
+  healthy term-12 leader. geode-2 logs **no** transport errors in the post-restart
+  window either. The heartbeat path leader→geode-2 is **silently not delivered** —
+  geode-2 never receives (or never accepts) the same-term leader's AppendEntries, so
+  it never steps down. This is the **silent-stall** signature of #5 (a long-lived
+  multiplexed stream to a peer that wedges without surfacing an error), distinct from
+  the **noisy** signature (the `getOrCreatePeerConnection failed
+  error=InvalidAddress|HandshakeError peer=2` churn that geode-2 logged for ~15 s
+  during the *initial* boot at 14:29–14:30, before the restart — the FQDN/handshake
+  fragility while a peer's pod is first coming up).
+- **The cluster stays correct and available at 2/3 quorum throughout.** geode-0
+  (follower) + geode-1 (leader) commit and replicate new writes
+  (`CREATE (z)-[:QQL]->(w)` → `QQL=1` on geode-0 and geode-1); geode-2 simply lags
+  (it holds its last consistent state — `Q11M=1`, `Q11L=1` — and misses only writes
+  made while partitioned). geode-2's `:3141` client interface still answers
+  (`RETURN 1` → `00000`); only its raft membership is wedged. No data is lost or
+  duplicated.
+- **Not observed to self-heal.** Unlike the `c1a95a48` membership-re-resolution
+  result (where a leader restart cleanly re-elected and all three reconverged), here
+  the post-restart re-election left geode-2 permanently out. The difference: there
+  the re-resolution reaper fired on the IP change; here geode-2 never re-establishes
+  the leader's heartbeat stream and the reaper never logs a re-resolve for the new
+  leader's IP. A pod roll of geode-2 would rejoin it, but a healthy cluster must
+  survive a single leader restart without operator intervention.
+
+**Status:** the write-path correctness work is **complete and verified on real
+k8s** — this is the first build where every write shape replicates-or-fails-closed
+*and* survives restart without divergence. The **only** thing standing between this
+and a production-eligible 3-node cluster is the #5 transport wedge: a leader (or
+any peer) restart must reliably re-establish the heartbeat stream to every peer so
+no node is stranded as a silent candidate. Recommend prioritizing the leader→peer
+heartbeat-stream liveness/reconnect path (`getOrCreatePeerConnection` /
+`connectWithTLS` / the long-lived multiplexed send stream in
+`src/distributed/raft_consensus.zig` + `src/transport/quic.zig`): detect a stalled
+stream (no ack within N heartbeat intervals) and force a teardown + FQDN re-resolve
+
+- reconnect, exactly as the noisy-error path already does on a hard send failure.
+prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ❌ RE-OPENED on real Kubernetes (2026-06-11, `dev` = `78bb908`) — the #5 stall-detector OVER-CORRECTS into a permanent all-candidate election livelock
+
+The `1637bcf8` stall-detector fix is **present and works at the transport layer**
+(the silent blackhole is gone — stalls are now detected and logged at warn), but on
+real k8s it **over-evicts and deadlocks the whole cluster on a leader restart**,
+which is strictly worse than the `a25a6f5` behavior it replaced (that retained a
+functional 2/3 quorum; this elects no leader at all).
+
+### Reproduction (the exact verification the fix doc said was owed)
+
+Rolled qa to `78bb908` (carries `1637bcf8`). Clean boot elected geode-2 leader at
+`term=13` (term restored from the prior session's **FileStorage** durable hard-state
+on the reused PVCs). Then `kubectl delete pod geode-2` (the leader). Outcome after
+~10 minutes: **all three nodes are wedged as candidates at `term=13`, the term never
+advances, no leader is ever elected, every write returns `ClusterNotLeader`, and it
+does not self-heal.**
+
+```
+node 1 (geode-0) state=candidate term=13 iter=45700   # max term ever reached: 13
+node 2 (geode-1) state=candidate term=13 iter=51400   # max term ever reached: 13
+node 3 (geode-2) state=candidate term=13 iter=35100   # max term ever reached: 13
+# CREATE on any node -> ClusterNotLeader ; RETURN 1 -> ok (client iface alive)
+```
+
+### Root cause — the stall detector evicts the connections an election needs, on a cadence shorter than the election itself
+
+The smoking gun is in the logs — **every node evicts BOTH its peers every ~3 s,
+indefinitely**:
+
+```
+WARN geode.raft raft transport peer stalled (no progress within budget); evicting stale connection endpoint=geode-1... peer=2
+WARN geode.raft raft transport peer stalled (no progress within budget); evicting stale connection endpoint=geode-2... peer=3
+```
+
+`shouldEvictOnStall` treats **absence of inbound AppendEntries-type progress** as a
+dead stream. That assumption holds only in steady state *with a leader*. During a
+leader-election window there is **legitimately no AppendEntries traffic** — yet
+`frames_sent > 0` (candidates are sending `RequestVote`), so every peer trips the
+`peer_stall_budget_ms` (3000 ms) and gets evicted. Evicting tears down the QUIC
+connection the in-flight `RequestVote` / `RequestVoteResponse` ride on; rebuilding it
+(`connectWithTLS` + TLS handshake) takes long enough that the next 3 s pass with
+still no AppendEntries progress → evict again. The election can never gather a
+majority, so no leader emerges, so AppendEntries never resumes, so the stall clock
+never refreshes — a **self-perpetuating livelock**. Because the term only advances
+when an election makes progress, it is frozen at the FileStorage-restored `term=13`
+forever.
+
+The fix doc's own tuning note is the bug: `peer_stall_budget_ms = 3000 ms`,
+deliberately set **"≤ the 5000 ms election-timeout ceiling."** A stall budget
+*below* the election timeout **guarantees** the detector fires in the middle of any
+election that takes more than one round — which, under restart churn, is the norm.
+
+### Two distinct problems, ranked
+
+1. **(Blocker, NEW) The stall detector evicts during elections.** Inbound
+   `RequestVote` / `RequestVoteResponse` (and ideally *any* decoded raft frame, plus
+   "I am a candidate / there is no leader" state) must count as liveness, and/or the
+   stall budget must be **well above** the worst-case election convergence time
+   (several × the election timeout), not below it. Best: suppress the stall check
+   entirely while this node is a candidate or while there is no established leader —
+   a stalled *stream* is only meaningful to detect when you actually expect periodic
+   traffic (steady state under a leader). As written, the recovery mechanism is the
+   outage.
+2. **(Pre-existing, exposed) A leaderless start from FileStorage-restored
+   hard-state does not reliably re-elect.** Even setting the eviction storm aside,
+   all three coming up as candidates pinned at the persisted `term=13` (each having
+   persisted `votedFor` from the prior term) needs the normal Raft escape — election
+   timeout → `currentTerm++` → fresh `RequestVote`. The term never advanced past 13
+   here; confirm the candidate election-timeout path increments the term when the
+   durable `votedFor` for the current term is already spent. (This may be entirely a
+   downstream symptom of #1 starving every election before it can complete — fix #1
+   first, then re-test before chasing #2.)
+
+### Also observed — write-commit was already failing at baseline, before the restart
+
+The pre-restart seed (leader geode-2 + 2 followers, all `term=13`)
+`CREATE (a:R13)-[:R13L]->(b)` did **not** replicate (`R13L=0/0/ERR`) — the leader
+could not commit even with two followers present. Consistent with the stall detector
+already churning the leader↔follower connections in steady state once the 3 s budget
+elapses between writes (the heartbeat is 50 ms, but if `notePeerProgress` only
+counts data-bearing AppendEntries and not idle heartbeats, an idle-then-write gap
+> 3 s evicts mid-propose). Worth checking whether **heartbeats refresh the stall
+clock** — if only non-empty AppendEntries do, any cluster idle for > 3 s will evict
+all peers and stall the next write too.
+
+### Recommendation
+
+`1637bcf8` needs to be reworked before any further k8s cluster testing: the stall
+detector must not evict connections that are healthy-but-quiet during an election or
+between writes. Until then a leader restart (or even an idle period) takes the whole
+cluster down — a worse failure than the silent-stall wedge it was built to fix. The
+correctness work (replication, fail-closed, restart-no-dup, MATCH…CREATE) remains
+sound and is unaffected; this is purely the transport-liveness reaper over-firing.
+prod remains UNTOUCHED (single-node 0.6.14); do NOT enable prod clustering.
+
+---
+
+## ✅ CLOSED (2026-06-10) — `MATCH … CREATE` silent divergence fixed; counter fix; fail-closed sweep + FTS apply symmetry as related hardening
+
+The `MATCH … CREATE (a)-[:R]->(b)` hole above is **fixed on `main`**:
+
+- **Dispatch gate + leader replication slice** (commits `96b73499`, `763d1f15`,
+  `c0786dc7`): the MATCH…CREATE path is now routed through the cluster
+  write-gate in `query_execution.zig`, and on the leader
+  `clusterReplicateMatchCreate` (`crud_operations.zig`) proposes a zero-node
+  **GNC2** entry carrying the MATCH-resolved **absolute node ids** as edge
+  endpoints — followers apply by id and NEVER re-run the MATCH (same posture as
+  the `GDEL`/`GUPD` slices). The GNC2 absolute-id apply path is pinned
+  in-process by `tests/test_raft_apply.zig` (commits `17a8f933`, `493a6bbd`).
+- **Replicable slice scope** (anything outside it fails closed with
+  `ClusterWriteNotReplicable`; a follower always gets `ClusterNotLeader`;
+  zero-match is a no-op): head-only named MATCH chains where each variable
+  resolves to EXACTLY one node; CREATE endpoints are pure variable references;
+  no RETURN/WITH/FILTER/SET/REMOVE/DELETE in the statement; scalar edge
+  properties only; ≤32 edges per statement. Documented residuals that fail
+  closed by design: Cartesian shapes (a MATCH variable matching >1 node) and a
+  new node minted inside the CREATE pattern (`CREATE (a)-[:R]->(new:X)`) in
+  cluster mode.
+- **Regression tests**: `tests/test_cluster_replicable_mutations.zig` Tests 5+6
+  (red at `97e2ddba` → green) — leader MATCH…CREATE reads back on all three
+  nodes; follower MATCH…CREATE is refused with `ClusterNotLeader`. The netns
+  churn harness gained an **M8 phase**
+  (`tests/cluster/netns_cluster_membership_churn_test.sh`) per the request
+  above: seeded endpoints, leader MATCH…CREATE → edge EXACTLY 1 on all three,
+  follower-directed MATCH…CREATE → `ClusterNotLeader` with no leaked edge, and
+  the edge stays EXACTLY 1 everywhere across an in-place restart.
+- **Secondary anomaly (counter) fixed** (commits `1aa12b7e`, `758ecc7c`): the
+  MATCH…CREATE summary now reports `nodes_created` and `relationships_created`
+  correctly (pure edge create → 0 nodes / 1 relationship), and the latent
+  silent no-op `MATCH (a) CREATE (a)-[:R]->(new:X {k:1})` (standalone mode) now
+  actually creates the new node WITH its properties. Regression:
+  `tests/test_match_create_counters.zig`.
+
+### Related hardening landed the same day (2026-06-10)
+
+- **Fail-closed doctrine for every sliceless write surface**
+  (`cluster.gateUnreplicatedWrite()`; commits `6d553fdc`, `ecb2bc68`,
+  `36fc76fd`, `6b1227d2`, `d7a9597a`): in cluster mode, writes with no
+  replication slice are refused — follower → `ClusterNotLeader`, leader →
+  `ClusterWriteNotReplicable` — instead of silently applying node-locally.
+  Covers `geode.ts.insert`/`insert_many`, auth DDL + mutating `geode.auth.*`,
+  policy DDL, tenant create/drop/set_quota, CREATE/DROP INDEX, CREATE/DROP
+  GRAPH, constraints, and mutating TDE/CDC/FLE procedures. Standalone mode is
+  unaffected. e2e: `tests/test_cluster_replicable_mutations.zig`
+  ("cluster: unreplicated write surfaces fail closed", red `5444c87e` → green,
+  7/7 suite).
+- **FTS apply-path symmetry** (commits `e280c526`, `3cd4e1a3`, `05c7944e`):
+  raft apply (GNC1/GNC2/GMRG/GUPD/GDEL) now fires FTS live-maintenance on
+  followers via a callback seam, and snapshot install rebuilds FTS indexes
+  (seam-level; `installSnapshotData` has no production caller yet —
+  `reportSnapshot` wiring pending). Also fixed a latent fts-storage
+  segment-flush doc-id delta overflow on descending ids surfaced by GNC2's id
+  band. Test: `tests/test_fts_apply_symmetry.zig` (3 tests).
+
+Verification at closure: cluster suite 7/7 green; 4-shard `zig build test`
+sweep green; named steps `test-raft-apply` (28/28),
+`test-match-create-counters`, `test-fts-apply-symmetry` (3/3),
+`test-cluster-coord-config` (6/6) green.
+
+---
+
+## ✅ FIX LANDED (2026-06-11) — root cause #5 transport wedge: stalled-stream liveness detector (pending real-k8s verification)
+
+The #5 silent-stall wedge ("leader restart strands the third node as a
+permanent stuck-candidate, zero transport errors on either side") is **fixed
+on `main`** (commits `6b4647c0` red-phase tests, `1637bcf8` fix).
+
+**Root cause (file:line confirmed):** the transport had exactly two recovery
+triggers, and the wedge provably escaped both:
+
+1. Hard-send-error eviction (`shouldEvictOnSendError` →
+   `evictPeerConnection` → next-send `connectWithTLS` FQDN re-resolve) never
+   fired, because `Transport.send` is fire-and-forget — a frame written onto
+   the long-lived `send_stream` of a stale/half-open QUIC connection buffers
+   locally and **returns success**. That is exactly why neither side logged
+   an error.
+2. The IP-change reaper (`maybeReconnectOnIpChange`, ~3s cadence) evicts only
+   when the *peer's* fresh FQDN resolution differs from `pc.resolved_ip`. The
+   strand victim (geode-2) never restarted — its IP never changed — so the
+   reaper declined to act every pass.
+
+**The fix — a third recovery trigger, sibling to the IP-change reaper, same
+~3s `clientPollLoop` cadence** (`src/distributed/raft_consensus.zig`):
+
+- `PeerConnection` gains `last_progress_ms` + `frames_sent` atomics, stamped
+  at connect time (stall clock resets on reconnect — no re-evict loop).
+- `Transport.send` increments `frames_sent` on every successful frame write
+  (send "success" is explicitly NOT trusted as liveness — that's the wedge).
+- `notePeerProgress(peer_id, now_ms)` — peer-id keyed, `peers_mutex` tier-3
+  only — is called from the inbound dispatch (`cluster.zig`
+  `applyDecodedRaftFrame`) **after** the cluster-token + nonce gates, so a
+  follower observing AppendEntries from the leader and a leader observing
+  AppendEntriesResponse from a follower both refresh the stall clock on the
+  OUTBOUND `PeerConnection` for that peer; a forged/replayed frame can never
+  hide a stall.
+- `shouldEvictOnStall` (pure, clock-injectable): evict iff `frames_sent > 0`
+  AND no progress for > `peer_stall_budget_ms` (3000 ms — several reaper
+  passes, ≤ the 5000 ms election-timeout ceiling, 60× the 50 ms heartbeat
+  cadence). Idle peers (nothing ever sent) are never evicted.
+- `maybeReconnectOnStall` logs at **warn** (the wedge is no longer silent)
+  and calls `evictPeerConnection`; the next send rebuilds via
+  `connectWithTLS`, which **re-resolves the FQDN** — identical mechanics to
+  the IP-change path. `maybeReconnectOnIpChange` and the send-error
+  classification are unchanged.
+
+**Verification at closure:** `zig build test-raft-stall-detector` 5/5
+(`tests/test_raft_stall_detector.zig` + in-file blocks; red-phase commit
+`6b4647c0` proved the stalled-peer and progress-stamp tests fail without the
+fix). Distributed suite green: `test-raft-per-peer-drain`,
+`test-cluster-3node-election`, `test-cluster-steady-state`,
+`test-cluster-propose-write`, `test-raft-envelope-roundtrip`,
+`test-drainready-dispatch`, `test-cluster-replicable-mutations` (7/7). Full
+debug build + `zig fmt` clean.
+
+**Residuals / follow-ups:**
+
+- **Real-k8s verification owed:** redo the 2026-06-11 reproduction (delete
+  the leader pod, assert the non-restarted third node reconverges to
+  follower within the election budget instead of parking as a candidate) on
+  the next dev build carrying `1637bcf8`. The in-process tests pin the
+  detector logic; only real k8s exercises the genuine silent-blackhole QUIC
+  topology.
+- **netns M9 phase** ("leader restart must not strand the third node",
+  ideally wedging the stream *without* an IP change so the stall reaper —
+  not the IP reaper — is what recovers it) — designed during triage,
+  deferred (needs root + minutes).
+- `client_writer_max_blocked_ns = 60s` dead-write budget
+  (`src/transport/quic.zig:274`) — secondary hardening, unchanged.
+
+prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ✅ REWORKED (2026-06-11) — stall detector gated on leadership + 15s budget + two-strike eviction (closes the livelock; real-k8s verification owed)
+
+The `78bb908` all-candidate election livelock above is **fixed on `main`**
+(commits `c7d07e2a` red-phase tests, `3aeb0fcc` rework). Triage **confirmed
+the over-fire but corrected the mechanism**:
+
+- The tester's response-path hypothesis ("the leader never observes follower
+  progress because responses ride the unread inbound stream") is **refuted**:
+  the raft lib emits ALL output — votes, heartbeats, and every response type —
+  via `sendMsg` → the transport bridge → the responder's OWN outbound
+  connection, so every inbound frame (including RequestVote/Response and
+  heartbeat AppendEntriesResponse) already landed in `applyDecodedRaftFrame`
+  and stamped `notePeerProgress`. Progress stamping was symmetric all along.
+- The REAL three-part mechanism: **(1)** `peer_stall_budget_ms = 3000` was
+  derived against the wrong number — the "5000 ms election timeout" is config
+  ms, but `election_tick = election_timeout_ms/50 = 100` ticks × the 10 ms
+  raft loop = **1000–2000 ms per election round** (randomized ×2), multi-round
+  under churn, so the budget sat BELOW election convergence while the reaper
+  interval (3000 ms) EQUALLED the budget — the check window measured itself.
+  **(2)** The check was armed regardless of raft role: during a leaderless
+  window there is legitimately no AppendEntries flow, `frames_sent > 0` from
+  RequestVote, so every peer tripped. **(3)** Eviction destroyed its own
+  clear-evidence: `notePeerProgress` no-ops for an evicted (map-absent) peer,
+  and the ~1 s `connectWithTLS` rebuild lands votes/responses in dead windows
+  — so each eviction manufactured the next "no progress" observation. The
+  same instability explains the pre-restart baseline write failure
+  (`R13L=0/0/ERR`): heartbeats DO stamp progress every ~10 ms, but one
+  eviction-induced stamp-loss window tripped the next eviction mid-propose.
+
+**The rework** (`src/distributed/raft_consensus.zig`, `cluster.zig`):
+
+- **Leader-only arming**: `shouldEvictOnStall(pc, now_ms, is_leader)` returns
+  false off-leader. A stalled stream is only meaningfully detectable in
+  steady state under a leader expecting AppendEntriesResponse flow — which is
+  exactly the original #5 silent-blackhole case. Election-window eviction is
+  now structurally impossible. No coverage lost: the IP-change reaper still
+  recovers moved peers regardless of role. The leader flag is injected via
+  `Transport.setLeaderSource` (wired in `ClusterCoordinator.start`, closure
+  over `raft.role() == .leader`); unwired (standalone) defaults to false —
+  the detector never arms outside cluster mode.
+- **Budget 3000 → 15000 ms**, decoupled from the 3000 ms reaper interval:
+  ≥7× the corrected 2000 ms worst-case election round, 5× the reaper
+  interval. The old "≤ 5000 ms election ceiling" sizing note was the bug.
+- **Two-strike eviction** (`recordStallPass`, `peer_stall_strikes_required=2`):
+  one stalled reaper pass records a strike; only consecutive stalled passes
+  evict; any `notePeerProgress` resets strikes to 0. A single lost-stamp
+  window from a rebuild can no longer trip eviction. The eviction warn now
+  logs strikes/budget/stall-age for operators.
+
+**Verification at closure:** `zig build test-raft-stall-detector` 9/9 (4 new
+red tests at `c7d07e2a` — leader-gating, budget-vs-convergence assertion,
+two-strike, strike-reset — all green at `3aeb0fcc`; the 5 original detector
+tests stay green, adapted to the new API). Distributed suite green 7/7:
+`test-raft-per-peer-drain`, `test-cluster-3node-election` (real election —
+leader-source wiring exercised), `test-cluster-steady-state`,
+`test-cluster-propose-write`, `test-raft-envelope-roundtrip`,
+`test-drainready-dispatch`, `test-cluster-replicable-mutations`. Full build +
+`zig fmt` clean.
+
+**Owed on real k8s (next dev build carrying `3aeb0fcc`):**
+
+1. Delete the leader pod → a new leader is elected (term advances), all three
+   nodes reconverge, writes succeed; NO `peer stalled … evicting` warn during
+   the election window.
+2. Re-run the ORIGINAL #5 silent-strand repro (leader restart, new IP) and
+   confirm the detector still catches the genuine blackhole: on the new
+   leader, eviction fires once after ~2 strikes (~18–21 s worst case) and the
+   stranded node reconverges — recovery, not a storm.
+3. Baseline steady-state write replicates with zero eviction churn; an idle
+   gap > 15 s followed by a write does not evict.
+4. If a FileStorage-restored high-term start still fails to re-elect AFTER
+   the storm is gone, that is a SEPARATE bug (candidate election path) — do
+   not conflate.
+
+prod remains UNTOUCHED (single-node 0.6.14) until (1)–(3) pass.
+
+---
+
+## ✅ VERIFIED on real Kubernetes (2026-06-11, `dev` = `c42853c`) — stall-detector rework holds; owed items (1)–(3) PASS; item (4) reproduced as predicted (dirty-durable-state recovery)
+
+The `3aeb0fcc` stall-detector rework is **verified on the real arda 3-pod
+cluster**. The owed checklist (1)–(3) passes, and the separate bug the rework doc
+anticipated in item (4) is confirmed real — which also **corrects the attribution
+in my `78bb908` RE-OPEN above**.
+
+### ⚠️ First, the methodology correction (why the `78bb908` report read as catastrophic)
+
+`78bb908` and the first `c42853c` pass were tested on **week-old reused PVCs**. With
+`FileStorage` now persisting the raft log + hard-state across rolls, those PVCs
+carried **divergent durable raft state** accumulated across ~7 days of forced-restart
+testing on buggy interim builds — both clusters booted at `term=13`/`term=14`
+(not a clean `term=1`) with inconsistent per-node logs. On `c42853c` (pre-wipe) the
+result was a stable-but-broken **leader + two stuck candidates**, term frozen at 14,
+writes timing out (`C14L=0/0/0`) — and, crucially, **with the stall-evict storm
+already gone** (0 `peer stalled` warns in steady state). That is exactly the rework
+doc's **item (4)**: "a FileStorage-restored high-term start still fails to re-elect
+AFTER the storm is gone → a SEPARATE bug (candidate election path) — do not
+conflate." My `78bb908` RE-OPEN conflated the two: the stall **storm** was real on
+`78bb908` (it fired every ~3 s), but the *term-frozen non-convergence* was
+substantially this durable-state recovery bug, not the detector.
+
+### A clean-slate boot (PVCs wiped) — everything works
+
+Wiped all three `data-geode-*` PVCs (`scale sts → 0`, `delete pvc`, `scale → 3`) for
+a genuine clean boot:
+
+- **Clean convergence**: all three elect immediately (iter 1) → geode-2 leader,
+  geode-0/1 followers, **`term=1`** (low term confirms fresh durable state).
+- **Replication**: leader `CREATE (a)-[:CLNL]->(b)` → `CLNL=1/1/1`.
+- **Zero transport churn**: across the entire clean-cluster lifetime (boot + 3
+  restarts below), **0** `peer stalled` / `evicting stale` / `HandshakeError` /
+  `InvalidAddress` warns on any node.
+
+### Owed item (1) + (3) — PASS (leader restart no longer strands; no election-window eviction)
+
+- **Leader restart self-heals** (the exact #5 repro). `kubectl delete pod geode-2`
+  (leader) → geode-0 elected leader at **`term=2`**, and **all three reconverge**
+  (the restarted geode-2 rejoins as a follower) in ~40 s. A post-restart leader
+  `CREATE (a)-[:PR1L]->(b)` → `PR1L=1/1/1`.
+- **Repeatable**: restarted the leader again (→ geode-2 leader `term=3`, reconverged
+  ~40 s) and then a follower (reconverged, slower ~2.5 min but clean). After all
+  three restarts: healthy 1 leader + 2 followers, a fresh `CREATE (:FIN)` →
+  `FIN=1/1/1`, and the pre-restart `CLNL` row stays **EXACTLY 1** (no duplication;
+  the intermittent `ERR` reads are a brief post-restart query warm-up timeout on the
+  just-rebooted node, not loss/dup).
+- **Item (1) "NO `peer stalled … evicting` warn during the election window"**:
+  confirmed — **0** such warns cluster-wide across every restart's election window.
+  The leader-only arming + 15 s budget + two-strike rework structurally eliminated
+  the election-window eviction.
+- **Item (3)**: baseline + post-restart writes replicate with **zero** eviction
+  churn.
+
+### Owed item (2) — NOT exercised (no genuine blackhole occurred to recover from)
+
+On the clean cluster the restarted node **reconnected cleanly**, so the detector
+never needed to fire — there was no silent-blackhole stream to catch, hence no
+"single eviction after ~2 strikes (~18–21 s)" recovery event to observe. The
+genuine-stall *recovery* path (the original #5 case) therefore remains
+**unverified on real k8s** — it requires reproducing an actual half-open/silent
+stream (e.g. the netns M9 phase, or a deliberately black-holed peer), not just a
+pod restart that re-resolves cleanly. The *correctness* of the leader-only gate and
+two-strike logic is pinned by the 9/9 in-process tests; only the live blackhole is
+owed.
+
+### Owed item (4) — CONFIRMED as a separate, still-open bug: no recovery from divergent durable raft state
+
+The pre-wipe behavior above is the standalone repro: starting all three from
+`FileStorage`-restored **inconsistent** high-term logs (`term=13`/`14`), the cluster
+elects a leader but the other two never latch as followers — they sit as candidates,
+the term does not advance, and writes time out **with zero transport churn** (so it
+is NOT the stall detector). Wiping the PVCs and booting clean resolves it entirely.
+
+This is a real robustness gap, distinct from #5: **a 3-node cluster cannot recover
+from divergent persisted raft state via a rolling restart — it requires a manual PVC
+wipe.** Under normal operation (graceful restarts, single failures, a consistent log
+prefix) a cluster should not reach this state, and it did not arise in any clean-boot
+test; it accumulated only from this doc's week of deliberately abusive forced-leader
+kills on pre-fix builds. But the durable layer should still self-heal a follower
+whose log diverges from the leader's (truncate-and-refill from the leader, or
+`InstallSnapshot`) rather than wedging as a perpetual candidate. **Suggested
+follow-up:** a netns/3-node test that seeds deliberately divergent on-disk raft logs
+(or force-kills the leader mid-append repeatedly) and asserts the cluster
+re-converges from durable state without a wipe. Likely related to the still-pending
+`reportSnapshot`/compaction wiring (a lagging/divergent follower that cannot be
+caught up by plain AppendEntries needs `InstallSnapshot`, which has no production
+caller yet).
+
+### Bottom line
+
+The stall-detector livelock (`78bb908`) is **fixed and verified** — on a clean
+cluster `c42853c` converges, replicates, and **survives leader restarts with all
+three reconverging and no eviction churn**, which is the milestone #5 was blocking.
+Two items remain before a production 3-node cluster: **(a)** exercise the genuine
+silent-blackhole recovery path on real k8s (owed item 2), and **(b)** the
+divergent-durable-state recovery gap (owed item 4) so a cluster self-heals without a
+PVC wipe. prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ✅ OWED ITEM 4 FIX LANDED (2026-06-11) — candidate-armed stall detector + frozen-term visibility (divergent-state wedge; k8s re-verify owed)
+
+The "divergent persisted raft state → all-candidate frozen-term wedge" (owed
+item 4 above) is **fixed on `main`** (commits `79f60b8d` red tests, `67d0d1cc`
+fix). Triage **refuted the divergent-log hypothesis** with an in-process
+reproduction against the pinned raft lib (v0.1.6, lib FileStorage + TestCluster
+harness):
+
+- Under **reliable delivery**, severely divergent durable logs at high terms
+  (conflicting tails, spent votedFor, term 13/14) re-elect a leader within ~2
+  rounds and divergent followers are truncated-and-refilled by the standard
+  AppendEntries consistency check. The lib is correct; **InstallSnapshot /
+  `reportSnapshot` wiring is NOT implicated** (no compaction ever runs, so no
+  follower's next_index can fall below a log start).
+- The wedge needs **two interacting mechanisms**: (1) vote frames silently
+  undelivered at restart (the same stale/half-open-QUIC-stream class as owed
+  item 2) while the stall detector was **leader-only gated** (3aeb0fcc) — so
+  nothing detects or recovers the stall exactly when votes must flow; and
+  (2) `pre_vote=true` (geode config) **freezes the term** — pre-vote does not
+  increment the term until a pre-vote is WON (`raft/src/node.zig:751-758`), so
+  a candidate whose votes vanish retries elections forever at an unchanging
+  term with zero log output. Reproduced in-process: full silent partition +
+  pre_vote=true → all three frozen at term 13 forever; same partition with
+  pre_vote=false → term advances 13→27.
+
+**The fix** (`67d0d1cc`):
+
+- **Stall detector arming widened from leader-only to leader-OR-candidate**
+  (`shouldEvictOnStallArmed(pc, now_ms, arm)`; only `.follower` is
+  suppressed). Safe against the old livelock by construction: the 15000 ms
+  budget + two-strike machine means eviction takes ≥ ~18–30 s vs 1–2 s healthy
+  election rounds — a progressing election always delivers frames long before
+  the budget. A follower stays suppressed (it expects inbound heartbeats; its
+  outbound health is the leader-side detector's job; the IP-change reaper
+  covers moved peers for every role). The leader-source injection became a
+  role source (`Transport.setRoleSource`, wired in `ClusterCoordinator.start`;
+  unwired/standalone → `.follower` → never arms).
+- **Frozen-term visibility**: `FrozenCandidateTracker` polled from the raft
+  loop (~1 s cadence) emits a rate-limited warn when a node has been a
+  candidate at an UNCHANGING term for > 15 s ("possible vote-delivery stall or
+  divergent durable state; check peer connectivity"). The silent-by-design
+  pre-vote freeze is now operator-visible.
+- **Green pin added**: `tests/test_raft_divergent_state_recovery.zig`
+  (`zig build test-raft-divergent-state-recovery`) seeds 3 FileStorage dirs at
+  divergent terms 7/9/11 and asserts an in-process 3-node cluster (real
+  loopback QUIC) elects a leader with the term advancing past the restored
+  value — pinning lib+geode divergent-state recovery under healthy transport.
+
+**Verification at closure:** `test-raft-stall-detector` 20/20 (4 red →
+green), `test-raft-divergent-state-recovery` green, distributed suite green
+(per-peer-drain, 3node-election, steady-state, propose-write,
+envelope-roundtrip, drainready-dispatch, replicable-mutations,
+hardstate-durability, apply-restart-idempotent). Full build + fmt clean.
+
+**Owed on real k8s (next dev build carrying `67d0d1cc`):**
+
+1. The pre-wipe reused-PVC scenario (divergent durable logs at high terms):
+   rolling restart must reconverge WITHOUT a PVC wipe — the candidate-armed
+   detector should evict the wedged streams after ~18–30 s and the election
+   should then complete; the frozen-term warn should fire in any window where
+   it can't.
+2. Owed item 2 (unchanged): the genuine silent-blackhole recovery on a LEADER
+   (original #5 case) still needs a live half-open stream to verify.
+
+**Deferred residuals:** netns M9 divergent-state phase; upstream lib-repo
+regression scenario (divergent FileStorage election — the lib has no coverage
+of restored-divergent-log elections today); boot-time durable-state
+validation (cluster-identity check on restore); de-swallowing repeated lib
+errors in the raft loop (rate-limited escalation).
+
+prod remains UNTOUCHED (single-node 0.6.14).

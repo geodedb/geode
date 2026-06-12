@@ -1430,6 +1430,18 @@ pub fn main() !void {
     const cluster_bootstrap = @import("cluster_bootstrap.zig");
     var cluster_handle: ?cluster_bootstrap.Bootstrap = null;
     defer if (cluster_handle) |*h| h.deinit();
+
+    // Cluster FTS symmetry (2026-06-10 audit slice 3): wire the raft apply +
+    // snapshot-install seams to the executor's fulltext live-maintenance so a
+    // follower applying committed entries (or installing a snapshot) keeps its
+    // FTS indexes identical to the leader's. Idempotent; harmless without a
+    // cluster (the seams simply never fire).
+    // ORDERING: must be registered before cluster bootstrap starts the raft
+    // threads — applies replay committed entries immediately, so a null hook
+    // here would silently skip FTS maintenance for the replayed entries.
+    // CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=ServerInitFtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
+    geode.execution.fts_index_ops.registerFtsApplyHook();
+
     if (cluster_token != null) {
         // Build a small EnvMap with just the keys cluster_bootstrap needs.
         // std.process.getEnvMap was removed in Zig 0.16; we already have

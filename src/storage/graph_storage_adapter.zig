@@ -13,6 +13,7 @@ const gs = @import("graph_storage");
 const sharded_store = gs.sharded_store;
 const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
+const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
@@ -625,7 +626,11 @@ fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
 
 fn shouldExposePropertyKey(key: []const u8) bool {
     return !std.mem.eql(u8, key, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY) and
-        !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY);
+        !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY) and
+        // GAP-0891 (RC-2): the persisted tenant tag must never surface as a
+        // user-visible property (it round-trips via getNodeProperty /
+        // getEdgeProperty during hydration, not via getAll*Properties).
+        !std.mem.eql(u8, key, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY);
 }
 
 // ============================================================================
@@ -973,6 +978,43 @@ pub const ManagedGraph = struct {
         const list = self.fts_label_index.getPtr(label) orelse return null;
         if (list.items.len == 0) return null;
         return list.items;
+    }
+
+    /// One (label, index-name, properties) triple deep-copied out of the
+    /// `fts_label_index` registry by `snapshotFtsLabelIndex`. All strings are
+    /// owned by the caller's allocator (use an arena — nothing is freed
+    /// individually).
+    pub const FtsRegistryEntry = struct {
+        label: []const u8,
+        name: []const u8,
+        properties: []const []const u8,
+    };
+
+    /// Deep-copy every registry triple with `allocator` (intended: an arena).
+    /// Lets the raft snapshot-install FTS rebuild enumerate the catalogued
+    /// fulltext indexes WITHOUT holding `fts_label_index_mutex` across engine
+    /// I/O (the registry mutex is brief-hold only). Brief mutex hold.
+    pub fn snapshotFtsLabelIndex(self: *ManagedGraph, allocator: Allocator) ![]FtsRegistryEntry {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.fts_label_index_mutex.lockUncancelable(io);
+        defer self.fts_label_index_mutex.unlock(io);
+
+        var out: std.ArrayListUnmanaged(FtsRegistryEntry) = .empty;
+        errdefer out.deinit(allocator);
+
+        var it = self.fts_label_index.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |spec| {
+                const props = try allocator.alloc([]const u8, spec.properties.len);
+                for (spec.properties, 0..) |p, i| props[i] = try allocator.dupe(u8, p);
+                try out.append(allocator, .{
+                    .label = try allocator.dupe(u8, entry.key_ptr.*),
+                    .name = try allocator.dupe(u8, spec.name),
+                    .properties = props,
+                });
+            }
+        }
+        return out.toOwnedSlice(allocator);
     }
 
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
@@ -1449,6 +1491,22 @@ pub const StorageAdapter = struct {
         self.allocator.destroy(self);
     }
 
+    /// Copy the names of every currently-OPEN ManagedGraph. Brief mutex hold
+    /// (tier-0 lookup only — no data ops under the lock). Names are duped with
+    /// `allocator` (intended: an arena — nothing is freed individually). Used
+    /// by the raft snapshot-install FTS rebuild to enumerate graphs whose
+    /// fulltext indexes need re-backfilling.
+    pub fn listOpenGraphNames(self: *StorageAdapter, allocator: Allocator) ![][]const u8 {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const out = try allocator.alloc([]const u8, self.engines.count());
+        var it = self.engines.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |key| : (i += 1) out[i] = try allocator.dupe(u8, key.*);
+        return out;
+    }
+
     /// Return the `ManagedGraph` for `name`, creating a new `GraphEngine` if
     /// the graph has not been opened yet.
     pub fn getOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
@@ -1904,6 +1962,29 @@ pub const StorageAdapter = struct {
         labels: []const []const u8,
         props: []const PropKV,
     ) !u64 {
+        // GAP-0891 (RC-1): contextless/inline callers resolve the tenant from
+        // the active ExecutionContext (or the per-thread map / "default"). The
+        // group-commit worker path uses the *ForTenant variant with the tenant
+        // captured on the handler thread at submit time (the worker thread has
+        // neither a context nor a per-thread tenant).
+        return self.bulkInsertNodeWithReservedIdForTenant(
+            graph_name,
+            reserved_id,
+            labels,
+            props,
+            fle_integration.tenantPreferringActiveContext(),
+        );
+    }
+
+    // GAP-0891 (RC-1): tenant-threaded variant of bulkInsertNodeWithReservedId.
+    pub fn bulkInsertNodeWithReservedIdForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        reserved_id: u64,
+        labels: []const []const u8,
+        props: []const PropKV,
+        request_tenant: []const u8,
+    ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -2009,6 +2090,23 @@ pub const StorageAdapter = struct {
         rec.prop_head = prop_head;
         try node_shard.putNodeTxn(slot_id, rec, local_txn);
 
+        // GAP-0891 (RC-2): persist the tenant tag in the SAME shard-pinned txn
+        // so bulk-created nodes round-trip their tenant across restart. The
+        // slot-direct bulk path bypasses the GraphStore-level
+        // persistNodeTenantId, so it must mirror the internal-id write here.
+        // No-op for default (absent-on-read means default — zero write
+        // amplification for single-tenant ingest).
+        if (!std.mem.eql(u8, request_tenant, graph_store.DEFAULT_TENANT_ID)) {
+            const tenant_prop_head = try node_shard.putPropertyTxn(
+                rec.prop_head,
+                graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY,
+                .{ .string = request_tenant },
+                local_txn,
+            );
+            rec.prop_head = tenant_prop_head;
+            try node_shard.putNodeTxn(slot_id, rec, local_txn);
+        }
+
         // CANARY: REQ=REQ-QUIC-HC-022; FEATURE="HighConcurrencyMutations"; ASPECT=ShardTxnPropertyFastPath; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
         //
         // Property writes touch the already-created node and, because the
@@ -2033,7 +2131,7 @@ pub const StorageAdapter = struct {
         {
             mg.string_indexes_mutex.lockUncancelable(io);
             defer mg.string_indexes_mutex.unlock(io);
-            try store.createNodeWithReservedIdAndSlotAndGraph(reserved_id, slot_id, labels, graph_name);
+            try store.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, request_tenant);
         }
         if (own_txn) try node_shard.commitTxn(local_txn);
 
@@ -2082,6 +2180,29 @@ pub const StorageAdapter = struct {
         rel_type: []const u8,
         props: []const PropKV,
     ) !u64 {
+        // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId — inline callers
+        // resolve via context; the group-commit worker uses the *ForTenant
+        // variant with the captured request tenant.
+        return self.bulkInsertEdgeWithIdsShardLockedForTenant(
+            graph_name,
+            source_id,
+            target_id,
+            rel_type,
+            props,
+            fle_integration.tenantPreferringActiveContext(),
+        );
+    }
+
+    // GAP-0891 (RC-1): tenant-threaded variant of bulkInsertEdgeWithIdsShardLocked.
+    pub fn bulkInsertEdgeWithIdsShardLockedForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        request_tenant: []const u8,
+    ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -2107,7 +2228,7 @@ pub const StorageAdapter = struct {
         if (src_shard == dst_shard) {
             mg.shard_locks[src_shard].lockUncancelable(io);
             defer mg.shard_locks[src_shard].unlock(io);
-            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props);
+            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
         } else {
             const first = @min(src_shard, dst_shard);
             const second = @max(src_shard, dst_shard);
@@ -2117,7 +2238,7 @@ pub const StorageAdapter = struct {
                 mg.shard_locks[second].unlock(io);
                 mg.shard_locks[first].unlock(io);
             }
-            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props);
+            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
         }
     }
 
@@ -2130,6 +2251,7 @@ pub const StorageAdapter = struct {
         target_id: u64,
         rel_type: []const u8,
         props: []const PropKV,
+        request_tenant: []const u8,
     ) !u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -2137,7 +2259,8 @@ pub const StorageAdapter = struct {
         if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
 
         mg.string_indexes_mutex.lockUncancelable(io);
-        const create_result = store.createEdgeWithGraph(source_id, target_id, rel_type, graph_name);
+        // GAP-0891 (RC-1): tag the edge with the captured request tenant.
+        const create_result = store.createEdgeForRequestTenant(source_id, target_id, rel_type, graph_name, request_tenant);
         mg.string_indexes_mutex.unlock(io);
         const edge_id = try create_result;
 
@@ -2177,6 +2300,31 @@ pub const StorageAdapter = struct {
         merge_value: graph_store.PropertyValue,
         on_create_props: []const PropKV,
         apply_on_match: bool,
+    ) !u64 {
+        // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
+        return self.bulkMergeNodeWithReservedIdForTenant(
+            graph_name,
+            reserved_id,
+            label,
+            merge_key,
+            merge_value,
+            on_create_props,
+            apply_on_match,
+            fle_integration.tenantPreferringActiveContext(),
+        );
+    }
+
+    // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedId.
+    pub fn bulkMergeNodeWithReservedIdForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        reserved_id: u64,
+        label: []const u8,
+        merge_key: []const u8,
+        merge_value: graph_store.PropertyValue,
+        on_create_props: []const PropKV,
+        apply_on_match: bool,
+        request_tenant: []const u8,
     ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -2247,7 +2395,8 @@ pub const StorageAdapter = struct {
 
         mg.string_indexes_mutex.lockUncancelable(io);
         const labels_slice = [_][]const u8{label};
-        const create_result = store.createNodeWithReservedIdAndGraph(reserved_id, &labels_slice, graph_name);
+        // GAP-0891 (RC-1): tag the merged node with the captured request tenant.
+        const create_result = store.createNodeWithReservedIdGraphAndTenant(reserved_id, &labels_slice, graph_name, request_tenant);
         mg.string_indexes_mutex.unlock(io);
         try create_result;
 
@@ -2279,6 +2428,27 @@ pub const StorageAdapter = struct {
         label: []const u8,
         merge_props: []const PropKV,
         on_create_props: []const PropKV,
+    ) !u64 {
+        // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
+        return self.bulkMergeNodeWithReservedIdMultiPropForTenant(
+            graph_name,
+            reserved_id,
+            label,
+            merge_props,
+            on_create_props,
+            fle_integration.tenantPreferringActiveContext(),
+        );
+    }
+
+    // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedIdMultiProp.
+    pub fn bulkMergeNodeWithReservedIdMultiPropForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        reserved_id: u64,
+        label: []const u8,
+        merge_props: []const PropKV,
+        on_create_props: []const PropKV,
+        request_tenant: []const u8,
     ) !u64 {
         if (merge_props.len == 0) return error.InvalidMergePattern;
 
@@ -2338,11 +2508,12 @@ pub const StorageAdapter = struct {
         }
 
         const labels_slice = [_][]const u8{label};
-        return try self.bulkInsertNodeWithReservedId(
+        return try self.bulkInsertNodeWithReservedIdForTenant(
             graph_name,
             reserved_id,
             &labels_slice,
             combined_props,
+            request_tenant,
         );
     }
 
@@ -2714,7 +2885,12 @@ pub const StorageAdapter = struct {
         }
 
         const labels = [_][]const u8{label};
-        const node_id = try store.createNodeWithGraph(&labels, graph_name);
+        // GAP-0891 (RC-1): bulkMergeNode runs inline on the request/handler
+        // thread (the GEODE_GROUP_COMMIT=off path), so the active
+        // ExecutionContext / per-thread tenant is valid here — resolve it
+        // explicitly and tag the merged node with it (instead of relying on the
+        // implicit resolution inside createNodeWithGraph).
+        const node_id = try store.createNodeForRequestTenant(&labels, graph_name, fle_integration.tenantPreferringActiveContext());
 
         // Write the merge key as a regular property (msft-graph's node_id
         // is both the merge key and a node property) and then all

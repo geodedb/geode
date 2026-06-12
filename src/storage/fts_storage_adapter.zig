@@ -91,6 +91,21 @@ pub const FtsStorageAdapter = struct {
         name: []u8,
         /// Serializes writes to THIS engine (single-writer lib contract).
         write_mu: std.Io.Mutex = .init,
+        /// Segment-order guard (Task 13, cluster FTS symmetry): the library's
+        /// segment writer DELTA-ENCODES each term's posting doc_ids at flush
+        /// time assuming they were appended in ASCENDING order — a smaller
+        /// doc_id after a larger one in the same memtable integer-overflows
+        /// `doc_id - last_doc_id` (fts-storage src/segment.zig:327). Executor
+        /// writes use monotonically-increasing time-based node ids, so this
+        /// never fired pre-cluster; raft-apply writes use the GNC2 id band
+        /// (~2^40, BELOW the ~2^57 time-based floor), so interleaving the two
+        /// produces descending ids. The adapter tracks the largest doc_id
+        /// indexed into the CURRENT memtable and force-flushes (sealing the
+        /// in-order memtable into a segment) before indexing a smaller id.
+        /// Per-segment delta decoding makes overlapping id ranges ACROSS
+        /// segments fine. Guarded by `write_mu`; conservative-high after an
+        /// engine-internal auto-flush (worst case: one redundant no-op flush).
+        max_doc_id_since_flush: u64 = 0,
     };
 
     pub fn init(
@@ -207,6 +222,17 @@ pub const FtsStorageAdapter = struct {
         });
         errdefer engine.deinit();
 
+        // Segment-order guard priming (WAL-replay reopen hole): Engine.init
+        // replays the WAL into a fresh memtable, which may already contain
+        // high (time-band, ~2^57) doc_ids — but IndexEngine starts with
+        // max_doc_id_since_flush = 0, so a subsequent SMALLER (GNC2-band,
+        // ~2^40) id would pass guardPostingOrder and hit the segment-flush
+        // delta-encoding overflow. Force one flush right after `.open`: an
+        // empty replayed memtable makes this a no-op (engine.zig:1024), and a
+        // non-empty one gets sealed into a segment — either way tracker=0 is
+        // then truthful.
+        if (intent == .open) try engine.flush();
+
         const name_copy = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(name_copy);
 
@@ -271,6 +297,18 @@ pub const FtsStorageAdapter = struct {
         return self.getIndex(name) orelse Error.IndexNotFound;
     }
 
+    /// Segment-order guard helper (see `IndexEngine.max_doc_id_since_flush`):
+    /// MUST be called with `ie.write_mu` held. Seals the current memtable into
+    /// a segment when `incoming_min_doc_id` would land out of order, then
+    /// resets the tracker. Equal ids are fine (delta 0), so only strictly
+    /// smaller ids force the flush.
+    fn guardPostingOrder(ie: *IndexEngine, incoming_min_doc_id: u64) !void {
+        if (incoming_min_doc_id < ie.max_doc_id_since_flush) {
+            try ie.engine.flush();
+            ie.max_doc_id_since_flush = 0;
+        }
+    }
+
     /// Index (or re-index) `node_id` with `terms` into `name`. Serialized per
     /// engine via `write_mu`.
     pub fn indexNode(
@@ -282,7 +320,9 @@ pub const FtsStorageAdapter = struct {
         const ie = try self.requireIndex(name);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
+        try guardPostingOrder(ie, node_id);
         try ie.engine.indexDocument(node_id, terms);
+        if (node_id > ie.max_doc_id_since_flush) ie.max_doc_id_since_flush = node_id;
     }
 
     /// Bulk index a batch of documents (one fsync per batch) into `name`.
@@ -294,7 +334,27 @@ pub const FtsStorageAdapter = struct {
         const ie = try self.requireIndex(name);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
+        // Segment-order guard: flush ahead of the batch if ANY id in it would
+        // land below the memtable's running max, then track the batch max.
+        // CALLER CONTRACT: ids WITHIN one batch MUST be ascending — callers
+        // (bulk-MERGE reindex) pass store-ordered ascending ids; a fully
+        // general per-batch sort is deliberately avoided on this hot path
+        // (the debug assert below pins the contract). The single-doc
+        // `indexNode` path (executor + raft apply) is fully guarded.
+        var batch_min: u64 = std.math.maxInt(u64);
+        var batch_max: u64 = 0;
+        var prev_id: u64 = 0;
+        for (docs, 0..) |d, di| {
+            // Within-batch ascending contract (see comment above): a
+            // descending pair would delta-overflow the segment writer.
+            if (di > 0) std.debug.assert(d.doc_id >= prev_id);
+            prev_id = d.doc_id;
+            if (d.doc_id < batch_min) batch_min = d.doc_id;
+            if (d.doc_id > batch_max) batch_max = d.doc_id;
+        }
+        if (docs.len > 0) try guardPostingOrder(ie, batch_min);
         try ie.engine.indexDocumentBatch(docs);
+        if (batch_max > ie.max_doc_id_since_flush) ie.max_doc_id_since_flush = batch_max;
     }
 
     /// Tombstone `node_id` in `name`.
@@ -311,6 +371,8 @@ pub const FtsStorageAdapter = struct {
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
         try ie.engine.flush();
+        // Memtable sealed — reset the segment-order tracker.
+        ie.max_doc_id_since_flush = 0;
     }
 
     /// Search `name` for `term`, returning up to `max_results` hits sorted by

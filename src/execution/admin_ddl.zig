@@ -58,6 +58,13 @@ fn oneRowResult(
 // ---------- DDL: user/role/grant/revoke ----------
 
 pub fn executeCreateUser(allocator: std.mem.Allocator, s: ast.CreateUserStatement, ctx: ExecutionContext) !ExecutionResult {
+    // Cluster fail-closed: auth state persists to the per-node __geode_security
+    // graph with no Raft slice — an ungated CREATE USER exists on ONE node only
+    // (security-relevant divergence). Same gate on every mutating handler below;
+    // auth_dispatch.execute() gates the direct CALL geode.auth.* route too
+    // (the DDL route double-fires there — identical error, harmless).
+    // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateAuthDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+    try cluster_mod.gateUnreplicatedWrite();
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_create", &.{
         s.name,
         s.password,
@@ -68,6 +75,7 @@ pub fn executeCreateUser(allocator: std.mem.Allocator, s: ast.CreateUserStatemen
 }
 
 pub fn executeAlterUser(allocator: std.mem.Allocator, s: ast.AlterUserStatement, ctx: ExecutionContext) !ExecutionResult {
+    try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return switch (s.action) {
         .set_password => |pw| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_reset_password", &.{ s.name, pw }),
         .set_role => |r| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_assign_role", &.{ s.name, r }),
@@ -88,10 +96,12 @@ pub fn executeDropUser(allocator: std.mem.Allocator, s: ast.DropUserStatement, c
     // This means DROP USER IF EXISTS on a non-existent user still returns status="deleted <name>",
     // which is safe and idempotent — the handler already degrades gracefully.
     _ = s.if_exists;
+    try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_delete", &.{s.name});
 }
 
 pub fn executeCreateRole(allocator: std.mem.Allocator, s: ast.CreateRoleStatement, ctx: ExecutionContext) !ExecutionResult {
+    try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.role_create", &.{
         s.name,
         s.description orelse "",
@@ -103,10 +113,12 @@ pub fn executeDropRole(allocator: std.mem.Allocator, s: ast.DropRoleStatement, c
     // fetchRemove (which is a no-op on missing keys) and always returns status="deleted <name>".
     // IF EXISTS is structurally a no-op; pass through.
     _ = s.if_exists;
+    try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.role_delete", &.{s.name});
 }
 
 pub fn executeGrant(allocator: std.mem.Allocator, s: ast.GrantStatement, ctx: ExecutionContext) !ExecutionResult {
+    try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return switch (s.subject) {
         .role => |role_name| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_assign_role", &.{ s.grantee, role_name }),
         .privilege => |p| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.grant", &.{
@@ -118,6 +130,7 @@ pub fn executeGrant(allocator: std.mem.Allocator, s: ast.GrantStatement, ctx: Ex
 }
 
 pub fn executeRevoke(allocator: std.mem.Allocator, s: ast.RevokeStatement, ctx: ExecutionContext) !ExecutionResult {
+    try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.revoke", &.{
         ast.grantPrivilegeName(s.privilege),
         s.grantee,

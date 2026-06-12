@@ -192,6 +192,18 @@ create/revoke) are wired at startup in `server_init`.
    in the FLE reference for the full procedure list and an end-to-end example
    (GAP-0845).
 
+8. **Auth DDL is refused in cluster mode (2026-06-10).** When the node runs as
+   part of a Raft cluster (`GEODE_CLUSTER_TOKEN` set), auth DDL
+   (`CREATE/ALTER/DROP USER`, `CREATE/DROP ROLE`, `GRANT`/`REVOKE`) and the
+   mutating `geode.auth.*` procedures fail closed via
+   `cluster.gateUnreplicatedWrite()` — a follower returns `ClusterNotLeader`,
+   the leader returns `ClusterWriteNotReplicable` — because there is no Raft
+   replication slice for auth writes yet and the `__geode_security` graph is
+   **per-node** (an ungated write would create users that exist on one node
+   only). Standalone mode is unaffected. A replication slice for auth DDL is
+   follow-up work. e2e: `tests/test_cluster_replicable_mutations.zig`
+   ("cluster: unreplicated write surfaces fail closed").
+
 ### Future: `CREATE POLICY`
 
 When `CREATE POLICY` lands it should follow:

@@ -115,6 +115,32 @@ pub fn getGlobalClusterCoordinator() ?*ClusterCoordinator {
     return g_cluster_coordinator;
 }
 
+/// Fail-closed gate for durable write surfaces that have NO Raft replication
+/// slice (timeseries ingest, auth/policy/tenant/index/graph/constraint DDL,
+/// TDE/CDC/FLE). In cluster mode these writes would land on exactly one node
+/// and silently diverge — so they are refused loudly instead. Standalone mode
+/// is unaffected.
+///
+/// Mirrors the role semantics of `clusterWriteRole()`
+/// (src/execution/crud_operations.zig): no coordinator → standalone (allowed,
+/// unchanged local path); non-leader → `error.ClusterNotLeader` (clients retry
+/// against the leader); leader → `error.ClusterWriteNotReplicable` because the
+/// surface has no replication slice — applying it leader-local would diverge.
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateHelper; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+pub fn gateUnreplicatedWrite() error{ ClusterNotLeader, ClusterWriteNotReplicable }!void {
+    const coord = getGlobalClusterCoordinator() orelse return; // standalone: allowed
+    if (coord.role() != .leader) return error.ClusterNotLeader;
+    return error.ClusterWriteNotReplicable;
+}
+
+// NOTE: the standalone-path unit test for gateUnreplicatedWrite lives in
+// tests/test_cluster_coordinator_config.zig (named step
+// test-cluster-coord-config). An inline `test` here would force analysis of
+// ClusterCoordinator (via setGlobalClusterCoordinator's parameter type) in
+// every unit-test module whose import closure reaches this file — and module
+// roots like graph_store.zig don't map "transport/quic", breaking the sharded
+// `zig build test` compile.
+
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);
@@ -526,6 +552,15 @@ pub const ClusterCoordinator = struct {
     /// Raft entries route into (registered with raft_apply at init).
     txn_coord: *raft_consensus.TxnCoordinator,
 
+    /// owed item (4) — frozen-term pre-vote VISIBILITY: tracks whether this node
+    /// has been wedged as a CANDIDATE at an UNCHANGING term past the warn
+    /// threshold. `pre_vote = true` freezes the term while a node is wedged as a
+    /// candidate (the term only increments after a WON pre-vote), so the
+    /// all-candidate divergent-durable-state wedge is otherwise SILENT — zero
+    /// transport errors, zero term churn. `raftLoop` polls this each tick and
+    /// emits a rate-limited operator warn when it returns true. Owns no I/O.
+    frozen_candidate_tracker: raft_consensus.FrozenCandidateTracker = .{},
+
     // QUAL-D004: Shutdown signal and pool handles for graceful stop.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     raft_pool: ?*pooled.ThreadPool = null,
@@ -920,6 +955,32 @@ pub const ClusterCoordinator = struct {
         // election can't progress.
         self.raft.setTransport(&self.raft_transport);
 
+        // election-livelock fix (2026-06-11) + owed item (4): wire the live
+        // `StallArm` role source the transport's stalled-stream reaper
+        // (`maybeReconnectOnStall`) arms its eviction decision on. The detector
+        // fires while THIS node is the raft LEADER or a CANDIDATE, and suppresses
+        // a FOLLOWER. Off-arm (follower) every peer reads as stalled during a
+        // leaderless election and evicting them all would livelock the cluster;
+        // but a CANDIDATE must get its RequestVote frames through a possibly-
+        // wedged stream at restart, so it MUST be armed (owed item (4) divergent-
+        // durable-state wedge). `ctx` is `self` (the coordinator owns
+        // `raft_transport` and outlives it, so the closure's ctx lifetime is
+        // sound), and the closure maps `coordinator.role()` onto `StallArm` (any
+        // shutdown/other state -> `.follower`, never armed). Wire it before the
+        // poll loop starts so the first reaper pass already sees a truthful role.
+        // Left unset (standalone) the transport defaults to `.follower` and never
+        // evicts on stall.
+        self.raft_transport.setRoleSource(@ptrCast(self), struct {
+            fn armOf(ctx: ?*anyopaque) raft_consensus.Transport.StallArm {
+                const coord: *ClusterCoordinator = @ptrCast(@alignCast(ctx.?));
+                return switch (coord.role()) {
+                    .leader => .leader,
+                    .candidate => .candidate,
+                    .follower, .shutdown => .follower,
+                };
+            }
+        }.armOf);
+
         self.shutdown.store(false, .release);
 
         // Task A6 (2026-05-25 plan): bring up the QUIC listener BEFORE any
@@ -1078,6 +1139,28 @@ pub const ClusterCoordinator = struct {
             iter += 1;
             if (iter % 100 == 0) {
                 std.debug.print("[raft] node {d} state={s} term={d} iter={d}\n", .{ self.node_id, @tagName(self.raft.state), self.raft.current_term, iter });
+
+                // owed item (4) — frozen-term pre-vote VISIBILITY: sample the
+                // live (role, term) on this ~1 s cadence (NOT every 10 ms tick —
+                // cheap, no per-tick inner-mutex lock, no per-tick allocation) and
+                // feed the frozen-candidate tracker. When a node has been wedged
+                // as a candidate at an UNCHANGING term past the warn threshold
+                // (`pre_vote=true` freezes the term, so the divergent-durable-state
+                // wedge would otherwise be SILENT), emit a rate-limited operator
+                // warn naming the condition. The tracker resets on any term advance
+                // or role transition, so a healthy (progressing) election is never
+                // flagged.
+                const cur_role = self.raft.role();
+                const term = self.raft.currentTerm();
+                const now_ms = compat_milliTimestamp();
+                if (self.frozen_candidate_tracker.update(cur_role, term, now_ms)) {
+                    const frozen_for_ms = now_ms - self.frozen_candidate_tracker.candidate_since_ms;
+                    log.warn("raft candidate frozen at term — possible vote-delivery stall or divergent durable state; check peer connectivity", &.{
+                        Attr.uint("node", self.node_id),
+                        Attr.uint("term", term),
+                        Attr.int("frozen_for_ms", frozen_for_ms),
+                    });
+                }
             }
             compat_sleepNs(10 * std.time.ns_per_ms);
         }
@@ -1506,6 +1589,22 @@ pub const ClusterCoordinator = struct {
         // ClusterCoordinator struct (zero-allocation on init when
         // unused) for binary compatibility with downstream tests that
         // exercise it directly.
+
+        // k8s root cause #5 (stalled-stream liveness): stamp forward progress
+        // for the OUTBOUND peer connection keyed by this frame's sender. Every
+        // inbound raft frame — a follower observing AppendEntries FROM the leader
+        // (`frame_res.from` == leader id) and a leader observing
+        // AppendEntriesResponse FROM a follower (`frame_res.from` == follower id)
+        // — is evidence that the bidirectional path to `frame_res.from` is alive,
+        // so it refreshes the stall clock on the outbound `PeerConnection` keyed
+        // by that id (a DIFFERENT object than the inbound connection this frame
+        // arrived on). We stamp only AFTER the token + nonce gates above so a
+        // forged/replayed frame can never reset a genuinely stalled peer's clock
+        // and hide the wedge. `notePeerProgress` is a no-op if we have no
+        // outbound connection to that peer yet (it is built lazily on first
+        // send), which is the conservative choice — it can never cause a false
+        // eviction of a healthy peer.
+        self.raft_transport.notePeerProgress(frame_res.from, compat_milliTimestamp());
 
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{

@@ -126,6 +126,90 @@ pub const State = enum {
     shutdown,
 };
 
+// ===========================================================================
+// owed item (4): frozen-term pre-vote VISIBILITY
+// ---------------------------------------------------------------------------
+// With `pre_vote = true` (raft_consensus.zig initWithStorageDir), the term only
+// increments AFTER a node WINS a pre-vote round. So when a node is wedged as a
+// candidate because its RequestVote frames are silently undelivered at restart,
+// the term NEVER changes — the cluster sits at an all-candidate frozen term with
+// ZERO transport errors and ZERO term churn. The wedge is therefore SILENT: no
+// log, no metric, nothing for an operator to see. This tracker makes it visible.
+//
+// `frozenCandidateWarnDue` is a PURE, clock-injectable decision: it fires a
+// rate-limited operator warning when a node has been a CANDIDATE at an UNCHANGING
+// term for longer than `frozen_candidate_warn_after_ms` (≈ 3× the default
+// election timeout = 15 s, so a single slow-but-progressing election round never
+// trips it), and then not again until `frozen_candidate_warn_interval_ms` has
+// elapsed (rate limit). Any term advance (election progressing) or a transition
+// to leader/follower resets the tracker.
+//
+// The fixer polls this from the raft loop (likely `cluster.zig` raftLoop /
+// `clientPollLoop`), feeding it the live `(role, term, now_ms)` each pass and
+// emitting `log.warn` when it returns true. The tracker itself owns no I/O.
+pub const FrozenCandidateTracker = struct {
+    /// Warn once a node has been a candidate at an unchanging term for this long.
+    /// ≈ 3× the default 5000 ms election timeout: a healthy election round is
+    /// 1-2 s, so 15 s of NO term movement while still a candidate is the wedge.
+    pub const frozen_candidate_warn_after_ms: i64 = 15000;
+
+    /// After a warn fires, suppress further warns for this interval (rate limit).
+    pub const frozen_candidate_warn_interval_ms: i64 = 30000;
+
+    /// The role observed on the last `update`. `null` until first observation.
+    last_role: ?State = null,
+    /// The term observed on the last `update`.
+    last_term: u64 = 0,
+    /// Wall-clock ms at which the CURRENT (role==candidate, term==last_term) run
+    /// began. Reset whenever the role leaves candidate or the term advances.
+    candidate_since_ms: i64 = 0,
+    /// Wall-clock ms of the last warn emitted, for rate limiting. `null` = never.
+    last_warn_ms: ?i64 = null,
+
+    /// Feed the live `(role, term, now_ms)` and return whether an operator warn
+    /// is DUE on this pass. Updates internal state (candidate-run start, term
+    /// tracking, role transitions) as a side effect so the next call rate-limits
+    /// correctly.
+    ///
+    /// Semantics:
+    ///   1. candidate at an unchanging term for > frozen_candidate_warn_after_ms
+    ///      → due (and stamp last_warn_ms);
+    ///   2. term changed since the candidate run began (election progressing)
+    ///      → NOT due, and the candidate run restarts at the new term;
+    ///   3. role left candidate (became leader/follower) → NOT due, state resets;
+    ///   4. rate limit: immediately after a warn, NOT due again until
+    ///      frozen_candidate_warn_interval_ms has elapsed.
+    pub fn update(self: *FrozenCandidateTracker, role: State, term: u64, now_ms: i64) bool {
+        const role_changed = self.last_role == null or self.last_role.? != role;
+        const term_changed = self.last_term != term;
+
+        // A role transition (into/out of/within candidate) or a term advance
+        // (election progressing) breaks the frozen run: re-anchor the run start
+        // at `now_ms` and clear the rate-limit stamp so a genuinely-new frozen
+        // run gets a fresh warn once it crosses the threshold.
+        if (role != .candidate or role_changed or term_changed) {
+            self.candidate_since_ms = now_ms;
+            self.last_warn_ms = null;
+        }
+        self.last_role = role;
+        self.last_term = term;
+
+        // Only a candidate at an unchanging term can be frozen.
+        if (role != .candidate) return false;
+
+        // Not yet past the warn-after threshold relative to the run start.
+        if (now_ms - self.candidate_since_ms <= frozen_candidate_warn_after_ms) return false;
+
+        // Past the threshold: rate-limit relative to the last warn so a node that
+        // stays wedged does not re-warn on every poll.
+        if (self.last_warn_ms) |last_warn| {
+            if (now_ms - last_warn < frozen_candidate_warn_interval_ms) return false;
+        }
+        self.last_warn_ms = now_ms;
+        return true;
+    }
+};
+
 pub const Command = union(enum) {
     noop,
     write: []const u8,
@@ -320,6 +404,21 @@ pub const Transport = struct {
     /// the override callback.  Ignored by the default send path.
     send_override_ctx: ?*anyopaque = null,
 
+    /// election-livelock fix (2026-06-11) + owed item (4) frozen-term wedge: the
+    /// live `StallArm` role source for the stalled-stream reaper
+    /// (`maybeReconnectOnStall`). The reaper arms its eviction decision ONLY when
+    /// THIS node is the raft LEADER or a CANDIDATE; a FOLLOWER is suppressed.
+    /// Rationale: during a leaderless election there is legitimately no
+    /// AppendEntries flow, so arming a follower would trip every peer and tear
+    /// down the connections votes/responses ride (the original livelock); but a
+    /// CANDIDATE must get its RequestVote frames through a possibly-wedged stream
+    /// at restart, so it MUST be armed. The cluster coordinator wires this from
+    /// `RaftNode.role()` mapped onto `StallArm`. Null (default / standalone) is
+    /// treated as `.follower`, so the standalone path never evicts on stall.
+    /// Mirrors the `send_override` injection pattern.
+    role_source_fn: ?*const fn (ctx: ?*anyopaque) StallArm = null,
+    role_source_ctx: ?*anyopaque = null,
+
     /// Task A6c (2026-05-25 distributed cluster testing plan):
     /// Persistent per-peer QUIC connection pool.  Each entry is keyed
     /// by `peer.id` and owns a long-lived `QuicClient` plus its TLS
@@ -441,6 +540,35 @@ pub const Transport = struct {
         /// opened on first send; closed+nulled on any write/open error and
         /// reopened on the next send.
         send_stream: ?*quic.QuicClientStream = null,
+
+        /// k8s root cause #5 (stalled-stream liveness, 2026-06-11): the raft
+        /// transport is fire-and-forget — a write into a stale/half-open QUIC
+        /// connection (peer's OLD endpoint after a pod reschedule) buffers
+        /// locally and returns success, so neither the send-error eviction path
+        /// nor the IP-change reaper (the strand victim's IP never changed) ever
+        /// fires. This timestamp records the last time we OBSERVED forward
+        /// progress with this peer (an inbound frame / RPC response, stamped via
+        /// `Transport.notePeerProgress`). Initialized at connect time so a brand
+        /// new connection is not immediately judged stalled. The stall reaper
+        /// compares `now - last_progress_ms` against `peer_stall_budget_ms`.
+        last_progress_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+
+        /// Count of frames handed to the wire for this peer. The stall reaper
+        /// must only act on a peer we have actually been SENDING to (a peer with
+        /// no traffic has no progress to expect and must not be evicted). Bumped
+        /// on each successful `send`.
+        frames_sent: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+        /// k8s root cause #5 (election-livelock fix, 2026-06-11): consecutive
+        /// stalled-reaper passes observed for this peer. A SINGLE stalled
+        /// observation must NOT evict — during a leaderless election there is
+        /// legitimately no AppendEntries flow, so a one-shot stall check trips on
+        /// every peer and tears down the very connections votes/responses ride,
+        /// preventing any leader from ever being elected. Eviction requires
+        /// `peer_stall_strikes_required` CONSECUTIVE stalled passes (tracked by
+        /// `recordStallPassArmed`); any progress stamp (`notePeerProgress`) or an
+        /// unarmed (follower) pass resets this to zero.
+        stall_strikes: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
         fn deinit(self: *PeerConnection) void {
             if (self.send_stream) |s| {
@@ -822,7 +950,8 @@ pub const Transport = struct {
         // connection rebuilt. Gated well above the 2 ms poll cadence so the DNS
         // lookups add negligible load; well below any election timeout so
         // recovery is prompt.
-        const peer_reresolve_ms: i64 = 3000;
+        // The reaper cadence is the public `peer_reresolve_ms` const (mirrored so
+        // tests can assert the stall budget is decoupled from it).
         var last_reresolve_ms: i64 = compat_milliTimestamp();
         while (!self.client_poll_shutdown.load(.acquire)) {
             const now_ms = compat_milliTimestamp();
@@ -857,6 +986,14 @@ pub const Transport = struct {
                 // the QUIC client). May evict pc; our snapshot ref keeps it alive
                 // until the release below.
                 if (do_reresolve) self.maybeReconnectOnIpChange(pc);
+                // k8s root cause #5: stalled-stream reaper, same slow cadence.
+                // Catches the silent-blackhole case the IP-change reaper cannot
+                // (the strand victim's OWN IP never changed): frames have been
+                // sent but no inbound progress observed within the budget. Pure
+                // atomic reads + (on stall) evictPeerConnection; never touches
+                // the QUIC client, so it is safe outside client_mutex. May evict
+                // pc; our snapshot ref keeps it alive until the release below.
+                if (do_reresolve) self.maybeReconnectOnStall(pc, now_ms);
                 if (pc.release()) {
                     // Eviction completed while we were polling/re-resolving; we
                     // hold the last reference and must deinit.
@@ -893,6 +1030,223 @@ pub const Transport = struct {
             Attr.uint("peer", pc.peer_id),
         });
         self.evictPeerConnection(pc.peer_id);
+    }
+
+    /// k8s root cause #5 (stalled-stream liveness): the budget, in ms, after
+    /// which a peer we are actively sending to but have observed NO forward
+    /// progress from is judged stalled and its cached connection evicted +
+    /// rebuilt (the same recovery the IP-change reaper performs).
+    ///
+    /// SIZING (election-livelock fix, 2026-06-11). The earlier 3000 ms value was
+    /// derived from a wrong "≤ 5000 ms election-timeout ceiling" rationale and
+    /// caused a total-cluster election livelock: it was BELOW the real election
+    /// convergence and EQUAL to the reaper interval. The correct derivation of the
+    /// worst-case election round is `2 * election_tick * tick_ms`:
+    ///   - `election_tick = max(2, election_timeout_ms / 50) = 100` ticks for the
+    ///     default 5000 ms timeout (see `RaftNode.initWithClock` election_tick),
+    ///   - the raft loop ticks every 10 ms (`cluster.zig` 10 ms tick),
+    ///   - the election timeout randomizes up to 2x,
+    /// → `2 * 100 * 10 = 2000 ms` per round (multi-round under churn). The budget
+    /// must give wide headroom so a leaderless election never trips the detector
+    /// AND must be decoupled from — strictly greater than — the reaper interval.
+    /// 15000 ms is ≥ 7x the 2000 ms worst-case round and 5x the 3000 ms reaper
+    /// interval (`peer_reresolve_ms`), while still recovering a genuinely wedged
+    /// leader stream within seconds. At the steady-state 50 ms heartbeat/response
+    /// cadence this budget gives a 300x margin, so a healthy link is never judged
+    /// stalled.
+    pub const peer_stall_budget_ms: i64 = 15000;
+
+    /// The `clientPollLoop` stalled-stream reaper cadence (mirror of the local
+    /// `peer_reresolve_ms` const inside `clientPollLoop`). Exposed `pub` so the
+    /// regression tests can assert the budget is decoupled from — and strictly
+    /// greater than — the interval at which the stall check runs. The check
+    /// window must NOT equal what it measures (the original bug: budget ==
+    /// interval == 3000 ms).
+    pub const peer_reresolve_ms: i64 = 3000;
+
+    /// Number of CONSECUTIVE stalled reaper passes required before a peer is
+    /// evicted (election-livelock fix, 2026-06-11). M >= 2: a single stalled
+    /// observation — which legitimately happens for every peer during a
+    /// leaderless election — must NOT evict. Any progress stamp or leader-loss
+    /// resets the strike counter.
+    pub const peer_stall_strikes_required: u32 = 2;
+
+    // =======================================================================
+    // owed item (4): all-candidate frozen-term wedge — role-arming widening
+    // -----------------------------------------------------------------------
+    // The original leader-only stall detector (added in 3aeb0fcc to stop the
+    // election livelock) over-corrected for the divergent-durable-state restart
+    // wedge: when vote frames are silently undelivered over a stale/half-open
+    // QUIC stream AT RESTART, a leader-only-gated detector means that during the
+    // leaderless window NOTHING
+    // detects or recovers the stalled outbound vote stream — the node sits as a
+    // silent candidate forever (`pre_vote=true` also freezes the term, so the
+    // wedge is silent; see FrozenCandidateTracker below).
+    //
+    // CORRECTED arming: the stall detector must arm for a node that is the
+    // LEADER **or a CANDIDATE**, and suppress ONLY a FOLLOWER. Rationale:
+    //   * a FOLLOWER expects inbound heartbeats and its OUTBOUND health is the
+    //     leader's detector's job, so a follower stands down (this is the safe
+    //     refinement of the old "suppress when not leader" rule — it now
+    //     suppresses only the follower, not the candidate);
+    //   * a CANDIDATE is EXACTLY the role that must get its RequestVote frames
+    //     through a possibly-wedged stream to make progress, so it must be
+    //     armed; and the 15 s budget + 2 consecutive strikes (≥ ~18-30 s to
+    //     evict, vs the 1-2 s healthy election round) cannot recreate the old
+    //     3 s-budget livelock.
+    //
+    /// Role the stall detector arms against. `.follower` suppresses the
+    /// detector; `.leader` and `.candidate` arm it. This is the single role
+    /// source for the stalled-stream reaper (the legacy `is_leader: bool` form
+    /// was removed in favor of this three-way arming).
+    pub const StallArm = enum {
+        leader,
+        candidate,
+        follower,
+    };
+
+    /// k8s root cause #5 (stalled-stream liveness) + owed item (4) role-arming:
+    /// PURE, clock- and role-injectable decision used by `maybeReconnectOnStall`
+    /// (and unit tests). Returns true iff this connection LOOKS stalled on this
+    /// single pass AND the local node is in an ARMED role (leader OR candidate):
+    /// frames have been sent to the peer, and no forward progress has been
+    /// observed for longer than `peer_stall_budget_ms`.
+    ///
+    /// Role arming (owed item (4)):
+    ///   * arm == .follower  → false. A follower expects INBOUND heartbeats; its
+    ///     outbound health is the leader's detector's job. Arming a follower
+    ///     would re-introduce the leaderless-window eviction storm (the original
+    ///     election-livelock bug), so a follower always stands down. The
+    ///     IP-change reaper (`maybeReconnectOnIpChange`) still covers a moved
+    ///     peer regardless of role, so suppressing the follower loses no
+    ///     recovery coverage.
+    ///   * arm == .candidate → armed. A candidate is EXACTLY the role that must
+    ///     get its RequestVote frames through a possibly-wedged stream at
+    ///     restart; the 15 s budget + 2 consecutive strikes (≥ ~18-30 s to evict,
+    ///     vs the 1-2 s healthy election round) cannot recreate the old 3 s-budget
+    ///     livelock.
+    ///   * arm == .leader    → armed. The leader's silent OUTBOUND stream to a
+    ///     follower is the original target wedge.
+    ///
+    /// Per-connection guards that keep this from evicting a healthy peer:
+    ///   1. `frames_sent == 0` → we have never sent to this peer, so there is no
+    ///      progress to expect (an idle/quiet peer must never be evicted).
+    ///   2. `now_ms - last_progress_ms <= peer_stall_budget_ms` → progress was
+    ///      observed recently. A freshly connected peer stamps `last_progress_ms`
+    ///      at connect time, so a brand new connection reads as fresh.
+    ///
+    /// This is a SINGLE-PASS look; eviction additionally requires
+    /// `peer_stall_strikes_required` consecutive such passes — see
+    /// `recordStallPassArmed`.
+    ///
+    /// Pure / side-effect-free: it only reads atomics and never mutates `pc`, so
+    /// it is safe to call from the reaper and from unit tests with an injected
+    /// clock + arm.
+    pub fn shouldEvictOnStallArmed(pc: *PeerConnection, now_ms: i64, arm: StallArm) bool {
+        // Role arming: suppress ONLY a follower; leader and candidate are armed.
+        if (arm == .follower) return false;
+        if (pc.frames_sent.load(.acquire) == 0) return false;
+        const last = pc.last_progress_ms.load(.acquire);
+        return (now_ms - last) > peer_stall_budget_ms;
+    }
+
+    /// Record one stalled-reaper pass for `pc` and return whether the peer has
+    /// now accumulated `peer_stall_strikes_required` CONSECUTIVE armed-and-stalled
+    /// passes (election-livelock fix, 2026-06-11; candidate-armed for owed item
+    /// (4)). Resets strikes to 0 when the armed decision is false on this pass
+    /// (healthy / follower / idle / progress observed). A progress stamp
+    /// (`notePeerProgress`) independently resets strikes.
+    ///
+    /// Atomicity discipline: `stall_strikes` is an atomic, but this is driven
+    /// exclusively by the single-threaded `clientPollLoop` reaper (one pass at a
+    /// time), so its load-then-store sequence is never racing another pass. The
+    /// only concurrent writer is `notePeerProgress` (the inbound path), which only
+    /// ever resets the counter to 0 — strictly the safe direction: a lost-update
+    /// race can at worst under-count strikes and DELAY an eviction by one reaper
+    /// pass, never cause a spurious one. We therefore use a plain atomic load/store
+    /// (not a CAS loop): the simplest discipline that preserves the "fail-safe
+    /// toward NOT evicting" invariant.
+    pub fn recordStallPassArmed(pc: *PeerConnection, now_ms: i64, arm: StallArm) bool {
+        if (!shouldEvictOnStallArmed(pc, now_ms, arm)) {
+            pc.stall_strikes.store(0, .release);
+            return false;
+        }
+        const strikes = pc.stall_strikes.load(.acquire) + 1;
+        pc.stall_strikes.store(strikes, .release);
+        return strikes >= peer_stall_strikes_required;
+    }
+
+    /// Refresh the forward-progress timestamp for the peer identified by
+    /// `peer_id`. Called from the INBOUND path (raft AppendEntries from the
+    /// leader / AppendEntriesResponse from a follower, dispatched in
+    /// `cluster.zig:applyDecodedRaftFrame`), which arrives on a DIFFERENT
+    /// connection object than the outbound `PeerConnection`, so progress must be
+    /// stamped by a peer-id keyed lookup into `peers` rather than by pointer.
+    /// Safe to call for an unknown peer (no-op) — e.g. before the outbound
+    /// connection has been built, or for a frame whose sender we never send to.
+    ///
+    /// Locking: takes `peers_mutex` (tier 3) only, and writes a leaf atomic; it
+    /// never acquires a lower-tier lock while held, so it respects the GAP-0278
+    /// ordering. We do NOT bump the refcount: the store is a single atomic on a
+    /// field that lives for the PeerConnection's lifetime, and `peers_mutex`
+    /// keeps the entry in the map (eviction also runs under `peers_mutex`) for
+    /// the duration of the store.
+    pub fn notePeerProgress(self: *Transport, peer_id: u64, now_ms: i64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        if (self.peers.get(peer_id)) |pc| {
+            pc.last_progress_ms.store(now_ms, .release);
+            // election-livelock fix (2026-06-11): observed progress clears any
+            // accumulated stall strikes so a peer that resumes responding is not
+            // evicted on a later isolated stalled-looking pass. This is the only
+            // off-reaper writer of `stall_strikes`, and it only ever resets to 0
+            // (the safe direction — see `recordStallPassArmed`).
+            pc.stall_strikes.store(0, .release);
+        }
+    }
+
+    /// election-livelock fix (2026-06-11) + owed item (4): wire the live
+    /// `StallArm` role source the stalled-stream reaper arms on (leader OR
+    /// candidate; suppress follower). The cluster coordinator passes a closure
+    /// that maps `RaftNode.role()` onto `StallArm`. Mirrors `send_override`
+    /// injection. Leaving it unset (standalone) means the reaper treats the node
+    /// as a follower and never evicts on stall.
+    pub fn setRoleSource(self: *Transport, ctx: ?*anyopaque, f: *const fn (ctx: ?*anyopaque) StallArm) void {
+        self.role_source_ctx = ctx;
+        self.role_source_fn = f;
+    }
+
+    /// Periodic stalled-stream reaper, sibling to `maybeReconnectOnIpChange`,
+    /// invoked from `clientPollLoop` on the same slow cadence. If the connection
+    /// has stalled (`shouldEvictOnStallArmed`), evict it so the next `send`
+    /// rebuilds via `connectWithTLS` (which re-resolves the FQDN) — exactly like
+    /// the IP-change path. Takes no lock here; `evictPeerConnection` takes
+    /// `peers_mutex` itself. Logs at warn (mirroring the IP-change reaper) so the
+    /// previously-silent wedge is now observable to an operator.
+    fn maybeReconnectOnStall(self: *Transport, pc: *PeerConnection, now_ms: i64) void {
+        // election-livelock fix (2026-06-11) + owed item (4): the eviction
+        // decision is armed ONLY when THIS node is the raft LEADER or a
+        // CANDIDATE. The live role comes from the injected `role_source_fn`
+        // (wired by the cluster coordinator from `RaftNode.role()`); if unset we
+        // conservatively treat the node as a `.follower` so the standalone path
+        // never evicts.
+        const arm = if (self.role_source_fn) |f| f(self.role_source_ctx) else StallArm.follower;
+        // recordStallPassArmed tracks M consecutive stalled passes; only the Mth
+        // pass returns true, so a single quiet pass (or anything observed while a
+        // follower) never evicts.
+        if (recordStallPassArmed(pc, now_ms, arm)) {
+            const last = pc.last_progress_ms.load(.acquire);
+            log.warn("raft transport peer stalled (no progress within budget); evicting stale connection", &.{
+                Attr.string("endpoint", pc.endpoint),
+                Attr.uint("peer", pc.peer_id),
+                Attr.uint("strikes", pc.stall_strikes.load(.acquire)),
+                Attr.uint("strikes_required", peer_stall_strikes_required),
+                Attr.int("budget_ms", peer_stall_budget_ms),
+                Attr.int("stall_ms", now_ms - last),
+            });
+            self.evictPeerConnection(pc.peer_id);
+        }
     }
 
     fn clientPollEntry(ctx: ?*anyopaque) void {
@@ -1040,6 +1394,15 @@ pub const Transport = struct {
         // NOTE: no per-RPC finish()/deinit() — the stream stays open for the
         // next frame. The dedicated client_poll_thread (A6e) flushes the write
         // onto the wire; the bridge returns immediately.
+
+        // k8s root cause #5 (stalled-stream liveness): we successfully handed a
+        // frame to the wire. Mark that this peer now has traffic to expect a
+        // response for, so the stall reaper is allowed to act if no inbound
+        // progress is observed within the budget. Frames written to a
+        // stale/half-open connection buffer locally and "succeed" here (that is
+        // precisely the fire-and-forget wedge), which is why the eviction
+        // decision is gated on OBSERVED inbound progress, not on send success.
+        _ = conn.frames_sent.fetchAdd(1, .acq_rel);
     }
 
     /// Look up or construct a persistent peer connection.  The
@@ -1089,6 +1452,14 @@ pub const Transport = struct {
             .port = peer.port,
             .peer_id = peer.id,
             .resolved_ip = resolved,
+            // k8s root cause #5: stamp the stall clock at connect time and reset
+            // the frame counter so a brand new connection reads as "fresh, no
+            // sends yet" — the stall reaper never fires on it until we have both
+            // sent a frame AND observed no progress for the full budget. This is
+            // the "stall clock resets on reconnect" guarantee that prevents a
+            // re-evict loop after the stall reaper rebuilds a connection.
+            .last_progress_ms = std.atomic.Value(i64).init(compat_milliTimestamp()),
+            .frames_sent = std.atomic.Value(u64).init(0),
         };
         errdefer conn.client.deinit();
 
@@ -3219,6 +3590,258 @@ test "raft_consensus: OutOfStreams/WouldBlock are transient (no evict); other er
     try std.testing.expect(Transport.shouldEvictOnSendError(error.ConnectionReset));
     try std.testing.expect(Transport.shouldEvictOnSendError(error.BrokenPipe));
     try std.testing.expect(Transport.shouldEvictOnSendError(error.TransportShutdown));
+}
+
+// ===========================================================================
+// k8s root cause #5 (transport wedge): stalled-stream liveness regression tests
+// ---------------------------------------------------------------------------
+// ORIGINAL wedge: a leader pod restarts with a NEW IP and re-wins leadership; a
+// third node that did NOT restart is stranded as a silent stuck-candidate. The
+// fire-and-forget transport never errors a send into the stale connection and
+// the IP-change reaper declines (the victim's OWN IP never changed). The first
+// fix added a stalled-stream liveness detector (notePeerProgress +
+// shouldEvictOnStall) keyed off observed forward progress.
+//
+// REGRESSION (this revision): that detector caused a TOTAL-CLUSTER ELECTION
+// LIVELOCK on real k8s. When the leader pod is deleted, all 3 nodes evict both
+// peers every ~3s forever and no leader is ever elected, because:
+//   1. the 3000 ms budget is BELOW real election convergence (~2000 ms worst
+//      case, multi-round under churn) AND equals the reaper interval, so the
+//      check window equals what it measures;
+//   2. the check is armed regardless of raft role — during a leaderless
+//      election there is legitimately no AppendEntries flow but frames_sent>0
+//      from RequestVote, so every peer trips and gets evicted, tearing down the
+//      connection that votes/responses ride;
+//   3. a SINGLE missed refresh evicts (no consecutive-strike requirement), so a
+//      transient quiet pass re-evicts even with a healthy leader.
+//
+// The tests below encode the CORRECTED behavior (now migrated to the role-armed
+// API — `shouldEvictOnStallArmed` / `recordStallPassArmed` / `StallArm`; the
+// legacy `is_leader: bool` form was removed):
+//   A. role arming (`StallArm`): suppress ONLY a follower; leader AND candidate
+//      are armed (owed item (4) widened the old leader-only rule);
+//   B. budget >> election convergence AND > reaper interval;
+//   C. M consecutive stalled passes required (recordStallPassArmed);
+//   D. progress stamp resets strikes.
+// CANARY: REQ=REQ-DIST-RAFT-STALL-LIVENESS; FEATURE="Raft transport stalled-stream liveness"; ASPECT=StallEvictDecision; STATUS=TESTED; OWNER=distributed; UPDATED=2026-06-11
+
+/// Build a heap-allocated PeerConnection suitable for the PURE stall-decision
+/// unit tests. In test mode `quic.QuicClient.init` is a no-op stub, so no real
+/// QUIC/TLS connection is created. The endpoint is a dup so deinit's free is
+/// balanced. `established=true` mirrors a live connection.
+fn makeStallTestPeerConnection(
+    allocator: std.mem.Allocator,
+    peer_id: u64,
+    frames_sent: u64,
+    last_progress_ms: i64,
+) !*Transport.PeerConnection {
+    const pc = try allocator.create(Transport.PeerConnection);
+    pc.* = .{
+        .allocator = allocator,
+        .client = quic.QuicClient.init(allocator),
+        .established = true,
+        .endpoint = try allocator.dupe(u8, "raft-peer.cluster.svc"),
+        .port = 7890,
+        .peer_id = peer_id,
+        .resolved_ip = &.{},
+        .frames_sent = std.atomic.Value(u64).init(frames_sent),
+        .last_progress_ms = std.atomic.Value(i64).init(last_progress_ms),
+    };
+    return pc;
+}
+
+// (B) Budget must exceed worst-case election convergence AND the reaper interval.
+// The worst-case election round is `2 * election_tick * tick_ms`. With the
+// default 5000 ms election timeout: election_tick = max(2, 5000/50) = 100 ticks,
+// the raft loop ticks every 10 ms, and the timeout is randomized up to 2x, so a
+// single round is up to 2 * 100 * 10 = 2000 ms (multi-round under churn). The
+// detector must give >= 3x that headroom so a leaderless election never trips.
+// SKELETON: peer_stall_budget_ms = 3000 < 6000 -> this test FAILS.
+test "raft stall: budget exceeds worst-case election convergence and reaper interval" {
+    const worst_case_election_round_ms: i64 = 2000; // 2 * election_tick(100) * tick_ms(10)
+    // >= 3x the worst-case round so multi-round convergence under churn is safe.
+    try std.testing.expect(Transport.peer_stall_budget_ms >= 3 * worst_case_election_round_ms);
+    // Decoupled from — and strictly above — the reaper interval (the original bug
+    // was budget == interval == 3000, so the check window equaled what it measured).
+    try std.testing.expect(Transport.peer_stall_budget_ms > Transport.peer_reresolve_ms);
+}
+
+// (A) Follower suppression: a follower must NEVER evict on stall, even with an
+// ancient progress timestamp and frames sent. During a leaderless election this
+// is exactly the case that, when armed, evicts every peer and livelocks the
+// cluster. The follower's outbound health is the leader's detector's job.
+test "raft stall: stall eviction is suppressed for a follower" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale_progress = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makeStallTestPeerConnection(allocator, 7, 12, stale_progress);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // A follower -> the stall detector must stand down (the IP-change reaper
+    // covers moved peers regardless of role).
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .follower));
+}
+
+// (A, positive) As the leader, a stalled outbound stream IS the target wedge and
+// must be judged stalled on a stalled pass. Single-pass look only; eviction adds
+// the consecutive-strike requirement (see the M-pass test).
+test "raft stall: leader sees a stalled outbound peer as stalled (single pass)" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale_progress = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makeStallTestPeerConnection(allocator, 7, 12, stale_progress);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+}
+
+test "raft stall: healthy peer (recent progress) is NOT evicted" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    // Progress observed comfortably inside the budget.
+    const recent_progress = now_ms - (Transport.peer_stall_budget_ms - 500);
+    const pc = try makeStallTestPeerConnection(allocator, 7, 12, recent_progress);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // False-positive guard: a peer with recent progress must NEVER be evicted,
+    // even when we ARE the leader.
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+}
+
+test "raft stall: idle peer (no frames sent) is NOT evicted even with an old timestamp" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    // last_progress is ancient, but nothing has ever been sent to this peer, so
+    // there is no progress to expect — it must not be evicted.
+    const pc = try makeStallTestPeerConnection(allocator, 9, 0, 0);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+}
+
+// (C) M consecutive stalled passes required. The FIRST stalled observation must
+// NOT evict — during a leaderless election or a single transient quiet pass that
+// would evict every peer. Only the Mth consecutive pass evicts.
+test "raft stall: one stalled pass does not evict; M consecutive passes do" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 1_000_000;
+    const stale_progress = now_ms - (Transport.peer_stall_budget_ms + 500);
+    const pc = try makeStallTestPeerConnection(allocator, 7, 12, stale_progress);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // Strike mechanism requires at least 2 consecutive passes.
+    try std.testing.expect(Transport.peer_stall_strikes_required >= 2);
+
+    // First stalled pass: record a strike but DO NOT evict.
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, now_ms, .leader));
+    try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
+
+    // Drive to the required number of consecutive stalled passes; only the last
+    // one evicts.
+    var pass: u32 = 1;
+    while (pass < Transport.peer_stall_strikes_required) : (pass += 1) {
+        const is_last = (pass + 1) == Transport.peer_stall_strikes_required;
+        const evict = Transport.recordStallPassArmed(pc, now_ms, .leader);
+        try std.testing.expectEqual(is_last, evict);
+    }
+}
+
+// (D) A progress stamp resets the strike counter, so a peer that resumes
+// responding is not evicted on a later isolated stalled-looking pass.
+test "raft stall: progress stamp resets strikes" {
+    const allocator = std.testing.allocator;
+    var transport = Transport.init(allocator);
+    defer transport.deinit();
+
+    const now_ms: i64 = 7_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 1000);
+    const pc = try makeStallTestPeerConnection(allocator, 1, 4, stale);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    transport.peers_mutex.lockUncancelable(io);
+    try transport.peers.put(1, pc);
+    transport.peers_mutex.unlock(io);
+    // (transport.deinit frees the entry via the peers map.)
+
+    // First stalled pass accrues strike 1 (no evict).
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, now_ms, .leader));
+    try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
+
+    // Inbound progress arrives -> strikes reset to 0 (and clock refreshed).
+    transport.notePeerProgress(1, now_ms);
+    try std.testing.expectEqual(@as(u32, 0), pc.stall_strikes.load(.acquire));
+
+    // A later stalled-looking pass is therefore strike 1 again, NOT an eviction.
+    const later = now_ms + Transport.peer_stall_budget_ms + 1;
+    try std.testing.expect(!Transport.recordStallPassArmed(pc, later, .leader));
+    try std.testing.expectEqual(@as(u32, 1), pc.stall_strikes.load(.acquire));
+}
+
+test "raft stall: notePeerProgress stamps the right PeerConnection (peer-id keyed)" {
+    const allocator = std.testing.allocator;
+    var transport = Transport.init(allocator);
+    defer transport.deinit();
+
+    // Publish two established connections into the peers map, simulating two
+    // live outbound peers. Each starts with a stale progress timestamp and a
+    // nonzero frames_sent so it would be judged stalled at now_ms.
+    const now_ms: i64 = 5_000_000;
+    const stale = now_ms - (Transport.peer_stall_budget_ms + 1000);
+    const pc1 = try makeStallTestPeerConnection(allocator, 1, 4, stale);
+    const pc2 = try makeStallTestPeerConnection(allocator, 2, 4, stale);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    transport.peers_mutex.lockUncancelable(io);
+    try transport.peers.put(1, pc1);
+    try transport.peers.put(2, pc2);
+    transport.peers_mutex.unlock(io);
+    // (transport.deinit frees both entries via the peers map.)
+
+    // Inbound progress arrives for peer 1 only (keyed by peer id, NOT by the
+    // outbound PeerConnection pointer — the inbound connection is a different
+    // object in production).
+    transport.notePeerProgress(1, now_ms);
+
+    // DESIRED behavior: peer 1's stamp is refreshed (so it is no longer stalled
+    // as the leader), peer 2's is untouched (still stalled). The single-pass look
+    // is evaluated as the leader (arm = .leader).
+    try std.testing.expectEqual(now_ms, pc1.last_progress_ms.load(.acquire));
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc1, now_ms, .leader));
+    // Peer 2 was never stamped — still stalled (as the leader).
+    try std.testing.expect(Transport.shouldEvictOnStallArmed(pc2, now_ms, .leader));
+}
+
+test "raft stall: progress refresh clears the stall (no immediate re-evict loop)" {
+    const allocator = std.testing.allocator;
+    const now_ms: i64 = 2_000_000;
+    // A peer that just reconnected: frames already queued, and progress stamped
+    // at reconnect time == now. The stall clock must read as fresh so the very
+    // next reaper pass does NOT immediately re-evict it (which would spin a
+    // reconnect loop).
+    const pc = try makeStallTestPeerConnection(allocator, 3, 1, now_ms);
+    defer {
+        pc.client.deinit();
+        allocator.free(pc.endpoint);
+        allocator.destroy(pc);
+    }
+    // Same instant -> 0 elapsed -> not stalled (even as the leader).
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+    // A subsequent progress observation keeps it healthy across the budget.
+    pc.last_progress_ms.store(now_ms + Transport.peer_stall_budget_ms, .release);
+    try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms + Transport.peer_stall_budget_ms, .leader));
 }
 
 // SEC-D011: Verify connectWithTLS compiles and selects the correct path.

@@ -22,6 +22,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const graph_store = @import("../graph_store.zig");
+const fle_integration = @import("../fle_integration.zig");
 const graph_storage_adapter = @import("graph_storage_adapter.zig");
 const graph_storage = @import("graph_storage");
 const pooled = @import("transport/thread_pool");
@@ -164,6 +165,11 @@ pub const ApplyOp = union(enum) {
         /// flusher-only design (the whole-graph bulkInsertNode path
         /// generates its own id).
         assigned_id: u64 = 0,
+        /// GAP-0891 (RC-1): the request tenant captured on the HANDLER thread
+        /// in `submit()` (shard workers have no per-thread tenant / context).
+        /// Borrowed for the lifetime of the blocking `submit()` — same
+        /// ownership discipline as `labels`/`props` (no dupe).
+        tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
     },
     bulk_insert_edge: struct {
         source_id: u64,
@@ -171,6 +177,8 @@ pub const ApplyOp = union(enum) {
         rel_type: []const u8,
         props: []const PropKV,
         result: ApplyResult,
+        /// GAP-0891 (RC-1): see bulk_insert_node.tenant.
+        tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
     },
     /// MATCH+CREATE edge variant — the coordinator resolves endpoints
     /// under its already-held EXCLUSIVE write lock, eliminating the
@@ -204,6 +212,8 @@ pub const ApplyOp = union(enum) {
         /// Pre-resolved at submit time when possible; zero means the
         /// worker must resolve under its shard lock.
         target_id: u64 = 0,
+        /// GAP-0891 (RC-1): see bulk_insert_node.tenant.
+        tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
     },
     bulk_merge_node: struct {
         label: []const u8,
@@ -218,6 +228,8 @@ pub const ApplyOp = union(enum) {
         /// match branches.  Forwarded to
         /// `bulkMergeNodeWithReservedId(..., apply_on_match = true)`.
         apply_on_match: bool = false,
+        /// GAP-0891 (RC-1): see bulk_insert_node.tenant.
+        tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
     },
     // CANARY: REQ=REQ-QUIC-HC-109; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeCoordinator; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
     bulk_merge_node_props: struct {
@@ -226,6 +238,8 @@ pub const ApplyOp = union(enum) {
         on_create_props: []const PropKV,
         result: ApplyResult,
         assigned_id: u64 = 0,
+        /// GAP-0891 (RC-1): see bulk_insert_node.tenant.
+        tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
     },
 
     pub fn resultPtr(self: *ApplyOp) *ApplyResult {
@@ -412,6 +426,22 @@ pub const ShardedCoordinator = struct {
         const collect_phase_metrics = phaseMetricsEnabled();
         const submit_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         if (collect_phase_metrics) _ = self.submit_calls_total.fetchAdd(1, .monotonic);
+
+        // GAP-0891 (RC-1): capture the request tenant on THIS (handler) thread,
+        // where the active ExecutionContext / per-thread tenant is valid, and
+        // stamp it on the op. The shard worker that drains this op has neither,
+        // so without this the worker tags every bulk-written row "default". The
+        // slice is borrowed (not duped): `submit()` blocks until the worker
+        // wakes it, so the captured tenant outlives the apply — identical
+        // ownership to the borrowed `labels`/`props` already on the op.
+        const request_tenant = fle_integration.tenantPreferringActiveContext();
+        switch (op.*) {
+            .bulk_insert_node => |*p| p.tenant = request_tenant,
+            .bulk_insert_edge => |*p| p.tenant = request_tenant,
+            .bulk_match_create_edge => |*p| p.tenant = request_tenant,
+            .bulk_merge_node => |*p| p.tenant = request_tenant,
+            .bulk_merge_node_props => |*p| p.tenant = request_tenant,
+        }
 
         switch (op.*) {
             .bulk_insert_node => |*p| {
@@ -638,11 +668,13 @@ pub const ShardedCoordinator = struct {
             const res = op.resultPtr();
             switch (op.*) {
                 .bulk_insert_node => |p| {
-                    if (self.adapter.bulkInsertNodeWithReservedId(
+                    // GAP-0891 (RC-1): tag with the tenant captured at submit.
+                    if (self.adapter.bulkInsertNodeWithReservedIdForTenant(
                         self.graph_name,
                         p.assigned_id,
                         p.labels,
                         p.props,
+                        p.tenant,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| {
@@ -650,12 +682,13 @@ pub const ShardedCoordinator = struct {
                     }
                 },
                 .bulk_insert_edge => |p| {
-                    if (self.adapter.bulkInsertEdgeWithIdsShardLocked(
+                    if (self.adapter.bulkInsertEdgeWithIdsShardLockedForTenant(
                         self.graph_name,
                         p.source_id,
                         p.target_id,
                         p.rel_type,
                         p.props,
+                        p.tenant,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| {
@@ -681,12 +714,13 @@ pub const ShardedCoordinator = struct {
                             },
                         }
                     }
-                    if (self.adapter.bulkInsertEdgeWithIdsShardLocked(
+                    if (self.adapter.bulkInsertEdgeWithIdsShardLockedForTenant(
                         self.graph_name,
                         p.source_id,
                         target_id,
                         p.rel_type,
                         p.props,
+                        p.tenant,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| switch (e) {
@@ -695,7 +729,7 @@ pub const ShardedCoordinator = struct {
                     }
                 },
                 .bulk_merge_node => |p| {
-                    if (self.adapter.bulkMergeNodeWithReservedId(
+                    if (self.adapter.bulkMergeNodeWithReservedIdForTenant(
                         self.graph_name,
                         p.assigned_id,
                         p.label,
@@ -703,6 +737,7 @@ pub const ShardedCoordinator = struct {
                         p.merge_value,
                         p.on_create_props,
                         p.apply_on_match,
+                        p.tenant,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| {
@@ -710,12 +745,13 @@ pub const ShardedCoordinator = struct {
                     }
                 },
                 .bulk_merge_node_props => |p| {
-                    if (self.adapter.bulkMergeNodeWithReservedIdMultiProp(
+                    if (self.adapter.bulkMergeNodeWithReservedIdMultiPropForTenant(
                         self.graph_name,
                         p.assigned_id,
                         p.label,
                         p.merge_props,
                         p.on_create_props,
+                        p.tenant,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| {

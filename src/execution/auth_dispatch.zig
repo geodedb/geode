@@ -66,6 +66,7 @@ const Value = value_types.Value;
 
 const user_mgmt = @import("../security/user_management.zig");
 const mfa_mod = @import("mfa");
+const cluster_mod = @import("../distributed/cluster.zig");
 
 // GAP-0270: Global custom role store for geode.auth.role_create/role_list
 pub var g_custom_roles: std.StringHashMap([]const u8) = undefined;
@@ -435,6 +436,16 @@ pub fn execute(
             const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
             om.recordAuthzCheck(.allow, .rbac, d);
         }
+
+        // Cluster fail-closed: auth state persists to the per-node
+        // __geode_security graph with no Raft slice — an ungated mutation
+        // creates users/roles/grants on exactly ONE node (a security-relevant
+        // divergence). Reads (user_list/role_list/user_show/...) stay open.
+        // Covers the direct CALL geode.auth.* route; the auth DDL route
+        // (admin_ddl.zig) gates at its own entry points and double-fires here
+        // via callAuthProcedure — identical error, harmless.
+        // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateAuthProcedures; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+        if (!read_only_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
 
         if (dispatch_table.get(proc_name)) |handler| {
             return try handler(allocator, proc_name, call_stmt, context);

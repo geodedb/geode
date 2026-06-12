@@ -150,6 +150,28 @@ inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]const
     return hm.canAccessTenantSafe(tid, edge.tenant_id);
 }
 
+// GAP-0891 (defense-in-depth): hierarchy-aware, endpoint-derived edge
+// visibility. The edge is visible when its own tag passes the (hierarchy-aware)
+// tenant filter OR when BOTH endpoints pass it. This bridges legacy edges
+// mis-tagged "default" (the pre-fix worker bug) whose endpoint nodes carry the
+// correct tenant, matching the store-level `GraphStore.edgeVisibleForTenant`.
+//
+// Isolation is preserved: a genuine "default"-tagged edge between
+// "default"-tagged nodes stays hidden from a non-default reader because both
+// endpoints fail `passesTenantFilter` (fail-closed). Endpoint lookups reuse the
+// already-held store/rwlock read pattern from the surrounding match loop
+// (`store.nodes.get`) — no new lock is acquired.
+inline fn edgeVisibleForTenantHierarchy(
+    store: *graph_store.GraphStore,
+    edge: graph_store.Edge,
+    filter_tenant: ?[]const u8,
+) bool {
+    if (passesTenantFilterEdge(edge, filter_tenant)) return true;
+    const from = store.nodes.get(edge.from_id) orelse return false;
+    const to = store.nodes.get(edge.to_id) orelse return false;
+    return passesTenantFilter(from, filter_tenant) and passesTenantFilter(to, filter_tenant);
+}
+
 // GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
 // (`store.getNodesByLabels(..., tenant)` and `store.getEdgesByType(..., tenant, ...)`).
 //
@@ -1431,7 +1453,26 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     var all_created_relationships = std.StringHashMap(Value).init(allocator);
     defer all_created_relationships.deinit();
 
-    var total_created_count: i64 = 0;
+    // Per-kind counters: the summary row reports nodes and relationships
+    // SEPARATELY (a pure edge create used to surface as `nodes_created: 1`).
+    var total_created_nodes: i64 = 0;
+    var total_created_relationships: i64 = 0;
+
+    // Node-variable names appearing in the MATCH pattern. Lets the CREATE
+    // batch distinguish a MATCH variable that failed to bind (skip the hop —
+    // GAP-0336 anonymous-node footgun) from a NEW variable introduced by the
+    // CREATE pattern (must be created).
+    var match_var_names = std.ArrayList([]const u8).empty;
+    defer match_var_names.deinit(allocator);
+    for (q.match.chains) |chain| {
+        if (chain.head) |head| {
+            if (head.name) |n| try match_var_names.append(allocator, n);
+        }
+        for (chain.hops) |hop| {
+            if (hop.left.name) |n| try match_var_names.append(allocator, n);
+            if (hop.right.name) |n| try match_var_names.append(allocator, n);
+        }
+    }
 
     if (all_simple_node_chains) {
         // GAP-0336: Build per-chain candidate lists by re-scanning the store
@@ -1553,12 +1594,13 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                 }
 
                 if (should_create) {
-                    var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+                    var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, match_var_names.items, current_graph);
                     defer {
                         result.created_nodes.deinit();
                         result.created_relationships.deinit();
                     }
-                    total_created_count += result.created_count;
+                    total_created_nodes += result.created_nodes_count;
+                    total_created_relationships += result.created_relationships_count;
 
                     var node_iter = result.created_nodes.iterator();
                     while (node_iter.next()) |entry| {
@@ -1603,12 +1645,13 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                 }
             }
 
-            var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+            var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, match_var_names.items, current_graph);
             defer {
                 result.created_nodes.deinit();
                 result.created_relationships.deinit();
             }
-            total_created_count += result.created_count;
+            total_created_nodes += result.created_nodes_count;
+            total_created_relationships += result.created_relationships_count;
 
             var node_iter = result.created_nodes.iterator();
             while (node_iter.next()) |entry| {
@@ -1719,13 +1762,19 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
     }
 
-    // Default: return summary row showing how many entities were created
-    var columns = try allocator.alloc([]const u8, 1);
+    // Default: return summary row showing how many entities were created.
+    // Nodes and relationships are reported in SEPARATE columns — collapsing
+    // them under `nodes_created` mislabeled a pure edge create as a node
+    // create (2026-06-04 bug doc, "Secondary anomaly").
+    // CANARY: REQ=REQ-GQL-MATCH-CREATE-COUNTERS; FEATURE="MatchCreateCounters"; ASPECT=SummaryColumns; STATUS=TESTED; TEST=tests/test_match_create_counters.zig; OWNER=execution; UPDATED=2026-06-10
+    var columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "nodes_created");
+    columns[1] = try allocator.dupe(u8, "relationships_created");
 
     var rows = try allocator.alloc([]Value, 1);
-    var summary_row = try allocator.alloc(Value, 1);
-    summary_row[0] = Value{ .Int = total_created_count };
+    var summary_row = try allocator.alloc(Value, 2);
+    summary_row[0] = Value{ .Int = total_created_nodes };
+    summary_row[1] = Value{ .Int = total_created_relationships };
     rows[0] = summary_row;
 
     return ExecutionResult{
@@ -2823,7 +2872,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
+                    if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -2844,7 +2894,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
+                    if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;

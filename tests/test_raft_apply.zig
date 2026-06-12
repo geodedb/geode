@@ -671,3 +671,51 @@ test "GUPD update command: two stores apply same multi-node payload -> identical
     try std.testing.expectEqual(@as(i64, 3), s2.getNodeProperty(70, "v").?.Int);
     try std.testing.expectEqual(@as(i64, 3), s2.getNodeProperty(71, "v").?.Int);
 }
+
+// ---------------------------------------------------------------------------
+// MATCH…CREATE edge replication: a zero-node GNC2 payload whose edge endpoints
+// reference PRE-EXISTING nodes by stable id (.absolute_id). Pins the apply-side
+// contract the leader slice for `MATCH (a),(b) CREATE (a)-[:R]->(b)` depends on.
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ApplyAbsoluteIdEdge; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-06-10
+test "GNC2: zero-node payload with absolute_id endpoints creates edge between pre-existing nodes, idempotently" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    // Pre-create two nodes at stable ids (leader-matched endpoints).
+    const src_id: u64 = 300;
+    const dst_id: u64 = 301;
+    try store.createNodeWithId(src_id, &.{"MatchCreate"}, "default");
+    try store.createNodeWithId(dst_id, &.{"MatchCreate"}, "default");
+    try std.testing.expectEqual(@as(usize, 0), store.edges.count());
+
+    const edge_specs = [_]cr.EdgeSpec{.{
+        .from = .{ .absolute_id = src_id },
+        .to = .{ .absolute_id = dst_id },
+        .edge_type = "MCL",
+        .props = &.{},
+    }};
+    const payload = try cr.serializeMultiCreate(allocator, "default", &.{}, &edge_specs);
+    defer allocator.free(payload);
+
+    const n1 = try cr.applyMultiCreatePayload(allocator, &store, payload, 4242);
+    try std.testing.expectEqual(@as(usize, 1), n1);
+
+    // Exactly one MCL edge exists, from src_id to dst_id, at the derived id.
+    const edge_id = cr.deriveMultiEdgeId(4242, 0);
+    try std.testing.expectEqual(@as(usize, 1), store.edges.count());
+    const edge = store.getEdgePtr(edge_id) orelse return error.EdgeNotFound;
+    try std.testing.expectEqual(src_id, edge.from_id);
+    try std.testing.expectEqual(dst_id, edge.to_id);
+    try std.testing.expectEqualStrings("MCL", edge.label);
+
+    // Re-apply (restart replay) must be a no-op: still exactly one edge,
+    // and the pre-existing endpoint nodes are untouched.
+    _ = try cr.applyMultiCreatePayload(allocator, &store, payload, 4242);
+    try std.testing.expectEqual(@as(usize, 1), store.edges.count());
+    try std.testing.expectEqual(@as(usize, 2), store.nodes.count());
+    try std.testing.expect(store.getNodePtr(src_id) != null);
+    try std.testing.expect(store.getNodePtr(dst_id) != null);
+}

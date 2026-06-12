@@ -180,6 +180,18 @@ pub const DEFAULT_TENANT_ID = "default";
 pub const INTERNAL_NODE_ID_PROPERTY_KEY = "__geode_internal_node_id";
 pub const INTERNAL_EDGE_ID_PROPERTY_KEY = "__geode_internal_edge_id";
 
+/// GAP-0891 (RC-2): reserved storage key used to round-trip a node/edge's
+/// `tenant_id` tag across restart. Before this, the adapter persisted only the
+/// public id and `loadOneGraphFromAdapter` rebuilt every row with
+/// `DEFAULT_TENANT_ID`, so a non-default tenant tag was silently lost on
+/// restart (native-tenant reads then saw zero rows). Persisted on node AND edge
+/// write whenever the tag is non-default; absent on read means
+/// `DEFAULT_TENANT_ID` (legacy / single-tenant back-compat, zero write
+/// amplification for the common single-tenant case). Like the internal id keys
+/// it is filtered out of user-visible properties (`isInternalPersistedPropertyKey`
+/// here + `shouldExposePropertyKey` in graph_storage_adapter.zig).
+pub const INTERNAL_TENANT_ID_PROPERTY_KEY = "__geode_tenant_id";
+
 pub const Node = struct {
     id: u64,
     labels: [][]const u8,
@@ -240,7 +252,8 @@ pub const PathFilter = struct {
 
 fn isInternalPersistedPropertyKey(key: []const u8) bool {
     return std.mem.eql(u8, key, INTERNAL_NODE_ID_PROPERTY_KEY) or
-        std.mem.eql(u8, key, INTERNAL_EDGE_ID_PROPERTY_KEY);
+        std.mem.eql(u8, key, INTERNAL_EDGE_ID_PROPERTY_KEY) or
+        std.mem.eql(u8, key, INTERNAL_TENANT_ID_PROPERTY_KEY);
 }
 
 /// Name of the internal HMAC-chained security graph (auth users/roles/
@@ -1260,6 +1273,21 @@ pub const GraphStore = struct {
         );
     }
 
+    /// GAP-0891 (RC-2): persist a node's tenant tag so it survives restart.
+    /// No-op for `DEFAULT_TENANT_ID` (absent-on-read means default — keeps the
+    /// single-tenant common case free of any extra write). Mirrors
+    /// `persistNodePublicId`; the key is filtered from user-visible properties.
+    fn persistNodeTenantId(vt: AdapterVTable, graph_name: []const u8, slot_id: u64, tenant: []const u8) !void {
+        if (std.mem.eql(u8, tenant, DEFAULT_TENANT_ID)) return;
+        try vt.setNodePropertyFn(
+            vt.ctx,
+            graph_name,
+            slot_id,
+            INTERNAL_TENANT_ID_PROPERTY_KEY,
+            .{ .String = tenant },
+        );
+    }
+
     fn persistEdgePublicId(
         vt: AdapterVTable,
         graph_name: []const u8,
@@ -1278,6 +1306,31 @@ pub const GraphStore = struct {
             edge_slot,
             INTERNAL_EDGE_ID_PROPERTY_KEY,
             .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+        );
+    }
+
+    /// GAP-0891 (RC-2): edge analog of `persistNodeTenantId`. No-op for
+    /// `DEFAULT_TENANT_ID`; absent-on-read means default. When the adapter has
+    /// no edge-property setter the tag simply is not persisted (the
+    /// endpoint-derived edge-visibility bridge still recovers visibility).
+    fn persistEdgeTenantId(
+        vt: AdapterVTable,
+        graph_name: []const u8,
+        from_slot: u64,
+        to_slot: u64,
+        edge_slot: u64,
+        tenant: []const u8,
+    ) !void {
+        if (std.mem.eql(u8, tenant, DEFAULT_TENANT_ID)) return;
+        const set_edge_property = vt.setEdgePropertyFn orelse return error.Unsupported;
+        try set_edge_property(
+            vt.ctx,
+            graph_name,
+            from_slot,
+            to_slot,
+            edge_slot,
+            INTERNAL_TENANT_ID_PROPERTY_KEY,
+            .{ .String = tenant },
         );
     }
 
@@ -1700,8 +1753,31 @@ pub const GraphStore = struct {
     // tenant_id instead of always using DEFAULT_TENANT_ID.
     // CANARY: REQ=REQ-MULTI-TENANT-006; FEATURE="PerTenantIsolation"; ASPECT=NodeCreateAutoTenant; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-05
     pub fn createNodeWithGraph(self: *GraphStore, labels: []const []const u8, graph_name: []const u8) !u64 {
-        const tenant = fle_integration.getCurrentTenantId();
+        // GAP-0891 (RC-1 step 3): prefer the active ExecutionContext's tenant
+        // over the per-thread map, so the EXECUTION CONTEXT — not the OS thread
+        // — is authoritative. The per-thread map (and its "default" fallback)
+        // is reached only for genuinely contextless callers.
+        const tenant = fle_integration.tenantPreferringActiveContext();
         return self.createNodeWithGraphAndTenant(labels, graph_name, tenant);
+    }
+
+    // GAP-0891 (RC-1 seam): bulk / group-commit writes execute on shard-worker
+    // threads that never call `fle_integration.setCurrentTenantId` and carry no
+    // active ExecutionContext, so the no-tenant `createNodeWithGraph` above
+    // resolves to "default" and would mis-tag every bulk-written node for a
+    // non-default request tenant. The real fix captures the request tenant on
+    // the HANDLER thread at submit time (`group_commit.ShardedCoordinator.submit`),
+    // stores it on the `group_commit.ApplyOp`, and threads it through the
+    // `graph_storage_adapter` bulk helpers down to this seam. Here we honor that
+    // captured tenant verbatim (no thread/context resolution — the worker thread
+    // has neither).
+    pub fn createNodeForRequestTenant(
+        self: *GraphStore,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        request_tenant: []const u8,
+    ) !u64 {
+        return self.createNodeWithGraphAndTenant(labels, graph_name, request_tenant);
     }
 
     /// Phase 2 of the graph-sharding plan: pre-allocate a node id
@@ -1736,7 +1812,8 @@ pub const GraphStore = struct {
         labels: []const []const u8,
         graph_name: []const u8,
     ) !void {
-        const tenant = fle_integration.getCurrentTenantId();
+        // GAP-0891 (RC-1 step 3): context-preferring tenant resolution.
+        const tenant = fle_integration.tenantPreferringActiveContext();
         return self.createNodeWithReservedIdGraphAndTenant(reserved_id, labels, graph_name, tenant);
     }
 
@@ -1762,6 +1839,11 @@ pub const GraphStore = struct {
 
         if (adapter_node) |persisted_node| {
             persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, reserved_id) catch |err| {
+                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
+                return err;
+            };
+            // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
+            persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant) catch |err| {
                 persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
                 return err;
             };
@@ -1801,7 +1883,8 @@ pub const GraphStore = struct {
         labels: []const []const u8,
         graph_name: []const u8,
     ) !void {
-        const tenant = fle_integration.getCurrentTenantId();
+        // GAP-0891 (RC-1 step 3): context-preferring tenant resolution.
+        const tenant = fle_integration.tenantPreferringActiveContext();
         return self.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, tenant);
     }
 
@@ -1880,6 +1963,11 @@ pub const GraphStore = struct {
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_node) |persisted_node| {
             persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, id) catch |err| {
+                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
+                return err;
+            };
+            // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
+            persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant) catch |err| {
                 persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
                 return err;
             };
@@ -1979,7 +2067,8 @@ pub const GraphStore = struct {
     ) ![]u64 {
         if (n == 0) return try out_allocator.alloc(u64, 0);
 
-        const tenant = fle_integration.getCurrentTenantId();
+        // GAP-0891 (RC-1 step 3): context-preferring tenant resolution.
+        const tenant = fle_integration.tenantPreferringActiveContext();
 
         // --- Adapter path: one mutex acquisition for all N slots. ---
         var adapter_slot_ids: ?[]u64 = null;
@@ -2053,6 +2142,11 @@ pub const GraphStore = struct {
                         // batch — their public IDs are emitted but the
                         // caller never saw the return value (errdefer on
                         // public_ids above drops it).
+                        if (global_vtable) |v| v.deleteNodeFn(v.ctx, graph_name, slots[i]) catch {};
+                        return err;
+                    };
+                    // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
+                    persistNodeTenantId(vt, graph_name, slots[i], tenant) catch |err| {
                         if (global_vtable) |v| v.deleteNodeFn(v.ctx, graph_name, slots[i]) catch {};
                         return err;
                     };
@@ -2277,6 +2371,14 @@ pub const GraphStore = struct {
         try self.ensureGraph(graph_name);
         if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
 
+        // GAP-0891 (RC-3): honor the active tenant instead of hardcoding
+        // DEFAULT_TENANT_ID. createNodeWithId is used by replication / WAL
+        // replay / reload entry points; those run inside the request's
+        // ExecutionContext (or a contextless internal caller, which resolves to
+        // "default"). The recovered tenant must be used for BOTH the in-memory
+        // tag and the PERF-C counter bucket so introspection stays consistent.
+        const tenant = fle_integration.tenantPreferringActiveContext();
+
         const adapter_node: ?struct {
             vt: AdapterVTable,
             slot_id: u64,
@@ -2293,6 +2395,11 @@ pub const GraphStore = struct {
                 persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
                 return err;
             };
+            // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
+            persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant) catch |err| {
+                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertNodeWithSlot(@as(u128, node_id), persisted_node.slot_id);
         }
@@ -2303,7 +2410,7 @@ pub const GraphStore = struct {
         }
 
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
 
         const node = Node{
             .id = node_id,
@@ -2320,12 +2427,10 @@ pub const GraphStore = struct {
         }
         // PERF-B (issue #811): per-graph node-id index.
         try self.addNodeToGraphIndex(graph_name, node_id);
-        // PERF-C (issue #814): tenant-keyed label counters.
-        // This path always tags with DEFAULT_TENANT_ID (see above) so the
-        // bump targets that bucket; a future change that lets the caller
-        // supply a tenant should pass it through here too.
+        // PERF-C (issue #814): tenant-keyed label counters. GAP-0891 (RC-3):
+        // bump the SAME tenant bucket the node is tagged with.
         for (labels) |label| {
-            try self.bumpLabelCount(DEFAULT_TENANT_ID, label);
+            try self.bumpLabelCount(tenant, label);
         }
 
         if (node_id >= self.next_node_id) {
@@ -3743,6 +3848,33 @@ pub const GraphStore = struct {
         return count;
     }
 
+    // GAP-0891 (defense-in-depth): edge visibility for a tenant-filtered edge
+    // read is derivable from ENDPOINT visibility — an edge is visible to a
+    // tenant when its own tag matches OR BOTH of its endpoint nodes pass that
+    // tenant's filter. This matches the GPS path and tolerates legacy edges
+    // that were mis-tagged "default" (the pre-fix worker bug) while their
+    // endpoints carry the correct tenant.
+    //
+    // SECURITY (invariant — must hold): this NEVER leaks a genuine
+    // "default"-tagged edge between "default"-tagged nodes to a non-default
+    // reader. If `edge.tenant_id != tid` and either endpoint also fails the
+    // exact-tenant filter, the edge stays hidden (fail-closed). Bridging only
+    // fires when both endpoints are already visible to the reader — i.e. the
+    // reader can already see both nodes, so revealing the connecting edge leaks
+    // nothing new.
+    //
+    // This store-level check is EXACT-tenant only (it has no tenant-hierarchy
+    // manager — that lives on the execution engine). The match loop wraps this
+    // semantics with `passesTenantFilter`, which is hierarchy-aware; see
+    // `match_operations.edgeVisibleForTenantHierarchy`.
+    pub fn edgeVisibleForTenant(self: *const GraphStore, edge: Edge, filter_tenant: ?[]const u8) bool {
+        const tid = filter_tenant orelse return true;
+        if (std.mem.eql(u8, edge.tenant_id, tid)) return true;
+        const from = self.nodes.get(edge.from_id) orelse return false;
+        const to = self.nodes.get(edge.to_id) orelse return false;
+        return std.mem.eql(u8, from.tenant_id, tid) and std.mem.eql(u8, to.tenant_id, tid);
+    }
+
     // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelIndexCardinality; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
     // GAP-0811: Label-scoped O(1) cardinality for the count fast-path.
     //
@@ -4292,8 +4424,24 @@ pub const GraphStore = struct {
     // tenant_id instead of always using DEFAULT_TENANT_ID.
     // CANARY: REQ=REQ-MULTI-TENANT-007; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreateAutoTenant; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-05
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
-        const tenant = fle_integration.getCurrentTenantId();
+        // GAP-0891 (RC-1 step 3): prefer the active ExecutionContext's tenant
+        // over the per-thread map (see createNodeWithGraph).
+        const tenant = fle_integration.tenantPreferringActiveContext();
         return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, tenant);
+    }
+
+    // GAP-0891 (RC-1 seam). The edge analog of `createNodeForRequestTenant`:
+    // the worker-side bulk/group-commit edge path calls this with the request
+    // tenant captured on the handler thread at submit time and honored verbatim.
+    pub fn createEdgeForRequestTenant(
+        self: *GraphStore,
+        from_id: u64,
+        to_id: u64,
+        edge_type: []const u8,
+        graph_name: []const u8,
+        request_tenant: []const u8,
+    ) !u64 {
+        return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, request_tenant);
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
@@ -4374,6 +4522,24 @@ pub const GraphStore = struct {
                 ) catch {};
                 return err;
             };
+            // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
+            persistEdgeTenantId(
+                persisted_edge.vt,
+                graph_name,
+                persisted_edge.from_slot,
+                persisted_edge.to_slot,
+                persisted_edge.edge_slot,
+                tenant,
+            ) catch |err| {
+                persisted_edge.vt.deleteEdgeFn(
+                    persisted_edge.vt.ctx,
+                    graph_name,
+                    persisted_edge.from_slot,
+                    persisted_edge.to_slot,
+                    persisted_edge.edge_slot,
+                ) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertEdgeWithSlot(@as(u128, id), persisted_edge.edge_slot);
         }
@@ -4443,6 +4609,11 @@ pub const GraphStore = struct {
         try self.ensureGraph(graph_name);
         if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
 
+        // GAP-0891 (RC-3): honor the active tenant instead of hardcoding
+        // DEFAULT_TENANT_ID, and keep the PERF-C edge-type counter on the same
+        // bucket as the tag (see createNodeWithIdInternal).
+        const tenant = fle_integration.tenantPreferringActiveContext();
+
         if (adapter_edge) |persisted_edge| {
             persistEdgePublicId(
                 persisted_edge.vt,
@@ -4461,13 +4632,31 @@ pub const GraphStore = struct {
                 ) catch {};
                 return err;
             };
+            // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
+            persistEdgeTenantId(
+                persisted_edge.vt,
+                graph_name,
+                persisted_edge.from_slot,
+                persisted_edge.to_slot,
+                persisted_edge.edge_slot,
+                tenant,
+            ) catch |err| {
+                persisted_edge.vt.deleteEdgeFn(
+                    persisted_edge.vt.ctx,
+                    graph_name,
+                    persisted_edge.from_slot,
+                    persisted_edge.to_slot,
+                    persisted_edge.edge_slot,
+                ) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertEdgeWithSlot(@as(u128, edge_id), persisted_edge.edge_slot);
         }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
 
         const edge = Edge{
             .id = edge_id,
@@ -4483,9 +4672,9 @@ pub const GraphStore = struct {
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
         try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
-        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
-        // This path tags with DEFAULT_TENANT_ID — see tenant_id_copy above.
-        try self.bumpEdgeTypeCount(DEFAULT_TENANT_ID, edge_type);
+        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP
+        // introspection. GAP-0891 (RC-3): bump the SAME bucket as the tag.
+        try self.bumpEdgeTypeCount(tenant, edge_type);
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -6072,7 +6261,22 @@ pub const GraphStore = struct {
                 const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                // GAP-0891 (RC-2): recover the persisted tenant tag. Absent
+                // (legacy / single-tenant data, or a default-tagged row we
+                // intentionally never persisted) -> DEFAULT_TENANT_ID. A corrupt
+                // tenant property is non-fatal: fall back to default rather than
+                // quarantine the node.
+                const tenant_id_copy = blk_tenant: {
+                    const maybe_t = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                    if (maybe_t) |stored_prop| {
+                        defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                        switch (stored_prop) {
+                            .string => |text| break :blk_tenant try self.allocator.dupe(u8, text),
+                            else => {},
+                        }
+                    }
+                    break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                };
 
                 var node = Node{
                     .id = node_uuid,
@@ -6184,7 +6388,20 @@ pub const GraphStore = struct {
                     const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
                     const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                     const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                    const edge_tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                    // GAP-0891 (RC-2): recover the persisted edge tenant tag
+                    // (absent / corrupt -> DEFAULT_TENANT_ID). Mirrors the node
+                    // path and the edge-id read above (node slot + edge slot).
+                    const edge_tenant_id_copy = blk_edge_tenant: {
+                        const maybe_t = adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                        if (maybe_t) |stored_prop| {
+                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                            switch (stored_prop) {
+                                .string => |text| break :blk_edge_tenant try self.allocator.dupe(u8, text),
+                                else => {},
+                            }
+                        }
+                        break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                    };
 
                     var edge = Edge{
                         .id = edge_uuid,

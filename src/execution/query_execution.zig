@@ -1685,6 +1685,20 @@ pub fn executeLegacyQueryWithResolvedParams(
     // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
     if (q.match.chains.len > 0 and q.create_pattern != null) {
         const create_graph = if (context.session_state) |session| session.graph else null;
+        // Cluster write routing for MATCH…CREATE (edge attach between matched
+        // nodes). At HEAD this reached createEdgeWithGraph with NO gate on every
+        // node → permanent silent divergence (2026-06-04 bug doc). Follower →
+        // error.ClusterNotLeader; leader resolves endpoints to stable ids and
+        // replicates a zero-node GNC2; non-replicable shapes fail closed; the
+        // ungated DELETE/REMOVE sub-paths of executeMatchCreateQuery are
+        // unreachable in cluster mode (the slice rejects those clauses).
+        // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=DispatchRouteMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+        {
+            const crud = @import("crud_operations.zig");
+            if (try crud.executeClusterMatchCreateIfNeeded(allocator, q, create_graph, context)) |cluster_result| {
+                return cluster_result;
+            }
+        }
         return executeMatchCreateQuery(allocator, q, param_names.items, param_values.items, create_graph);
     }
 

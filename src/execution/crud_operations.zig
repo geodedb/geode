@@ -793,14 +793,68 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
 // Result struct for tracking created entities
 const CreateBatchResult = struct {
+    // Sum of nodes + relationships (kept for compatibility; prefer the
+    // per-kind counts below — summing them mislabeled relationships as
+    // nodes in the MATCH…CREATE summary row).
     created_count: i64,
+    created_nodes_count: i64,
+    created_relationships_count: i64,
     created_nodes: std.StringHashMap(u64),
     created_relationships: std.StringHashMap(Value),
 };
 
+fn isMatchVar(match_var_names: []const []const u8, name: []const u8) bool {
+    for (match_var_names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+// Apply a hop endpoint NodePattern's inline props to a newly created node.
+// Mirrors `executeCreate`'s hop path (endpoint-prop application after node
+// resolution) using the same Env/eval machinery as the relationship-props
+// block in `executeCreateForBatchWithTracking` — this batch path carries no
+// query parameters, so the Env is empty.
+fn applyEndpointProps(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    node_pattern: ast.NodePattern,
+    node_id: u64,
+) !void {
+    const props = node_pattern.props orelse return;
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+    for (props) |prop| {
+        const value = try eval.evalExpr(allocator, prop.value.*, env);
+        try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
+    }
+}
+
+// True when a hop endpoint is a MATCH variable that failed to bind for this
+// row (the GAP-0336 conservative-skip rule). Resolved for BOTH endpoints
+// BEFORE either node is created so a skipped hop never leaves an orphan
+// newly-created endpoint behind (e.g. `MATCH (a) CREATE (new:X)-[:R]->(a)`
+// with `a` absent from the row's bindings must not create `new`).
+fn hopEndpointSkips(
+    endpoint: ast.NodePattern,
+    created_nodes: *const std.StringHashMap(u64),
+    matched_bindings: *const std.StringHashMap(u64),
+    match_var_names: []const []const u8,
+) bool {
+    const var_name = endpoint.name orelse return false;
+    if (created_nodes.contains(var_name)) return false;
+    return matched_bindings.count() > 0 and isMatchVar(match_var_names, var_name);
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-017; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatchWithTracking; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-// Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation
-pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), current_graph: ?[]const u8) !CreateBatchResult {
+// Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation.
+//
+// `match_var_names` is the set of node-variable names that appear in the
+// query's MATCH pattern. A hop endpoint whose name is a MATCH variable but is
+// absent from `matched_bindings` failed to bind for this row, so the hop is
+// conservatively skipped (the GAP-0336 anonymous-node footgun). A name that is
+// NOT a MATCH variable is a NEW variable introduced by the CREATE pattern
+// (e.g. `MATCH (a) CREATE (a)-[:R]->(new:Label)`) and MUST be created.
+pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), match_var_names: []const []const u8, current_graph: ?[]const u8) !CreateBatchResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
     var created_relationships_count: i64 = 0;
@@ -884,42 +938,52 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
         // Handle relationship creation
         for (chain.hops) |hop| {
+            // Resolve BOTH endpoints' skip-status BEFORE creating either node:
+            // if one endpoint is a MATCH variable that failed to bind for this
+            // row, the whole hop is skipped and no orphan endpoint node may be
+            // created (or counted) for the other side.
+            if (hopEndpointSkips(hop.left, &created_nodes, &matched_bindings, match_var_names) or
+                hopEndpointSkips(hop.right, &created_nodes, &matched_bindings, match_var_names))
+            {
+                continue;
+            }
+
             // For batch CREATE from MATCH, nodes must already exist in bindings
             const left_id = if (hop.left.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
-                } else if (matched_bindings.count() > 0) {
-                    continue; // Skip if node not found in batch mode
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.left.labels);
+                    try applyEndpointProps(allocator, store, hop.left, new_id);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
+                try applyEndpointProps(allocator, store, hop.left, new_id);
                 break :blk new_id;
             };
 
             const right_id = if (hop.right.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
-                } else if (matched_bindings.count() > 0) {
-                    continue; // Skip if node not found in batch mode
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.right.labels);
+                    try applyEndpointProps(allocator, store, hop.right, new_id);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
+                try applyEndpointProps(allocator, store, hop.right, new_id);
                 break :blk new_id;
             };
 
@@ -962,6 +1026,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     if (batch_stmt_txn_open) try batch_stmt_txn.commit();
     return CreateBatchResult{
         .created_count = created_nodes_count + created_relationships_count,
+        .created_nodes_count = created_nodes_count,
+        .created_relationships_count = created_relationships_count,
         .created_nodes = created_nodes,
         .created_relationships = created_relationships,
     };
@@ -3653,6 +3719,249 @@ pub fn executeClusterMatchUpdateIfNeeded(
     switch (try clusterWriteRole()) {
         .standalone => return null,
         .leader => return try clusterReplicateMatchSet(allocator, q, current_graph, context),
+    }
+}
+
+/// Empty (no columns / no rows) ExecutionResult — the success shape for a
+/// replicated or no-op cluster write. Allocated fresh per call so each early
+/// exit owns its result independently; fail-closed error paths never construct
+/// one (nothing to leak).
+fn emptyExecutionResult(allocator: std.mem.Allocator) !ExecutionResult {
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+/// Replicate an eligible `MATCH (a:L {p}),(b:M {q}) CREATE (a)-[:R {props}]->(b)`
+/// through Raft as a GNC2 multi-create with ZERO new nodes and `absolute_id`
+/// endpoints. Called ONLY when this node is the cluster leader. The create is
+/// proposed to the Raft log (never written locally) and applied
+/// deterministically on every node.
+///
+/// THE SILENT-DIVERGENCE FIX (2026-06-04 bug doc §MATCH…CREATE): at HEAD this
+/// shape reached the local edge-create path with no clusterWriteRole() gate on
+/// EVERY node — leader-local and follower-local edges, never proposed through
+/// Raft. Here the LEADER resolves each MATCH variable to exactly ONE stable
+/// node id (tenant-honored, GAP-0840) and ships explicit endpoint ids;
+/// followers never re-MATCH.
+///
+/// Scope (`error.ClusterWriteNotReplicable` for anything else, fail-closed):
+///   * every MATCH chain: head-only (no hops), named variable,
+///   * each variable resolves to EXACTLY one node (0 → no-op; >1 → fail closed),
+///   * CREATE endpoints are pure var refs (no labels/props on endpoint patterns),
+///   * no RETURN / WITH / FILTER / SET / REMOVE / DELETE attached,
+///   * scalar edge props only; ≤ MAX_MULTI_EDGES edges; no variable-length hops.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=LeaderProposeMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+fn clusterReplicateMatchCreate(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+) !ExecutionResult {
+    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+
+    // Attached clauses whose semantics this slice does not model → fail closed.
+    if (q.ret.items.len > 0) return error.ClusterWriteNotReplicable;
+    if (q.with_clause != null or q.filter_clause != null) return error.ClusterWriteNotReplicable;
+    if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) return error.ClusterWriteNotReplicable;
+    if (q.delete_items.len > 0) return error.ClusterWriteNotReplicable;
+    // A MATCH…CREATE without a CREATE pattern is malformed for this slice —
+    // fail closed up front (NOT after MATCH resolution, where a zero-match
+    // chain would silently no-op instead).
+    const create_pattern = q.create_pattern orelse return error.ClusterWriteNotReplicable;
+
+    const read_store = graph_store.getWritableGlobalStore(allocator);
+    const filter_graph = current_graph orelse "default";
+    const filter_tenant = try tenantFilterFromContext(context);
+
+    // Resolve every MATCH variable to exactly one stable node id (tenant-honored).
+    var var_names = std.ArrayList([]const u8).empty;
+    defer var_names.deinit(allocator);
+    var var_nodes = std.ArrayList(Value).empty; // .Node values for the WHERE/prop Env
+    defer var_nodes.deinit(allocator);
+    var var_ids = std.StringHashMap(u64).init(allocator);
+    defer var_ids.deinit();
+
+    for (q.match.chains) |chain| {
+        if (chain.hops.len != 0) return error.ClusterWriteNotReplicable;
+        const node_pattern = chain.head orelse return error.ClusterWriteNotReplicable;
+        const match_var = node_pattern.name orelse return error.ClusterWriteNotReplicable;
+
+        const evaluated_props = evaluatePatternProps(allocator, node_pattern.props, context) catch
+            return error.ClusterWriteNotReplicable;
+        defer freeEvaluatedPatternProps(allocator, evaluated_props);
+
+        const candidate_ids = try collectCandidateNodeIds(
+            allocator,
+            read_store,
+            filter_graph,
+            filter_tenant,
+            node_pattern.labels,
+            evaluated_props,
+        );
+        defer allocator.free(candidate_ids);
+
+        var resolved: ?u64 = null;
+        for (candidate_ids) |node_id| {
+            const node = read_store.nodes.getPtr(node_id) orelse continue;
+            if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_props)) continue;
+            // Ambiguous (>1 match) → a Cartesian-product CREATE is out of this
+            // slice; fail closed BEFORE touching Raft.
+            if (resolved != null) return error.ClusterWriteNotReplicable;
+            resolved = node_id;
+        }
+        const rid = resolved orelse {
+            // Nothing matched → semantically a no-op; short-circuit WITHOUT proposing.
+            return try emptyExecutionResult(allocator);
+        };
+        // Duplicate MATCH variable names would make the Env lookup (first
+        // binding wins) disagree with endpoint resolution (last put wins) —
+        // out of this slice, fail closed.
+        if (var_ids.contains(match_var)) return error.ClusterWriteNotReplicable;
+        try var_names.append(allocator, match_var);
+        try var_nodes.append(allocator, Value{ .Node = read_store.nodes.getPtr(rid).? });
+        try var_ids.put(match_var, rid);
+    }
+
+    // Bind every matched node so WHERE / edge-prop expressions evaluate on THIS
+    // leader's concrete values — followers never re-evaluate.
+    const env = Env{
+        .allocator = allocator,
+        .names = var_names.items,
+        .values = var_nodes.items,
+        .param_names = context.query_param_names,
+        .param_values = context.query_param_values,
+    };
+
+    if (q.where_clause) |where_expr| {
+        const where_result = eval.evalExpr(allocator, where_expr, env) catch
+            return error.ClusterWriteNotReplicable;
+        const keep = switch (where_result) {
+            .Bool => |b| b,
+            else => false,
+        };
+        if (!keep) return try emptyExecutionResult(allocator);
+    }
+
+    // Build edge specs from the CREATE pattern: endpoints must be pure refs to
+    // matched vars (no labels, no props) → `.absolute_id`. Each EdgeSpec owns
+    // one heap props slice off `allocator` (not assumed to be an arena); free
+    // them on every exit path. Prop keys/string values are borrowed (AST- or
+    // eval-owned), so only the OUTER slices are freed — same discipline as
+    // clusterReplicateMatchSet.
+    var edge_specs = std.ArrayList(cluster_replication.EdgeSpec).empty;
+    defer {
+        for (edge_specs.items) |es| if (es.props.len > 0) allocator.free(es.props);
+        edge_specs.deinit(allocator);
+    }
+
+    for (create_pattern.chains) |cchain| {
+        // A bare node CREATE after MATCH is out of this slice — fail closed.
+        if (cchain.hops.len == 0) return error.ClusterWriteNotReplicable;
+        for (cchain.hops) |hop| {
+            // Variable-length / quantified hops are not replicable in this slice.
+            if (hop.rel.min_len != null or hop.rel.max_len != null)
+                return error.ClusterWriteNotReplicable;
+
+            const EndpointOf = struct {
+                fn run(np: ast.NodePattern, ids: *const std.StringHashMap(u64)) error{ClusterWriteNotReplicable}!u64 {
+                    const nm = np.name orelse return error.ClusterWriteNotReplicable;
+                    if (np.labels.len != 0) return error.ClusterWriteNotReplicable;
+                    if (np.props != null and np.props.?.len != 0) return error.ClusterWriteNotReplicable;
+                    return ids.get(nm) orelse error.ClusterWriteNotReplicable;
+                }
+            };
+            const left_id = try EndpointOf.run(hop.left, &var_ids);
+            const right_id = try EndpointOf.run(hop.right, &var_ids);
+
+            // Direction: store edges are directed left->right. `.left` reverses
+            // the endpoints; `.undirected` is stored left->right (matching treats
+            // it as a directionless adjacency). Same as buildEdgeCreateSpecs.
+            const from_id = if (hop.rel.dir == .left) right_id else left_id;
+            const to_id = if (hop.rel.dir == .left) left_id else right_id;
+
+            // Bounds: refuse to propose a payload larger than the GNC2 cap.
+            // Checked BEFORE constructing/appending the spec so every exit
+            // path leaves exactly one owner of the props slice (a post-append
+            // check would double-free: the function-level defer frees the
+            // appended es.props while the loop-body errdefer was still live).
+            if (edge_specs.items.len == cluster_replication.MAX_MULTI_EDGES)
+                return error.ClusterWriteNotReplicable;
+
+            // Scalar edge props, evaluated on the leader (matched vars bound).
+            var eprops: []cluster_replication.Prop = &.{};
+            if (hop.rel.props) |plist| {
+                const out = try allocator.alloc(cluster_replication.Prop, plist.len);
+                errdefer allocator.free(out);
+                for (plist, 0..) |p, i| {
+                    const val = eval.evalExpr(allocator, p.value.*, env) catch
+                        return error.ClusterWriteNotReplicable;
+                    const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                    out[i] = .{ .key = p.key, .value = pv };
+                }
+                eprops = out;
+            }
+            errdefer if (eprops.len > 0) allocator.free(eprops);
+
+            const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
+            try edge_specs.append(allocator, .{
+                .from = .{ .absolute_id = from_id },
+                .to = .{ .absolute_id = to_id },
+                .edge_type = rel_type,
+                .props = eprops,
+            });
+        }
+    }
+    if (edge_specs.items.len == 0) return error.ClusterWriteNotReplicable;
+
+    const payload = cluster_replication.serializeMultiCreate(
+        allocator,
+        filter_graph,
+        &.{},
+        edge_specs.items,
+    ) catch |err| switch (err) {
+        cluster_replication.CodecError.UnsupportedPropertyType,
+        cluster_replication.CodecError.CorruptPayload,
+        => return error.ClusterWriteNotReplicable,
+        else => return err,
+    };
+    defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
+
+    const cmd = raft_consensus.Command{ .graph_mutation = .{
+        .graph = filter_graph,
+        .mutation_type = .create,
+        .data = payload,
+        .txn_id = null,
+    } };
+    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
+        // Lost leadership between the role check and the propose — fail closed.
+        error.NotLeader => return error.ClusterNotLeader,
+        else => return err,
+    };
+    // Block until the entry is applied locally (apply happens on quorum commit).
+    try coord.waitForApplied(idx, 5000);
+
+    return try emptyExecutionResult(allocator);
+}
+
+/// Cluster write routing for a `MATCH … CREATE …` query. Returns `null` in
+/// standalone (no coordinator) mode so the dispatcher takes the unchanged local
+/// MATCH…CREATE path. On the leader it replicates the create through Raft (or
+/// fails closed). On a follower it rejects the write (error.ClusterNotLeader —
+/// clients retry the leader). THIS CLOSES THE 2026-06-04 SILENT-DIVERGENCE
+/// HOLE: MATCH…CREATE edge writes were previously never cluster-gated.
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=ExecutorRouteMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+pub fn executeClusterMatchCreateIfNeeded(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+) !?ExecutionResult {
+    switch (try clusterWriteRole()) {
+        .standalone => return null,
+        .leader => return try clusterReplicateMatchCreate(allocator, q, current_graph, context),
     }
 }
 

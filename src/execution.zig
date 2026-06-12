@@ -55,7 +55,9 @@ const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
-const fts_index_ops = @import("execution/fts_index_ops.zig");
+// pub: server startup + apply-symmetry tests reach registerFtsApplyHook()
+// through geode.execution.fts_index_ops.
+pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
@@ -1428,6 +1430,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeProfile(allocator, prof, context);
         },
         .CreateIndex => |ci| {
+            // Cluster fail-closed: index DDL mutates the per-node catalog (and,
+            // for fulltext, on-disk fts-storage engines) with no Raft slice —
+            // an ungated CREATE INDEX exists on ONE node and silently diverges.
+            // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateIndexDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+            try cluster_mod.gateUnreplicatedWrite();
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -1537,6 +1544,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateConstraint => |cc| {
+            // Cluster fail-closed: constraint DDL mutates the per-node catalog
+            // with no Raft slice — an ungated CREATE CONSTRAINT enforces on ONE
+            // node only and silently diverges.
+            // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateConstraintDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+            try cluster_mod.gateUnreplicatedWrite();
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -1602,6 +1614,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropIndex => |di| {
+            // Cluster fail-closed: see .CreateIndex (GateIndexDDL).
+            try cluster_mod.gateUnreplicatedWrite();
             const cat = context.catalog;
             const index_name = di.name;
 
@@ -1656,6 +1670,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropConstraint => |dc| {
+            // Cluster fail-closed: see .CreateConstraint (GateConstraintDDL).
+            // (Currently a stub no-op, but the surface claims to mutate — keep
+            // the fail-closed contract so a future real implementation stays gated.)
+            try cluster_mod.gateUnreplicatedWrite();
             // DROP CONSTRAINT implementation
             _ = dc;
             return ExecutionResult{
@@ -1712,6 +1730,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .CreateGraph => |cg| {
+            // Cluster fail-closed: explicit CREATE GRAPH has no live Raft slice
+            // (the propose path below is disabled) — an ungated DDL creates the
+            // graph on ONE node only. NOTE: the Raft data-apply path auto-creates
+            // graphs (GraphAlreadyExists catch in the GNC1/GNC2 applies), so
+            // replicated writes INTO a graph still work on followers; only the
+            // explicit DDL is refused pending a real schema-change slice.
+            // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateGraphDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+            try cluster_mod.gateUnreplicatedWrite();
             // CREATE GRAPH implementation with duplicate detection (Catalog instance)
             const graph_name = cg.name;
             const cat = context.catalog;
@@ -1783,6 +1809,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraph => |dg| {
+            // Cluster fail-closed: see .CreateGraph (GateGraphDDL) — same
+            // auto-create note applies; only the explicit DDL is refused.
+            try cluster_mod.gateUnreplicatedWrite();
             // DROP GRAPH implementation with existence check (Catalog instance)
             const graph_name = dg.name;
             const cat = context.catalog;
@@ -2062,6 +2091,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         // Persistence to __geode_security is Task 4-5.
         // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=CreatePolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
         .CreatePolicy => |cp_stmt| {
+            // Cluster fail-closed: policy DDL writes the per-node policy catalog
+            // (+ __geode_security write-through) with no Raft slice — an ungated
+            // CREATE POLICY enforces on ONE node only (security-relevant divergence).
+            // Gate fires before the catalog-initialized check so the error name
+            // is deterministic on the wire.
+            // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GatePolicyDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+            try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
@@ -2140,6 +2176,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=DropPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
         .DropPolicy => |dp_stmt| {
+            // Cluster fail-closed: see .CreatePolicy (GatePolicyDDL).
+            try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
@@ -2205,6 +2243,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
         .AlterPolicy => |ap_stmt| {
+            // Cluster fail-closed: see .CreatePolicy (GatePolicyDDL).
+            try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
