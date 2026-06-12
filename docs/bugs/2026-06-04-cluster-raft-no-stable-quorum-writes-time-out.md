@@ -1758,3 +1758,83 @@ silent-blackhole) remains unexercised; (3) reused-PVC rolling restart
 without a wipe (owed item 1) still to be retried directly.
 
 prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ⚠️ real Kubernetes (2026-06-12, `dev` = `a765c9f`) — NEW: release build breaks the health probes (deployment blocker, fixed in argo); clean-boot convergence is now FLAKY; aggressive churn still wedges all-candidate frozen-term
+
+### New deployment blocker — release-build `geode query` refuses `--insecure-tls-skip-verify` → all probes fail → pods never Ready
+
+`a765c9f` is a **release build**, and a release build's `geode query` now **refuses
+`--insecure-tls-skip-verify`**:
+
+```
+SECURITY: refusing --insecure-tls-skip-verify — TLS certificate verification cannot be
+disabled under production conditions (release build or GEODE_ENV=production). … Use
+--ca-cert <path> to trust a private CA, or set GEODE_ALLOW_INSECURE_TLS=1 …
+```
+
+The k8s **startup, liveness, and readiness probes** (`manifests/base/geode.yaml`) all
+shell out `geode query … --insecure-tls-skip-verify … "RETURN 1"`. On a release build
+every probe now exits non-zero, so **the StatefulSet pods never report Ready** even
+though the raft cluster underneath is running (geode-0 was an elected leader at a high
+term while k8s showed `0/3` Ready). This is an intended security hardening, but it is a
+**breaking change for any deployment whose health checks (or clients) use insecure
+TLS** — and it is on the **prod upgrade path**: prod's single-node 0.6.14 → any release
+build will hit the same probe failure unless the probes are migrated off
+`--insecure-tls-skip-verify` first.
+
+**Fix (geode-argo-arda, clustered component, commit `ed0852a`, committed local):**
+the clustered pods already mount the issuing CA at `/cluster-tls/ca.crt`, so the 3
+probe commands now verify against it via `--ca-cert /cluster-tls/ca.crt` (the
+build-sanctioned secure path; `GEODE_ALLOW_INSECURE_TLS=1` is the other, less-safe
+escape hatch). After this, pods go Ready. **The single-node base probes still use
+`--insecure-tls-skip-verify` and must be migrated before prod upgrades to a release
+build** (single-node has no mounted CA — it needs its own server cert exposed as a
+`--ca-cert`, or `GEODE_ALLOW_INSECURE_TLS=1`). All of my test queries also had to move
+to `--ca-cert`. (ArgoCD auto-sync was paused for qa to apply the live probe fix; it
+must be re-enabled once the argo change is pushed, else a sync reverts the probes and
+re-breaks the pods.)
+
+### Cluster behavior on `a765c9f` (clean-slate, PVCs wiped, probes fixed)
+
+- **Single leader restart: PASS** (parity with `c42853c`/`3ddb3f7`) — kill the leader →
+  reconverge to 1 leader + 2 followers, post-restart write `ok`. (Minor: a restarted
+  node showed catch-up lag — a post-restart write read back `0` on the just-rebooted
+  node for a while.)
+- **Clean-boot convergence is now FLAKY** (a reliability regression vs `c42853c`,
+  which converged deterministically on clean PVCs in prior runs). Across three fresh
+  starts on the same wiped PVCs: boot 1 converged 1+2 `term=1` and replicated
+  (`AB7L=1/1/1`); **boot 2 stranded geode-0 as a candidate at `term=1` and the
+  remaining 2/3 quorum could not commit a write** (leader query timed out, `Q23L`
+  never replicated; geode-0's frozen-term warn fired); boot 3 converged cleanly again.
+  A plain pod restart recovered the stranded boot-2 state.
+- **Aggressive churn (4 rapid leader kills): still wedges, no recovery.** All three
+  end as candidates **frozen at `term=5`** (max term reached = 5; never advances),
+  **no leader, writes fail** (`NO LEADER`, `ACH7=0/0/0`), and it does **not** self-heal
+  (watched several minutes; **transport is quiet — zero peer-connection errors** in
+  steady state). The `67d0d1cc` mechanisms fire (frozen-term warns 1/4/2 across nodes;
+  candidate-armed stall-evicts 2/11/6) — so the wedge is **visible and the recovery
+  path engages — but eviction+reconnect still does not restore vote delivery**, so the
+  pre-vote term stays frozen. Same all-candidate frozen-term family as `78bb908`, just
+  now instrumented.
+- **Recurring (unchanged): `Timeout` response on a committed write.** Even the healthy
+  converged 3/3 cluster returns a client `Timeout` on a `CREATE` that nonetheless
+  replicates `1/1/1` (`AB7L`, `HLL`); in the degraded boot-2 state the same path timed
+  out *and* failed to commit. The client-facing ack latency needs attention
+  independently — a `Timeout` is currently ambiguous (may have committed).
+
+### Net
+
+`a765c9f` adds a correct security hardening that, as a side effect, **breaks the
+existing health-probe contract** (now fixed for the cluster overlay; the single-node
+base + prod path still need the same migration). On cluster behavior it is **not an
+improvement** over `c42853c`/`3ddb3f7`: a single restart still recovers, but clean-boot
+convergence became flaky (a node can strand even at `term=1`, taking the 2/3 quorum's
+writes down with it) and aggressive churn still ends in the all-candidate frozen-term
+wedge — the recovery mechanisms are visible but ineffective at restoring vote delivery.
+The core unresolved item remains the same: **after connection churn, peer vote/heartbeat
+delivery is not reliably re-established, and the eviction/reconnect path does not fix
+it** (a leader-side per-direction liveness signal — track AppendEntries *acks*, not any
+inbound frame — plus a delivery-restoring reconnect, is still owed). prod remains
+UNTOUCHED (single-node 0.6.14).
