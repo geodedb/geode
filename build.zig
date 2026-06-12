@@ -6623,6 +6623,25 @@ pub fn build(b: *std.Build) void {
     const adapter_registry_restart_step = b.step("test-adapter-registry-restart", "Regression: NodePropertyExactIndex.loadFromFile self-deadlock on adapter reopen");
     adapter_registry_restart_step.dependOn(&run_adapter_registry_restart_tests.step);
 
+    // Edge data-integrity under churn: an idempotent GNC2 edge re-apply must NOT
+    // orphan a durable edge slot (createEdgeWithIdInternal mints the adapter slot
+    // BEFORE the in-memory dedup check), and hydration must self-heal an
+    // already-corrupted store. Intentionally NOT wired into the aggregate `test`
+    // step (no shardDep): RED until the fix lands; the fixer flips it GREEN.
+    // See docs/bugs (EdgeSlotMappingMissing under churn).
+    const edge_durability_churn_repro_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_edge_durability_churn_repro.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    edge_durability_churn_repro_test_mod.addImport("geode", root_mod);
+    edge_durability_churn_repro_test_mod.addImport("graph_storage", graph_storage_mod);
+    const edge_durability_churn_repro_tests = b.addTest(.{ .root_module = edge_durability_churn_repro_test_mod });
+    const run_edge_durability_churn_repro_tests = b.addRunArtifact(edge_durability_churn_repro_tests);
+    const edge_durability_churn_repro_step = b.step("test-edge-durability-churn-repro", "Regression: GNC2 edge re-apply orphans a durable edge slot -> EdgeSlotMappingMissing after restart (edge durability under churn)");
+    edge_durability_churn_repro_step.dependOn(&run_edge_durability_churn_repro_tests.step);
+
     // Task #34: bulk-edge ingest slowness on edges_app_role_assignment.jsonl.
     // Level 1 regression — contract tests for the future
     // `StorageAdapter.setEdgePropertiesBatch` helper.  See

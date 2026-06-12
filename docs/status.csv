@@ -793,6 +793,7 @@ REQ-DIST-CLUSTER-TLS-NOLOOPBACK,DistributedCluster,PeerTlsHandshakeDistinctIp,TE
 REQ-DIST-CLUSTER-WAIT-APPLIED,ClusterCoordinator Public Propose,WaitForApplied,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig
 REQ-DIST-CONN-001,Distributed Query Connection,ConnectionInit,EXEMPT,,,distributed,2026-06-11,src/distributed/query_transport.zig
+REQ-DIST-EDGE-DURABILITY-CHURN,DistributedCluster,EdgeReApplyIdempotency,TESTED,,,distributed,2026-06-12,tests/test_edge_durability_churn_repro.zig
 REQ-DIST-FEDERATION-MERGE-001,Distributed Federation Merge,CloneOrderKeys,TESTED,,,dist,2026-04-10,src/distributed/federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-001,Distributed Federation Merge,CloneOrderKeys,TESTED,,,dist,2026-04-06,tests/test_federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-002,Distributed Federation Merge,CloneOrderDirs,TESTED,,,dist,2026-04-10,src/distributed/federation_merge.zig
