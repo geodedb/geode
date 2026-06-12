@@ -1603,3 +1603,92 @@ validation (cluster-identity check on restore); de-swallowing repeated lib
 errors in the raft loop (rate-limited escalation).
 
 prod remains UNTOUCHED (single-node 0.6.14).
+
+---
+
+## ⚠️ PARTIAL on real Kubernetes (2026-06-12, `dev` = `3ddb3f7`, carries `67d0d1cc`) — frozen-term warn + candidate-arming both fire, but a node stranded a term behind still does NOT recover; leader-side stall detector is fooled by the stranded candidate's vote traffic
+
+`3ddb3f7` carries `67d0d1cc` (verified by behavior, below). The good news first:
+the basics and observability are solid; the gap is now a deeper, precisely-located
+one-directional recovery hole.
+
+### What PASSES (clean cluster — no regression vs `c42853c`)
+
+Clean-slate boot (PVCs wiped): converges immediately at **`term=1`** (1 leader + 2
+followers); a leader edge write replicates `CB7L=1/1/1`; a **single leader restart
+self-heals** — new leader elected, all three reconverge, post-restart write
+replicates, restart-no-dup holds; **zero** stall-evict churn.
+
+### What the `67d0d1cc` mechanisms DO deliver (both confirmed firing on real k8s)
+
+- ✅ **Frozen-term visibility works.** The `FrozenCandidateTracker` fires exactly as
+  designed: `WARN geode.cluster raft candidate frozen at term — possible
+  vote-delivery stall or divergent durable state; check peer connectivity node=2
+  term=6 frozen_for_ms=45255` … escalating to `frozen_for_ms=166108`. The
+  previously-silent wedge is now operator-visible — a real improvement.
+- ✅ **Candidate-armed stall detector fires.** The stranded candidate (geode-1) armed
+  its own detector and evicted its peer streams 16× (leader-only gating is gone).
+
+### What still FAILS — a node stranded a term behind after churn does not rejoin
+
+Repro: on the healthy clean cluster, **4 rapid successive leader kills** (kill leader
+→ wait only until it's Ready → kill the new leader, ×4). Outcome:
+
+- The cluster does **NOT** fully collapse (a real improvement over `78bb908`): a
+  stable **2/3 quorum holds** — geode-2 leader `term=7`, geode-0 follower `term=7` —
+  and writes still commit + replicate to the quorum (`STORM7=1/1` on geode-0+geode-2,
+  `post-storm write: ok`).
+- But **geode-1 is stranded as a candidate at `term=6` — a full term behind the
+  quorum — and never rejoins** (observed frozen 166 s+, iter climbing past 31 700,
+  the frozen-term warn firing the whole time). The candidate-armed eviction fires
+  repeatedly and **does not fix it.**
+
+**Root cause (precisely located): the recovery acts on the wrong direction.** The
+broken stream is **leader → geode-1** (the leader's AppendEntries/heartbeats are not
+reaching the stranded node, so geode-1 never receives the `term=7` heartbeat that
+would step it down to follower and catch it up). But:
+
+1. geode-1's *own* candidate-armed detector evicts geode-1's **outbound** streams —
+   the healthy direction — which does nothing for the broken inbound one.
+2. The **leader never evicts/reconnects its outbound stream to geode-1**, because the
+   leader's stall detector is **fooled**: geode-1, spinning as a candidate, keeps
+   sending `RequestVote`/pre-vote frames to the leader; each inbound frame stamps
+   `notePeerProgress(peer=2)` on the leader, so the leader believes its connection to
+   geode-1 is making progress and the stall budget never trips. (Confirmed: the
+   leader logged only 2 `peer stalled` for peer=2, both from the kill window, none
+   while geode-1 was wedged.)
+
+So "progress = ANY inbound decoded raft frame" is too coarse: a peer that floods
+`RequestVote` but never acknowledges the leader's `AppendEntries` looks healthy to
+the leader-side detector, masking a dead outbound heartbeat stream.
+
+### Suggested fix
+
+Make the leader-side liveness **per-direction / per-message-type**: the leader should
+track whether its outbound `AppendEntries` to a peer are being **acknowledged**
+(`AppendEntriesResponse` / matching `match_index` advance), not merely whether *any*
+inbound frame (including `RequestVote`) arrives. A peer that sends only votes and
+never an `AppendEntriesResponse` to a leader's heartbeats is a stalled *outbound*
+stream → evict + FQDN re-resolve + reconnect. Equivalently: a leader seeing a peer it
+believes should be a follower instead persistently `RequestVote`-ing at a stale term
+should force-reconnect that peer's stream. The frozen-term warn already detects the
+victim side; the leader side needs the symmetric trigger.
+
+### Secondary (recurring) — `Timeout` response on a write that actually committed
+
+Seen again here: the clean baseline `CREATE (a)-[:CB7L]->(b)` returned a client
+`Timeout` yet replicated `CB7L=1/1/1` (committed on all three). The leader commits +
+replicates but the client-facing ack exceeds the client timeout. This is not
+divergence, but it makes writes non-idempotent from the client's view — a
+retry-on-timeout would double a `CREATE`. Worth a look at the `waitForApplied` /
+client-ack path latency under cluster mode (distinct from the liveness wedge above).
+
+### Scope / caveat
+
+This needs **aggressive** churn (4 rapid kills) to induce; a single leader restart
+recovers cleanly. And owed **item 1** (rolling-restart reconvergence from genuinely
+*pre-divergent* reused PVCs, without a wipe) was not directly retried this run — the
+PVCs were clean — but this stranded-term-behind repro is the same family and shows
+the candidate-arming alone is insufficient. Owed **item 2** (genuine silent-blackhole
+recovery on a leader) likewise remains unexercised. prod remains UNTOUCHED
+(single-node 0.6.14).
