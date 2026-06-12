@@ -4589,6 +4589,20 @@ pub const GraphStore = struct {
         mark_dirty: bool,
         persist_adapter: bool,
     ) !void {
+        // Existence check BEFORE any storage-adapter slot creation, mirroring
+        // createNodeWithIdInternal. An idempotent edge re-create (a restarted
+        // Raft node replaying a committed entry whose edge id already lives in
+        // the persisted store) must return `error.EdgeAlreadyExists` WITHOUT
+        // physically minting a durable edge slot. The old order minted the
+        // adapter slot first and only then ran the dedup check, so the early
+        // return left an ORPHAN physical edge slot (no __geode_internal_edge_id,
+        // no IdMap entry) behind on every re-apply — one per churn round — which
+        // hydration could not reverse-map (-> error.EdgeSlotMappingMissing). See
+        // tests/test_edge_durability_churn_repro.zig and
+        // cluster_replication.applyMultiCreatePayload.
+        try self.ensureGraph(graph_name);
+        if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
+
         const adapter_edge: ?struct {
             vt: AdapterVTable,
             from_slot: u64,
@@ -4596,6 +4610,8 @@ pub const GraphStore = struct {
             edge_slot: u64,
         } = if (persist_adapter) blk: {
             const vt = global_vtable orelse break :blk null;
+            // Resolve endpoint slots BEFORE minting the edge slot so a missing
+            // endpoint fails closed without leaking a phantom adapter slot.
             const from_slot = try self.requireNodeSlot(graph_name, from_id);
             const to_slot = try self.requireNodeSlot(graph_name, to_id);
             break :blk .{
@@ -4605,9 +4621,6 @@ pub const GraphStore = struct {
                 .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type),
             };
         } else null;
-
-        try self.ensureGraph(graph_name);
-        if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
 
         // GAP-0891 (RC-3): honor the active tenant instead of hardcoding
         // DEFAULT_TENANT_ID, and keep the PERF-C edge-type counter on the same
@@ -6195,6 +6208,9 @@ pub const GraphStore = struct {
             var backfilled_from_legacy = false;
             var skipped_node_mappings: u64 = 0;
             var skipped_edge_mappings: u64 = 0;
+            // Orphan physical edge slots physically deleted during this load
+            // (the hydration self-heal for the pre-fix re-apply orphan bug).
+            var repaired_edge_slots: u64 = 0;
 
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
@@ -6337,6 +6353,23 @@ pub const GraphStore = struct {
                 var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
                 defer out_edges.deinit();
 
+                // Hydration self-heal: physical outgoing edge slots with no
+                // __geode_internal_edge_id and no legacy mapping are ORPHANS
+                // left behind by the pre-fix createEdgeWithIdInternal ordering
+                // bug (one per idempotent Raft re-apply). They have no IdMap
+                // entry, so the read path can never reverse-map them
+                // (-> error.EdgeSlotMappingMissing). Collect them while the
+                // adjacency iterator is live and DELETE them after the iterator
+                // is exhausted (deleting mid-iteration would invalidate the
+                // adjacency cursor). The canonical slot for any public id always
+                // carries __geode_internal_edge_id, so it never lands here — and
+                // a legitimate distinct parallel edge carries its own id and is
+                // likewise never collected. See
+                // tests/test_edge_durability_churn_repro.zig.
+                const OrphanEdgeSlot = struct { to_slot: u64, edge_slot: u64 };
+                var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
+                defer orphan_edge_slots.deinit(self.allocator);
+
                 while (try out_edges.next()) |edge_entry| {
                     // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
                     const edge_uuid = blk: {
@@ -6374,7 +6407,15 @@ pub const GraphStore = struct {
 
                         break :blk null;
                     } orelse {
+                        // Orphan physical edge slot: no persisted public id, no
+                        // legacy mapping. Queue it for durable deletion (the
+                        // self-heal) and account it as a repair rather than a
+                        // silent skip.
                         skipped_edge_mappings += 1;
+                        try orphan_edge_slots.append(self.allocator, .{
+                            .to_slot = edge_entry.neighbor,
+                            .edge_slot = edge_entry.edge_id,
+                        });
                         continue;
                     };
                     try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
@@ -6450,9 +6491,31 @@ pub const GraphStore = struct {
                         self.next_edge_id = edge_uuid + 1;
                     }
                 }
+
+                // Self-heal: now that this node's adjacency cursor is exhausted,
+                // physically delete the orphan edge slots collected above so an
+                // already-corrupted PVC converges to one durable slot per logical
+                // edge on restart. Deletion is best-effort per slot (a failure
+                // leaves the slot orphaned but unmapped — still no read-path
+                // regression, since it was already unqueryable).
+                for (orphan_edge_slots.items) |orphan| {
+                    adapter.deleteEdge(graph_name, slot_id, orphan.to_slot, orphan.edge_slot) catch |err| {
+                        log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.int("from_slot", @intCast(slot_id)),
+                            Attr.int("edge_slot", @intCast(orphan.edge_slot)),
+                            Attr.string("error", @errorName(err)),
+                        });
+                        continue;
+                    };
+                    repaired_edge_slots += 1;
+                }
             }
 
-            if (backfilled_from_legacy) {
+            // Flush the legacy backfill AND any orphan-slot repairs so the
+            // durable store reflects the self-heal on next open (idempotent
+            // re-load then sees a clean adjacency).
+            if (backfilled_from_legacy or repaired_edge_slots > 0) {
                 try adapter.checkpointAll();
             }
             self.cleanupLegacySidecarsForGraph(graph_name);
@@ -6462,6 +6525,13 @@ pub const GraphStore = struct {
                     Attr.string("graph", graph_name),
                     Attr.int("skipped_nodes", @intCast(skipped_node_mappings)),
                     Attr.int("skipped_edges", @intCast(skipped_edge_mappings)),
+                });
+            }
+
+            if (repaired_edge_slots > 0) {
+                log.warn("loadFromAdapter repaired orphan edge slots (re-apply self-heal)", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.int("repaired_edge_slots", @intCast(repaired_edge_slots)),
                 });
             }
         }
