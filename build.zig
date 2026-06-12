@@ -1617,6 +1617,27 @@ pub fn build(b: *std.Build) void {
     const raft_follower_response_eviction_step = b.step("test-raft-follower-response-eviction", "Run follower response-direction eviction reproduction tests (k8s churn RC3)");
     raft_follower_response_eviction_step.dependOn(&run_raft_follower_response_eviction_tests.step);
 
+    // k8s SUSTAINED-churn liveness, ROOT CAUSE A (RC-A): AGGREGATE inbound-pool
+    // occupancy starvation. RED reproduction tests for the pure aggregate
+    // reap/admission decision (cluster.inboundReapCountForCapacity +
+    // freshActiveConnServiceableWithin + InboundConnSnapshot + the bounded
+    // fresh-conn service budget const). The per-connection RC1 reap clock starts
+    // at WORKER ACQUISITION and runs only inside a pinned worker — so a queued
+    // zombie never reaps and aggregate occupancy stays >=4 across 3 back-to-back
+    // 4-kill churn rounds, starving the only path to raft.handleMessage and
+    // stranding the node as candidate. Until the aggregate (accept-time clock +
+    // independent sweeper) surface lands, the comptime-@hasDecl guards fail.
+    const raft_inbound_pool_occupancy_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_inbound_pool_occupancy.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_inbound_pool_occupancy_tests.root_module.addImport("geode", root_mod);
+    raft_inbound_pool_occupancy_tests.root_module.link_libc = true;
+    const run_raft_inbound_pool_occupancy_tests = b.addRunArtifact(raft_inbound_pool_occupancy_tests);
+    const raft_inbound_pool_occupancy_step = b.step("test-raft-inbound-pool-occupancy", "Run aggregate inbound-pool occupancy reap/admission reproduction tests (k8s sustained-churn RC-A)");
+    raft_inbound_pool_occupancy_step.dependOn(&run_raft_inbound_pool_occupancy_tests.step);
+
     // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
     // distributed cluster testing plan).  Brings up two real
     // ClusterCoordinators with their QUIC listeners on loopback,

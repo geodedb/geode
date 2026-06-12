@@ -37,6 +37,25 @@
 #                            a follower-directed MATCH...CREATE fails closed with
 #                            ClusterNotLeader, and the edge stays EXACTLY 1 on all
 #                            3 across an in-place restart (no re-apply duplicate).
+#   M9 sustained churn   -> 3 BACK-TO-BACK reschedule rounds with NO settle between
+#                            them (the k8s 3×4-kill churn signature). Each round
+#                            reschedules every node onto a new IP in rapid
+#                            succession, piling zombie half-open inbound conns onto
+#                            the receiver's fixed 4-worker pool faster than the
+#                            per-connection 30 s idle-reap can serialize-drain them.
+#                            ROOT CAUSE A (RC-A): the RC1 reap clock starts at
+#                            WORKER-ACQUISITION and runs only inside a pinned
+#                            worker, so a QUEUED zombie never reaps; aggregate
+#                            occupancy stays >=4 ACROSS rounds (monotonic
+#                            degradation), starving the only path to
+#                            raft.handleMessage -> a node strands as CANDIDATE at
+#                            the quorum's term for 87-180 s+. Contract: after the
+#                            3rd round, ALL THREE nodes converge (1 leader + 2
+#                            followers, the stranded node returns to follower) and
+#                            a fresh write replicates to all 3 within a generous
+#                            budget. Gated behind M9 (NOT in the default PHASES;
+#                            opt in via PHASES="... M9" or RUN_SUSTAINED_CHURN=1).
+#                            In-process analog: tests/test_raft_inbound_pool_occupancy.zig.
 #
 # Same faithful topology as netns_cluster_replication_test.sh: 3 nodes, each in
 # its own netns with a distinct routable IP on a bridge, WILDCARD cluster bind
@@ -60,6 +79,13 @@ BR=gchurnbr0
 NS_NODES="1 2 3"
 NS_ALL="1 2 3 53"
 PHASES="${PHASES:-M1 M2 M3 M4 M5 M6 M7 M8}"
+# M9 (sustained 3-round churn, RC-A) is opt-in: it is long and intentionally
+# stresses the receiver inbound-pool past the per-connection reap's serialized
+# drain rate. Append it when RUN_SUSTAINED_CHURN=1 (unless the caller already
+# named M9 explicitly in PHASES).
+if [ "${RUN_SUSTAINED_CHURN:-0}" = "1" ] && ! { case " $PHASES " in *" M9 "*) true;; *) false;; esac; }; then
+  PHASES="$PHASES M9"
+fi
 # Node IPs start at $SUBNET.1<id> (.11/.12/.13); a reschedule moves a node to
 # $SUBNET.2<id> (.21/.22/.23). DNS is $SUBNET.153, bridge gw is $SUBNET.1.
 ns_ip() { echo "$SUBNET.1$1"; }      # original pod IP for node $1
@@ -719,6 +745,74 @@ if run_phase M8; then
     fi
   fi
   echo "  M8 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
+fi
+
+# =============================================================================
+# M9: SUSTAINED churn — 3 back-to-back reschedule rounds with NO settle between
+#   them (the k8s 3×4-kill churn signature). This is the netns analog of the
+#   discrete-event repro in tests/test_raft_inbound_pool_occupancy.zig.
+#
+#   ROOT CAUSE A (RC-A), src/distributed/cluster.zig: the receiver's inbound
+#   `connection_pool` has a FIXED 4 workers. Each accepted inbound conn PINS one
+#   worker for its lifetime, busy-parking on WouldBlock. The RC1 30 s idle-reap
+#   (`shouldReapIdleInboundConnection`) runs ONLY inside the pinned worker's loop
+#   and stamps last_activity at WORKER-ACQUISITION time — so a QUEUED zombie never
+#   starts its reap clock, and there is no independent sweeper. Under rapid
+#   kill/restart churn the zombie half-open inbound conns arrive FASTER than the
+#   serialized 4-wide × 30 s-each drain, aggregate occupancy stays >=4, the
+#   backlog carries ACROSS rounds (monotonic degradation), and the node's only
+#   path to raft.handleMessage is starved 87-180 s+ → it strands as CANDIDATE at
+#   the quorum's term (the raft lib's only same-term step-down is an inbound
+#   AppendEntries it can no longer hear).
+#
+#   Contract (RED on the unfixed binary, GREEN after the aggregate accept-time
+#   reap + independent sweeper land): after the 3rd round, ALL THREE nodes
+#   converge to 1 leader / 0 candidates and a fresh write replicates to all 3
+#   within a generous budget. assert_cluster_healthy already encodes exactly that
+#   (sustained 1-leader/0-candidate window + replicated write); a node stranded
+#   candidate never accumulates the clean window → fail.
+#
+#   NOTE: like the other M phases this orphans veths and needs sudo. It is opt-in
+#   (PHASES="... M9" or RUN_SUSTAINED_CHURN=1); do NOT add it to the default set.
+# =============================================================================
+if run_phase M9; then
+  echo "== M9: SUSTAINED churn — 3 back-to-back reschedule rounds, no settle (RC-A inbound-pool starvation) =="
+  for id in $NS_NODES; do [ -n "${PID[$id]:-}" ] || start_node $id; done
+  LID=$(wait_leader 40) || fail "M9 no leader for 3-node cluster in 40s"
+  if [ -n "${LID:-}" ]; then
+    # Seed a row BEFORE the churn so we can prove replication is alive again at the
+    # end (and that the stranded node rejoined with the committed log).
+    q "$LID" 'CREATE (:M9pre {v:1})' 20 >/dev/null
+    for id in $NS_NODES; do
+      wait_cnt1 $id M9pre 40 || fail "M9 seed CREATE (:M9pre) did not replicate to node$id before churn (count=$(cnt $id M9pre))"
+    done
+
+    # 3 BACK-TO-BACK rounds. Each round reschedules every node onto a new IP in
+    # rapid succession with NO health wait between rounds — this is the key
+    # difference from M2/M3 (which reschedule ONE node then let the cluster
+    # settle). Rescheduling blackholes each node's OLD IP in its peers (see
+    # reschedule_node), so every round leaves fresh zombie half-open inbound
+    # conns on the survivors' 4-worker pools. Three rounds pile ~12 zombies on
+    # each receiver faster than the serialized per-connection drain can clear.
+    M9_ROUND=0
+    while [ "$M9_ROUND" -lt 3 ]; do
+      M9_ROUND=$((M9_ROUND + 1))
+      echo "  -- M9 churn round $M9_ROUND/3 (no settle) --"
+      for id in $NS_NODES; do
+        reschedule_node "$id"
+      done
+      # Deliberately NO wait_leader / assert here — the rounds must overlap so the
+      # inbound-pool backlog accumulates ACROSS rounds (the A→B→C signature).
+    done
+
+    # After 3 sustained rounds, the cluster MUST still recover: 1 leader / 0
+    # candidates held steady + a fresh write reaching all 3. A node stranded
+    # candidate (RC-A inbound-pool starvation) never lets this window close.
+    # Generous budgets: the recovery may legitimately take tens of seconds once
+    # the aggregate reaper frees the pool — but NOT the 87-180 s+ wedge.
+    HEALTH_WAIT=90 STABLE_SECS=8 assert_cluster_healthy M9
+  fi
+  echo "  M9 states: $(for id in 1 2 3; do echo -n "n$id=[$(laststate $id | sed 's/\[raft\] node [0-9]* //')] "; done)"
 fi
 
 echo
