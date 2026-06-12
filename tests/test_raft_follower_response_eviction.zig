@@ -167,3 +167,168 @@ test "directional: leader and candidate evict on stale proof regardless of inbou
 test "directional: PeerConnection carries a last_inbound_request_ms timestamp" {
     try std.testing.expect(@hasField(Transport.PeerConnection, "last_inbound_request_ms"));
 }
+
+// ===========================================================================
+// (D) RED reproduction tests — IDLE-CLUSTER CONNECTION CHURN (RC3 residual).
+//
+// THE BUG (residual flagged on the RC3 landing, evidence below):
+//   On a fully idle (zero-write) HEALTHY cluster the leader keeps sending EMPTY
+//   heartbeats (no log entries, constant prev_log_index / leader_commit). A
+//   follower's implicit-ack path (`noteInboundAppendEntriesAdvance`) only stamps
+//   outbound proof when prev_log_index / leader_commit ADVANCE — which never
+//   happens on an idle cluster. So a healthy quiet follower's outbound proof goes
+//   permanently stale after the base budget while the leader's heartbeats keep
+//   `last_inbound_request_ms` fresh -> `directionalEvictAllowed(.follower, true,
+//   true, true)` returns true -> the follower evicts and rebuilds its perfectly
+//   healthy outbound every `currentBudgetMs()` (capped 60s), FOREVER. Perpetual
+//   churn on every idle cluster — and churn is exactly what destabilizes this
+//   fire-and-forget transport (teardown drops in-flight acks, which can make the
+//   leader's per-direction detector fire too, amplifying).
+//
+// THE DISTINGUISHING SIGNAL:
+//   A WEDGED follower->leader response direction manifests leader-side as ack
+//   loss, so the leader RETRANSMITS entries — the follower sees repeated
+//   NON-EMPTY, NON-ADVANCING AppendEntries. A HEALTHY idle cluster sends EMPTY
+//   heartbeats (no entries, constant indices). So an empty heartbeat is "nothing
+//   pending, connection presumed fine" and MUST stamp proof; only a non-advancing
+//   retransmit WITH entries leaves the follower eviction-eligible.
+//
+// INTENDED FIX CONTRACT (what these tests pin):
+//   * `noteInboundAppendEntriesAdvance` gains a `has_entries: bool` parameter,
+//     populated at the cluster.zig decode site from `ae.entries.len > 0`.
+//   * A PURE decision `implicitAckStampsProof(advanced, has_entries)` governs the
+//     stamp: proof is stamped when (advanced) OR (!advanced AND !has_entries).
+//
+//   Behavior matrix (the 3 cases):
+//     1. advancing (entries or not)        -> STAMP (existing behavior, keep)
+//     2. non-advancing + empty (heartbeat) -> STAMP (NEW — the churn guard)
+//     3. non-advancing + has_entries       -> NO STAMP (preserves the F2/RC3 wedge
+//                                             detection: a committed-blocked write
+//                                             shows up exactly as this case)
+//
+// Accepted residual (documented in the impl comment): an idle cluster whose
+// follower outbound dies SILENTLY is indistinguishable from healthy-idle at the
+// follower until the next write turns the loss into retransmits — at which point
+// case 3 makes it eligible. Leader-side per-direction liveness (dacf4771) covers
+// detection meanwhile.
+//
+// RED MECHANISM: `@hasDecl` comptime guard on the pure function returns an error
+// until it exists; the Transport-level integration test guards on the new
+// `has_entries` parameter arity via @typeInfo and errors until the signature
+// changes.
+// ===========================================================================
+
+const Peer = raft_consensus.Peer;
+
+// Build a heap-allocated PeerConnection with the in-test QUIC stub for the
+// stamping side-effect tests, mirroring tests/test_raft_stall_detector.zig.
+const QuicClientType = @FieldType(Transport.PeerConnection, "client");
+fn makePeerConn(
+    allocator: std.mem.Allocator,
+    peer_id: u64,
+    frames_sent: u64,
+    last_progress_ms: i64,
+) !*Transport.PeerConnection {
+    const pc = try allocator.create(Transport.PeerConnection);
+    pc.* = .{
+        .allocator = allocator,
+        .client = QuicClientType.init(allocator),
+        .established = true,
+        .endpoint = try allocator.dupe(u8, "raft-peer.cluster.svc"),
+        .port = 7890,
+        .peer_id = peer_id,
+        .resolved_ip = &.{},
+        .frames_sent = std.atomic.Value(u64).init(frames_sent),
+        .last_progress_ms = std.atomic.Value(i64).init(last_progress_ms),
+    };
+    return pc;
+}
+
+// ---------------------------------------------------------------------------
+// (D.1) PURE matrix — advancing always stamps (entries present or not).
+// ---------------------------------------------------------------------------
+test "implicit ack: advancing AppendEntries always stamps proof (with or without entries)" {
+    if (comptime @hasDecl(Transport, "implicitAckStampsProof")) {
+        // case 1: advanced + has_entries -> stamp
+        try std.testing.expect(Transport.implicitAckStampsProof(true, true));
+        // case 1: advanced + empty -> stamp
+        try std.testing.expect(Transport.implicitAckStampsProof(true, false));
+    } else {
+        return error.ImplicitAckStampsProofNotImplemented;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (D.2) PURE matrix — THE CHURN GUARD: a non-advancing EMPTY heartbeat (idle
+// healthy cluster) stamps proof so a quiet follower never churns.
+// ---------------------------------------------------------------------------
+test "implicit ack: non-advancing EMPTY heartbeat stamps proof (idle churn guard)" {
+    if (comptime @hasDecl(Transport, "implicitAckStampsProof")) {
+        try std.testing.expect(Transport.implicitAckStampsProof(false, false));
+    } else {
+        return error.ImplicitAckStampsProofNotImplemented;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (D.3) PURE matrix — a non-advancing RETRANSMIT (entries present) does NOT
+// stamp, so a genuinely wedged follower stays eviction-eligible (preserves F2).
+// ---------------------------------------------------------------------------
+test "implicit ack: non-advancing RETRANSMIT (has_entries) does NOT stamp (preserves wedge detection)" {
+    if (comptime @hasDecl(Transport, "implicitAckStampsProof")) {
+        try std.testing.expect(!Transport.implicitAckStampsProof(false, true));
+    } else {
+        return error.ImplicitAckStampsProofNotImplemented;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// (D.4) INTEGRATION — `noteInboundAppendEntriesAdvance` with the new
+// `has_entries` parameter actually STAMPS `last_progress_ms` on an idle EMPTY
+// heartbeat (non-advancing), proving the wired churn guard, while a non-advancing
+// retransmit WITH entries leaves the clock stale (eviction-eligible).
+// ---------------------------------------------------------------------------
+test "implicit ack: empty heartbeat stamps last_progress_ms; retransmit-with-entries does not" {
+    // RED arity guard: until `noteInboundAppendEntriesAdvance` takes the extra
+    // `has_entries: bool`, the call below would not compile, so we gate the body
+    // on the parameter count and fail loudly when it's the old 4-arg shape.
+    const params = @typeInfo(@TypeOf(Transport.noteInboundAppendEntriesAdvance)).@"fn".params;
+    if (comptime params.len < 6) {
+        return error.NoteInboundAppendEntriesAdvanceMissingHasEntries;
+    }
+
+    const allocator = std.testing.allocator;
+    var transport = Transport.init(allocator);
+    defer transport.deinit();
+
+    const peer_id: u64 = 42;
+    // Seed the outbound connection with a STALE last_progress_ms and a non-zero
+    // last-seen index/commit so a later heartbeat at the SAME index/commit is
+    // non-advancing. The map owns the PeerConnection; transport.deinit destroys it.
+    const pc = try makePeerConn(allocator, peer_id, 12, 1_000);
+    pc.last_seen_prev_log_index.store(7, .release);
+    pc.last_seen_leader_commit.store(7, .release);
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        transport.peers_mutex.lockUncancelable(io);
+        try transport.peers.put(peer_id, pc);
+        transport.peers_mutex.unlock(io);
+    }
+
+    // Case 3: non-advancing (same 7/7) + has_entries=true (a retransmit) -> NO stamp.
+    transport.noteInboundAppendEntriesAdvance(peer_id, 7, 7, 5_000, true);
+    try std.testing.expectEqual(@as(i64, 1_000), pc.last_progress_ms.load(.acquire));
+
+    // Case 2: non-advancing (same 7/7) + has_entries=false (empty heartbeat) -> STAMP.
+    transport.noteInboundAppendEntriesAdvance(peer_id, 7, 7, 9_000, false);
+    try std.testing.expectEqual(@as(i64, 9_000), pc.last_progress_ms.load(.acquire));
+
+    // Case 1: advancing (8 > 7) -> STAMP regardless of has_entries.
+    transport.noteInboundAppendEntriesAdvance(peer_id, 8, 7, 12_000, true);
+    try std.testing.expectEqual(@as(i64, 12_000), pc.last_progress_ms.load(.acquire));
+}
+
+comptime {
+    // Silence unused-import if Peer is not otherwise referenced.
+    _ = Peer;
+}
