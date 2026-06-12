@@ -1572,6 +1572,51 @@ pub fn build(b: *std.Build) void {
     const raft_stall_detector_step = b.step("test-raft-stall-detector", "Run stalled-stream liveness detector regression tests (k8s root cause #5 transport wedge)");
     raft_stall_detector_step.dependOn(&run_raft_stall_detector_tests.step);
 
+    // k8s churn recovery, ROOT CAUSE #1: receiver-side worker-pool starvation.
+    // RED reproduction tests for the pure inbound-connection reap decision
+    // (cluster.shouldReapIdleInboundConnection + idle-deadline const + env
+    // resolver). Until those symbols land the comptime-@hasDecl guards fail.
+    const raft_receiver_reap_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_receiver_reap.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_receiver_reap_tests.root_module.addImport("geode", root_mod);
+    raft_receiver_reap_tests.root_module.link_libc = true;
+    const run_raft_receiver_reap_tests = b.addRunArtifact(raft_receiver_reap_tests);
+    const raft_receiver_reap_step = b.step("test-raft-receiver-reap", "Run receiver-side idle inbound-connection reap reproduction tests (k8s churn RC1)");
+    raft_receiver_reap_step.dependOn(&run_raft_receiver_reap_tests.step);
+
+    // k8s churn recovery, ROOT CAUSE #2: rebuild clock-reset re-eviction chase.
+    // RED reproduction tests for the pure RebuildProbation state machine (a
+    // stall-rebuild is not progress proof; consecutive rebuilds escalate the
+    // eviction budget; only a *_response clears probation).
+    const raft_rebuild_probation_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_rebuild_probation.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_rebuild_probation_tests.root_module.addImport("geode", root_mod);
+    raft_rebuild_probation_tests.root_module.link_libc = true;
+    const run_raft_rebuild_probation_tests = b.addRunArtifact(raft_rebuild_probation_tests);
+    const raft_rebuild_probation_step = b.step("test-raft-rebuild-probation", "Run rebuild-probation backoff reproduction tests (k8s churn RC2)");
+    raft_rebuild_probation_step.dependOn(&run_raft_rebuild_probation_tests.step);
+
+    // k8s churn recovery, ROOT CAUSE #3: follower response-direction suppression.
+    // RED reproduction tests for the pure directionalEvictAllowed decision (a
+    // follower actively receiving requests with no outbound proof may evict; a
+    // quiet follower stays suppressed) + the new last_inbound_request_ms field.
+    const raft_follower_response_eviction_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_follower_response_eviction.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_follower_response_eviction_tests.root_module.addImport("geode", root_mod);
+    raft_follower_response_eviction_tests.root_module.link_libc = true;
+    const run_raft_follower_response_eviction_tests = b.addRunArtifact(raft_follower_response_eviction_tests);
+    const raft_follower_response_eviction_step = b.step("test-raft-follower-response-eviction", "Run follower response-direction eviction reproduction tests (k8s churn RC3)");
+    raft_follower_response_eviction_step.dependOn(&run_raft_follower_response_eviction_tests.step);
+
     // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
     // distributed cluster testing plan).  Brings up two real
     // ClusterCoordinators with their QUIC listeners on loopback,
