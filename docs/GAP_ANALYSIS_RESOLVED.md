@@ -28,7 +28,7 @@ dated 2026-06-11 entries below). Per-commit narrative: `docs/superpowers/plans/2
 infra), GAP-0838 (Critical, Blocked — only real-cluster k8s end-to-end validation remains; both
 repo-side 0.6.14 defects fixed), GAP-0873 (Medium, deferred to GAP-0290 — per-tenant at-rest keys),
 GAP-0885 (High, open/partial — security sibling residuals: LSP-SEC-002 fork pin, deferred
-SEC-MFA-FIPS-01/SEC-MON-01/SEC-INFRA-02, GAP-0818 tenant derivation), GAP-0891 (High, Blocked —
+SEC-MFA-FIPS-01/SEC-MON-01/SEC-INFRA-02, GAP-0818 tenant derivation), GAP-0893 (High, Blocked —
 vendor `grpc_zig` 0.1.7 per-connection crash). Current actionable status: `docs/GAP_ANALYSIS.md`.
 
 | Gap-ID | Severity | Area | Closing commit(s) | Pinning gate | Resolved date |
@@ -88,7 +88,7 @@ LSP re-parsing the identical buffer on every request (AST cache, `2ccbbfcf`); co
 `SESSION SET PROPERTY GRAPH` preambles — returned 0 (`8833fc4a`); TRAIL/WALK path-mode plumbing dropped on the planned-read
 path (`9eb236a9`); JSON error-meta leak + REPL pool teardown + remote-KMS multi-request fixes (GAP-0514 Phase 6 evidence
 work); `getParallelPool` capturing the first caller's per-request arena as the process-lifetime pool allocator (UAF,
-`c4145c99`); and the GAP-0891 discovery — vendor `grpc_zig` 0.1.7 crashes per-connection (`allocStreamWindows`), making the
+`c4145c99`); and the GAP-0893 discovery — vendor `grpc_zig` 0.1.7 crashes per-connection (`allocStreamWindows`), making the
 gRPC transport non-verifiable e2e (`b51e0b77`).
 
 ### Full closure evidence — rows moved verbatim from the live register (2026-06-11 close-out)
