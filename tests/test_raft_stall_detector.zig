@@ -546,3 +546,212 @@ test "frozen-term: a warn is rate-limited until the interval elapses" {
     const after_interval = first_due + FrozenCandidateTracker.frozen_candidate_warn_interval_ms + 1;
     try std.testing.expect(t.update(.candidate, term, after_interval));
 }
+
+// ===========================================================================
+// (E) Per-direction liveness: only RESPONSE frames may stamp our outbound clock
+// ===========================================================================
+// k8s root cause #5 transport-wedge REGRESSION (2026-06-12): the stamp site in
+// cluster.zig:applyDecodedRaftFrame calls `notePeerProgress(frame.from, ...)`
+// UNCONDITIONALLY for every inbound raft frame. That is per-PEER, not
+// per-DIRECTION. A stranded candidate re-sends RequestVote every 1-2 s; each
+// inbound RequestVote stamps the LEADER's outbound-to-that-peer clock, so the
+// 15 s stall budget never elapses and the leader never evicts/rebuilds its
+// genuinely-wedged outbound stream to that peer. The wedge is masked by the
+// PEER's healthy outbound traffic.
+//
+// Direction reasoning:
+//   * An inbound REQUEST (request_vote / append_entries / install_snapshot)
+//     proves only the PEER's outbound path to us works — NOT that our outbound
+//     request to that peer was delivered. It must NOT stamp our outbound clock.
+//   * An inbound RESPONSE (*_response) can only exist if OUR outbound request
+//     reached the peer (the peer produced it by handling our request). Only a
+//     response proves our outbound path, so only a response may stamp.
+//
+// `frameProvesOurOutboundDelivered(body)` is the pure classifier the gated stamp
+// site will call: `if (frameProvesOurOutboundDelivered(body)) notePeerProgress(...)`.
+//
+// SKELETON returns true for EVERY variant (current unconditional-stamp behavior),
+// so the three REQUEST assertions below FAIL (red) and the three RESPONSE
+// assertions pass; after the fix narrows the body to the *_response-only switch,
+// all six pass.
+
+const Message = raft_consensus.Message;
+
+// Minimal payload builders for each of the 6 Message variants. The classifier
+// reads only the union TAG, so payload field values are immaterial; we still
+// construct full, valid payloads (mirroring tests/test_quic_raft_smoke.zig's
+// empty-entries AppendEntries and the envelope round-trip tests) so the test is
+// robust to a future classifier that inspects fields.
+fn msgRequestVote(pre_vote: bool) Message {
+    return .{ .request_vote = .{
+        .term = 3,
+        .candidate_id = 7,
+        .last_log_index = 0,
+        .last_log_term = 0,
+        .pre_vote = pre_vote,
+    } };
+}
+fn msgRequestVoteResponse(pre_vote: bool) Message {
+    return .{ .request_vote_response = .{
+        .term = 3,
+        .vote_granted = true,
+        .voter_id = 7,
+        .pre_vote = pre_vote,
+    } };
+}
+fn msgAppendEntries() Message {
+    return .{ .append_entries = .{
+        .term = 3,
+        .leader_id = 2,
+        .prev_log_index = 0,
+        .prev_log_term = 0,
+        .entries = &[_]raft_consensus.LogEntry{},
+        .leader_commit = 0,
+    } };
+}
+fn msgAppendEntriesResponse() Message {
+    return .{ .append_entries_response = .{
+        .term = 3,
+        .success = true,
+        .match_index = 1,
+    } };
+}
+fn msgInstallSnapshot() Message {
+    return .{ .install_snapshot = .{
+        .term = 3,
+        .leader_id = 2,
+        .last_included_index = 0,
+        .last_included_term = 0,
+        .offset = 0,
+        .data = &.{},
+        .done = true,
+    } };
+}
+fn msgInstallSnapshotResponse() Message {
+    return .{ .install_snapshot_response = .{
+        .term = 3,
+        .success = true,
+    } };
+}
+
+// (E.1) Pure classification table over all 6 Message variants.
+// DESIRED: true for exactly the three *_response variants; false for the three
+// request variants. Pre-vote is a FIELD, not a tag, so a pre-vote RequestVote is
+// still a request (false) and a pre-vote RequestVoteResponse is still a response
+// (true).
+// RED: the skeleton returns true for everything, so the three request assertions
+// (and the pre-vote-request assertion) FAIL.
+test "raft liveness: only response frames prove our outbound was delivered" {
+    // Requests prove only the PEER's outbound — must NOT stamp our clock.
+    try std.testing.expect(!raft_consensus.frameProvesOurOutboundDelivered(msgRequestVote(false)));
+    try std.testing.expect(!raft_consensus.frameProvesOurOutboundDelivered(msgAppendEntries()));
+    try std.testing.expect(!raft_consensus.frameProvesOurOutboundDelivered(msgInstallSnapshot()));
+
+    // A pre-vote RequestVote is still a REQUEST (pre_vote is a field, not a tag).
+    try std.testing.expect(!raft_consensus.frameProvesOurOutboundDelivered(msgRequestVote(true)));
+
+    // Responses can only exist if our outbound request reached the peer -> stamp.
+    try std.testing.expect(raft_consensus.frameProvesOurOutboundDelivered(msgRequestVoteResponse(false)));
+    try std.testing.expect(raft_consensus.frameProvesOurOutboundDelivered(msgAppendEntriesResponse()));
+    try std.testing.expect(raft_consensus.frameProvesOurOutboundDelivered(msgInstallSnapshotResponse()));
+
+    // A pre-vote RequestVoteResponse is still a RESPONSE (pre_vote is a field).
+    try std.testing.expect(raft_consensus.frameProvesOurOutboundDelivered(msgRequestVoteResponse(true)));
+}
+
+// (E.2) Transport-level direction test: encodes the gating CONTRACT the
+// cluster.zig stamp site will adopt —
+//   `if (frameProvesOurOutboundDelivered(body)) transport.notePeerProgress(...)`
+// — composed against the real helper + the real notePeerProgress, without a
+// ClusterCoordinator. A leader-armed PeerConnection with an ancient progress
+// stamp would evict; an inbound REQUEST must NOT refresh it (eviction decision
+// stays true), while an inbound RESPONSE must refresh it (decision flips false).
+//
+// RED: with the skeleton classifier returning true for the request, the gated
+// stamp fires and refreshes the clock, so assertion (a) — "request does NOT
+// refresh" — FAILS. After the fix, the request is gated out and the clock stays
+// ancient (a) holds; the response and response-response paths still refresh
+// ((b), (c)).
+test "raft liveness: inbound request does not refresh outbound stall clock; response does" {
+    const allocator = std.testing.allocator;
+
+    // Helper that simulates the cluster.zig gated stamp path exactly: stamp only
+    // when the inbound frame proves OUR outbound was delivered.
+    const Gate = struct {
+        fn apply(transport: *Transport, peer_id: u64, body: Message, now_ms: i64) void {
+            if (raft_consensus.frameProvesOurOutboundDelivered(body)) {
+                transport.notePeerProgress(peer_id, now_ms);
+            }
+        }
+    };
+
+    // --- (a) An inbound REQUEST must NOT refresh: eviction decision stays true.
+    {
+        var transport = Transport.init(allocator);
+        defer transport.deinit();
+
+        const now_ms: i64 = 9_000_000;
+        const ancient = now_ms - (Transport.peer_stall_budget_ms + 5000);
+        const pc = try makePeerConn(allocator, 4, 8, ancient);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        transport.peers_mutex.lockUncancelable(io);
+        try transport.peers.put(4, pc); // transport.deinit frees the entry.
+        transport.peers_mutex.unlock(io);
+
+        // Sanity: armed as leader, this peer is stalled before any frame arrives.
+        try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+
+        // A stranded candidate's RequestVote arrives FROM this peer. This proves
+        // only the PEER's outbound; it must NOT reset our outbound stall clock.
+        Gate.apply(&transport, 4, msgRequestVote(false), now_ms);
+
+        // DESIRED: clock untouched -> still stalled -> eviction decision stays true.
+        // RED: skeleton stamps it, clock becomes now_ms, decision flips false.
+        try std.testing.expectEqual(ancient, pc.last_progress_ms.load(.acquire));
+        try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+    }
+
+    // --- (b) An inbound RESPONSE (append_entries_response) MUST refresh: the
+    //         eviction decision flips false.
+    {
+        var transport = Transport.init(allocator);
+        defer transport.deinit();
+
+        const now_ms: i64 = 9_000_000;
+        const ancient = now_ms - (Transport.peer_stall_budget_ms + 5000);
+        const pc = try makePeerConn(allocator, 5, 8, ancient);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        transport.peers_mutex.lockUncancelable(io);
+        try transport.peers.put(5, pc); // transport.deinit frees the entry.
+        transport.peers_mutex.unlock(io);
+
+        try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+
+        // A response can only exist if our outbound AppendEntries reached the peer.
+        Gate.apply(&transport, 5, msgAppendEntriesResponse(), now_ms);
+
+        try std.testing.expectEqual(now_ms, pc.last_progress_ms.load(.acquire));
+        try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+    }
+
+    // --- (c) An inbound request_vote_response likewise refreshes.
+    {
+        var transport = Transport.init(allocator);
+        defer transport.deinit();
+
+        const now_ms: i64 = 9_000_000;
+        const ancient = now_ms - (Transport.peer_stall_budget_ms + 5000);
+        const pc = try makePeerConn(allocator, 6, 8, ancient);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        transport.peers_mutex.lockUncancelable(io);
+        try transport.peers.put(6, pc); // transport.deinit frees the entry.
+        transport.peers_mutex.unlock(io);
+
+        try std.testing.expect(Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+
+        Gate.apply(&transport, 6, msgRequestVoteResponse(false), now_ms);
+
+        try std.testing.expectEqual(now_ms, pc.last_progress_ms.load(.acquire));
+        try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
+    }
+}

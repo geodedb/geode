@@ -1698,6 +1698,51 @@ pub const Message = union(enum) {
     install_snapshot_response: InstallSnapshotResponse,
 };
 
+// k8s root cause #5 transport-wedge REGRESSION (per-direction liveness),
+// 2026-06-12:
+//
+// The original stalled-stream fix (`notePeerProgress`) stamped forward progress
+// on the OUTBOUND PeerConnection for the sender of EVERY inbound raft frame
+// (cluster.zig:applyDecodedRaftFrame). That is per-PEER, not per-DIRECTION, and
+// it masks the leader-side wedge: a stranded candidate re-sends RequestVote
+// every 1-2 s; each inbound RequestVote stamps the LEADER's outbound-to-that-
+// peer clock, so `now - last_progress_ms` never crosses the 15 s budget and the
+// leader never evicts/rebuilds its genuinely-wedged outbound stream to that peer.
+//
+// Direction reasoning:
+//   * An inbound REQUEST (`request_vote` / `append_entries` / `install_snapshot`)
+//     proves only the PEER's OUTBOUND path to us works. It says NOTHING about
+//     whether OUR outbound request to that peer was ever delivered — so it must
+//     NOT stamp our outbound liveness clock.
+//   * An inbound RESPONSE (`*_response`) can only exist if OUR outbound request
+//     reached the peer (the peer produced the response by handling our request).
+//     A response is therefore the only frame that proves OUR outbound path is
+//     alive, so only a response may stamp.
+//
+// `frameProvesOurOutboundDelivered(body)` is the PURE classifier the gated stamp
+// site will call: `if (frameProvesOurOutboundDelivered(body)) notePeerProgress(...)`.
+// It returns true ONLY for the three `*_response` variants. Pre-vote is a bool
+// FIELD on the vote messages, not a separate tag, so a pre-vote RequestVote is
+// still a request (false) and a pre-vote RequestVoteResponse is still a response
+// (true).
+//
+// SKELETON (red phase): returns `true` for EVERY variant — the current
+// unconditional-stamp behavior — so the tests compile and FAIL on the three
+// request variants. The fixer narrows the body to the `*_response`-only switch.
+pub fn frameProvesOurOutboundDelivered(body: Message) bool {
+    // SKELETON: current (buggy) behavior — every inbound frame is treated as
+    // proof of our outbound delivery. The fix replaces this with:
+    //   return switch (body) {
+    //       .request_vote_response,
+    //       .append_entries_response,
+    //       .install_snapshot_response,
+    //       => true,
+    //       else => false,
+    //   };
+    _ = body;
+    return true;
+}
+
 pub const RequestVote = struct {
     term: u64,
     candidate_id: u64,
