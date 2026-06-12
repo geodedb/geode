@@ -1356,6 +1356,45 @@ pub const Transport = struct {
         };
     }
 
+    /// RC3 residual (idle-cluster churn guard): PURE decision for whether an
+    /// inbound AppendEntries counts as an IMPLICIT outbound-delivery proof.
+    ///
+    /// THE BUG it closes: on a fully idle (zero-write) HEALTHY cluster the leader
+    /// sends only EMPTY heartbeats (no log entries, CONSTANT prev_log_index /
+    /// leader_commit). The advance-only implicit-ack path then never stamps a
+    /// quiet follower's outbound proof, so after the base budget its
+    /// `outbound_proof_stale` is permanently true while the leader's heartbeats
+    /// keep `last_inbound_request_ms` fresh -> `directionalEvictAllowed(.follower,
+    /// true, true, true)` -> the follower evicts and rebuilds a perfectly healthy
+    /// outbound every budget window, FOREVER. Churn is exactly what destabilizes
+    /// this fire-and-forget transport (teardown drops in-flight acks, which can
+    /// make the leader's per-direction detector fire too, amplifying).
+    ///
+    /// DISTINGUISHING SIGNAL: a wedged follower->leader response direction shows
+    /// up leader-side as ack loss, so the leader RETRANSMITS entries — the
+    /// follower sees repeated NON-EMPTY, NON-ADVANCING AppendEntries. A healthy
+    /// idle cluster sends EMPTY heartbeats. So:
+    ///   * advanced (entries or not)        -> stamp (the leader applied our prior
+    ///                                          response, real implicit ack)
+    ///   * !advanced AND !has_entries        -> stamp (empty heartbeat == "nothing
+    ///                                          pending, connection presumed fine")
+    ///   * !advanced AND has_entries         -> DO NOT stamp (a non-advancing
+    ///                                          retransmit — leaves a genuinely
+    ///                                          wedged follower eviction-eligible;
+    ///                                          this is exactly how a
+    ///                                          committed-blocked write manifests,
+    ///                                          preserving the F2/RC3 detection).
+    ///
+    /// Accepted residual: an idle cluster whose follower outbound dies SILENTLY is
+    /// indistinguishable from healthy-idle at the follower until the next write
+    /// turns the loss into retransmits — at which point the third case makes it
+    /// eligible. Leader-side per-direction liveness (dacf4771) covers detection
+    /// meanwhile.
+    // CANARY: REQ=REQ-DIST-RAFT-FOLLOWER-DIRECTIONAL-EVICT; FEATURE="Raft Directional Eviction"; ASPECT=ImplicitAckStampsProof; STATUS=TESTED; TEST=tests/test_raft_follower_response_eviction.zig; OWNER=distributed; UPDATED=2026-06-12
+    pub fn implicitAckStampsProof(advanced: bool, has_entries: bool) bool {
+        return advanced or !has_entries;
+    }
+
     /// RC2 wiring: the eviction budget the reaper measures against for `pc` on
     /// this pass. While the connection is in probation (a stall-rebuild without an
     /// intervening `*_response` proof), use the ESCALATED
@@ -1476,24 +1515,38 @@ pub const Transport = struct {
         }
     }
 
-    /// RC3 (healthy-follower implicit ack): an inbound AppendEntries from the
-    /// leader whose `prev_log_index` OR `leader_commit` ADVANCES versus the last
-    /// one we saw from that leader is an IMPLICIT proof that our PRIOR response
-    /// reached the leader (the leader only advances after applying it). Stamp
-    /// forward progress (clearing probation / strikes via the same path as a real
-    /// `*_response`) so a HEALTHY follower's outbound never looks stale and never
-    /// churns its connection — while a WEDGED follower sees only non-advancing
-    /// retransmits, gets no stamp, and remains eligible for directional eviction.
+    /// RC3 (healthy-follower implicit ack) + idle-cluster churn guard: an inbound
+    /// AppendEntries from the leader is treated as an IMPLICIT proof that our PRIOR
+    /// response reached the leader when EITHER it ADVANCES (`prev_log_index` OR
+    /// `leader_commit` grew versus the last one we saw — the leader only advances
+    /// after applying our response) OR it is an EMPTY heartbeat (`!has_entries` —
+    /// "nothing pending, connection presumed fine"). Both stamp forward progress
+    /// (clearing probation / strikes via the same path as a real `*_response`) so a
+    /// HEALTHY follower's outbound never looks stale and never churns its
+    /// connection. The ONLY case that does NOT stamp is a NON-advancing
+    /// AppendEntries that STILL CARRIES entries — i.e. a leader RETRANSMIT, which is
+    /// exactly how a wedged follower->leader response direction (ack loss) and a
+    /// committed-blocked write manifest; that follower gets no stamp and remains
+    /// eligible for directional eviction. The stamp predicate is the pure
+    /// `implicitAckStampsProof`.
+    ///
+    /// WHY `has_entries` matters: before this guard, a fully idle (zero-write)
+    /// healthy cluster — which sends only empty, non-advancing heartbeats — left a
+    /// quiet follower's outbound proof permanently stale and churned its connection
+    /// every budget window forever. See `implicitAckStampsProof` for the full
+    /// matrix and the accepted silent-death residual.
     ///
     /// Peer-id keyed and `peers_mutex`-guarded like `notePeerProgress`; a no-op if
     /// the outbound connection to the leader does not exist yet. The last-seen
     /// values live on that outbound PeerConnection.
+    // CANARY: REQ=REQ-DIST-RAFT-FOLLOWER-DIRECTIONAL-EVICT; FEATURE="Raft Directional Eviction"; ASPECT=NoteInboundAppendEntriesAdvance; STATUS=TESTED; TEST=tests/test_raft_follower_response_eviction.zig; OWNER=distributed; UPDATED=2026-06-12
     pub fn noteInboundAppendEntriesAdvance(
         self: *Transport,
         peer_id: u64,
         prev_log_index: u64,
         leader_commit: u64,
         now_ms: i64,
+        has_entries: bool,
     ) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.peers_mutex.lockUncancelable(io);
@@ -1504,7 +1557,9 @@ pub const Transport = struct {
         const advanced = prev_log_index > prev_seen_idx or leader_commit > prev_seen_commit;
         if (prev_log_index > prev_seen_idx) pc.last_seen_prev_log_index.store(prev_log_index, .release);
         if (leader_commit > prev_seen_commit) pc.last_seen_leader_commit.store(leader_commit, .release);
-        if (!advanced) return;
+        // Stamp on an ADVANCE or an EMPTY heartbeat; a non-advancing retransmit
+        // (still carrying entries) leaves a genuinely wedged follower eligible.
+        if (!implicitAckStampsProof(advanced, has_entries)) return;
         // Implicit ack: treat exactly like a real outbound proof.
         _ = self.probation_carry.remove(peer_id);
         pc.last_progress_ms.store(now_ms, .release);

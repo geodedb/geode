@@ -1704,18 +1704,24 @@ pub const ClusterCoordinator = struct {
             // one-way-wedged follower (still receiving requests, outbound proof
             // stale) from a QUIET follower (suppressed).
             self.raft_transport.noteInboundRequest(frame_res.from, now_inbound_ms);
-            // RC3 (healthy-follower implicit ack): an AppendEntries whose
-            // prev_log_index / leader_commit ADVANCES is an implicit ack that our
-            // PRIOR response reached the leader — stamp outbound progress so a
-            // HEALTHY follower never looks stale and never churns its connection.
-            // A WEDGED follower sees only non-advancing retransmits, gets no
-            // stamp, and stays eligible for directional eviction.
+            // RC3 (healthy-follower implicit ack) + idle-cluster churn guard: an
+            // AppendEntries whose prev_log_index / leader_commit ADVANCES is an
+            // implicit ack that our PRIOR response reached the leader; an EMPTY
+            // heartbeat (no entries) is "nothing pending, connection presumed
+            // fine". Both stamp outbound progress so a HEALTHY follower never
+            // looks stale and never churns its connection — critically including a
+            // fully IDLE (zero-write) cluster, which sends only empty,
+            // non-advancing heartbeats and would otherwise churn forever. A WEDGED
+            // follower sees non-advancing RETRANSMITS (entries still present),
+            // gets no stamp, and stays eligible for directional eviction.
+            // `has_entries` is the distinguishing signal.
             switch (frame_res.body) {
                 .append_entries => |ae| self.raft_transport.noteInboundAppendEntriesAdvance(
                     frame_res.from,
                     ae.prev_log_index,
                     ae.leader_commit,
                     now_inbound_ms,
+                    ae.entries.len > 0,
                 ),
                 else => {},
             }
