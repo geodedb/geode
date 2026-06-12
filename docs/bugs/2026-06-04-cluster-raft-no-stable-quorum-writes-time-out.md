@@ -1838,3 +1838,57 @@ delivery is not reliably re-established, and the eviction/reconnect path does no
 it** (a leader-side per-direction liveness signal — track AppendEntries *acks*, not any
 inbound frame — plus a delivery-restoring reconnect, is still owed). prod remains
 UNTOUCHED (single-node 0.6.14).
+
+## 2026-06-12 — churn-recovery fix landed: receiver reap + rebuild probation + directional follower eviction (`80ed0539` + `14b7295e`)
+
+Triage of the `a765c9f` k8s findings located **three root causes** behind "eviction +
+reconnect does not restore vote delivery", and all three are now fixed on main. The
+key reframe: the wedge was never a sender-side detection problem (dacf4771 was
+correct) — **recovery could not work because the receiver was starved**.
+
+- **RC1 — receiver-side worker-pool starvation (the foundational one;
+  `src/distributed/cluster.zig`).** Every accepted inbound cluster connection pinned
+  one of only **4** connection-pool worker threads, and the handler's accept loop
+  never exited for a half-open peer — it parked on `WouldBlock` until the **300 s**
+  QUIC idle timeout. Four rapid kills left zombie inbound connections pinning all
+  workers, so rebuilt outbound connections carrying current-term votes were **never
+  serviced**. This is why every sender-side fix (eviction, per-direction liveness)
+  failed to move the wedge. Fix: `handleQuicConnection` stamps `last_activity_ms` on
+  every accepted stream / dispatched frame and **reaps an idle inbound connection
+  after 30 s** (`GEODE_CLUSTER_INBOUND_IDLE_MS` overridable), releasing the worker.
+  Pure decision fn `shouldReapIdleInboundConnection`; tests
+  `test-raft-receiver-reap` (6/6).
+- **RC2 — rebuild clock-reset re-eviction chase (`raft_consensus.zig`).** A
+  stall-triggered rebuild stamped `last_progress_ms = now`, i.e. a forced rebuild
+  counted as proof of health — with all 6 directed connections stale, rebuilds chased
+  each other on phase-shifted 15 s clocks and never converged. Fix: `RebuildProbation`
+  — a rebuild enters probation (NOT progress proof), measured from `rebuilt_at_ms`
+  against an escalating budget (15 s → 30 s → 60 s capped); only a real
+  `*_response` frame (or implicit ack, below) clears it. Tests
+  `test-raft-rebuild-probation` (6/6).
+- **RC3 — follower response-direction suppression (`raft_consensus.zig`).** The
+  stall reaper suppressed eviction for followers entirely, so a follower whose
+  *response-carrying* outbound was dead kept answering AppendEntries into a dead
+  buffer while the leader never got acks — exactly the boot-2 "geode-0 stranded,
+  2/3 quorum can't commit" signature. Fix: `directionalEvictAllowed` — a follower
+  that is actively receiving request frames while having no outbound-delivery proof
+  for the budget may now evict/rebuild its outbound. To keep a HEALTHY follower from
+  churning: an inbound AppendEntries whose `prev_log_index`/`leader_commit`
+  **advances** is an implicit ack (stamps proof), and — the churn guard (`14b7295e`)
+  — a non-advancing **empty heartbeat** also stamps proof; only a non-advancing
+  **retransmit with entries** (the actual ack-loss signature) leaves the follower
+  eviction-eligible. Tests `test-raft-follower-response-eviction` (10/10).
+
+Accepted residual (documented in code): an idle cluster whose follower outbound dies
+silently is indistinguishable from healthy-idle at the follower until the next write
+turns the loss into retransmits — leader-side per-direction liveness (dacf4771)
+covers detection meanwhile. The client-retry idempotency residual (committed write →
+client `Timeout` → retry double-insert) is **unchanged and still owed** — it is a
+propose-level idempotency-key problem, independent of delivery.
+
+Local verification: all four new/changed suites green (`test-raft-receiver-reap`
+6/6, `test-raft-rebuild-probation` 6/6, `test-raft-follower-response-eviction`
+10/10, `test-raft-stall-detector` 22/22 unchanged), `test-raft-divergent-state-recovery`,
+`test-cluster-replicable-mutations` 7/7, distributed unit + cluster smoke steps all
+pass. **k8s validation owed**: clean-boot ×N flake check, 4-kill aggressive churn,
+and the previously owed live-blackhole + reused-PVC roll, on the next release build.
