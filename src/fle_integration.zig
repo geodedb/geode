@@ -543,7 +543,10 @@ pub fn decryptFieldIfNeeded(
         // If field is searchable, throw error (search operations require privilege)
         // If field is not searchable, return redacted placeholder (projection only)
         if (catalog.isFieldSearchable(type_name, field_name)) {
-            return fle_aead.Error.SearchNotPermitted;
+            // fle v0.1.7 (98dd8af) dropped the never-raised SearchNotPermitted
+            // from its aead.Error set; this is geode's own authz semantic
+            // (see value_types / execution / eval EvalError.SearchNotPermitted).
+            return error.SearchNotPermitted;
         }
         // Return redacted placeholder for non-searchable fields
         return try ctx.allocator.dupe(u8, "[REDACTED]");
@@ -616,7 +619,9 @@ pub fn lookupEncryptedField(
 
     // 3. Check RBAC - user must have READ_PLAINTEXT privilege to search encrypted fields
     if (!canReadPlaintext(ctx, type_name, field_name)) {
-        return fle_aead.Error.SearchNotPermitted;
+        // fle v0.1.7 (98dd8af) dropped the never-raised SearchNotPermitted from
+        // its aead.Error set; raise geode's own error (handled downstream).
+        return error.SearchNotPermitted;
     }
 
     // 4. Get BIK from key manager
