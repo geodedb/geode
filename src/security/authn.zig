@@ -87,6 +87,18 @@ pub const AuthResult = struct {
     requires_mfa: bool, // If true, MFA step required
     requires_password_reset: bool,
     elevation_level: ElevationLevel,
+    // When true, `username` and `scopes` are owned allocations (the api-key
+    // path returns owned copies from auth v0.1.7+ validateKey) and must be
+    // released via `deinit`. Other paths return borrowed literals.
+    owns_strings: bool = false,
+
+    /// Release owned `username`/`scopes` (api-key path). No-op otherwise.
+    pub fn deinit(self: *const AuthResult, allocator: Allocator) void {
+        if (!self.owns_strings) return;
+        allocator.free(self.username);
+        for (self.scopes) |scope| allocator.free(scope);
+        allocator.free(self.scopes);
+    }
 };
 
 /// Elevation level for step-up authentication
@@ -340,6 +352,9 @@ pub const AuthProvider = struct {
         const key = try self.api_key_manager.validateKey(token);
 
         if (key) |k| {
+            // auth v0.1.7+ validateKey returns OWNED copies of name/scopes;
+            // mark the result so the consumer releases them (was a borrowed
+            // view into the manager map before the breaking change).
             return AuthResult{
                 .user_id = k.user_id,
                 .username = k.name,
@@ -350,6 +365,7 @@ pub const AuthProvider = struct {
                 .requires_mfa = false,
                 .requires_password_reset = false,
                 .elevation_level = .standard,
+                .owns_strings = true,
             };
         }
 

@@ -326,7 +326,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                     record_id_buf,
                                     true,
                                 ) catch |err| blk_decrypt: {
-                                    if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
+                                    if (err == error.SearchNotPermitted) {
                                         break :blk_decrypt "[REDACTED]";
                                     }
                                     break :blk_decrypt s;
@@ -422,7 +422,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                     record_id_buf,
                                     true,
                                 ) catch |err| blk_decrypt: {
-                                    if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
+                                    if (err == error.SearchNotPermitted) {
                                         break :blk_decrypt "[REDACTED]";
                                     }
                                     break :blk_decrypt s;

@@ -56,6 +56,10 @@ pub const Verifier = struct {
         ok: struct {
             username: []const u8,
             role: ?[]const u8 = null,
+            // When set, `username`/`role` are owned allocations the consumer
+            // (AuthState.verify) frees with this allocator after copying them.
+            // Stub verifiers leave it null (borrowed literals).
+            free_with: ?std.mem.Allocator = null,
         },
         invalid,
     };
@@ -190,6 +194,12 @@ pub const AuthState = struct {
         switch (v.verifyFn(v.ctx, self.token)) {
             .invalid => return AuthError.InvalidToken,
             .ok => |ok| {
+                // Release owned outcome strings once copied (api-key path);
+                // borrowed-literal outcomes (stub verifiers) set free_with=null.
+                defer if (ok.free_with) |fa| {
+                    fa.free(ok.username);
+                    if (ok.role) |r| fa.free(r);
+                };
                 self.user = try allocator.dupe(u8, ok.username);
                 if (ok.role) |role_name| {
                     if (user_management.Role.fromString(role_name)) |r| {
@@ -233,8 +243,20 @@ fn authProviderVerifyFn(ctx: *anyopaque, token: []const u8) Verifier.Outcome {
 
     // 1. Try API-key (Bearer) — the common path for programmatic LSP clients.
     if (provider.authenticate(.{ .bearer_token = token })) |result| {
-        const role_name: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
-        return .{ .ok = .{ .username = result.username, .role = role_name } };
+        // The api-key path returns OWNED username/scopes (auth v0.1.7+
+        // validateKey). Copy what we need into outcome-owned memory, then
+        // release the result; AuthState.verify frees the copies after use.
+        defer result.deinit(provider.allocator);
+        const role_src: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
+        const user_dup = provider.allocator.dupe(u8, result.username) catch return .invalid;
+        const role_dup: ?[]const u8 = if (role_src) |rn|
+            (provider.allocator.dupe(u8, rn) catch {
+                provider.allocator.free(user_dup);
+                return .invalid;
+            })
+        else
+            null;
+        return .{ .ok = .{ .username = user_dup, .role = role_dup, .free_with = provider.allocator } };
     } else |_| {
         // Fall through to session-token path.
     }

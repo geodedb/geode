@@ -101,7 +101,6 @@ test "file sink JSON formatting" {
     };
 
     const sink = try file_sink.FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
     // Create test metadata
     var metadata_obj: std.json.ObjectMap = .{};
@@ -126,7 +125,10 @@ test "file sink JSON formatting" {
         .metadata = metadata,
     };
 
-    try sink.write(&event, metadata);
+    // audit FileSink is async (enqueue → background worker); deinit drains
+    // all queued writes to disk before closing, so deinit BEFORE readback.
+    _ = try sink.write(&event, metadata);
+    sink.deinit();
 
     // Read back the file and verify JSON format
     const io_fs = std.Io.Threaded.global_single_threaded.io();
@@ -186,7 +188,6 @@ test "file rotation" {
     };
 
     const sink = try file_sink.FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
     // Write many events to trigger rotation
     var i: u32 = 0;
@@ -207,8 +208,12 @@ test "file rotation" {
             .metadata = null,
         };
 
-        try sink.write(&event, null);
+        _ = try sink.write(&event, null);
     }
+
+    // deinit drains all queued writes to disk before closing, so rotation
+    // and backup files are present before the access checks below.
+    sink.deinit();
 
     // Check that backup files exist (Zig 0.15 access returns void on success, error on failure)
     // CANARY: REQ=REQ-QUALITY-GAP-413-015; FEATURE="OrphanedTestRemediation"; ASPECT=FileAccessAPI; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
