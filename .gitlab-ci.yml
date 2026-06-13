@@ -1008,6 +1008,45 @@ bench-query-path:
   # (pipelines #2510271779, #2512695029 both `job_execution_timeout` at
   # 3601s). Give it 2h; the four bench builds + compare fit comfortably.
   timeout: 2h
+  # 2026-06-12: this job failed on EVERY recent pipeline for two distinct
+  # reasons, both addressed below:
+  #
+  #   (A) Build-time protoc fetch flake. The k8s runner has NO shared cache
+  #       ("No URL provided, cache will not be downloaded" on every key), so
+  #       the LAZY protoc dep is re-fetched from GitHub releases each run and
+  #       intermittently dies with "invalid HTTP response: HttpConnectionClosing"
+  #       (pipeline #2598146491 job 14836994639). This job was the ONLY
+  #       dep-fetching job with no `retry:` block — bench-timeseries /
+  #       test-cross-build / test-macos-unit all retry max:2 on script_failure
+  #       for exactly this transitive-fetch flake. Added here so a single
+  #       transient fetch is retried (the public same-network GitLab mirror
+  #       in the *zig-vendor-cache pre-fetch makes the retry land quickly).
+  #
+  #   (B) Compare-time false regression. `compare-bench` was run as a hard
+  #       gate against a fixed baseline JSON captured on a DIFFERENT machine
+  #       (docs/performance/2026-04-20-...), two months stale. On the shared,
+  #       CPU-contended k8s runner this produces machine-variance swings far
+  #       wider than the 15% noise floor (e.g. latency_execute +136.99%,
+  #       throughput -57.69% in job 14835468165) — 166-212 spurious
+  #       "regressions" per run. compare-bench is sound when both sides are
+  #       built on the SAME host (that's how scripts/perf-gate.sh and
+  #       scripts/query-perf-gate.sh use it — both with `|| true`, advisory).
+  #       Cross-machine against a frozen baseline is noise-dominated and can
+  #       never be a stable hard gate, so the comparison here is now ADVISORY:
+  #       its full output is captured into the artifact and a banner reports
+  #       the regression count, but it does not fail the job (which is
+  #       allow_failure anyway — this just stops the misleading red so a
+  #       real, reproducible regression is no longer buried under 200 noise
+  #       rows). The job comment at the top of this block ("flip to blocking
+  #       after ~4 weeks of quiet runs") was never reachable because the runs
+  #       were never quiet; a stable hard gate needs same-host before/after,
+  #       not a cross-host frozen baseline.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -1024,8 +1063,22 @@ bench-query-path:
         > bench-query-all.json
       BASELINE=docs/performance/2026-04-20-query-bench/baseline/bench-query-all.json
       if [ -f "$BASELINE" ]; then
-        echo "=== Comparing against baseline ==="
-        zig build compare-bench -- --baseline "$BASELINE" --current bench-query-all.json
+        echo "=== Comparing against baseline (ADVISORY — cross-host, see job comment) ==="
+        # Advisory comparison: capture the full row-by-row report but never
+        # let cross-machine variance against the frozen baseline red the job.
+        # Matches scripts/perf-gate.sh / scripts/query-perf-gate.sh (`|| true`).
+        zig build compare-bench -- --baseline "$BASELINE" --current bench-query-all.json \
+          2>&1 | tee bench-query-compare.log || true
+        REGRESSIONS=$(grep -oE '[0-9]+ regression\(s\) detected' bench-query-compare.log \
+          | grep -oE '[0-9]+' | head -1 || true)
+        if [ -n "${REGRESSIONS:-}" ] && [ "${REGRESSIONS}" -gt 0 ] 2>/dev/null; then
+          echo "[advisory] compare-bench reported ${REGRESSIONS} row(s) over the noise gate"
+          echo "[advisory] this is informational only on the shared CI runner (cross-host"
+          echo "[advisory] vs the frozen 2026-04-20 baseline). Reproduce with same-host"
+          echo "[advisory] before/after via scripts/query-perf-gate.sh before acting."
+        else
+          echo "[advisory] compare-bench reported no rows over the noise gate"
+        fi
       else
         echo "SKIP: baseline $BASELINE not present; uploading current JSON only"
       fi
@@ -1037,6 +1090,13 @@ bench-query-path:
     when: always
     paths:
       - bench-query-all.json
+      # Per-bench JSONs + the comparison report so partial results survive a
+      # mid-build failure and the advisory regression rows stay inspectable.
+      - bench-parser.json
+      - bench-planner.json
+      - bench-exec-match.json
+      - bench-exec-mut.json
+      - bench-query-compare.log
     expire_in: 4 weeks
 
 # =============================================================================
