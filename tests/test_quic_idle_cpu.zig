@@ -86,7 +86,7 @@ fn buildChildEnv(aa: std.mem.Allocator) !*std.process.Environ.Map {
     if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
     if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
     if (posixGetenv("LD_LIBRARY_PATH")) |p| try env_ptr.put("LD_LIBRARY_PATH", p);
-    try env_ptr.put("GEODE_ADMIN_PASSWORD", "idlecputest123");
+    try env_ptr.put("GEODE_ADMIN_PASSWORD", "idlecputest123"); // gitleaks:allow — test fixture password
     return env_ptr;
 }
 

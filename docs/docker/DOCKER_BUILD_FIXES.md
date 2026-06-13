@@ -18,7 +18,7 @@ Created `scripts/docker/install-zig.sh` that:
 - Tries multiple community mirrors for downloading Zig
 - Includes signature verification using minisign
 - Falls back gracefully if mirrors are unavailable
-- Uses the official Zig public key: `RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U`
+- Uses the official Zig public key: `RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U` <!-- gitleaks:allow — official Zig PUBLIC minisign key, not a secret -->
 
 ### 3. Multiple Dockerfiles
 

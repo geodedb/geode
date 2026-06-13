@@ -150,7 +150,7 @@ test "TDE environment variable fallback" {
     const allocator = testing.allocator;
 
     // Set test TDE key
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"); // gitleaks:allow — deterministic test key fixture
     defer std.process.unsetEnvVar("GEODE_TDE_KEY") catch {};
 
     var manager = tde_kms.TDEKeyManager.init(allocator);

@@ -317,7 +317,7 @@ test "RC-3 codec: a keyed payload round-trips its idempotency key" {
     {
         const a = std.testing.allocator;
         const labels = [_][]const u8{"K"};
-        const key = "round-trip-key-7";
+        const key = "round-trip-key-7"; // gitleaks:allow — test fixture, not a secret
         const payload = try cluster_replication.serializeNodeCreateKeyed(a, "default", &labels, &.{}, key);
         defer a.free(payload);
 
