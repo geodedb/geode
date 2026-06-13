@@ -2154,3 +2154,48 @@ pre-vote rejections or a denial response carrying `leader_id`/`term`.
   reconverges, no monotonic degradation. Commit the next stable release build and
   re-run the arda churn sequence.
 - **Committed-write client-`Timeout` idempotency residual** — unchanged, still open.
+
+## ✅ FIXED 2026-06-12 (night) — committed-write client-`Timeout` idempotency residual (tests `cf8e5dda`, fix `b427cdcc`)
+
+The last recurring residual of this report — a committed, fully-replicated write
+returning `Timeout` to the client, and a client retry double-inserting — is closed by
+a three-part fix:
+
+- **RC-1 (wrong-signal wait, `cluster.zig:2537`)**: `waitForApplied` busy-polled the
+  node's global `log.applied` with a flat 5000ms budget, so an entry that COMMITTED but
+  applied slowly (apply-pipeline lag under churn) surfaced `error.Timeout` despite
+  raft guaranteeing its apply. New `waitForCommittedThenApplied` (+ pure
+  `waitOutcomeForState` decision fn): committed ⇒ success (never `Timeout`);
+  `error.Timeout` now strictly means commit-unconfirmed (genuine unknown — leadership
+  lost / propose unconfirmed). Wired at all 7 `crud_operations.zig` propose sites; the
+  misleading "timeout means did not replicate" comment corrected.
+- **RC-2 (opaque outcome, `proto_util.zig`)**: `error.Timeout` no longer maps to the
+  generic `58000` — it gets an 08006-class retryable-UNKNOWN SQLSTATE ("outcome
+  unknown — do not blindly retry"); `ClusterNotLeader`/`ClusterWriteNotReplicable`
+  share a distinct not-applied safe-to-retry class. Clients/drivers can now implement
+  a correct retry policy.
+- **RC-3 (no idempotency key)**: replicated GNC1/GNC2 create payloads can carry an
+  optional client idempotency key (backward-compatible codec — legacy keyless payloads
+  decode/apply unchanged; mixed-version roll safe). Apply-time deterministic
+  key→original-index dedup (rides the log ⇒ identical on every replica; rebuilt by
+  replay; bounded): same-key-different-index (a client retry minting a new raft index,
+  which the index-keyed #6 dedup by design cannot catch) is now a NO-OP — no duplicate
+  rows. Same-key-same-index restart replay unchanged. This closes the Go-driver
+  `database/sql` `ErrBadConn` silent auto-retry path (the driver re-runs a write on a
+  fresh conn after a lost response).
+
+Evidence: `zig build test-cluster-commit-aware-wait` 5/5,
+`test-proto-util-cluster-error-mapping` 7/7, `test-cluster-write-idempotency` 6/6 (all
+RED at `cf8e5dda`); regression suites (raft-apply-restart-idempotent,
+cluster-propose-write, cluster-replicable-mutations, raft-apply, steady-state,
+edge-durability-churn-repro, inbound-pool-occupancy) green; full 8/8 test shards green.
+
+Residual (minor, documented): external clients adopt the wire idempotency-key field
+(additive optional proto field; old clients unaffected — leader generates a key when
+absent, which covers server-side retries but means a client that re-sends a whole new
+request without a key still creates a second logical write, same as any database).
+k8s arda re-validation of the Timeout-under-churn path owed with the next dev build.
+
+**With this, both production-blockers of this report are closed at the repo level:
+liveness under sustained churn (inbound-pool starvation, above) and committed-write
+Timeout/retry integrity. Remaining owed items are k8s re-validations.**
