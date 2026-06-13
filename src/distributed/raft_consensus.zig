@@ -380,6 +380,16 @@ pub const Statistics = struct {
 
 const builtin = @import("builtin");
 const quic = if (builtin.is_test) struct {
+    // A single shared, well-defined stub stream that every test-mode
+    // `getStream()` hands back. Returning `undefined` here (the prior
+    // behavior) made `conn.send_stream = getStream()` an undefined optional
+    // pointer; the subsequent `conn.send_stream.?` unwrap in `Transport.send`
+    // is illegal behavior whose bit pattern Debug happened to leave non-null
+    // but ReleaseSafe's optional-unwrap safety check caught as
+    // "attempt to use null value" (SIGABRT). `QuicClientStream` is a
+    // zero-field struct, so a single static instance is sufficient and all
+    // of its methods (`writeAll`/`finish`/`deinit`) are no-ops.
+    var stub_stream: QuicClientStream = .{};
     pub const QuicClient = struct {
         pub fn init(_: anytype) QuicClient {
             return .{};
@@ -390,7 +400,7 @@ const quic = if (builtin.is_test) struct {
         pub fn waitForHandshake(_: *QuicClient, _: u32) !void {}
         pub fn deinit(_: *QuicClient) void {}
         pub fn getStream(_: *QuicClient) !*QuicClientStream {
-            return undefined;
+            return &stub_stream;
         }
         // Task A6b: test-mode stub for the same poll() call the production
         // path uses to flush in-flight FIN before tearing the client down.
@@ -410,7 +420,7 @@ const quic = if (builtin.is_test) struct {
         pub fn listen(_: *QuicTransport) !void {}
         pub fn deinit(_: *QuicTransport) void {}
         pub fn getStream(_: *QuicTransport) !*QuicClientStream {
-            return undefined;
+            return &stub_stream;
         }
     };
     // Test-mode stub for the peer re-resolution used by clientPollLoop. Tests
