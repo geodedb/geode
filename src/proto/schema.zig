@@ -101,12 +101,23 @@ pub const ExecuteRequest = struct {
     // Senders that do not support envelopes simply leave the field null;
     // existing wire frames without field 4 are unchanged (backward-compatible).
     principal_envelope_bytes: ?[]const u8 = null,
+    // CANARY: REQ=REQ-DIST-CLUSTER-IDEMPOTENT-RETRY; FEATURE="DistributedCluster"; ASPECT=ExecuteRequestIdempotencyKey; STATUS=TESTED; TEST=tests/test_cluster_write_idempotency.zig; OWNER=distributed; UPDATED=2026-06-12
+    // RC-3 ("committed write -> client Timeout -> retry double-insert"): an
+    // OPTIONAL client-supplied idempotency key. When a client retries a write
+    // after a committed-but-Timeout outcome it resends the SAME key, so the
+    // cluster apply path dedups the retry (no duplicate row). Field 5 is additive
+    // and backward-compatible: old clients leave it null and the leader generates
+    // a per-request key instead (which still dedups internal retries but cannot
+    // dedup an EXTERNAL client retry — that needs client adoption of this field).
+    // Existing wire frames without field 5 decode unchanged.
+    idempotency_key: ?[]const u8 = null,
 
     pub const _desc_table = .{
         .session_id = fd(1, .{ .scalar = .string }),
         .query = fd(2, .{ .scalar = .string }),
         .params = fd(3, .{ .repeated = .{ .submessage = {} } }),
         .principal_envelope_bytes = fd(4, .{ .scalar = .bytes }),
+        .idempotency_key = fd(5, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *ExecuteRequest, allocator: std.mem.Allocator) void {

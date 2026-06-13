@@ -3333,6 +3333,25 @@ pub const RaftNode = struct {
         return self.inner.log.applied;
     }
 
+    /// Returns the COMMIT watermark of this node's inner Raft log -- the highest
+    /// index known to be replicated to a quorum (distinct from `appliedIndex`,
+    /// which is the highest index the state machine has applied locally). Raft
+    /// guarantees a committed entry WILL apply, so a committed-but-not-yet-applied
+    /// entry is a durable success, never a replication failure.
+    ///
+    /// Reads `inner.log.committed` the same way `appliedIndex` reads
+    /// `inner.log.applied`: a plain u64 load, monotonic, advanced only inside the
+    /// inner library under `inner_mutex` (commitTo). Safe to call from any thread;
+    /// a torn read would at worst cost a spurious wait iteration (it never
+    /// fabricates a higher watermark out of nothing because the field only ever
+    /// increases). Used by the commit-aware post-propose wait
+    /// (ClusterCoordinator.waitForCommittedThenApplied), RC-1 of the
+    /// "committed write -> client Timeout -> retry double-insert" fix.
+    /// CANARY: REQ=REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT; FEATURE="DistributedCluster"; ASPECT=CommittedIndexAccessor; STATUS=TESTED; TEST=tests/test_cluster_commit_aware_wait.zig; OWNER=distributed; UPDATED=2026-06-12
+    pub fn committedIndex(self: *RaftNode) u64 {
+        return self.inner.log.committed;
+    }
+
     /// Returns the current Raft role of this node mirroring the inner
     /// library's state.  Falls through to `self.state` (which `drainReady`
     /// keeps in sync) so this remains correct under shutdown.

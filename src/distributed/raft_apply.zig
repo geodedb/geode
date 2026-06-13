@@ -183,6 +183,39 @@ pub fn resetGlobalTxnCoordinator() void {
 }
 
 // ---------------------------------------------------------------------------
+// Idempotency-key dedup table (RC-3, 2026-06-12)
+//
+// "committed write -> client Timeout -> retry double-insert": a keyed create
+// carries an optional client idempotency key. The apply path consults this
+// process-wide table so a same-key-DIFFERENT-index retry is a NO-OP (the
+// duplicate-row fix), while a same-index re-apply (restart replay) stays the
+// normal index-idempotent path. The table is rebuilt naturally by replay (geode
+// re-applies the full committed log on restart, in order), so it is
+// cross-replica deterministic without any persistence of its own. Apply runs
+// single-threaded inside the Raft tick loop, so no internal locking is needed.
+// ---------------------------------------------------------------------------
+
+var g_idempotency_dedup: ?*cluster_replication.IdempotencyDedup = null;
+
+/// Register the idempotency-key dedup table consulted by keyed create apply.
+/// The coordinator owns the table's lifetime (same pattern as setGlobalStore);
+/// tests register their own. If unregistered, keyed creates fall back to
+/// index-only dedup (a lazily-created per-apply table would defeat cross-entry
+/// retry detection, so we instead apply the inner body directly — see the
+/// `.create` branch).
+pub fn setGlobalIdempotencyDedup(dedup: *cluster_replication.IdempotencyDedup) void {
+    g_idempotency_dedup = dedup;
+}
+
+pub fn getGlobalIdempotencyDedup() ?*cluster_replication.IdempotencyDedup {
+    return g_idempotency_dedup;
+}
+
+pub fn resetGlobalIdempotencyDedup() void {
+    g_idempotency_dedup = null;
+}
+
+// ---------------------------------------------------------------------------
 // Apply callback — matches the RaftNode.apply_callback signature
 // ---------------------------------------------------------------------------
 
@@ -382,6 +415,44 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
 
     switch (gm.mutation_type) {
         .create => {
+            // RC-3 (2026-06-12): a keyed create wrapper (GN1K / GN2K) carries an
+            // optional client idempotency key. Route it through the key-aware apply
+            // so a same-key-DIFFERENT-index retry is a NO-OP (the duplicate-row
+            // fix), consulting the process-wide dedup table. When no dedup table is
+            // registered (single-node / non-cluster tests), we still strip the
+            // wrapper and apply the inner body index-idempotently via a transient
+            // per-apply table — correct for THIS entry, and cross-entry retry
+            // detection only matters in a live cluster where the table is wired.
+            // CANARY: REQ=REQ-DIST-CLUSTER-IDEMPOTENT-RETRY; FEATURE="DistributedCluster"; ASPECT=ApplyKeyedCreate; STATUS=TESTED; TEST=tests/test_cluster_write_idempotency.zig; OWNER=distributed; UPDATED=2026-06-12
+            if (cluster_replication.isKeyedPayload(gm.data)) {
+                var transient: ?cluster_replication.IdempotencyDedup = null;
+                defer if (transient) |*t| t.deinit();
+                const dedup = g_idempotency_dedup orelse blk: {
+                    transient = cluster_replication.IdempotencyDedup.init(allocator);
+                    break :blk &transient.?;
+                };
+                const is_multi = gm.data.len >= 4 and
+                    std.mem.eql(u8, gm.data[0..4], &cluster_replication.MAGIC_KEYED2);
+                if (is_multi) {
+                    const touched = try cluster_replication.applyMultiCreatePayloadKeyed(allocator, store, gm.data, raft_index, dedup);
+                    log.info("raft apply: replicated keyed multi create", &.{
+                        Attr.uint("entities", touched),
+                        Attr.string("graph", graph_name),
+                    });
+                    const result = try allocator.alloc(u8, 8);
+                    std.mem.writeInt(u64, result[0..8], cluster_replication.deriveMultiNodeId(raft_index, 0), .little);
+                    return result;
+                }
+                const node_id = try cluster_replication.applyNodeCreatePayloadKeyed(allocator, store, gm.data, raft_index, dedup);
+                log.info("raft apply: replicated keyed node create", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("graph", graph_name),
+                });
+                const result = try allocator.alloc(u8, 8);
+                std.mem.writeInt(u64, result[0..8], node_id, .little);
+                return result;
+            }
+
             // Cluster write replication (GNC1 payload): decode the serialized
             // single-node create and replay it deterministically. The node id is
             // the committed entry's Raft log index, which is globally unique and

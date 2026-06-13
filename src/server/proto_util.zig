@@ -159,6 +159,35 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // the engine-backed CLI (`geode backup create` / `geode restore`) is the
         // supported surface. Stable message names the CLI alternative.
         error.GqlBackupRestoreUnsupported => .{ .code = "0A000", .message = execution.gql_backup_restore_unsupported_message },
+        // RC-2 ("committed write -> client Timeout -> retry double-insert",
+        // 2026-06-12): a clustered write's outcome must NOT be conflated into the
+        // generic 58000 system-error class. Three distinct outcomes, each
+        // separately recognizable by a client, so a committed-but-unknown write is
+        // never retried blindly (which is what minted the duplicate row):
+        //
+        //   * error.Timeout -> CONNECTION-EXCEPTION class (08). The write MIGHT
+        //     have committed but this node could not confirm its local-apply
+        //     outcome within budget. The outcome is UNKNOWN: a client may retry
+        //     ONLY with an idempotency key (RC-3). 08006 = connection_failure;
+        //     the message states the outcome is unknown. Distinct from the
+        //     not-applied class (40) below, so the client can tell "retry only
+        //     with idempotency" from "retry freely against the leader".
+        //   * error.ClusterNotLeader / error.ClusterWriteNotReplicable ->
+        //     TRANSACTION-ROLLBACK class (40). The write definitively did NOT
+        //     apply here (this node is a follower, or the leader could not
+        //     replicate the write shape). Nothing mutated; safe to retry against
+        //     the leader. 40001 = serialization_failure, the canonical
+        //     "rolled back, safe to retry" code; both errors SHARE class 40 so a
+        //     client treats them identically.
+        // CANARY: REQ=REQ-DIST-CLUSTER-WRITE-OUTCOME-SQLSTATE; FEATURE="DistributedCluster"; ASPECT=ClusterErrorSqlstateMapping; STATUS=TESTED; TEST=tests/test_proto_util_cluster_error_mapping.zig; OWNER=transport; UPDATED=2026-06-12
+        // The error NAME is retained in each message (a stable, wire-discoverable
+        // token) so clients and regression suites that key on `ClusterNotLeader` /
+        // `ClusterWriteNotReplicable` / `Timeout` continue to recognize the
+        // outcome — RC-2 only requires distinct, non-58000 codes and a non-empty
+        // message, not the removal of the name.
+        error.Timeout => .{ .code = "08006", .message = "Timeout: cluster write outcome unknown — the entry may have committed but local apply could not be confirmed in time; retry ONLY with an idempotency key" },
+        error.ClusterNotLeader => .{ .code = "40001", .message = "ClusterNotLeader: cluster write not applied here — this node is not the leader; retry against the current leader" },
+        error.ClusterWriteNotReplicable => .{ .code = "40001", .message = "ClusterWriteNotReplicable: cluster write not applied here — the leader could not replicate this write shape; retry against the current leader" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

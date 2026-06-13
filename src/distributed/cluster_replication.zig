@@ -946,6 +946,327 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     return update_count;
 }
 
+// ===========================================================================
+// RC-3 — client idempotency key dedup ("committed write -> client Timeout ->
+// retry double-insert", 2026-06-12)
+// ===========================================================================
+//
+// THE BUG: a CREATE that committed but whose client saw a Timeout (RC-1/RC-2)
+// is RE-PROPOSED by the retrying client, lands at a NEW raft index, and mints
+// NEW ids (GNC1 id == raft_index, GNC2 ids derived from raft_index) — a
+// DUPLICATE row. The persisted store deduped only by raft index (restart
+// replay), never by the logical client request.
+//
+// THE FIX: an OPTIONAL client idempotency key rides the replicated create
+// payload. At apply time a deterministic key -> original-raft-index dedup table
+// makes a same-key-DIFFERENT-index apply a NO-OP (the retry case). Same-key-
+// SAME-index re-apply (restart replay) stays the normal index-idempotent path.
+// A keyless (legacy) payload applies EXACTLY as before — backward compatible.
+//
+// CODEC EVOLUTION (mixed-version-safe): rather than mutate the GNC1/GNC2 body,
+// a keyed create is a self-describing WRAPPER with its own 4-byte magic
+// (GN1K / GN2K) carrying an optional-key header followed by the UNCHANGED
+// legacy GNC1/GNC2 payload. A node running the fixed code recognizes both the
+// wrapper (keyed) and the bare legacy magic (keyless, already committed in the
+// log before the roll). A node running OLD code never sees a GN1K/GN2K wrapper
+// because the leader only emits one when a client supplies a key, AND the apply
+// dispatch's unknown-magic arm already log-and-skips (raft_apply.zig) rather
+// than minting junk — so a stray wrapper on an un-upgraded node is inert, not
+// corrupting. The wrapper distinguishes "no key" (header byte 0) from "empty
+// key" (header byte 1 + zero-length string), satisfying idempotencyKeyOf's
+// null-vs-present contract.
+//
+// DETERMINISM: the dedup table is rebuilt naturally by replay — geode re-applies
+// the full committed log on restart (no compaction), so every replica processes
+// the SAME keyed entries in the SAME order and reaches the SAME table + eviction
+// state. The table is bounded (LRU by insertion order, generous cap) so it
+// cannot grow without bound; identical insertion order across replicas ⇒
+// identical eviction ⇒ deterministic.
+//
+// CANARY: REQ=REQ-DIST-CLUSTER-IDEMPOTENT-RETRY; FEATURE="DistributedCluster"; ASPECT=IdempotencyKeyDedup; STATUS=TESTED; TEST=tests/test_cluster_write_idempotency.zig; OWNER=distributed; UPDATED=2026-06-12
+
+/// 4-byte magic prefix identifying a GNC1 (single-node create) payload wrapped
+/// with an optional idempotency key.
+pub const MAGIC_KEYED1 = [4]u8{ 'G', 'N', '1', 'K' };
+
+/// 4-byte magic prefix identifying a GNC2 (multi-create) payload wrapped with an
+/// optional idempotency key.
+pub const MAGIC_KEYED2 = [4]u8{ 'G', 'N', '2', 'K' };
+
+/// Generous bound on the key -> original-index table. The same committed log is
+/// replayed on every replica in the same order, so insertion-order LRU eviction
+/// is deterministic across replicas. 64k entries is far above any realistic
+/// in-flight-retry window while bounding memory (~key bytes + 8 bytes/entry).
+pub const IDEMPOTENCY_DEDUP_CAP: usize = 64 * 1024;
+
+/// Bounded, deterministic key -> original-raft-index dedup table. Rebuilt
+/// naturally by replay (the full committed log re-applies on restart). Eviction
+/// is LRU by INSERTION order (a committed key is recorded once, at its first
+/// apply, and never re-touched), so every replica processing the same log
+/// reaches the same table and the same eviction state.
+///
+/// The fixer owns the exact shape; the apply functions consult & populate it.
+pub const IdempotencyDedup = struct {
+    allocator: std.mem.Allocator,
+    /// key (owned copy) -> original raft index where the key was first applied.
+    map: std.StringHashMap(u64),
+    /// Insertion-order ring of the owned key slices, for O(1) LRU eviction of
+    /// the OLDEST inserted key once the cap is reached. Indices into `order`
+    /// are never reused while an entry is live; eviction pops from the front.
+    order: std.ArrayList([]const u8),
+    /// Front cursor into `order` (the next key to evict). Entries before it have
+    /// already been evicted (their slots are stale/null-equivalent).
+    head: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) IdempotencyDedup {
+        return .{
+            .allocator = allocator,
+            .map = std.StringHashMap(u64).init(allocator),
+            .order = std.ArrayList([]const u8).empty,
+        };
+    }
+
+    pub fn deinit(self: *IdempotencyDedup) void {
+        var it = self.map.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.map.deinit();
+        self.order.deinit(self.allocator);
+    }
+
+    /// The original raft index a key was first applied at, or null if unseen.
+    pub fn lookup(self: *const IdempotencyDedup, key: []const u8) ?u64 {
+        return self.map.get(key);
+    }
+
+    /// Record `key` -> `raft_index` if absent. A duplicate record (same key seen
+    /// again, e.g. restart replay of the SAME committed entry) is a no-op — the
+    /// FIRST recorded index is authoritative and stable across replays. Evicts
+    /// the oldest-inserted key once the cap is exceeded (deterministic LRU).
+    pub fn record(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
+        if (self.map.contains(key)) return; // first index wins; replay is a no-op
+        const owned = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned);
+        try self.map.put(owned, raft_index);
+        try self.order.append(self.allocator, owned);
+        // Evict oldest live entries until back within cap. Deterministic: same
+        // log order on every replica ⇒ same eviction sequence.
+        while (self.map.count() > IDEMPOTENCY_DEDUP_CAP and self.head < self.order.items.len) {
+            const victim = self.order.items[self.head];
+            self.head += 1;
+            if (self.map.fetchRemove(victim)) |kv| self.allocator.free(kv.key);
+        }
+        // Compact the order ring once the consumed front dominates it, so its
+        // backing array stays O(live entries) instead of growing with total
+        // history. Deterministic: the trigger depends only on counts, identical
+        // on every replica processing the same log. The freed front slots held
+        // dangling pointers (already evicted from the map) — never dereferenced.
+        if (self.head > 0 and self.head * 2 >= self.order.items.len) {
+            const live = self.order.items[self.head..];
+            std.mem.copyForwards([]const u8, self.order.items[0..live.len], live);
+            self.order.shrinkRetainingCapacity(live.len);
+            self.head = 0;
+        }
+    }
+};
+
+/// Read the idempotency key from a keyed (GN1K / GN2K) payload, or null for a
+/// keyless legacy (GNC1 / GNC2 / any non-wrapper) payload. Distinguishes "no
+/// key" (null) from "empty key" (a present, zero-length key). Borrows into
+/// `data`; the slice is valid for the lifetime of `data`.
+pub fn idempotencyKeyOf(data: []const u8) ?[]const u8 {
+    if (!isKeyedPayload(data)) return null;
+    var r = Reader{ .data = data, .pos = MAGIC_KEYED1.len };
+    const present = r.byte() catch return null;
+    if (present == 0) return null;
+    return r.str16() catch null;
+}
+
+/// True iff `data` is a GN1K or GN2K keyed-create wrapper.
+pub fn isKeyedPayload(data: []const u8) bool {
+    return (data.len >= MAGIC_KEYED1.len and std.mem.eql(u8, data[0..MAGIC_KEYED1.len], &MAGIC_KEYED1)) or
+        (data.len >= MAGIC_KEYED2.len and std.mem.eql(u8, data[0..MAGIC_KEYED2.len], &MAGIC_KEYED2));
+}
+
+/// Encode the optional-key header: byte 0 = no key; byte 1 + str16 = present key
+/// (possibly empty). Returns the cursor just past the header.
+fn appendKeyHeader(list: *std.ArrayList(u8), a: std.mem.Allocator, key: ?[]const u8) !void {
+    if (key) |k| {
+        try list.append(a, 1);
+        try appendStr16(list, a, k);
+    } else {
+        try list.append(a, 0);
+    }
+}
+
+/// Split a keyed wrapper into (key, inner legacy body). `data` must be a keyed
+/// payload (caller checks isKeyedPayload). The inner body is the UNCHANGED
+/// legacy GNC1/GNC2 payload (with its own magic), borrowed from `data`.
+const KeyedSplit = struct { key: ?[]const u8, inner: []const u8 };
+fn splitKeyed(data: []const u8) !KeyedSplit {
+    var r = Reader{ .data = data, .pos = MAGIC_KEYED1.len };
+    const present = try r.byte();
+    const key: ?[]const u8 = if (present == 0) null else try r.str16();
+    return .{ .key = key, .inner = data[r.pos..] };
+}
+
+/// Serialize a single-node create carrying an OPTIONAL idempotency key into a
+/// GN1K wrapper around the legacy GNC1 body. A null key produces a wrapper whose
+/// header marks "no key" (so it still dedups by index only, but travels through
+/// the keyed apply path uniformly). The legacy keyless `serializeNodeCreate`
+/// payload is unchanged and still decodes/applies through `applyNodeCreatePayloadKeyed`.
+pub fn serializeNodeCreateKeyed(
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    labels: []const []const u8,
+    props: []const Prop,
+    idempotency_key: ?[]const u8,
+) ![]u8 {
+    const inner = try serializeNodeCreate(allocator, graph, labels, props);
+    defer allocator.free(inner);
+
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+    try list.appendSlice(allocator, &MAGIC_KEYED1);
+    try appendKeyHeader(&list, allocator, idempotency_key);
+    try list.appendSlice(allocator, inner);
+    return list.toOwnedSlice(allocator);
+}
+
+/// Apply a (keyed GN1K OR legacy keyless GNC1) single-node create with key-aware
+/// dedup. Semantics:
+///   * legacy GNC1 (no wrapper) -> applies EXACTLY like applyNodeCreatePayload
+///     (index-keyed only); no key recorded.
+///   * GN1K, no key             -> strips the wrapper, applies the inner GNC1
+///     normally; no key recorded.
+///   * GN1K, key NOT yet seen   -> records (key -> raft_index), then applies.
+///   * GN1K, key seen at SAME index (restart replay) -> applies (index-idempotent).
+///   * GN1K, key seen at a DIFFERENT index (CLIENT RETRY) -> NO-OP; returns the
+///     ORIGINAL node id (== the original raft index for GNC1). No new row.
+/// `dedup` persists across calls and is the cross-replica-deterministic oracle.
+pub fn applyNodeCreatePayloadKeyed(
+    allocator: std.mem.Allocator,
+    store: *GraphStore,
+    data: []const u8,
+    raft_index: u64,
+    dedup: *IdempotencyDedup,
+) !u64 {
+    // Legacy keyless GNC1 payload: behave exactly like applyNodeCreatePayload.
+    if (isNodeCreatePayload(data)) {
+        return applyNodeCreatePayload(allocator, store, data, raft_index);
+    }
+    if (data.len < MAGIC_KEYED1.len or !std.mem.eql(u8, data[0..MAGIC_KEYED1.len], &MAGIC_KEYED1))
+        return CodecError.CorruptPayload;
+
+    const split = try splitKeyed(data);
+    if (split.key) |key| {
+        if (dedup.lookup(key)) |orig_index| {
+            // Same key already applied. Same index = restart replay (fall through
+            // to the index-idempotent apply); different index = CLIENT RETRY ->
+            // NO-OP, return the original node id (== original raft index, GNC1).
+            if (orig_index != raft_index) return orig_index;
+        } else {
+            try dedup.record(key, raft_index);
+        }
+    }
+    // Apply the unchanged inner GNC1 body at this entry's index (index-idempotent).
+    return applyNodeCreatePayload(allocator, store, split.inner, raft_index);
+}
+
+/// Serialize a multi-create (N nodes + M edges) carrying an OPTIONAL idempotency
+/// key into a GN2K wrapper around the legacy GNC2 body. See
+/// serializeNodeCreateKeyed for the wrapper contract.
+pub fn serializeMultiCreateKeyed(
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    nodes: []const NodeSpec,
+    edges: []const EdgeSpec,
+    idempotency_key: ?[]const u8,
+) ![]u8 {
+    const inner = try serializeMultiCreate(allocator, graph, nodes, edges);
+    defer allocator.free(inner);
+
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+    try list.appendSlice(allocator, &MAGIC_KEYED2);
+    try appendKeyHeader(&list, allocator, idempotency_key);
+    try list.appendSlice(allocator, inner);
+    return list.toOwnedSlice(allocator);
+}
+
+/// Apply a (keyed GN2K OR legacy keyless GNC2) multi-create with key-aware
+/// dedup. Mirrors applyNodeCreatePayloadKeyed: a same-key-different-index retry
+/// is a NO-OP (no duplicate nodes/edges), returning the original entity count;
+/// a same-index replay or unseen key applies through applyMultiCreatePayload
+/// (which is itself index-idempotent). `dedup` persists across calls.
+pub fn applyMultiCreatePayloadKeyed(
+    allocator: std.mem.Allocator,
+    store: *GraphStore,
+    data: []const u8,
+    raft_index: u64,
+    dedup: *IdempotencyDedup,
+) !usize {
+    // Legacy keyless GNC2 payload: behave exactly like applyMultiCreatePayload.
+    if (isMultiCreatePayload(data)) {
+        return applyMultiCreatePayload(allocator, store, data, raft_index);
+    }
+    if (data.len < MAGIC_KEYED2.len or !std.mem.eql(u8, data[0..MAGIC_KEYED2.len], &MAGIC_KEYED2))
+        return CodecError.CorruptPayload;
+
+    const split = try splitKeyed(data);
+    if (split.key) |key| {
+        if (dedup.lookup(key)) |orig_index| {
+            // Different index = CLIENT RETRY -> NO-OP. Return the entity count the
+            // original apply would have (decoded cheaply from the inner body) so
+            // the caller sees a consistent "touched" total without re-creating.
+            if (orig_index != raft_index) return countMultiCreateEntities(split.inner);
+        } else {
+            try dedup.record(key, raft_index);
+        }
+    }
+    return applyMultiCreatePayload(allocator, store, split.inner, raft_index);
+}
+
+/// Count the (nodes + edges) a GNC2 body declares, WITHOUT applying it — used to
+/// report a deduped-retry's touched-entity total. Returns 0 on a malformed body
+/// (the retry is a no-op regardless).
+fn countMultiCreateEntities(inner: []const u8) usize {
+    if (!isMultiCreatePayload(inner)) return 0;
+    var r = Reader{ .data = inner, .pos = MAGIC2.len };
+    _ = r.str16() catch return 0; // graph
+    const node_count = r.readU16() catch return 0;
+    // We only need the counts; skip the node bodies to read the edge count.
+    var k: usize = 0;
+    while (k < node_count) : (k += 1) {
+        const nlabels = r.readU16() catch return 0;
+        var li: usize = 0;
+        while (li < nlabels) : (li += 1) {
+            _ = r.str16() catch return 0;
+        }
+        if (skipProps(&r) == false) return 0;
+    }
+    const edge_count = r.readU16() catch return 0;
+    return @as(usize, node_count) + @as(usize, edge_count);
+}
+
+/// Advance `r` past one appendProps-encoded prop list. Returns false on a
+/// malformed body.
+fn skipProps(r: *Reader) bool {
+    const n = r.readU16() catch return false;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        _ = r.str16() catch return false; // key
+        const tag = r.byte() catch return false;
+        switch (tag) {
+            0 => {},
+            1, 2 => _ = r.readU64() catch return false,
+            3 => _ = r.byte() catch return false,
+            4 => _ = r.str32() catch return false,
+            else => return false,
+        }
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -3014,6 +3014,12 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_cert_provided_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_replicable_mut_tests.step, 1, test_shard_loads, test_shard_index);
+    // "committed write -> client Timeout -> retry double-insert" fix (2026-06-12):
+    // now GREEN, folded into the shard aggregate (RC-1 commit-aware wait, RC-2
+    // distinct cluster-write SQLSTATE outcomes, RC-3 idempotency-key apply dedup).
+    shardDep(test_step, &run_cluster_commit_aware_wait_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_proto_util_cluster_error_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cluster_write_idempotency_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_acceptor_watchdog_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);

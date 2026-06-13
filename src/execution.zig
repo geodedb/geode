@@ -526,6 +526,16 @@ pub const ExecutionContext = struct {
     // that frees the keys (gpa in the QUIC handler). Without this, property_mutation
     // would dupe keys with store.allocator causing Invalid free when gpa frees them.
     pending_index_rebuilds_allocator: ?std.mem.Allocator = null,
+    // CANARY: REQ=REQ-DIST-CLUSTER-IDEMPOTENT-RETRY; FEATURE="DistributedCluster"; ASPECT=ExecutionContextIdempotencyKey; STATUS=TESTED; TEST=tests/test_cluster_write_idempotency.zig; OWNER=distributed; UPDATED=2026-06-12
+    // RC-3 ("committed write -> client Timeout -> retry double-insert"): the
+    // optional client-supplied idempotency key (ExecuteRequest field 5),
+    // threaded from the request boundary to the cluster-replication propose hook
+    // so a retried write carrying the SAME key dedups at apply time (no duplicate
+    // row). Null when the client did not supply one — the leader then generates a
+    // per-request key, which still keys the replicated payload (lighting up the
+    // dedup path) but cannot dedup an EXTERNAL client retry (client adoption of
+    // field 5 closes that residual). Borrowed; valid for the request's lifetime.
+    idempotency_key: ?[]const u8 = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;

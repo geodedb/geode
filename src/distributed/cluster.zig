@@ -76,6 +76,7 @@ const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
 
 const cluster_auth = @import("cluster_auth.zig");
 const raft_apply = @import("raft_apply.zig");
+const cluster_replication = @import("cluster_replication.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("cluster");
@@ -286,6 +287,71 @@ pub fn freshActiveConnServiceableWithin(
     // the sweeper cannot break is a pool fully saturated by live conns — that is
     // real load, and the fresh conn must wait in line (no live-conn reaping).
     return active < workers;
+}
+
+// ===========================================================================
+// RC-1: commit-aware post-propose wait decision (pure, unit-testable)
+// ===========================================================================
+//
+// "committed write -> client Timeout -> retry double-insert" (2026-06-12),
+// root cause 1: the post-propose wait busy-polled the LOCAL apply index with a
+// flat budget and returned error.Timeout for an entry that was already
+// COMMITTED. Raft guarantees a committed entry applies (once, in the current
+// term), so a committed-but-apply-lagged entry is NOT a replication failure —
+// reporting it as Timeout is the wrong signal that drives the client retry.
+//
+// This is the decision factored out of the wait loop so the wrong-signal logic
+// is testable without a live cluster (sibling to the stall-detector decision
+// functions in raft_consensus.zig and the inbound-reap decisions above).
+
+/// The outcome of evaluating a post-propose wait against the current
+/// (committed, applied, target, budget) state.
+pub const WaitOutcome = enum {
+    /// applied_index >= target: the entry is applied locally — full success.
+    applied,
+    /// committed_index >= target but applied_index < target: the entry is
+    /// COMMITTED (durably replicated to a quorum) and WILL apply; the wait must
+    /// keep waiting for local apply rather than surfacing a timeout. A success
+    /// class — NEVER a Timeout, even with the budget exhausted.
+    committed_apply_pending,
+    /// Neither committed nor applied yet, but budget remains: keep waiting.
+    keep_waiting,
+    /// commit could NOT be confirmed (committed_index < target) and the budget
+    /// is exhausted: a genuine unknown — this node cannot confirm the write
+    /// reached a quorum. The ONLY state that maps to error.Timeout.
+    commit_unknown_timeout,
+};
+
+/// PURE decision over (committed_index, applied_index, target_index,
+/// budget_exhausted). The truth table (RC-1 of the committed-write-Timeout fix):
+///
+///   | committed>=target | applied>=target | budget_exhausted | outcome                 |
+///   |-------------------|-----------------|------------------|-------------------------|
+///   | *                 | yes             | *                | applied                 |
+///   | yes               | no              | *                | committed_apply_pending |  <- the FIX
+///   | no                | no              | no               | keep_waiting            |
+///   | no                | no              | yes              | commit_unknown_timeout  |
+///
+/// A committed entry is NEVER reported as a timeout: commit guarantees apply, so
+/// once committed_index >= target the only remaining wait is for LOCAL apply.
+/// error.Timeout is reserved for the genuine unknown (commit not confirmed in
+/// budget).
+// CANARY: REQ=REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT; FEATURE="DistributedCluster"; ASPECT=CommitAwarePostProposeWait; STATUS=TESTED; TEST=tests/test_cluster_commit_aware_wait.zig; OWNER=distributed; UPDATED=2026-06-12
+pub fn waitOutcomeForState(
+    committed_index: u64,
+    applied_index: u64,
+    target_index: u64,
+    budget_exhausted: bool,
+) WaitOutcome {
+    // Fast path: the entry is applied locally — full success regardless of budget.
+    if (applied_index >= target_index) return .applied;
+    // Committed but apply lagging: a success class (commit guarantees apply).
+    // This is the bug fix — pre-fix this state returned Timeout once the budget
+    // elapsed, the exact wrong inference that drove the client retry.
+    if (committed_index >= target_index) return .committed_apply_pending;
+    // Not yet committed: keep waiting while there is budget; once the budget is
+    // exhausted without a confirmed commit it is a genuine unknown.
+    return if (budget_exhausted) .commit_unknown_timeout else .keep_waiting;
 }
 
 // NOTE: the standalone-path unit test for gateUnreplicatedWrite lives in
@@ -706,6 +772,10 @@ pub const ClusterCoordinator = struct {
     /// GAP-0870: 2PC coordinator that committed `txn_prepare` / `txn_decide`
     /// Raft entries route into (registered with raft_apply at init).
     txn_coord: *raft_consensus.TxnCoordinator,
+    /// RC-3 (2026-06-12): the idempotency-key dedup table consulted by the keyed
+    /// create apply path (registered with raft_apply at init). Owned here; rebuilt
+    /// naturally by committed-log replay on restart, so it needs no persistence.
+    idempotency_dedup: *cluster_replication.IdempotencyDedup,
 
     /// owed item (4) — frozen-term pre-vote VISIBILITY: tracks whether this node
     /// has been wedged as a CANDIDATE at an UNCHANGING term past the warn
@@ -988,6 +1058,14 @@ pub const ClusterCoordinator = struct {
         raft_apply.setGlobalClusterConfig(applied_cfg);
         raft_apply.setGlobalTxnCoordinator(txn_coord);
 
+        // RC-3 (2026-06-12): the idempotency-key dedup table consulted by keyed
+        // create apply. Owned by the coordinator; rebuilt by committed-log replay.
+        const idem_dedup = try allocator.create(cluster_replication.IdempotencyDedup);
+        errdefer allocator.destroy(idem_dedup);
+        idem_dedup.* = cluster_replication.IdempotencyDedup.init(allocator);
+        errdefer idem_dedup.deinit();
+        raft_apply.setGlobalIdempotencyDedup(idem_dedup);
+
         var cluster_state = try initClusterState(allocator);
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
         // so the network transport's findNodeEndpoint() lookup works from
@@ -1034,6 +1112,7 @@ pub const ClusterCoordinator = struct {
             .store = store,
             .applied_cluster_config = applied_cfg,
             .txn_coord = txn_coord,
+            .idempotency_dedup = idem_dedup,
             .replication_factor = config.replication_factor,
             .sharding_strategy = config.sharding_strategy,
             .failover_config = config.failover_config,
@@ -1082,6 +1161,13 @@ pub const ClusterCoordinator = struct {
         if (raft_apply.getGlobalTxnCoordinator() == self.txn_coord) {
             raft_apply.resetGlobalTxnCoordinator();
         }
+        // RC-3: unregister + free the idempotency dedup table (same ownership
+        // pattern as the apply targets above).
+        if (raft_apply.getGlobalIdempotencyDedup() == self.idempotency_dedup) {
+            raft_apply.resetGlobalIdempotencyDedup();
+        }
+        self.idempotency_dedup.deinit();
+        self.allocator.destroy(self.idempotency_dedup);
         self.applied_cluster_config.deinit();
         self.allocator.destroy(self.applied_cluster_config);
         self.txn_coord.deinit();
@@ -2542,6 +2628,52 @@ pub const ClusterCoordinator = struct {
             if (applied >= index) return;
             if (compat_milliTimestamp() >= deadline) return error.Timeout;
             compat_sleepNs(2 * std.time.ns_per_ms);
+        }
+    }
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT; FEATURE="DistributedCluster"; ASPECT=CommittedIndexAccessor; STATUS=TESTED; TEST=tests/test_cluster_commit_aware_wait.zig; OWNER=distributed; UPDATED=2026-06-12
+    /// The COMMIT watermark on this node (distinct from `appliedIndex()`): the
+    /// highest log index known replicated to a quorum. A committed entry is
+    /// durable and WILL apply — see `waitForCommittedThenApplied`.
+    pub fn committedIndex(self: *ClusterCoordinator) u64 {
+        return self.raft.committedIndex();
+    }
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT; FEATURE="DistributedCluster"; ASPECT=CommitAwarePostProposeWait; STATUS=TESTED; TEST=tests/test_cluster_commit_aware_wait.zig; OWNER=distributed; UPDATED=2026-06-12
+    /// Commit-aware replacement for `waitForApplied` (RC-1 of the "committed
+    /// write -> client Timeout -> retry double-insert" fix). Blocks until the
+    /// target `index` is CONFIRMED COMMITTED — at which point the write is
+    /// durable (replicated to a quorum) and Raft guarantees it WILL apply, so
+    /// this returns SUCCESS. A committed-but-apply-lagged entry is NEVER reported
+    /// as `error.Timeout`: that was the wrong signal that drove the client to
+    /// retry a write that already committed (minting the duplicate row).
+    ///
+    /// `error.Timeout` is returned ONLY when COMMIT ITSELF cannot be confirmed
+    /// within `deadline_ms` (committed_index < index AND the budget is
+    /// exhausted) — a genuine unknown: this node could not confirm the write
+    /// reached a quorum.
+    ///
+    /// The decision per poll is the pure `waitOutcomeForState`; this method only
+    /// owns the clock, the poll cadence, and the budget. Polls every 2 ms.
+    pub fn waitForCommittedThenApplied(self: *ClusterCoordinator, index: u64, deadline_ms: u64) !void {
+        const begin_ms = compat_milliTimestamp();
+        const deadline = begin_ms +| @as(i64, @intCast(deadline_ms));
+        while (true) {
+            const applied = self.raft.appliedIndex();
+            const committed = self.raft.committedIndex();
+            const budget_exhausted = compat_milliTimestamp() >= deadline;
+            switch (waitOutcomeForState(committed, applied, index, budget_exhausted)) {
+                // Applied locally, or committed (durable; apply guaranteed to
+                // follow) — both are success. A committed entry returns here
+                // immediately rather than blocking further on local apply: the
+                // durability guarantee the client needs is COMMIT, and returning
+                // success on commit is exactly what stops the spurious retry.
+                .applied, .committed_apply_pending => return,
+                // Commit not confirmed in budget — a genuine unknown.
+                .commit_unknown_timeout => return error.Timeout,
+                // Still within budget and not yet committed — keep polling.
+                .keep_waiting => compat_sleepNs(2 * std.time.ns_per_ms),
+            }
         }
     }
 

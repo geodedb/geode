@@ -1867,6 +1867,38 @@ fn clusterPropValue(v: Value) ?graph_store.PropertyValue {
     };
 }
 
+/// Resolve the idempotency key for a cluster-replicated write (RC-3, 2026-06-12).
+/// Prefers a client-supplied key from the active ExecutionContext (ExecuteRequest
+/// field 5) — that is what lets an EXTERNAL client retry dedup. When the client
+/// supplied none, the leader generates a random per-request key into `buf` and
+/// returns that slice: this keys the replicated payload (so the apply dedup path
+/// is exercised and a future client adoption needs no further server change) but
+/// does NOT dedup an external retry (each retry re-enters here and mints a fresh
+/// key — the documented residual). A leader-generated key is 32 lowercase hex
+/// chars; `buf` must be at least 32 bytes. The returned slice borrows the client
+/// key (valid for the request) or `buf` (valid for the caller's frame).
+fn effectiveIdempotencyKey(buf: *[32]u8) []const u8 {
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.idempotency_key) |k| {
+            if (k.len > 0) return k;
+        }
+    }
+    var raw: [16]u8 = undefined;
+    // Zig 0.16 compat: std.crypto.random was removed; use the getrandom syscall
+    // (same pattern as user_management.compat_fillRandom).
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(&raw, raw.len, 0);
+    } else {
+        std.c.arc4random_buf(&raw, raw.len);
+    }
+    const hex = "0123456789abcdef";
+    for (raw, 0..) |b, i| {
+        buf[i * 2] = hex[b >> 4];
+        buf[i * 2 + 1] = hex[b & 0x0f];
+    }
+    return buf[0..32];
+}
+
 /// Replicate an eligible single-node `CREATE (:Label {props})` through Raft and
 /// return its result. Called ONLY when this node is the cluster leader. The
 /// create is proposed to the Raft log (never written locally) and applied
@@ -1944,7 +1976,11 @@ fn clusterReplicateNodeCreate(
     }
 
     const graph = current_graph orelse "default";
-    const payload = cluster_replication.serializeNodeCreate(allocator, graph, node.labels, props.items) catch |err| switch (err) {
+    // RC-3 (2026-06-12): carry an idempotency key so a retried CREATE dedups at
+    // apply time (no duplicate row). Client key from the request, else leader-generated.
+    var idem_buf: [32]u8 = undefined;
+    const idem_key = effectiveIdempotencyKey(&idem_buf);
+    const payload = cluster_replication.serializeNodeCreateKeyed(allocator, graph, node.labels, props.items, idem_key) catch |err| switch (err) {
         cluster_replication.CodecError.UnsupportedPropertyType => return error.ClusterWriteNotReplicable,
         else => return err,
     };
@@ -1961,10 +1997,14 @@ fn clusterReplicateNodeCreate(
         error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    // Block until the entry is applied locally. Apply happens on quorum commit
-    // (replicated to a majority); a timeout means the write did not durably
-    // replicate, so surface it rather than claim success.
-    try coord.waitForApplied(idx, 5000);
+    // Commit-aware wait (RC-1, 2026-06-12): block until the entry is CONFIRMED
+    // COMMITTED (durably replicated to a quorum) — at which point Raft guarantees
+    // it WILL apply, so this returns success. error.Timeout is surfaced ONLY when
+    // commit itself cannot be confirmed in budget (a genuine unknown), NEVER for a
+    // committed-but-apply-lagged entry. Reporting apply lag as Timeout was the
+    // wrong signal that drove the client to retry an already-committed write,
+    // minting the duplicate row.
+    try coord.waitForCommittedThenApplied(idx, 5000);
 
     if (ret_result) |r| {
         ret_result = null; // ownership transferred to the caller
@@ -2119,11 +2159,16 @@ fn clusterReplicateEdgeCreate(
     try buildEdgeCreateSpecs(allocator, chain, env, &node_specs, &edge_specs);
 
     const graph = current_graph orelse "default";
-    const payload = cluster_replication.serializeMultiCreate(
+    // RC-3 (2026-06-12): carry an idempotency key so a retried edge-CREATE dedups
+    // at apply time (no duplicate subgraph). Client key from the request, else leader-generated.
+    var idem_buf: [32]u8 = undefined;
+    const idem_key = effectiveIdempotencyKey(&idem_buf);
+    const payload = cluster_replication.serializeMultiCreateKeyed(
         allocator,
         graph,
         node_specs.items,
         edge_specs.items,
+        idem_key,
     ) catch |err| switch (err) {
         cluster_replication.CodecError.UnsupportedPropertyType,
         cluster_replication.CodecError.CorruptPayload,
@@ -2142,8 +2187,10 @@ fn clusterReplicateEdgeCreate(
         error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    // Block until the entry is applied locally (apply happens on quorum commit).
-    try coord.waitForApplied(idx, 5000);
+    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
+    // then guaranteed); error.Timeout only when commit cannot be confirmed in
+    // budget — never for a committed-but-apply-lagged entry.
+    try coord.waitForCommittedThenApplied(idx, 5000);
 
     if (ret_result) |r| {
         ret_result = null; // ownership transferred to the caller
@@ -2802,7 +2849,9 @@ fn clusterReplicateMerge(
             error.NotLeader => return error.ClusterNotLeader,
             else => return err,
         };
-        try coord.waitForApplied(idx, 5000);
+        // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT; no
+        // spurious Timeout for a committed-but-apply-lagged entry.
+        try coord.waitForCommittedThenApplied(idx, 5000);
         return empty_result;
     }
 
@@ -2837,7 +2886,9 @@ fn clusterReplicateMerge(
         error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    try coord.waitForApplied(idx, 5000);
+    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT; no
+    // spurious Timeout for a committed-but-apply-lagged entry.
+    try coord.waitForCommittedThenApplied(idx, 5000);
     return empty_result;
 }
 
@@ -3460,8 +3511,10 @@ fn clusterReplicateDelete(
         error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    // Block until the entry is applied locally (apply happens on quorum commit).
-    try coord.waitForApplied(idx, 5000);
+    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
+    // then guaranteed); error.Timeout only when commit cannot be confirmed in
+    // budget — never for a committed-but-apply-lagged entry.
+    try coord.waitForCommittedThenApplied(idx, 5000);
 
     // RETURN clause: mirror the local path's "deleted_count" projection.
     if (d.return_clause) |_| {
@@ -3697,8 +3750,10 @@ fn clusterReplicateMatchSet(
         error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    // Block until the entry is applied locally (apply happens on quorum commit).
-    try coord.waitForApplied(idx, 5000);
+    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
+    // then guaranteed); error.Timeout only when commit cannot be confirmed in
+    // budget — never for a committed-but-apply-lagged entry.
+    try coord.waitForCommittedThenApplied(idx, 5000);
 
     return empty_result;
 }
@@ -3916,11 +3971,17 @@ fn clusterReplicateMatchCreate(
     }
     if (edge_specs.items.len == 0) return error.ClusterWriteNotReplicable;
 
-    const payload = cluster_replication.serializeMultiCreate(
+    // RC-3 (2026-06-12): carry an idempotency key so a retried MATCH…CREATE edge
+    // dedups at apply time (no duplicate edge). Client key from the request, else
+    // leader-generated.
+    var idem_buf: [32]u8 = undefined;
+    const idem_key = effectiveIdempotencyKey(&idem_buf);
+    const payload = cluster_replication.serializeMultiCreateKeyed(
         allocator,
         filter_graph,
         &.{},
         edge_specs.items,
+        idem_key,
     ) catch |err| switch (err) {
         cluster_replication.CodecError.UnsupportedPropertyType,
         cluster_replication.CodecError.CorruptPayload,
@@ -3940,8 +4001,10 @@ fn clusterReplicateMatchCreate(
         error.NotLeader => return error.ClusterNotLeader,
         else => return err,
     };
-    // Block until the entry is applied locally (apply happens on quorum commit).
-    try coord.waitForApplied(idx, 5000);
+    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
+    // then guaranteed); error.Timeout only when commit cannot be confirmed in
+    // budget — never for a committed-but-apply-lagged entry.
+    try coord.waitForCommittedThenApplied(idx, 5000);
 
     return try emptyExecutionResult(allocator);
 }

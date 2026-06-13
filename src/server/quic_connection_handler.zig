@@ -5728,6 +5728,11 @@ fn handleClientMessage(
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
                 .pending_index_rebuilds = null,
+                // RC-3 (2026-06-12): thread the optional client idempotency key
+                // (ExecuteRequest field 5) into the context so a clustered create
+                // dedups a client retry at apply time. Null when the client did
+                // not supply one (the leader then generates a per-request key).
+                .idempotency_key = exec_req.idempotency_key,
             };
 
             var pending_index_rebuilds = std.StringHashMap(void).init(gpa);
