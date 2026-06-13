@@ -291,11 +291,38 @@ test "insecure-tls gate: env truthiness parsing" {
     try testing.expect(!gate.envTruthy(""));
 }
 
-// The live evaluation reads builtin.mode (Debug in test binaries) and the
-// process environment. In a Debug test binary with no GEODE_ENV=production,
-// the gate must not refuse — proving the dev workflow keeps working.
-test "insecure-tls gate: live evaluation permits flag in debug test binary" {
-    try gate.evaluateLive(true);
+// The live evaluation reads builtin.mode and the process environment. The
+// posture branch is mode-dependent, so this test asserts mode-appropriate
+// behavior in BOTH build modes (so it stays meaningful under
+// `-Doptimize=ReleaseSafe`, not just Debug):
+//   * Debug test binary, no GEODE_ENV=production: the gate must NOT refuse —
+//     proving the dev/test workflow keeps working.
+//   * Release test binary (ReleaseSafe/ReleaseFast/ReleaseSmall): the gate is
+//     in production posture (`builtin.mode != .Debug`) and MUST fail closed
+//     with error.InsecureTlsRefused unless GEODE_ALLOW_INSECURE_TLS is set —
+//     this is the security posture worth pinning.
+//
+// Guard the release branch on the override env var: a release CI binary that
+// happens to run with GEODE_ALLOW_INSECURE_TLS=1 set would (correctly) permit
+// the flag, so only assert the refusal when the override is absent.
+test "insecure-tls gate: live evaluation is mode-appropriate (debug permits, release fails closed)" {
+    const builtin = @import("builtin");
+    if (builtin.mode == .Debug) {
+        // Dev/test loop: permissive in a Debug binary with no production env.
+        try gate.evaluateLive(true);
+    } else {
+        // Release binary => production posture. Fail closed unless the operator
+        // set the explicit acknowledgement override.
+        const override_set = if (std.c.getenv(gate.allow_env)) |p|
+            gate.envTruthy(std.mem.span(p))
+        else
+            false;
+        if (override_set) {
+            try gate.evaluateLive(true);
+        } else {
+            try testing.expectError(error.InsecureTlsRefused, gate.evaluateLive(true));
+        }
+    }
 }
 
 // SEC-CLI-01 follow-up: the implicit insecure-enable triggered by

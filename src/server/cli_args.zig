@@ -1,5 +1,13 @@
 const std = @import("std");
 
+// Portable process-argv holder (captured from std.process.Args at startup).
+// Replaces the Linux-only /proc/self/cmdline read so `geode serve` starts on
+// every supported platform (notably macOS). Re-exported (`pub`) so tests that
+// only link the standalone cli_args module can reach the SAME holder instance
+// (and its setForTesting seam) that parseArgs uses — avoiding a duplicate
+// module with a divergent global.
+pub const process_args = @import("process_args.zig");
+
 // Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -229,41 +237,21 @@ pub fn printHelp() void {
 /// Parse command line arguments into ServerConfig
 /// Returns null if help was requested (caller should exit)
 pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
-    // Zig 0.16 compat: read /proc/self/cmdline to get process args.
-    // NOTE: /proc files report size 0 via stat/length(), so we must read in
-    // chunks until EOF rather than trusting length(). Max 64 KiB is safely
-    // above Linux's ARG_MAX-aware cmdline truncation.
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cmdline_file = std.Io.Dir.openFileAbsolute(io, "/proc/self/cmdline", .{}) catch return error.StdioUnavailable;
-    defer cmdline_file.close(io);
+    // Zig 0.16 compat: std.process.argsAlloc (and std.os.argv) were removed.
+    // The authoritative, CROSS-PLATFORM argv is the std.process.Args delivered
+    // to main(); src/unified_entry.zig captures it into `process_args` at
+    // startup. Reading from that holder works identically on Linux, macOS,
+    // Windows, and the BSDs — unlike the prior /proc/self/cmdline read, which
+    // is Linux-only and made `geode serve` die at startup on macOS
+    // (FileNotFound -> StdioUnavailable -> NodeStartupTimeout in the
+    // 3-node subprocess cluster test).
+    const args = process_args.getArgs(allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.StdioUnavailable => return error.StdioUnavailable,
+    };
+    defer allocator.free(args);
 
-    const max_cmdline: usize = 64 * 1024;
-    const cmdline_data = try allocator.alloc(u8, max_cmdline);
-    defer allocator.free(cmdline_data);
-
-    var total_read: usize = 0;
-    while (total_read < max_cmdline) {
-        const n = cmdline_file.readPositional(io, &.{cmdline_data[total_read..]}, total_read) catch return error.StdioUnavailable;
-        if (n == 0) break;
-        total_read += n;
-    }
-    const filled = cmdline_data[0..total_read];
-
-    // Split by null bytes to get individual args
-    var args_list = std.ArrayList([]const u8).empty;
-    defer args_list.deinit(allocator);
-    var start: usize = 0;
-    for (filled, 0..) |c, i| {
-        if (c == 0) {
-            if (i > start) {
-                args_list.append(allocator, filled[start..i]) catch return error.OutOfMemory;
-            }
-            start = i + 1;
-        }
-    }
-    if (args_list.items.len == 0) return error.StdioUnavailable;
-
-    return try parseArgsFromSlice(allocator, args_list.items);
+    return try parseArgsFromSlice(allocator, args);
 }
 
 /// Parse command line arguments from a caller-supplied slice.

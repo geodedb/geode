@@ -143,6 +143,9 @@ const index_catalog = @import("index_catalog.zig");
 const server_flags = geode.server_flags;
 // Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
 const cli_args = @import("cli_args.zig");
+// Portable process-argv holder (captured from std.process.Args at startup);
+// replaces the Linux-only /proc/self/cmdline read in parseLspBootstrapConfig.
+const process_args = @import("process_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
 const server_init = @import("server_init.zig");
 const fd_limit = @import("geode").fd_limit;
@@ -659,41 +662,23 @@ const LspBootstrapConfig = struct {
 /// flags it doesn't recognise, so these flags pass through it
 /// untouched and we re-walk argv here.
 ///
-/// Zig 0.16: `std.process.argsAlloc` was removed; the same pattern
-/// `cli_args.parseArgs` uses (read `/proc/self/cmdline` and split on
-/// NULs) is the supported way to recover argv. Any I/O failure
+/// Zig 0.16: `std.process.argsAlloc` was removed; argv is recovered from the
+/// portable `process_args` holder that `src/unified_entry.zig` captures from
+/// the `std.process.Args` delivered to `main`. This works on every supported
+/// platform (the prior `/proc/self/cmdline` read was Linux-only). Any failure
 /// degrades silently to the defaults (port=3142, loopback-only).
 fn parseLspBootstrapConfig(allocator: std.mem.Allocator) LspBootstrapConfig {
     var cfg: LspBootstrapConfig = .{};
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cmdline_file = std.Io.Dir.openFileAbsolute(io, "/proc/self/cmdline", .{}) catch return cfg;
-    defer cmdline_file.close(io);
+    const args = process_args.getArgs(allocator) catch return cfg;
+    defer allocator.free(args);
 
-    const max_cmdline: usize = 64 * 1024;
-    const cmdline_data = allocator.alloc(u8, max_cmdline) catch return cfg;
-    defer allocator.free(cmdline_data);
-
-    var total_read: usize = 0;
-    while (total_read < max_cmdline) {
-        const n = cmdline_file.readPositional(io, &.{cmdline_data[total_read..]}, total_read) catch return cfg;
-        if (n == 0) break;
-        total_read += n;
-    }
-    const filled = cmdline_data[0..total_read];
-
-    var start: usize = 0;
-    for (filled, 0..) |c, i| {
-        if (c != 0) continue;
-        if (i > start) {
-            const arg = filled[start..i];
-            if (std.mem.startsWith(u8, arg, "--lsp-port=")) {
-                const v = arg["--lsp-port=".len..];
-                cfg.port = std.fmt.parseUnsigned(u16, v, 10) catch cfg.port;
-            } else if (std.mem.eql(u8, arg, "--lsp-bind-all")) {
-                cfg.loopback_only = false;
-            }
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "--lsp-port=")) {
+            const v = arg["--lsp-port=".len..];
+            cfg.port = std.fmt.parseUnsigned(u16, v, 10) catch cfg.port;
+        } else if (std.mem.eql(u8, arg, "--lsp-bind-all")) {
+            cfg.loopback_only = false;
         }
-        start = i + 1;
     }
     return cfg;
 }

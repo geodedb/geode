@@ -1313,6 +1313,22 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("cli_args", cli_args_mod);
     const run_cli_args_cluster_tests = b.addRunArtifact(cli_args_cluster_tests);
 
+    // Portable process-argv holder tests (REQ-CLI-PORTABLE-ARGV-001). Replaces
+    // the Linux-only /proc/self/cmdline read so `geode serve` starts on macOS.
+    // Reaches the holder through cli_args (which re-exports it) so the test's
+    // setForTesting() seam and cli_args.parseArgs see one shared global.
+    const process_args_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_process_args.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    process_args_test_mod.addImport("cli_args", cli_args_mod);
+    const process_args_tests = b.addTest(.{ .root_module = process_args_test_mod });
+    const run_process_args_tests = b.addRunArtifact(process_args_tests);
+    const process_args_step = b.step("test-process-args", "Run portable process-argv holder tests (REQ-CLI-PORTABLE-ARGV-001)");
+    process_args_step.dependOn(&run_process_args_tests.step);
+
     // ClusterCoordinator.Config field tests (Tasks A3/A3b/A3c of the 2026-05-25
     // distributed cluster testing plan). Imports the full geode root module so
     // the test sees the *production* ClusterCoordinator (via
@@ -2989,6 +3005,9 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     shardDep(test_step, &run_lib_unit_tests.step, 10, test_shard_loads, test_shard_index);
+    // REQ-CLI-PORTABLE-ARGV-001: portable process-argv holder (declared near
+    // cli_args_mod above). Cross-platform replacement for /proc/self/cmdline.
+    shardDep(test_step, &run_process_args_tests.step, 1, test_shard_loads, test_shard_index);
     // GAP-0857: embedded server API gate (declared near lib_unit_tests above).
     shardDep(test_step, &run_gap0857_lib_api_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ext_builtins_tests.step, 1, test_shard_loads, test_shard_index);
