@@ -416,3 +416,39 @@ automatic recovery within the deadline.
   `Endpoint.mu` contention that *causes* the wedge (that remains a `quic`
   dependency fix — §6) — it makes recovery automatic so the wedge is no longer a
   restart-only outage. Tests: `zig build test-acceptor-watchdog`.
+
+## 9. Fix (partial, geode-side): bound the `drainPendingDestroy` `ep.mu` hold (2026-06-14)
+
+Implements §6 bullet 2 ("reduce `Endpoint.mu` hold time on the accept path") for
+the one `ep.mu`-hold source that lives in **geode** rather than the vendored
+`quic` lib.
+
+**Root-cause refinement.** The accept loop (`src/server/main.zig` serve loop)
+calls `QuicTransport.drainPendingDestroy()` every iteration. That function
+acquired `ep.mu` (which the vendored poll path — `ep.pollWithStats`, the thing
+that actually drains the listener UDP socket — also acquires; see the GAP-0203
+comment at the `ep.mu` lock) and then looped over the **entire**
+`pending_destroy` backlog calling `api.destroy(ep, conn)` for each. Under the
+sustained-churn signature (rapid leader-kill / reschedule storms) the backlog
+reaches thousands, so a single drain parked **every** poll worker on `ep.mu` for
+the whole batch — the listener `rx_queue` then backed up to MiB (the wedge),
+AppendEntries stopped being accepted, and the candidate froze.
+
+**Fix.** `src/transport/quic.zig`: cap the per-call batch
+(`drain_pending_destroy_batch`, default 64; `0` = unbounded/pre-fix; tunable at
+runtime via `GEODE_QUIC_DESTROY_BATCH` for k8s churn validation without a
+rebuild). drainPendingDestroy now processes at most that many destroys per call
+and keeps the remainder; the accept loop's existing slot-freed wake re-enters it
+within the ≤5 ms admission park, so a backlog is reaped across cycles at far
+above the churn rate while `ep.mu` is never held more than ~`batch` `api.destroy`
+calls. The split is a pure, unit-tested helper (`drainBatchSplit`, inline test in
+`quic.zig`).
+
+**Status.** Addresses the geode-side `ep.mu`-hold contributor only. The
+poll-vs-`tryAcceptStream` contention and per-stream-stall amplifier (§6 bullets
+1 and 4, upstream `quic`) can still wedge under extreme burst. Compiles +
+existing transport regressions green (`test-perf-d-admission-wake`,
+`test-quic-streams`, `test-quic-pollsync-wake`); **wedge-efficacy validation is
+owed on the k8s sustained-churn repro** (local netns repro is blocked by an
+unrelated cluster-TLS sync failure). The acceptor watchdog (§8) remains the
+backstop until the upstream pieces land.

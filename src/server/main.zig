@@ -2128,6 +2128,11 @@ pub fn main() !void {
             1,
             64,
         );
+        // QUIC-acceptor-wedge fix: bound drainPendingDestroy()'s per-call batch so
+        // the endpoint-mutex hold stays short under sustained connection churn and
+        // the poll workers keep draining the listener UDP rx_queue (0 = unbounded,
+        // the pre-fix behaviour; default 64). See quic.drain_pending_destroy_batch.
+        quic_transport.setDrainPendingDestroyBatch(envUsize(gpa, "GEODE_QUIC_DESTROY_BATCH", 64, 0, 1_000_000));
         const poll_contexts = gpa.alloc(PollLoopContext, quic_poll_worker_count) catch |err| {
             log.err("Failed to allocate poll loop contexts", &.{Attr.string("error", @errorName(err))});
             return;

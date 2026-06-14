@@ -266,6 +266,69 @@ pub const server_writer_max_blocked_ns: u64 = 60 * std.time.ns_per_s;
 const server_writer_retry_yield_every: usize = 64;
 const server_writer_credit_wait_ns: u64 = 5 * std.time.ns_per_ms;
 
+// Max connections destroyed per drainPendingDestroy() call. drainPendingDestroy
+// holds the endpoint mutex (ep.mu) — which the vendored QUIC poll path also
+// acquires to process incoming datagrams — across the whole batch. Under
+// sustained connection churn (rapid leader-kill / reschedule storms) the
+// pending-destroy backlog can reach thousands; draining it in ONE batch parks
+// every poll worker on ep.mu for the whole batch, the listener UDP rx_queue
+// backs up to MiB, and the raft transport can no longer accept AppendEntries —
+// the acceptor wedge (docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new
+// -conns-refused.md; sustained-churn stranded-candidate, RC-A follow-up). Capping
+// the per-call batch bounds the ep.mu hold (~this many api.destroy calls) so the
+// 16 poll workers reclaim ep.mu and keep draining the socket between calls; the
+// accept loop calls drainPendingDestroy every iteration (<=5 ms admission park),
+// so any remainder is reaped across cycles at >> the churn rate. Tunable for
+// k8s validation via GEODE_QUIC_DESTROY_BATCH (0/unset → this default).
+const drain_pending_destroy_batch_default: usize = 64;
+var drain_pending_destroy_batch: usize = drain_pending_destroy_batch_default;
+
+/// Override the per-call drainPendingDestroy() batch cap (0 = unbounded, the
+/// pre-fix behaviour). Called once at startup from main.zig with
+/// GEODE_QUIC_DESTROY_BATCH so the cap can be tuned in a k8s churn run without
+/// a rebuild. Single-threaded startup write; drainPendingDestroy reads it from
+/// the accept loop only.
+pub fn setDrainPendingDestroyBatch(n: usize) void {
+    drain_pending_destroy_batch = n;
+}
+
+/// Pure split for drainPendingDestroy: of `total` queued destroys, process the
+/// tail `n` this call and keep the surviving prefix `keep` for the next call.
+/// `batch == 0` means unbounded (process everything). Extracted so the bounding
+/// arithmetic is unit-testable without a configured QUIC endpoint.
+const DrainSplit = struct { n: usize, keep: usize };
+fn drainBatchSplit(total: usize, batch: usize) DrainSplit {
+    const n = if (batch == 0) total else @min(total, batch);
+    return .{ .n = n, .keep = total - n };
+}
+
+test "drainBatchSplit bounds the per-call destroy count and preserves the remainder" {
+    const t = std.testing;
+    // empty
+    try t.expectEqual(@as(usize, 0), drainBatchSplit(0, 64).n);
+    // below the cap → drain all, keep none
+    try t.expectEqual(DrainSplit{ .n = 10, .keep = 0 }, drainBatchSplit(10, 64));
+    // exactly the cap
+    try t.expectEqual(DrainSplit{ .n = 64, .keep = 0 }, drainBatchSplit(64, 64));
+    // above the cap → drain the cap, keep the remainder for the next call
+    try t.expectEqual(DrainSplit{ .n = 64, .keep = 936 }, drainBatchSplit(1000, 64));
+    // unbounded (batch == 0) → drain everything (pre-fix behaviour)
+    try t.expectEqual(DrainSplit{ .n = 1000, .keep = 0 }, drainBatchSplit(1000, 0));
+    // draining a large backlog in capped chunks reaps every entry exactly once
+    var left: usize = 5000;
+    var total_drained: usize = 0;
+    var calls: usize = 0;
+    while (left > 0) {
+        const s = drainBatchSplit(left, 64);
+        total_drained += s.n;
+        left = s.keep;
+        calls += 1;
+        try t.expect(s.n <= 64); // hold stays bounded every call
+    }
+    try t.expectEqual(@as(usize, 5000), total_drained);
+    try t.expectEqual(@as(usize, (5000 + 63) / 64), calls);
+}
+
 // CANARY: REQ=REQ-QUIC-HC-084; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ClientWriteCongestionDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
 //
 // Request fan-out has the same congestion-window burst behavior as response
@@ -469,7 +532,18 @@ pub const QuicTransport = struct {
         {
             self.pending_destroy_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.pending_destroy_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            if (self.pending_destroy.items.len == 0) return;
+            const total = self.pending_destroy.items.len;
+            if (total == 0) return;
+
+            // Bound the per-call batch so the ep.mu hold (which the vendored QUIC
+            // poll path also needs, to drain the listener socket) stays short
+            // under sustained connection churn — see drain_pending_destroy_batch.
+            // Process the TAIL `n` entries and keep the surviving prefix `keep`
+            // for the next accept-loop iteration (destroy order is irrelevant —
+            // each connection is independent).
+            const split = drainBatchSplit(total, drain_pending_destroy_batch);
+            const n = split.n;
+            const keep = split.keep;
 
             // api.destroy() modifies endpoint internal maps (conns, accepted, retired)
             // without acquiring ep.mu. Acquire it here to prevent racing with poll().
@@ -481,17 +555,17 @@ pub const QuicTransport = struct {
                 defer ep.pto_lifetime_mu.unlock(std.Io.Threaded.global_single_threaded.io());
                 ep.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
                 defer ep.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-                for (self.pending_destroy.items) |inner_conn| {
+                for (self.pending_destroy.items[keep..]) |inner_conn| {
                     self.removeEndpointPendingRefs(ep, inner_conn);
                     api.destroy(ep, inner_conn);
                 }
             } else {
-                for (self.pending_destroy.items) |inner_conn| {
+                for (self.pending_destroy.items[keep..]) |inner_conn| {
                     inner_conn.deinit();
                 }
             }
-            drained = self.pending_destroy.items.len;
-            self.pending_destroy.clearRetainingCapacity();
+            drained = n;
+            self.pending_destroy.shrinkRetainingCapacity(keep);
         }
 
         // PERF-D / #816 follow-up: signal admission waiter outside the lock
