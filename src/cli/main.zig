@@ -482,6 +482,7 @@ fn printAuthUsage() void {
         "  --password <password>  Password (prompt if not provided)\n" ++
         "  --password-file <path> Read password from file\n" ++
         "  --save-session         Save session token to ~/.geode/credentials.json\n" ++
+        "  --ca-cert <path>       Verify the server's TLS cert against this CA (release-safe)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Offline Options (init, reseal, verify):\n" ++
@@ -3526,7 +3527,7 @@ const AuthResult = struct {
 
 /// GAP-0150: Real QUIC authentication to server
 /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8, allow_insecure: bool) !AuthResult {
+fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8, allow_insecure: bool, ca_cert: ?[]const u8) !AuthResult {
     const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch {
         std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
         return error.InvalidAddress;
@@ -3540,11 +3541,15 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
     }
 
     const insecure = allow_insecure or repl_quic_transport.getTlsConfig().insecure;
+    // A caller-supplied --ca-cert verifies the server against a private CA
+    // (release-safe). Fall back to the REPL transport's configured CA when the
+    // caller passed none, so a globally-set CA still applies.
+    const ca_cert_path = ca_cert orelse repl_quic_transport.getTlsConfig().ca_cert_path;
     client.* = try zig_quic_bridge.initClientStrictTls(
         allocator,
         parsed.host,
         parsed.port,
-        .{ .insecure = insecure },
+        .{ .insecure = insecure, .ca_cert_path = ca_cert_path },
         null,
         null,
     );
@@ -3592,12 +3597,14 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     var password: ?[]const u8 = null;
     var password_file: ?[]const u8 = null;
     var save_session = false; // NEW: --save-session flag
+    var ca_cert: ?[]const u8 = null; // --ca-cert: verify the server against a private CA
     // Default to insecure when GEODE_SERVER_ADDRESS is set (test harness uses self-signed certs)
     // SEC-CLI-01 follow-up: implicit insecure-enable routes through the same
     // production-posture gate as the explicit flag below — refused in a
     // release build / GEODE_ENV=production without GEODE_ALLOW_INSECURE_TLS=1.
+    // The gate is enforced AFTER arg parsing so a --ca-cert can opt into
+    // verified TLS (release-safe) instead of being refused.
     var insecure = env_server != null;
-    if (insecure) insecure_tls_gate.enforceOrExit(); // SEC-CLI-01 (implicit via GEODE_SERVER_ADDRESS)
 
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -3623,11 +3630,23 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
             i += 1;
         } else if (std.mem.eql(u8, argv[i], "--save-session")) {
             save_session = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert") and i + 1 < argv.len) {
+            // Verify the server's certificate against this private CA. Opts out
+            // of the implicit-insecure default so the connection is release-safe.
+            ca_cert = argv[i + 1];
+            insecure = false;
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--insecure") or std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             insecure = true;
-            insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
+            ca_cert = null;
         }
     }
+
+    // SEC-CLI-01: enforce the production-posture gate for any insecure TLS
+    // (explicit flag OR the implicit GEODE_SERVER_ADDRESS default). A --ca-cert
+    // verifies against a private CA and is exempt — refused on a release build /
+    // GEODE_ENV=production without GEODE_ALLOW_INSECURE_TLS=1.
+    if (insecure) insecure_tls_gate.enforceOrExit();
 
     // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
@@ -3692,7 +3711,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         final_password;
 
     // Authenticate with server
-    const auth_result = connectToServer(allocator, server, final_username, trimmed_password, insecure) catch |err| {
+    const auth_result = connectToServer(allocator, server, final_username, trimmed_password, insecure, ca_cert) catch |err| {
         // Log failed authentication attempt
         logAuditEvent("auth", "login", "failure");
 
