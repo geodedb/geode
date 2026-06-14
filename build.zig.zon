@@ -159,8 +159,14 @@
             // 2026-05-29: pins a1858c1, reverting the rejected
             // REQ-QUIC-HC-177 busy-connection shedding experiment after it
             // regressed Geode's 2048x8 mixed workload.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.26#bd9ab6fba3ccbc9996f607bc1ffd1561c8bb842d",
-            .hash = "quic-0.1.22-gBIqUS52PQDojFLJDIht5Uzy1YI87CgkBU2O2MebKe5V",
+            // 2026-06-14: v0.1.27 — fix(endpoint): batch connection teardown.
+            // api.destroyBatch frees a churn backlog in ONE O(N+keys) map sweep
+            // instead of O(backlog×N) per-conn scans under ep.mu (acceptor-wedge:
+            // long ep.mu hold starved poll workers → UDP rx_queue backed up →
+            // AppendEntries dropped → stranded candidate). See
+            // docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.27#2e66508e1b906aeda5122d930a017cfc8518c748",
+            .hash = "quic-0.1.22-gBIqUYyUPQDqgqMsgYiwIS5Vd_EC50dJtrP3oWTwVdJ7",
         },
 
         // =======================================================================
@@ -319,8 +325,11 @@
             // build.zig.zon is empty), so the single-quic-module convergence
             // constraint is preserved. Commit is on origin/main (ahead of the
             // v0.2.11 tag), hence ref=main.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.12#6509db054c5e438c329e4d2ed2b270a7ca22abb3",
-            .hash = "geode_client_zig-0.2.10-8ysbV9GDCQAadmCR7CyG7fEdRyE4ull5EPKnjzb2ZEC3",
+            // 2026-06-14: v0.2.13 — bumps quic to v0.1.27 too, so geode's direct
+            // quic pin and geode-client-zig's quic pin agree (single quic module
+            // instance / diamond constraint preserved).
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.13#37ef9fb930974670957f4e570819d7c4b03fdcd8",
+            .hash = "geode_client_zig-0.2.10-8ysbVx-ECQBJKU6uKbVsxoB-y6BbPvcD3SZrI4IjiFD9",
         },
 
         // =======================================================================

@@ -452,3 +452,43 @@ existing transport regressions green (`test-perf-d-admission-wake`,
 owed on the k8s sustained-churn repro** (local netns repro is blocked by an
 unrelated cluster-TLS sync failure). The acceptor watchdog (§8) remains the
 backstop until the upstream pieces land.
+
+## 10. Fix (root cause, lib-side): O(N)→O(keys) batch connection teardown (2026-06-14)
+
+§9 capped the *backlog* factor of the `ep.mu` hold; this closes the **other,
+dominant factor** and supersedes §9's "upstream piece owed" status.
+
+**Root cause (measured, not assumed).** The vendored `quic` poll/accept paths
+are already well-architected — lock-free socket recv, narrow per-datagram global
+locks (mu released between datagrams), a per-slot short-header route cache, and a
+lock-free futex accept-wait. The one thing that held `ep.mu` long enough to
+starve the 16 poll workers was **`api.destroy`** (`quic/src/quic/api.zig`): to
+evict a connection it did a **linear scan of the entire connection map, repeated
+once per CID** the connection held (`while (true) { iterate conns; remove }`).
+geode's `drainPendingDestroy` ran that per-connection under `ep.mu`, so draining
+a churn backlog of `B` connections from a map of `N` entries was **O(B × N)
+under the lock**. That is what wedged the listener `rx_queue`.
+
+**Fix.** `devnw/zig/quic` **v0.1.27** (`2e66508`): `Endpoint.destroyConnections`
+/ `api.destroyBatch` mark every batch member `endpoint_destroying` (which drains
+in-flight RX refs), then evict **all** their map keys in **one O(N + keys)
+sweep**, drop them from `accepted`/`retired` in one pass each, and free them.
+Exhaustive-removal semantics are identical to the old per-conn scan (every map
+entry whose owner is a batch member is removed before any free → no dangling
+pointer); OOM falls back to the per-conn scan. `api.destroy` now delegates to the
+single-element batch. Regression test `REQ-QUIC-HC-099` in the lib
+(`test_endpoint_pto_handshake_uaf_regression.zig`).
+
+geode (`src/transport/quic.zig`): `drainPendingDestroy` now removes the per-conn
+side-set entries for the whole batch, then calls `api.destroyBatch(ep, doomed)`
+**once**. Combined with the §9 batch bound, the per-call `ep.mu` hold is now
+O(`batch` + N) with `batch ≤ 64`, and the O(N) **per-destroy** multiplier — the
+real killer — is gone entirely. `build.zig.zon` bumped to quic v0.1.27.
+
+**Validation.** Lib `zig build test` green incl. the new test (3/3 in
+`test_pto_uaf`); geode builds against v0.1.27 and the transport regressions pass
+(`test-quic-streams`, `test-quic-pollsync-wake`, `test-perf-d-admission-wake` —
+15/15 steps, 10/10 tests). **Wedge-efficacy under the k8s sustained-churn repro
+(arda geode-qa) is still owed** before push — staged per the cluster-change
+discipline (commit local, validate on k8s, then push the quic tag + the geode
+bump together). The acceptor watchdog (§8) remains the backstop until then.

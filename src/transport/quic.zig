@@ -545,8 +545,9 @@ pub const QuicTransport = struct {
             const n = split.n;
             const keep = split.keep;
 
-            // api.destroy() modifies endpoint internal maps (conns, accepted, retired)
-            // without acquiring ep.mu. Acquire it here to prevent racing with poll().
+            // api.destroyBatch() modifies endpoint internal maps (conns, accepted,
+            // retired) without acquiring ep.mu. Acquire it here to prevent racing
+            // with poll().
             if (self.endpoint) |ep| {
                 // REQ-QUIC-HC-035 pairs with endpoint poll's PTO recompute
                 // lifetime guard: do not free a connection while poll is
@@ -555,10 +556,22 @@ pub const QuicTransport = struct {
                 defer ep.pto_lifetime_mu.unlock(std.Io.Threaded.global_single_threaded.io());
                 ep.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
                 defer ep.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-                for (self.pending_destroy.items[keep..]) |inner_conn| {
+                const doomed = self.pending_destroy.items[keep..];
+                // Side-set removal (closed/pto-dirty/pending-hs) is per-conn and
+                // O(1) each; do it for the whole batch first.
+                for (doomed) |inner_conn| {
                     self.removeEndpointPendingRefs(ep, inner_conn);
-                    api.destroy(ep, inner_conn);
                 }
+                // REQ-QUIC-HC-099: free the whole batch in ONE sweep of the
+                // endpoint connection map. The old per-conn api.destroy()
+                // re-scanned the entire map for every freed connection, so
+                // draining a churn backlog of B conns from a map of N entries was
+                // O(B × N) under ep.mu — that long hold starved the poll workers
+                // that drain the listener UDP socket and wedged the rx_queue.
+                // destroyBatch collapses the map work to a single O(N + keys)
+                // pass; combined with the batch bound above the per-call ep.mu
+                // hold stays short under sustained churn.
+                api.destroyBatch(ep, doomed);
             } else {
                 for (self.pending_destroy.items[keep..]) |inner_conn| {
                     inner_conn.deinit();
