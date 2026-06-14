@@ -328,7 +328,17 @@ fn concurrentMergeWorker(ctx: *RaceWorkerCtx) void {
     // the two-phase split).  Under the write lock the lookupMergeCandidate
     // probe + insert is atomic from the caller's perspective, so the
     // 15 losing threads see the winning insert on their re-probe.
-    const deadline = monoNanosNow() + 30 * std.time.ns_per_s;
+    //
+    // Deadline is intentionally generous (180s). The actual lock-hold work is
+    // tiny, but the local pre-push gate runs all 4 test shards in parallel
+    // (`.pre-commit-config.yaml` zig-test), oversubscribing the box far past its
+    // cores; a waiting thread can then be descheduled for many seconds between
+    // lock-handoffs. The old 30s deadline made ~14/16 threads time out and report
+    // a spurious error under that oversubscription (the dedup invariants below
+    // were never the problem — they pass cleanly when run un-oversubscribed). A
+    // large deadline lets every thread acquire so the test measures correctness,
+    // not scheduler latency.
+    const deadline = monoNanosNow() + 180 * std.time.ns_per_s;
     const handle = graph_store.acquireGraphWriteLockCancelable("default", deadline) catch {
         _ = ctx.errored.fetchAdd(1, .monotonic);
         return;
