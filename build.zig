@@ -1426,6 +1426,13 @@ pub fn build(b: *std.Build) void {
     cert_provided_tests.root_module.addImport("cert_gen", cert_provided_mod);
     cert_provided_tests.root_module.link_libc = true;
     const run_cert_provided_tests = b.addRunArtifact(cert_provided_tests);
+    // This e2e test spawns ./zig-out/bin/geode (BINARY_PATH) directly, so it MUST
+    // depend on the geode install — otherwise a test shard that contains no other
+    // install-dependent test never (re)builds the binary, and the test spawns
+    // whatever stale binary is already in zig-out. A stale RELEASE binary rejects
+    // the test's --no-auth (debug-only), so geode exits before logging the cert
+    // load and the test fails (pre-push shard-2 flake, 2026-06-14).
+    run_cert_provided_tests.step.dependOn(&install_geode_exe.step);
     const cert_provided_step = b.step("test-cert-provided", "Run explicit-cert-honored regression (provided --cert not discarded)");
     cert_provided_step.dependOn(&run_cert_provided_tests.step);
 
