@@ -2299,3 +2299,80 @@ log on rejoin → **1/1/1**. No divergence; strong consistency preserved across 
   **production-functional with automatic self-healing** (MTTR ~7.8 min for a wedged node;
   quorum and durability never lost) but **not wedge-free** under pathological churn.
 - Prod remains untouched (`geode-prod` single-node `0.6.14`).
+
+## ❌ real Kubernetes (2026-06-14, `dev` = `v0.6.27-28-g4986ef2d`, carries `destroyBatch` `44b0af1e` + `drainPendingDestroy` bound `2fba2b1d`) — acceptor wedge NOT eliminated at k8s scale; pushing past it (5 bursts) now falls into a NO-LEADER all-candidate livelock that does not self-heal
+
+### Setup
+
+Clean PVCs. Build `v0.6.27-28-g4986ef2d` (digest `ef5c1ffd`) carries the §11
+acceptor-wedge fixes (`destroyBatch` connection-teardown O(B×N)→O(N+B), bounded
+`drainPendingDestroy` ep.mu hold) on top of the prior `v0.6.27-23` section. Per §11 the
+fix passed netns M9 at 6 rounds with no regression, but the doc itself flags the wedge
+"needs k8s scale" — so this is the decisive arda re-validation. All queries
+`--ca-cert /cluster-tls/ca.crt`. **Prod untouched** (`geode-prod` `0.6.14`).
+
+### ✅ What still works
+
+- Clean-boot convergence: leader @ term 1, 1/1/1 baseline write.
+- Bursts 1 + B (4 rapid leader-kills each): **3/3 fully converged** (term 6 then 11, all
+  three at the same term) — cleaner than `v0.6.27-5`/`-23` at the same point.
+- Edge churn-durability: `(:EA28)-[:EL28]->(:EB28)` **1/1/1 before and after** the whole
+  20-kill battery; **zero `EdgeSlotMappingMissing`**.
+- **Zero data loss**: after recovery, every pre-churn row survived (`BW28` 1/1/1, edge
+  1/1/1); a fresh write replicated 1/1/1.
+
+### ❌ Acceptor wedge is NOT eliminated — still fires at k8s scale
+
+Escalated to **5 back-to-back 4-kill bursts (20 kills)**, one past the documented 4th-burst
+point. The wedge reproduced on **two** nodes:
+
+```
+geode-0 (prev container): ACCEPTOR WEDGE: :3141 UDP rx_queue=11384064 bytes >= 8388608 for >= 30000ms → exit(70)
+geode-1 (prev container): ACCEPTOR WEDGE: :3141 UDP rx_queue=11397888 bytes >= 8388608 for >= 30000ms → exit(70)
+```
+
+Wedge-event tally (current + previous containers): **geode-0 = 2, geode-1 = 2**, geode-2 = 0.
+The `destroyBatch` teardown is structurally sound (and the cluster sailed cleanly through
+bursts 1–B), but the UDP-rx-queue still backs up to ~11.4 MB — the same magnitude as
+`v0.6.27-23` — under continued sustained churn. **Measurement caveat for anyone re-running:
+a `kubectl logs --tail` snapshot reads only the CURRENT container; a wedge that already
+triggered `exit(70)` lives in `--previous`.** An in-run grep of current logs alone reports
+a false "0 wedges".
+
+### ❌ NEW worse failure mode: no-leader all-candidate livelock (does not self-heal)
+
+Where `v0.6.27-23` degraded *gracefully* (a functional 2/3 quorum + watchdog self-heal to
+3/3), 20 kills here drove the cluster into a **permanent all-candidate livelock**:
+
+- geode-0 + geode-1 both candidates, term-incrementing **in lockstep** (21→22→23→24) —
+  classic split-vote: each starts an election, votes for itself, times out, retries.
+- geode-2 **frozen candidate at term 14** the entire time (10 terms behind; `frozen`-tracker
+  warnings ×14) — never votes in the term-24 elections (`pre_vote` freeze).
+- **leader = NONE for 10+ minutes**, writes unavailable. The acceptor watchdog DID restart
+  both wedged nodes (`restarts 0→1` on each), but each rejoined straight back into the
+  split-vote — **the watchdog does not break this livelock.**
+- Recovery required a **manual full-pod roll** (`delete pod geode-0 geode-1 geode-2`), after
+  which it re-elected cleanly (leader @ term 25) with zero data loss.
+
+This is the `pre_vote` frozen-term split-vote livelock (the same family as the `78bb908`
+all-candidate livelock and the RC-B `node.zig:837-854` pre-vote-denial gap noted earlier):
+once the acceptor wedge is pushed past on ≥2 nodes while a third is frozen, no majority can
+form and the term just runs away.
+
+### Net
+
+- **Acceptor wedge (the `v0.6.27-23` blocker): NOT closed on k8s.** `destroyBatch` cleared
+  bursts 1–B but the wedge still fires (`exit(70)`, ~11.4 MB rx_queue) on sustained churn.
+  Any threshold shift (wedge near burst E=20 kills here vs burst D=16 kills last build) is
+  within single-run noise — not a demonstrated fix.
+- **Worst-case behavior regressed:** 20 kills → no-leader all-candidate livelock that the
+  watchdog cannot resolve (needs a manual roll), vs the prior build's graceful 2/3 +
+  auto-self-heal. Data integrity held throughout (zero loss, edges intact).
+- **Two stacked root causes remain:** (1) the QUIC acceptor UDP-rx-queue still wedges under
+  connection-kill storms — `destroyBatch` reduced teardown cost but did not bound the
+  rx-queue growth itself; (2) the raft `pre_vote` frozen-term split-vote livelock now
+  dominates once ≥2 nodes wedge near-simultaneously (RC-B: a quorum-denied / frozen
+  candidate has no demotion path). A durable fix likely needs BOTH: bound/drain the
+  acceptor rx-queue independent of teardown, AND give a frozen candidate a step-down path
+  (etcd-style demotion on `pre_vote` rejection, or a live-leader signal on the denial).
+- Prod untouched (`geode-prod` single-node `0.6.14`).
