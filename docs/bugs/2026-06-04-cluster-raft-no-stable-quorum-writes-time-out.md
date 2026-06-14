@@ -2199,3 +2199,103 @@ k8s arda re-validation of the Timeout-under-churn path owed with the next dev bu
 **With this, both production-blockers of this report are closed at the repo level:
 liveness under sustained churn (inbound-pool starvation, above) and committed-write
 Timeout/retry integrity. Remaining owed items are k8s re-validations.**
+
+## ⚠️ VERIFIED on real Kubernetes (2026-06-14, `dev` = `v0.6.27-23-g540ba165`) — committed-write `Timeout` residual CLOSED on k8s; sustained-churn stranding REDUCED (RC-A holds ≤3 bursts, no monotonic degradation) but a deeper QUIC-acceptor wedge persists, self-healed by the watchdog (~7.8 min, zero data loss)
+
+### Setup
+
+Clean PVCs (scale STS → 0, `delete pvc data-geode-{0,1,2}`, scale → 3). Build under
+test `v0.6.27-23-g540ba165` (digest `b2a7d838`, `geodedb/geode:dev`) — the `dev` tag had
+not moved since the 41 h-old deploy, but this is **+18 commits** past the prior session's
+documented build (`v0.6.27-5-gd84cb40`) and carries both owed k8s re-validations
+(`0d7d879c` sustained-churn RC-A, `97a0a8b8`/`b427cdcc` committed-write residual). All
+queries via `--ca-cert /cluster-tls/ca.crt`. **Prod untouched** (`geode-prod` single-node
+`0.6.14`).
+
+### ✅ Clean-boot convergence — cleanest yet
+
+geode-2 leader @ term 1, geode-0/geode-1 followers @ term 1; stable, no elevated terms.
+
+### ✅ Write-path correctness
+
+- Leader write → `00000`, replicated **1/1/1**.
+- Follower-routed write → fail-closed `40001` (`ClusterNotLeader`), **0/0/0** (no divergence).
+- 10 sequential leader writes → **10/10/10** (no dup).
+- Single aggressive churn (4 rapid leader-kills) → reconverged **3/3 @ term 6**, no strand.
+
+### ✅ Committed-write client-`Timeout` idempotency residual — CLOSED on k8s (validates `b427cdcc` RC-1/RC-2/RC-3)
+
+- Stable-quorum writes return clean `00000`.
+- The one write issued **at the instant geode-0 was freshly re-elected** (immediately
+  post-kill) returned the NEW `08006` retryable-UNKNOWN class — **not** the old misleading
+  `Timeout` — and the write **did commit** (`PC1` = 1/1/1). This is exactly RC-2's
+  "outcome unknown — do not blindly retry" mapping working as designed on real k8s.
+- A 2/3-quorum write issued *during* the strand (`QWRITE`) also returned clean `00000`,
+  replicated to the quorum, and **backfilled** to the stranded node after it rejoined
+  (1/1/0 → **1/1/1**). No `Timeout` and no double-insert observed anywhere in the battery.
+
+### ⚠️ Sustained-churn stranded-candidate — RC-A inbound-pool fix holds for ≤3 bursts; a 4th burst still strands one node via a deeper QUIC-acceptor wedge
+
+Bursts = 4 rapid leader-kills each, **no settle between**:
+
+- round-1 → 3/3 @ term 6; burst B → leader re-elected `@iter2` (~10 s); burst C → leader
+  re-elected `@iter2` (~10 s). **No monotonic recovery-speed degradation** — contrast
+  `v0.6.27-5` (B @ ~iter20, C wedged). RC-A's accept-time idle clocks + independent
+  sweeper are a real, measurable improvement.
+- burst D (16th kill total) → **geode-2 stranded as candidate frozen at term 17** while
+  geode-0 + geode-1 advanced to term 24 and kept committing writes. `pre_vote` freezes the
+  stranded term; the 2/3 quorum stays fully functional throughout.
+
+Root cause is **below** the raft inbound-pool that RC-A fixed — the QUIC **acceptor**
+itself wedges:
+
+```
+error: ACCEPTOR WEDGE: :3141 UDP rx_queue=11146752 bytes stayed >= 8388608 for >= 30000ms
+— the QUIC acceptor is wedged and not draining new connections.
+```
+
+The UDP receive queue backs up past the 8 MiB / 30 s watchdog threshold; new connections
+(including the leader's AppendEntries) can't be accepted, so the raft same-term step-down
+path (`node.zig:937`) is never reached. RC-A closed one starvation path (inbound-pool
+worker pinning); this is a **distinct, deeper transport-layer wedge** in the acceptor's
+UDP-rx-queue drain under a connection-kill storm.
+
+### ✅ Acceptor watchdog self-heal — VERIFIED on real k8s (validates `bffb6789` `exit(70)` path)
+
+- geode-2 self-restarted at **~470 s (~7.8 min from detection** — matches the documented
+  ~7 min per-stream stall phase) via `exit(70)`: *"ACCEPTOR WEDGE … self-restarting for
+  automatic recovery"* (opt-out `GEODE_ACCEPTOR_WATCHDOG_DISABLE=1`).
+- k8s recreated the pod; it rejoined as **follower @ term 24** (restarts 0 → 1). Full 3/3
+  restored automatically, **no operator action**.
+- This watchdog is what produced the **21/21/5 restart churn** observed on the 41 h-old
+  dirty-PVC cluster at the start of this session — it had been self-healing repeatedly.
+
+### ✅ Zero data loss on rejoin
+
+The committed write geode-2 missed while stranded (`QWRITE` 1/1/0) replayed from the raft
+log on rejoin → **1/1/1**. No divergence; strong consistency preserved across the wedge.
+
+### ✅ Edge churn-durability — HOLDS (`2cdc053a`)
+
+`(:EA)-[:ELINK]->(:EB)` created 1/1/1; survives a 4-kill churn round **1/1/1**; **zero
+`EdgeSlotMappingMissing`** on all three nodes.
+
+### Net
+
+- **Committed-write `Timeout` integrity** (owed k8s re-validation): **PASS — closed on real
+  k8s.** Clean `00000` on a stable quorum; honest `08006` "outcome-unknown" at the exact
+  leader-transition moment (never a misleading `Timeout`); no double-insert.
+- **Sustained-churn liveness** (owed k8s re-validation): **PARTIAL.** RC-A eliminates the
+  monotonic recovery-speed degradation and holds for ≤3 back-to-back bursts, but the deeper
+  **QUIC-acceptor UDP-rx-queue wedge** still strands a node under ≥4 back-to-back 4-kill
+  bursts. The 2/3 quorum never loses functionality; the acceptor watchdog auto-recovers the
+  wedged node in **~7.8 min** with **zero data loss**.
+- **Remaining repo work** for a clean (non-watchdog) 3/3 under extreme sustained churn: fix
+  the QUIC **acceptor** UDP-rx-queue drain under connection-kill storms (the layer beneath
+  RC-A). Candidate directions: bound/independently-drain the acceptor's UDP socket rx queue
+  off the wedge-prone path, or carry a live-leader signal on `pre_vote` denials so a
+  quorum-denied candidate demotes without needing inbound `AppendEntries` (the RC-B
+  `devnw/zig/raft` follow-up noted above). Until then the QA cluster is
+  **production-functional with automatic self-healing** (MTTR ~7.8 min for a wedged node;
+  quorum and durability never lost) but **not wedge-free** under pathological churn.
+- Prod remains untouched (`geode-prod` single-node `0.6.14`).
