@@ -492,3 +492,35 @@ real killer — is gone entirely. `build.zig.zon` bumped to quic v0.1.27.
 (arda geode-qa) is still owed** before push — staged per the cluster-change
 discipline (commit local, validate on k8s, then push the quic tag + the geode
 bump together). The acceptor watchdog (§8) remains the backstop until then.
+
+## 11. Local e2e validation (netns, 2026-06-14) — no-regression confirmed; wedge needs k8s scale
+
+Attempted the local cluster-churn repro on the fixed binary. The netns test
+(`tests/cluster/netns_cluster_membership_churn_test.sh`) was previously blocked
+at M1 by the GAP-0838-class verified inter-node TLS handshake bug (node3 couldn't
+backfill). **Routing around it with `GEODE_CLUSTER_INSECURE=1` (debug-only) on the
+node launch unblocks M1** — confirming that blocker *was* the TLS bug, not a
+backfill defect:
+
+```
+# in a copy of the test, swap the launch env: GEODE_CLUSTER_CA_CERT="$WORK/ca.crt" -> GEODE_CLUSTER_INSECURE=1
+sudo PHASES="M1 M2" NETNS_TEST_WORK=/tmp/... bash <copy> <fixed-binary>
+#  PASS M1a: late node backfilled M1pre   PASS M1b: post-join write replicated to node3   RESULT: PASS
+```
+
+**M9 (sustained back-to-back churn = the k8s 3×4-kill signature), extended to 6
+rounds (2× the documented 4th-burst wedge point), with the fixed binary
+(`destroyBatch`, geode 44b0af1e):** `PASS M9: sustained 1 leader / 0 candidates +
+write replicated to all 3` (term=16, healthy) — no stranded candidate, no
+watchdog exit. **No regression: the fix handles sustained cluster churn cleanly.**
+
+**Honest limit:** the pre-fix binary (`2fba2b1d`, batch-bound only) *also* passes
+6 rounds at netns scale. So **netns (3 nodes) cannot reproduce the wedge** —
+because the documented wedge is a `:3141` *client/acceptor* rx_queue phenomenon
+under k8s-scale client churn, not the Raft `:4242` membership churn M9 drives, and
+the O(B×N) destroy backlog only piles past the drain rate at the larger pod/conn
+scale. This **substantiates** (rather than defers) that wedge-*prevention*
+efficacy must be measured on the **arda geode-qa sustained-churn repro** at scale.
+Local evidence to date: correctness unit test (REQ-QUIC-HC-099), the structural
+O(B×N)→O(N+B) collapse, cross-repo build/test (geode-client-zig 422/422; geode
+transport 15/15·10/10), and this netns no-regression run.
