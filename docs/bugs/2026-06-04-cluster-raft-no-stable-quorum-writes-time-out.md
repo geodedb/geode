@@ -2697,3 +2697,51 @@ backstop — both well inside the gate's 8-min self-heal window.
 - **OWED — k8s gate re-validation**: the in-repo QUIC stub makes handshakes no-ops, so it cannot
   reproduce a real `HandshakeError`; only the k8s churn battery (6×4-kill + 8-min self-heal) can
   confirm the stranded-node-rejoins-clean-3/3 condition. **Do not tag v0.7.0 until it passes.**
+
+## ✅✅ RESOLVED on real Kubernetes (2026-06-15, `dev` = `v0.6.27-34-gc5c0b833`, RC-C stale-conn reap) — the k8s gate PASSES clean; all three root causes closed; **v0.7.0 tagged**
+
+The owed gate ran on arda geode-qa (clean PVCs, `--ca-cert`, **6×4-kill bursts = 24 kills** +
+8-min no-manual-roll self-heal watch). **Both gate conditions pass — for the first time in this
+saga.**
+
+### ✅ Condition 1 (rx_queue < 8 MiB, no `exit(70)`) — PASS
+
+Zero `ACCEPTOR WEDGE`, zero `exit(70)`, zero restarts across all 24 kills
+(`cur=0 prev=0 rst=0`, every node, every burst). RC-A stays closed (quic v0.1.29).
+
+### ✅ Condition 2 (stranded node rejoins clean 3/3, no manual roll) — PASS
+
+**Every one of the 6 bursts reconverged to a clean 3/3** within ~10–20 s (terms
+4→7→11→13→18→22, all three nodes equal each time); the self-heal watch found 3/3 already
+held. No node stranded; **no manual pod roll**. RC-C (`c5c0b833`: reap a churned peer's stale
+QUIC connection so a fresh handshake succeeds) closes the iteration-2 residual — transient
+`HandshakeError` lines still appear during churn, but the stale conn is now reaped and the peer
+re-handshakes and rejoins, instead of flapping candidate/follower forever.
+
+### Data integrity
+
+Edge `EL34` 1/1/1 before and after; baseline `BW34` 1/1/1; post-churn writes commit and
+replicate 1/1/1 (`FIN34`/`STABLEA`); **zero data loss / zero `EdgeSlotMappingMissing`**.
+
+### Progression of the three stacked root causes (k8s wedge-by-build)
+
+| build | acceptor wedge | no-leader livelock | stranded-node rejoin |
+|---|---|---|---|
+| `-28` | 2 nodes wedge | permanent (manual roll) | — |
+| `-30` | 1 node wedges | ~6 min, watchdog-assisted | geode-0 stranded |
+| `-32` | **0** (RC-A closed) | **0** (livelock closed) | ❌ `HandshakeError` strand |
+| **`-34`** | **0** | **0** | **✅ clean 3/3, no roll** |
+
+### Minor residual (non-blocking, pre-existing)
+
+A write occasionally returns `08006` "outcome-unknown" while it actually replicated 1/1/1
+(`STABLEB`). This is the long-documented committed-write-uncertain signal (idempotency-key
+dedup prevents a double-insert on retry) — correctness/availability are unaffected; not a
+release blocker.
+
+### Decision
+
+The k8s gate is met: the 3-node Raft cluster survives sustained extreme churn (24 rapid leader
+kills) with no acceptor wedge, no no-leader livelock, automatic rejoin to clean 3/3 without
+operator action, and zero data loss. **Tagged `geode v0.7.0` on `c5c0b833`.** Prod still on
+single-node `0.6.14` — the operator decides when to roll prod onto a clustered release.
