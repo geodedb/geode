@@ -2133,6 +2133,11 @@ pub fn main() !void {
         // the poll workers keep draining the listener UDP rx_queue (0 = unbounded,
         // the pre-fix behaviour; default 64). See quic.drain_pending_destroy_batch.
         quic_transport.setDrainPendingDestroyBatch(envUsize(gpa, "GEODE_QUIC_DESTROY_BATCH", 64, 0, 1_000_000));
+        // QUIC-acceptor-wedge RC-A (quic v0.1.28): bound the kernel UDP rx_queue
+        // under a reconnect storm by draining (cheaply shedding surplus Initials)
+        // a large slice per poll cycle, decoupled from the expensive Initial
+        // processing budget. 0 = lib compiled default (UdpBatchCap*64 = 4096).
+        quic_transport.setServerSocketDrainPackets(envUsize(gpa, "GEODE_QUIC_DRAIN_PACKETS", 0, 0, 1_000_000));
         const poll_contexts = gpa.alloc(PollLoopContext, quic_poll_worker_count) catch |err| {
             log.err("Failed to allocate poll loop contexts", &.{Attr.string("error", @errorName(err))});
             return;

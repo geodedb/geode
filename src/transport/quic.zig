@@ -292,6 +292,18 @@ pub fn setDrainPendingDestroyBatch(n: usize) void {
     drain_pending_destroy_batch = n;
 }
 
+/// Override the vendored QUIC endpoint's per-poll-cycle server socket-DRAIN cap
+/// (acceptor-wedge RC-A, quic v0.1.28). The drain cap is decoupled from the
+/// Initial PROCESSING budget so a reconnect storm's surplus Initials are cheaply
+/// shed and the kernel UDP rx_queue stays bounded independent of teardown. 0 ->
+/// the lib's compiled default (UdpBatchCap*64 = 4096). Called once at startup
+/// from main.zig with GEODE_QUIC_DRAIN_PACKETS so the cap can be tuned in a k8s
+/// churn run without a rebuild. Single-threaded startup write; the lib reads it
+/// on the poll hot path.
+pub fn setServerSocketDrainPackets(n: usize) void {
+    api.setServerSocketDrainPackets(n);
+}
+
 /// Pure split for drainPendingDestroy: of `total` queued destroys, process the
 /// tail `n` this call and keep the surviving prefix `keep` for the next call.
 /// `batch == 0` means unbounded (process everything). Extracted so the bounding

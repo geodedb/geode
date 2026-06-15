@@ -2376,3 +2376,71 @@ form and the term just runs away.
   acceptor rx-queue independent of teardown, AND give a frozen candidate a step-down path
   (etcd-style demotion on `pre_vote` rejection, or a live-leader signal on the denial).
 - Prod untouched (`geode-prod` single-node `0.6.14`).
+
+## ✅ FIX (both stacked root causes, repo-side; k8s re-validation owed) — 2026-06-14
+
+Both root causes identified in the section above are now fixed in the vendored
+libraries and cascaded into geode. Staged per the cluster-change discipline:
+committed local + lib tags cut, **k8s arda sustained-churn re-validation owed
+before push**.
+
+### RC-B (raft): etcd-style candidate demotion on quorum vote rejection — `devnw/zig/raft` v0.1.8
+
+**Root cause confirmed in the lib.** `RaftNode.handleRequestVoteResponse`
+(`raft/src/node.zig`) detected only a vote **WIN** (`hasJointQuorum`); there was
+**no `VoteLost` path**. A candidate denied by a quorum stayed in the election loop
+until its own election timer fired — it never *stepped down* — so a node frozen
+behind the cluster under `pre_vote` (or a split-vote loser) kept self-voting
+instead of demoting to a follower that can grant a competitor's vote. That is the
+consensus-layer half of the no-leader all-candidate livelock.
+
+**Fix.** Mirror etcd's `case quorum.VoteLost: r.becomeFollower(r.Term, None)`: a
+candidate (pre-vote OR real) rejected by a quorum now demotes to follower at the
+current term and resets its randomized election timer. New
+`ElectionState.hasRejectQuorum` / `hasJointRejectQuorum` (the loss-side dual of
+`hasQuorum`/`hasJointQuorum`). **Liveness-only — `becomeFollower` keeps the term,
+so no safety property changes.** Closes the lib's
+`ISSUE-candidate-liveness-backstop` (Option A). Regression scenarios
+`candidate_demotes_on_quorum_{pre,real}vote_rejection`
+(RED before the fix: the candidate stays a candidate).
+
+### RC-A (quic): bound the rx-queue independent of teardown — `devnw/zig/quic` v0.1.28
+
+The transport half — see the matching §12 in the acceptor-wedge bug doc
+(`2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md`). In short:
+`pollWithStats` used one master cap for both *reading* and *processing* datagrams,
+so the "shed surplus Initials" path never ran and a reconnect storm backed the
+kernel `:3141` UDP rx_queue up to the 8 MiB watchdog threshold. v0.1.28 decouples
+a larger **socket-DRAIN cap** (default 4096) from the unchanged Initial/short-header
+**processing** budgets, so surplus Initials are cheaply shed and the kernel buffer
+drains regardless of teardown/processing load. Tunable via `GEODE_QUIC_DRAIN_PACKETS`.
+
+### Cascade + local validation
+
+- geode `build.zig.zon`: raft → v0.1.8 (`d101908`), quic → v0.1.28 (`8ed9425`);
+  `GEODE_QUIC_DRAIN_PACKETS` knob wired in `main.zig` via
+  `quic_transport.setServerSocketDrainPackets`.
+- raft lib: `zig build test` / `test-scenarios` / `test-integration` / `test-chaos`
+  all green (incl. the 2 new RC-B scenarios + `cascade_failures` survivor-leader
+  robustness fix).
+- quic lib: `zig build test` green; targeted `-Dtest-filter=acceptor_drain_budget`
+  2/2 (RED→GREEN proven by reverting the drain cap to equal the processing budget);
+  pto-handshake-uaf (§10) green.
+- geode: builds clean against the bump; **16 regression suites green** — transport
+  (`test-quic-streams`, `test-quic-pollsync-wake`, `test-perf-d-admission-wake`,
+  `test-acceptor-watchdog`, `test-acceptor-bail`), raft (`test-raft-apply`,
+  `test-raft-stall-detector`, `test-raft-divergent-state-recovery`,
+  `test-raft-inbound-pool-occupancy`, `test-raft-apply-restart-idempotent`), and
+  cluster subprocess (`test-cluster-3node-election`, `test-cluster-propose-write`,
+  `test-cluster-replicable-mutations`, `test-cluster-commit-aware-wait`,
+  `test-cluster-write-idempotency`, `test-cluster-steady-state`).
+
+### Owed (per discipline — needs the real environment)
+
+- **k8s arda sustained-churn re-validation** of both fixes: ≥5×4-kill bursts must
+  no longer wedge the acceptor (rx_queue stays bounded) AND must not fall into the
+  no-leader all-candidate livelock (a quorum-denied candidate demotes; a leader
+  re-forms without a manual pod roll). Per §11 of the acceptor-wedge doc, **netns
+  (3 nodes) cannot reproduce the wedge** — it is a `:3141` client/acceptor rx_queue
+  phenomenon at k8s pod/conn scale — so this gate is k8s-only.
+- Then push the raft v0.1.8 + quic v0.1.28 tags + the geode bump together.

@@ -524,3 +524,49 @@ efficacy must be measured on the **arda geode-qa sustained-churn repro** at scal
 Local evidence to date: correctness unit test (REQ-QUIC-HC-099), the structural
 O(B×N)→O(N+B) collapse, cross-repo build/test (geode-client-zig 422/422; geode
 transport 15/15·10/10), and this netns no-regression run.
+
+## 12. Fix (root cause, lib-side): bound the rx-queue independent of teardown — drain cap decoupled from processing budget (2026-06-14)
+
+§9/§10 cut the **teardown** cost of the wedge (O(B×N)→O(N+B) `destroyBatch`,
+bounded `drainPendingDestroy`), but the decisive arda re-validation of that build
+(`v0.6.27-28-g4986ef2d`, see the raft-quorum bug doc's matching dated section)
+showed the wedge **still fires at k8s scale** — `destroyBatch` reduced teardown
+cost but **did not bound the rx-queue growth itself**. Pushing past it (5×4-kill
+bursts) also fell into a no-leader all-candidate livelock (the raft RC-B half,
+fixed separately in `devnw/zig/raft` v0.1.8). This closes the transport half.
+
+**Root cause (measured against the vendored `quic` poll loop).** `pollWithStats`
+(`quic/src/quic/endpoint.zig`) used a **single master cap**
+(`maxPacketsPerPollCycleForRole`, server = `UdpBatchCap*4` = 256) for BOTH how
+many datagrams it *read* from the socket AND how many Initials it *processed*.
+The "shed surplus Initials" fast path (read-and-discard; client PTO retransmits)
+was designed to keep draining the kernel socket cheaply past the expensive
+Initial-processing budget — but because the Initial processing budget *equalled*
+the master read cap, **the loop stopped reading at the exact point it stopped
+processing, so the shed path never ran**. Under a connection-kill / reconnect
+storm (slow handshakes → client PTO retransmits → more Initials → positive
+feedback), each poll cycle processed 256 expensive Initials and then *stopped
+reading*, leaving the rest in the kernel FIFO. The `:3141` UDP `rx_queue` backed
+up to the 8 MiB / 30 s geode acceptor-watchdog threshold → `exit(70)`.
+
+**Fix.** `devnw/zig/quic` **v0.1.28** (`8ed9425`): add
+`maxSocketDrainPacketsForRole` — a separate, larger **server socket-DRAIN cap**
+(default `UdpBatchCap*64` = 4096, enough to drain a full 16 MiB `SO_RCVBUF` in a
+couple of cycles) used as the master read cap; the Initial/short-header
+**processing** budgets are unchanged. Surplus Initials beyond the processing
+budget are now cheaply **shed**, so the kernel rx_queue drains **independent of
+how much expensive processing — or teardown — the cycle can afford**. Client
+behaviour is unchanged (one-batch fairness budget). Runtime-tunable for k8s churn
+validation without a rebuild via `setServerSocketDrainPackets` (geode
+`GEODE_QUIC_DRAIN_PACKETS`, wired in `main.zig`). Regression
+`tests/test_acceptor_drain_budget.zig` (RED when drain cap == processing budget).
+
+**Validation.** quic lib: `zig build test` green, targeted
+`-Dtest-filter=acceptor_drain_budget` 2/2 (RED→GREEN proven by reverting the cap
+to equal the processing budget), pto-handshake-uaf (§10 test) green. geode builds
+against v0.1.28; transport regressions green (`test-quic-streams`,
+`test-quic-pollsync-wake`, `test-perf-d-admission-wake`, `test-acceptor-watchdog`,
+`test-acceptor-bail`). **Wedge-prevention efficacy under the arda k8s sustained-churn
+repro is still owed** before push — staged per the cluster-change discipline
+(commit local, validate on k8s, then push the quic+raft tags + the geode bump
+together). The acceptor watchdog (§9) remains the backstop until then.

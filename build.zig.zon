@@ -165,8 +165,13 @@
             // long ep.mu hold starved poll workers → UDP rx_queue backed up →
             // AppendEntries dropped → stranded candidate). See
             // docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.27#2e66508e1b906aeda5122d930a017cfc8518c748",
-            .hash = "quic-0.1.22-gBIqUYyUPQDqgqMsgYiwIS5Vd_EC50dJtrP3oWTwVdJ7",
+            // Bumped 2026-06-14 to v0.1.28 (8ed9425) — acceptor-wedge RC-A: the
+            // per-poll socket-DRAIN cap is decoupled from the Initial PROCESSING
+            // budget so a reconnect storm's surplus Initials are cheaply shed and
+            // the kernel UDP rx_queue stays bounded (the destroyBatch teardown fix
+            // alone did not bound rx-queue growth). Tunable via GEODE_QUIC_DRAIN_PACKETS.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.28#8ed9425aef2616363726d1ca1d7f1fe7330d10ed",
+            .hash = "quic-0.1.28-gBIqUXa3PQC5z_Z8dgnK_rGcxRnryXDxJIUx5-5T5MMJ",
         },
 
         // =======================================================================
@@ -328,8 +333,11 @@
             // 2026-06-14: v0.2.13 — bumps quic to v0.1.27 too, so geode's direct
             // quic pin and geode-client-zig's quic pin agree (single quic module
             // instance / diamond constraint preserved).
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.13#37ef9fb930974670957f4e570819d7c4b03fdcd8",
-            .hash = "geode_client_zig-0.2.10-8ysbVx-ECQBJKU6uKbVsxoB-y6BbPvcD3SZrI4IjiFD9",
+            // 2026-06-14: v0.2.14 — keeps geode-client-zig's quic pin in lockstep
+            // with geode's bump to v0.1.28 (acceptor-wedge RC-A) so the build
+            // graph has a single quic module instance (no diamond).
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.14#f8dc9d2bfc2f3a5dab3ea76d3f9fec049db9665b",
+            .hash = "geode_client_zig-0.2.14-8ysbVwqFCQDfO1YXLh2mTYxSnaGvotwbtpf4N0yEdG26",
         },
 
         // =======================================================================
@@ -360,9 +368,14 @@
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
+        // Bumped 2026-06-14 to v0.1.8 (d101908) — RC-B: etcd-style candidate
+        // demotion on quorum vote rejection (a quorum-denied / frozen candidate
+        // now steps down to follower instead of cycling the election loop),
+        // closing the consensus-layer half of the no-leader all-candidate livelock
+        // (docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md).
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.7#43b7d38b3e3872a8bfb2abb5dd2c00026e56012f",
-            .hash = "raft-0.1.6-PqJyvkETBQB19rK-um4snOyeK0HS2awREJ6XsCFpHYXr",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.8#d1019082f4627cd01de8451fa40fc01f248de2d8",
+            .hash = "raft-0.1.8-PqJyviAiBQBU-L1HGiws3-cyj7vQ6b2yUkFAUcEbb20d",
         },
 
         // =======================================================================
