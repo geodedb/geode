@@ -2619,3 +2619,81 @@ re-establishing its raft peer connection. **Do not push the tags / cut a release
 churn — force FQDN re-resolution + fresh QUIC/TLS handshake (and/or have the leader re-drive
 its outbound AppendEntries stream to an evicted peer), so a stranded node re-handshakes and
 catches up without operator action. Prod untouched (`geode-prod` single-node `0.6.14`).
+
+---
+
+## Iteration 3 — root cause corrected and fixed: the QUIC server never reaped dead/churned connections
+
+**Status: FIX IMPLEMENTED + unit/integration validated locally; dependency cascade + k8s gate re-validation OWED. Do NOT tag/push yet.**
+
+### The iter-3 hypothesis was wrong (and the proposed geode-side fix was already present)
+
+The iteration-2 verdict proposed making `getOrCreatePeerConnection` "force FQDN re-resolution +
+fresh handshake / re-drive AppendEntries to an evicted peer." Tracing the code showed that path
+is **already implemented**: every reconnect goes `send → getOrCreatePeerConnection →
+connectWithTLS(conn.endpoint = FQDN)` (`src/distributed/raft_consensus.zig`), `qc.connect`
+re-resolves the FQDN on each attempt, and the **per-peer drain thread** re-drives the send every
+cycle. So geode already re-resolves + re-handshakes + re-drives — the handshake simply kept
+*failing*. That moved the true root cause down to the **QUIC/TLS transport layer** (exactly where
+iter-1 = quic v0.1.28 and iter-2 = quic v0.1.29 landed).
+
+### Real root cause: dead-code idle/stale-connection reaping in the QUIC server
+
+In `devnw/zig/quic`, the QUIC **server endpoint never reaped a connection whose peer silently
+vanished** (a killed/rescheduled pod). Two recovery mechanisms existed but were **dead code**:
+
+- `src/quic/connection/idle.zig` implements a full RFC 9000 §10.1 `IdleTimer`, but it is
+  **referenced nowhere** outside its own file. `max_idle_timeout_ms` is *advertised* as a transport
+  parameter (`transport.zig`) but **never enforced** — `endpoint/types.zig` `TimerKind` has no
+  idle variant and `processExpiredTimers` never closes an idle connection.
+- `endpoint.closeStaleConnectionsForPeer()` (`endpoint/lifecycle.zig`) exists but is **called from
+  nowhere** — the two `// Endpoint will handle closeStaleConnectionsForPeer via callback` sites
+  (`endpoint/incoming.zig`, `endpoint/incoming/module_b.zig`) are bare comments. (Wiring it also
+  surfaced a latent type bug: `LifecycleContext.allocator` was passed `&self.allocator`.)
+
+Consequence: a dead pod's connection lingered in `endpoint.conns` **forever** — directly the
+leader-side `proto_reader stall idle_ms≈706702` (~12-min wedged inbound stream) — and the
+accumulated stale state across the 24-kill battery blocked/starved the replacement pod's fresh
+handshake, surfacing in geode as the repeating `getOrCreatePeerConnection failed
+error=HandshakeError`. A manual pod roll "fixed" it only because it cleared every server's `conns`
+map.
+
+### Fix (quic v0.1.30 + geode raft opt-in)
+
+quic (`245ecae`, tag **v0.1.30**), opt-in and **OFF by default** (`QuicConfig.dead_conn_reap_ms = 0`,
+so the long-idle client-facing server and every existing test are unaffected):
+
+- `config.zig`: new `dead_conn_reap_ms`.
+- `conn.zig`: `last_rx_ns` (stamped on the steady-state short-header RX path, gated) + `stale_swept` latch.
+- `endpoint.zig`: throttled (≤1/sec) Phase-5.5 `reapDeadConnections` sweep, under `mu` like
+  `processExpiredTimers`:
+  - **idle reap** — close any connection silent past the budget. **RX-only** by design, so a leader
+    blindly retransmitting AppendEntries to a vanished follower still reaps it (the RFC idle timer's
+    reset-on-send is exactly what let the stale connection live forever);
+  - **same-peer stale close** — on a fresh server handshake, close older connections from the same
+    peer address → **instant** recovery when a churned pod reconnects from a recycled IP.
+- `endpoint/lifecycle.zig`: pure, unit-tested `shouldReapIdleConnection` + `samePeerConn`.
+- Tests: `tests/unit/endpoint/test_lifecycle.zig` (5/5; new `zig build test-dead-conn-reap` step).
+
+geode raft listener opts in (`src/distributed/raft_consensus.zig`, `src/transport/quic.zig`): the
+raft QUIC server passes `dead_conn_reap_ms = 30000` (30s) — well above any healthy-peer silence
+(heartbeats every ~50ms; even a leaderless election keeps RequestVote/AppendEntries flowing) and
+≥ the OUTBOUND `peer_stall_budget_ms` (15s × 2 strikes), so both directions of a churned peer
+recover on a complementary timescale. Tunable via `GEODE_RAFT_DEAD_CONN_REAP_MS` (0 disables).
+The instant same-peer close handles the common recycled-IP case; 30s idle reap is the different-IP
+backstop — both well inside the gate's 8-min self-heal window.
+
+### Validation (local) and what is owed
+
+- quic: `zig build test-dead-conn-reap` → 5/5; `zig build` (lib) clean.
+- geode (built against local quic v0.1.30 via a temporary path-override, since `git+file` can't be
+  fetched): `zig-out/bin/geode` links clean; raft transport suites all green —
+  `test-raft-stall-detector` 23/23 (incl. the new reap-budget invariant), `test-raft-per-peer-drain`
+  1/1, `test-raft-receiver-reap` 6/6, `test-raft-rebuild-probation` 6/6,
+  `test-raft-follower-response-eviction` 10/10.
+- **OWED — dependency cascade** (push-coupled; the user's routine): push quic **v0.1.30** → bump +
+  tag `geode_client_zig` **v0.2.16** (its quic pin → v0.1.30, lockstep) → bump geode's `quic` and
+  `geode_client_zig` pins (refresh hashes via `zig fetch`) → `make build`.
+- **OWED — k8s gate re-validation**: the in-repo QUIC stub makes handshakes no-ops, so it cannot
+  reproduce a real `HandshakeError`; only the k8s churn battery (6×4-kill + 8-min self-heal) can
+  confirm the stranded-node-rejoins-clean-3/3 condition. **Do not tag v0.7.0 until it passes.**

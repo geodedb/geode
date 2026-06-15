@@ -1687,8 +1687,36 @@ pub const Transport = struct {
         _ = conn;
     }
 
+    /// Default server-side dead-connection reap budget for the raft listener's
+    /// QUIC endpoint, in milliseconds. The QUIC reaper closes an INBOUND server
+    /// connection whose peer has gone silent past this budget — the recovery the
+    /// previously-dead idle path never performed, which let a churned pod's
+    /// connection (the `proto_reader stall idle_ms≈12min` symptom) linger forever
+    /// and starve the replacement pod's handshake. 30s is well above any
+    /// healthy-peer silence (raft heartbeats every ~50ms; even a leaderless
+    /// election keeps RequestVote/AppendEntries flowing) and matches the timescale
+    /// of the OUTBOUND stall reaper (`peer_stall_budget_ms` 15s × 2 strikes), so
+    /// both directions of a churned peer recover together. The QUIC layer ALSO
+    /// closes same-peer stale connections the instant a replacement reconnects
+    /// from a recycled address, so 30s is only the different-IP backstop. Tunable
+    /// for k8s churn validation via GEODE_RAFT_DEAD_CONN_REAP_MS (0 disables).
+    pub const default_server_dead_conn_reap_ms: u64 = 30000;
+
+    fn serverDeadConnReapMs(allocator: Allocator) u64 {
+        const raw = getEnvVarOwned(allocator, "GEODE_RAFT_DEAD_CONN_REAP_MS") catch return default_server_dead_conn_reap_ms;
+        defer allocator.free(raw);
+        return std.fmt.parseInt(u64, std.mem.trim(u8, raw, " \t\r\n"), 10) catch default_server_dead_conn_reap_ms;
+    }
+
     pub fn listen(self: *Transport, address: []const u8, port: u16) !void {
-        const qt = try quic.QuicTransport.init(self.allocator, .{ .address = address, .port = port });
+        const qt = try quic.QuicTransport.init(self.allocator, .{
+            .address = address,
+            .port = port,
+            // k8s pod-churn recovery (iter-3): opt the raft listener into the QUIC
+            // dead-connection reaper so a vanished/churned peer's stale inbound
+            // connection is closed instead of wedging an inbound stream forever.
+            .dead_conn_reap_ms = serverDeadConnReapMs(self.allocator),
+        });
         self.server = qt;
         try self.server.?.listen();
     }

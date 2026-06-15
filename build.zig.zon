@@ -178,8 +178,17 @@
             // empty a full 16 MiB SO_RCVBUF per cycle, so the lock-free shed-drain
             // engages immediately and the rx_queue is actually bounded. Initial
             // budget tunable via GEODE_QUIC_INITIAL_BUDGET.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.29#69d53630252efcaa9da0fdba2d37ecc1ab1e7119",
-            .hash = "quic-0.1.29-gBIqUeLJPQBViVQOkmQTLkrZ9aQNi5O9kIRTDrll8sVD",
+            // 2026-06-15: v0.1.30 — RC-C (it.3): wire the dead/churned-connection
+            // reaper (idle close + same-peer stale close). Server-side opt-in via
+            // dead_conn_reap_ms (OFF by default; the raft listener opts in at 30s),
+            // so client behaviour is unchanged. The raft server reaps a churned
+            // peer's stale INBOUND connection (the ~12-min proto_reader stall) so
+            // the replacement pod can re-handshake. NOTE: the v0.1.30 tag commit
+            // (245ecae) predates its own .version bump, so the content hash is
+            // labelled 0.1.29 — pinned by commit, reproducible, lockstep with
+            // geode-client-zig.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.30#245ecae9f4a2755ae79991bb18a7025da036022e",
+            .hash = "quic-0.1.29-gBIqUaUCPgBVgy1MKj-IzF3GoMEfTpHJ3_p6tUcXkbKl",
         },
 
         // =======================================================================
@@ -346,8 +355,10 @@
             // graph has a single quic module instance (no diamond).
             // 2026-06-15: v0.2.15 — lockstep with geode's quic v0.1.29 bump
             // (acceptor-wedge RC-A it.2).
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.15#b307550a0424b33952cae14f9c79b4c92f46c6d9",
-            .hash = "geode_client_zig-0.2.15-8ysbV_iFCQDN6iSTLeEQMcOSoCcwzy45OuD52v_PnKuZ",
+            // 2026-06-15: v0.2.16 — lockstep with geode's quic v0.1.30 bump
+            // (RC-C dead-connection reaper). Keeps a single quic module instance.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.16#5985be75d7cdba2e8faf241b329915dab248ba7a",
+            .hash = "geode_client_zig-0.2.16-8ysbV-uHCQDUggm7yrgAYnMw6Qjkk6sjMr6UV3nCfiCL",
         },
 
         // =======================================================================

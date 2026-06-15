@@ -755,3 +755,20 @@ test "raft liveness: inbound request does not refresh outbound stall clock; resp
         try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms, .leader));
     }
 }
+
+// iter-3 (k8s HandshakeError-on-churn): the raft listener opts its QUIC endpoint
+// into the dead-connection reaper so a churned/vanished peer's stale INBOUND
+// server connection is closed (the ~12-min `proto_reader stall` wedge) instead of
+// lingering forever and starving the replacement pod's handshake. This pins the
+// design invariants of that opt-in (the QUIC-side reap mechanics are unit-tested
+// in quic's tests/unit/endpoint/test_lifecycle.zig).
+test "raft listener opts into a dead-connection reap budget above the outbound stall budget" {
+    // ENABLED by default (> 0): the inbound reaper must actually run, otherwise a
+    // churned peer's stale connection is never reaped.
+    try std.testing.expect(Transport.default_server_dead_conn_reap_ms > 0);
+    // The INBOUND reap budget must be >= the OUTBOUND stall budget so the two
+    // reapers recover the two directions of a churned peer on a comparable /
+    // complementary timescale, rather than the inbound reaper firing before the
+    // outbound stall reaper (peer_stall_budget_ms) has had its chance to act.
+    try std.testing.expect(Transport.default_server_dead_conn_reap_ms >= Transport.peer_stall_budget_ms);
+}

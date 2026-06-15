@@ -476,6 +476,15 @@ pub const QuicTransport = struct {
         port: u16 = DEFAULT_PORT,
         max_connections: usize = 10000,
         idle_timeout_ms: u64 = 300000,
+        /// Server-side dead-connection reap budget, in milliseconds. 0 = disabled
+        /// (default). When > 0, the QUIC endpoint reaps a connection whose peer
+        /// has been silent past this budget (a vanished/churned pod that never
+        /// sent CONNECTION_CLOSE) and closes same-peer stale connections when a
+        /// fresh server handshake completes. Opt-in for the raft transport, whose
+        /// peers exchange heartbeats every ~50ms, so a connection silent for tens
+        /// of seconds is provably dead — never merely quiet. Leave 0 for the
+        /// client-facing server, whose connections may idle legitimately.
+        dead_conn_reap_ms: u64 = 0,
         max_stream_data: u64 = 10 * 1024 * 1024,
         max_data: u64 = 100 * 1024 * 1024,
         cert_path: []const u8 = "certs/server.crt",
@@ -745,6 +754,7 @@ pub const QuicTransport = struct {
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
             .max_connections = self.config.max_connections,
+            .dead_conn_reap_ms = self.config.dead_conn_reap_ms,
             .defer_accept_until_stream = true,
             .require_client_cert = self.config.require_client_cert,
             .inline_server_cert_der = inline_cert_der,
