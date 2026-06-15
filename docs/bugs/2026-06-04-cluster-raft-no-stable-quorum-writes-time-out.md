@@ -2566,3 +2566,56 @@ must stay **under 8 MiB** through ≥6×4-kill bursts (no `exit(70)`), and a
 transport-degraded / lagging candidate must demote on the timer and rejoin to a
 clean **3/3** without a manual pod roll. Then push the four tags + the geode bump
 together. Prod untouched (`geode-prod` single-node `0.6.14`).
+
+## ⚠️ k8s re-validation of iteration 2 (2026-06-15, `dev` = `v0.6.27-32-g6b0e6885`) — RC-A (acceptor wedge) and the no-leader livelock are FIXED; gate still FAILS on a THIRD residual: a churned node can't re-handshake its raft peer conn → stays stranded, no clean 3/3 (do not tag yet)
+
+Ran the owed gate (clean PVCs, `--ca-cert`, **6×4-kill bursts = 24 kills** + 8-min
+no-manual-roll self-heal watch).
+
+### ✅ Gate condition 1 (rx_queue < 8 MiB, no `exit(70)`) — PASSES decisively
+
+**Zero acceptor wedges across all 6 bursts** (`cur=0 prev=0 rst=0` on every node every
+burst; no `exit(70)`, no restarts). Wedge count by build at 24 kills: `-28` = 2 nodes,
+`-30` = 1 node (+ both wedged again later), **`-32` = 0**. The quic v0.1.29 fix (Initial
+*processing* budget → 64/cycle + lock-free shed, drain cap 16 MiB) **bounds the kernel
+rx-queue at k8s scale**. RC-A is closed.
+
+### ✅ No-leader all-candidate livelock — FIXED
+
+A **leader + functional 2/3 quorum held continuously** through all 24 kills (bursts 1/B/C
+all converged 3/3; D/E/F kept a stable leader at terms 17→21→25). Contrast `-30` (no leader
+for ~6 min at burst C). The cluster stayed **available and committed+replicated writes to
+the majority throughout** (`BW32`/`FIN32`/`CHK32` all reach the geode-0+geode-1 quorum 1/1;
+edge `EL32` 1/1/1 before+after; **zero data loss**). Writes return `08006` "outcome-unknown"
+while the 3rd node is missing (honest — the leader can't confirm the absent ack), but they
+do commit to the majority.
+
+### ❌ Gate condition 2 (lagging candidate demotes + rejoins clean 3/3, no manual roll) — FAILS — THIRD residual: `HandshakeError` on raft peer re-connect
+
+After the churn, **geode-2 stranded at term 16** (quorum at 25) and never rejoined across the
+full 8-min watch. Root cause is **not** RC-A or RC-B — it is the raft **peer transport failing
+to re-establish**:
+
+```
+geode-2: WARN raft transport getOrCreatePeerConnection failed error=HandshakeError peer=2   (repeating ~every 1–2 s)
+geode-2: WARN raft transport peer stalled (no progress within budget); evicting stale connection peer=1/2 strikes=2 budget_ms=60000
+geode-1 (leader): error: per-stream proto_reader stall: stream_id=0 ... idle_ms=706702   (~12 min wedged stream)
+```
+
+geode-2 cannot complete the QUIC/TLS handshake to the leader after the pods churned (new IPs),
+so it never receives AppendEntries, can't advance term, and flaps candidate↔follower at 16.
+The raft v0.1.9 **timer-demotion is moot here** — demoting to follower can't help a node whose
+peer connection won't handshake; it has no leader to follow. (This is the directional/stranded
+transport residual last seen around `3ddb3f7`/`a25a6f5`: a peer conn evicted under churn is not
+reliably re-handshaked.) Required: a manual pod roll cleared it (→ clean 3/3, writes 1/1/1).
+
+### Verdict
+
+`v0.6.27-32` is a real two-of-three win — **acceptor wedge closed, no-leader livelock closed,
+quorum stays available with zero data loss**. But the gate's "rejoin to clean 3/3 without a
+manual roll" still fails because a churned node hits a persistent `HandshakeError`
+re-establishing its raft peer connection. **Do not push the tags / cut a release yet.** Next
+(iteration 3): make `getOrCreatePeerConnection` recover from `HandshakeError` after peer
+churn — force FQDN re-resolution + fresh QUIC/TLS handshake (and/or have the leader re-drive
+its outbound AppendEntries stream to an evicted peer), so a stranded node re-handshakes and
+catches up without operator action. Prod untouched (`geode-prod` single-node `0.6.14`).
