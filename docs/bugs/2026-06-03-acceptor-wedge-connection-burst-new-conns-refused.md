@@ -570,3 +570,41 @@ against v0.1.28; transport regressions green (`test-quic-streams`,
 repro is still owed** before push — staged per the cluster-change discipline
 (commit local, validate on k8s, then push the quic+raft tags + the geode bump
 together). The acceptor watchdog (§9) remains the backstop until then.
+
+## 13. Fix iteration 2 (root cause, lib-side): bound the rx-queue via a small Initial-processing budget (2026-06-15)
+
+§12 (v0.1.28) decoupled the socket-DRAIN cap from the *master read* cap — but the
+decisive arda k8s re-validation of `v0.6.27-30` (which carried v0.1.28) showed the
+`:3141` rx_queue **still reached ~11.4 MB → exit(70)** (see the raft-quorum bug
+doc's `v0.6.27-30` section). v0.1.28 "cut the frequency but did not keep the
+kernel rx-queue under the 8 MiB threshold."
+
+**Why (the residual coupling).** v0.1.28 left the per-cycle **Initial PROCESSING**
+budget at 256 (`maxInitialPacketsPerPollCycleForRole` still returned
+`maxPacketsPerPollCycleForRole` = 256). So `pollWithStats` ground through up to
+256 expensive new-connection Initials — each touching the global endpoint mutex —
+**before** it reached the cheap lock-free shed phase. With 16 poll workers all
+contending on `ep.mu` for those 256 Initials, almost none were actually calling
+`recvBatch` to drain the socket. The drain cap was raised, but the drain *rate*
+was still throttled by ep.mu-serialized Initial processing.
+
+**Fix.** `devnw/zig/quic` **v0.1.29** (`69d5363`): drop the per-cycle server
+Initial PROCESSING budget to **one UDP batch (64)** — decoupled from
+`server_max_packets_per_poll_cycle` — and raise the socket-drain cap to
+`UdpBatchCap*256` = 16384 (a full 16 MiB `SO_RCVBUF`). A worker now processes ≤64
+new Initials/cycle then **sheds the rest lock-free** for the remainder of the
+drain cap, so the shed-drain engages after ~one batch and the kernel buffer drains
+**independent of ep.mu contention**. Load-shedding backpressure: under a reconnect
+storm new connections are admitted at a steady bounded rate while the socket stays
+drained; normal load is unaffected (the budget is only hit when Initials exceed
+one batch/cycle). New runtime knob `setServerInitialProcessingBudget` (geode
+`GEODE_QUIC_INITIAL_BUDGET`).
+
+**Validation.** quic lib: `zig build test` + pto green; `acceptor_drain_budget`
+filter green (RED on the old 256-Initial budget — proven by reverting). geode
+builds against v0.1.29; transport + raft + cluster regressions green (16 suites).
+Paired with raft v0.1.9 (timer-based candidate demotion, RC-B it.2 — see the
+raft-quorum bug doc) so a transport-degraded candidate that can't reach a quorum
+still demotes. **k8s arda re-validation owed** before push (the rx_queue must stay
+< 8 MiB through ≥6×4-kill bursts; netns cannot reproduce the wedge — §11). The
+acceptor watchdog (§9) remains the backstop until then.

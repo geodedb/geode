@@ -2503,3 +2503,66 @@ up at pod scale; consider a hard `recvmmsg`-drain loop or `SO_RCVBUF`/backpressu
 8 MiB watchdog), and (2) ensure a frozen/lagging candidate can demote even when it *can't*
 reach a response quorum (timer-based step-down to follower after N frozen intervals,
 independent of receiving rejections). Prod untouched (`geode-prod` single-node `0.6.14`).
+
+## ✅ FIX iteration 2 (both gate residuals; k8s re-validation owed) — 2026-06-15
+
+Addresses the two "Next" items above directly. Committed local + lib tags cut;
+**k8s arda re-validation owed before push.**
+
+### RC-A iteration 2 (quic v0.1.29, `69d5363`) — actually bound the kernel rx-queue
+
+**Why v0.1.28 wasn't enough (the coupling the k8s run exposed).** v0.1.28 raised
+the socket-DRAIN cap, but draining was still gated behind the **256-Initial,
+ep.mu-serialized PROCESSING budget**: `pollWithStats` processed up to 256
+expensive new-connection Initials per cycle *before* reaching the cheap lock-free
+shed phase. With 16 poll workers all contending on the global endpoint mutex for
+those 256 Initials, almost none were actually draining the socket — so the kernel
+rx_queue still climbed to ~11.4 MB. The drain cap was decoupled from the *master
+read* cap but NOT from the *Initial processing* cost.
+
+**Fix.** Drop the per-cycle server **Initial PROCESSING** budget to **one UDP
+batch (64)** — decoupled from `server_max_packets_per_poll_cycle` — and raise the
+socket-drain cap to 16384 (a full 16 MiB `SO_RCVBUF`). A worker now processes ≤64
+new Initials/cycle then **sheds the rest lock-free** (read-and-discard; client PTO
+retransmits) for the remainder of the drain cap, so the shed-drain engages almost
+immediately and the kernel buffer is bounded **independent of ep.mu contention**.
+This is load-shedding backpressure: under a reconnect storm new connections are
+admitted at a steady bounded rate while the socket stays drained. Tunable via
+`GEODE_QUIC_INITIAL_BUDGET`.
+
+### RC-B iteration 2 (raft v0.1.9, `555dbb3`) — timer-based candidate demotion
+
+**Why v0.1.8 didn't rescue geode-0.** v0.1.8's `VoteLost → becomeFollower` only
+fires on a **quorum of vote rejections** — but a transport-degraded candidate
+(rx-queue backed up, below the `exit(70)` threshold) can't collect a quorum of
+*any* responses, and a pre-vote mutual-grant lockstep never produces a rejection
+quorum at all. So geode-0 stayed a frozen candidate at term 8.
+
+**Fix.** Add a **timer-based** demotion (`Config.candidate_demote_threshold`,
+default 4): after N consecutive failed candidate elections (no win, no
+higher-term contact), the node steps down to follower and applies a growing,
+capped, randomized election backoff (`applyElectionBackoff`), desynchronizing
+lockstep peers so one campaigns ahead and wins — **without needing to receive any
+quorum**. Liveness-only (no term/log change). Complements, not replaces, the
+quorum-rejection VoteLost path.
+
+### Cascade + local validation
+
+- geode `build.zig.zon`: quic → v0.1.29 (`69d5363`), raft → v0.1.9 (`555dbb3`),
+  geode-client-zig → v0.2.15 (`b307550`, lockstep quic pin); `GEODE_QUIC_INITIAL_BUDGET`
+  wired in `main.zig`.
+- raft v0.1.9: 4 suites green (incl. new `stuck candidate demotes to follower …`
+  scenario, RED before the fix, + `applyElectionBackoff` unit test).
+- quic v0.1.29: `zig build test` + pto green; `acceptor_drain_budget` filter green
+  (RED on the old 256-Initial budget).
+- geode-client-zig v0.2.15: build + test green on quic v0.1.29.
+- geode: builds clean (single quic instance, diamond gate passes); 16 regression
+  suites green (transport + raft + cluster subprocess, same set as iteration 1).
+
+### Owed (k8s only — netns cannot reproduce the wedge, §11)
+
+Re-run the arda sustained-churn gate against the iteration-2 build: the rx_queue
+must stay **under 8 MiB** through ≥6×4-kill bursts (no `exit(70)`), and a
+transport-degraded / lagging candidate must demote on the timer and rejoin to a
+clean **3/3** without a manual pod roll. Then push the four tags + the geode bump
+together. Prod untouched (`geode-prod` single-node `0.6.14`).

@@ -304,6 +304,16 @@ pub fn setServerSocketDrainPackets(n: usize) void {
     api.setServerSocketDrainPackets(n);
 }
 
+/// Override the vendored QUIC endpoint's per-poll-cycle server Initial
+/// (new-connection) PROCESSING budget (acceptor-wedge RC-A it.2, quic v0.1.29).
+/// Surplus Initials beyond this are shed lock-free (client PTO retransmits), so
+/// the shed-drain engages immediately and the kernel rx_queue stays bounded
+/// under a reconnect storm. 0 -> the lib's compiled default (one UDP batch = 64).
+/// Startup-only write; the lib reads it on the poll hot path.
+pub fn setServerInitialProcessingBudget(n: usize) void {
+    api.setServerInitialProcessingBudget(n);
+}
+
 /// Pure split for drainPendingDestroy: of `total` queued destroys, process the
 /// tail `n` this call and keep the surviving prefix `keep` for the next call.
 /// `batch == 0` means unbounded (process everything). Extracted so the bounding

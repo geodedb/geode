@@ -2138,6 +2138,12 @@ pub fn main() !void {
         // a large slice per poll cycle, decoupled from the expensive Initial
         // processing budget. 0 = lib compiled default (UdpBatchCap*64 = 4096).
         quic_transport.setServerSocketDrainPackets(envUsize(gpa, "GEODE_QUIC_DRAIN_PACKETS", 0, 0, 1_000_000));
+        // QUIC-acceptor-wedge RC-A it.2 (quic v0.1.29): cap per-cycle new-conn
+        // (Initial) PROCESSING to a small budget so the lock-free shed-drain
+        // engages immediately and the kernel rx_queue stays bounded under a
+        // reconnect storm (the v0.1.28 drain cap alone was still gated behind the
+        // old 256-Initial ep.mu-serialized budget). 0 = lib default (one batch=64).
+        quic_transport.setServerInitialProcessingBudget(envUsize(gpa, "GEODE_QUIC_INITIAL_BUDGET", 0, 0, 1_000_000));
         const poll_contexts = gpa.alloc(PollLoopContext, quic_poll_worker_count) catch |err| {
             log.err("Failed to allocate poll loop contexts", &.{Attr.string("error", @errorName(err))});
             return;

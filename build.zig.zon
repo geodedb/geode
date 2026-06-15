@@ -170,8 +170,16 @@
             // budget so a reconnect storm's surplus Initials are cheaply shed and
             // the kernel UDP rx_queue stays bounded (the destroyBatch teardown fix
             // alone did not bound rx-queue growth). Tunable via GEODE_QUIC_DRAIN_PACKETS.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.28#8ed9425aef2616363726d1ca1d7f1fe7330d10ed",
-            .hash = "quic-0.1.28-gBIqUXa3PQC5z_Z8dgnK_rGcxRnryXDxJIUx5-5T5MMJ",
+            // Bumped 2026-06-15 to v0.1.29 (69d5363) — RC-A iteration 2: v0.1.28's
+            // drain cap was still gated behind the 256-Initial ep.mu-serialized
+            // PROCESSING budget (16 workers all blocked on ep.mu → none draining),
+            // so the k8s rx_queue still wedged at ~11.4 MB. Drop the Initial
+            // processing budget to one UDP batch (64) + raise the drain cap to
+            // empty a full 16 MiB SO_RCVBUF per cycle, so the lock-free shed-drain
+            // engages immediately and the rx_queue is actually bounded. Initial
+            // budget tunable via GEODE_QUIC_INITIAL_BUDGET.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.29#69d53630252efcaa9da0fdba2d37ecc1ab1e7119",
+            .hash = "quic-0.1.29-gBIqUeLJPQBViVQOkmQTLkrZ9aQNi5O9kIRTDrll8sVD",
         },
 
         // =======================================================================
@@ -336,8 +344,10 @@
             // 2026-06-14: v0.2.14 — keeps geode-client-zig's quic pin in lockstep
             // with geode's bump to v0.1.28 (acceptor-wedge RC-A) so the build
             // graph has a single quic module instance (no diamond).
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.14#f8dc9d2bfc2f3a5dab3ea76d3f9fec049db9665b",
-            .hash = "geode_client_zig-0.2.14-8ysbVwqFCQDfO1YXLh2mTYxSnaGvotwbtpf4N0yEdG26",
+            // 2026-06-15: v0.2.15 — lockstep with geode's quic v0.1.29 bump
+            // (acceptor-wedge RC-A it.2).
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.15#b307550a0424b33952cae14f9c79b4c92f46c6d9",
+            .hash = "geode_client_zig-0.2.15-8ysbV_iFCQDN6iSTLeEQMcOSoCcwzy45OuD52v_PnKuZ",
         },
 
         // =======================================================================
@@ -373,9 +383,15 @@
         // now steps down to follower instead of cycling the election loop),
         // closing the consensus-layer half of the no-leader all-candidate livelock
         // (docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md).
+        // Bumped 2026-06-15 to v0.1.9 (555dbb3) — RC-B iteration 2: timer-based
+        // candidate demotion. v0.1.8's demotion only fires on a quorum REJECTION;
+        // a transport-degraded candidate or a pre-vote mutual-grant lockstep
+        // forms no rejection quorum and stayed a candidate forever (v0.6.27-30
+        // residual). After N consecutive failed elections the candidate now steps
+        // down + backs off (Config.candidate_demote_threshold, default 4).
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.8#d1019082f4627cd01de8451fa40fc01f248de2d8",
-            .hash = "raft-0.1.8-PqJyviAiBQBU-L1HGiws3-cyj7vQ6b2yUkFAUcEbb20d",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.9#555dbb30138e756329419670e3eb35b87a98de5b",
+            .hash = "raft-0.1.9-PqJyvow1BQDiyePA2whHJ-ELOwAaigFFkk_cpMNxXhAq",
         },
 
         // =======================================================================
