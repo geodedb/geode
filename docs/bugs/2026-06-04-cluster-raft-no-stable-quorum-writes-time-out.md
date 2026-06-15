@@ -2444,3 +2444,62 @@ drains regardless of teardown/processing load. Tunable via `GEODE_QUIC_DRAIN_PAC
   (3 nodes) cannot reproduce the wedge** — it is a `:3141` client/acceptor rx_queue
   phenomenon at k8s pod/conn scale — so this gate is k8s-only.
 - Then push the raft v0.1.8 + quic v0.1.28 tags + the geode bump together.
+
+## ❌ k8s re-validation FAILS the gate (2026-06-14, `dev` = `v0.6.27-30-gc2b80555`, carries raft v0.1.8 + quic v0.1.28) — both fixes improve behavior but NEITHER root cause is closed at k8s scale; do NOT push/tag yet
+
+Ran the owed arda sustained-churn re-validation against the gate above (clean PVCs,
+`--ca-cert`, **6×4-kill bursts = 24 kills**, one past the ≥5 requirement, + an 8-min
+no-manual-roll self-heal watch). **The gate's two hard conditions both fail.**
+
+### ✅ Genuine improvements over `v0.6.27-28`
+
+- Bursts 1 + B (8 kills): **3/3 fully converged** (term 5 then 8) — clean.
+- **No permanent manual-roll livelock**: unlike `-28` (which sat no-leader until a manual
+  roll), the cluster *did* re-form a leader on its own (term 10).
+- Edge durability + **zero data loss**: `EL30` 1/1/1 throughout; after recovery every
+  pre-churn row survived (`BW30` 1/1/1, fresh write 1/1/1); zero `EdgeSlotMappingMissing`.
+- Acceptor wedge is **less frequent**: 1 node wedged this run vs 2 on `-28`, and only
+  during prolonged leaderlessness — not during the active bursts.
+
+### ❌ Gate condition 1 — "rx_queue stays bounded, no acceptor wedge" — FAILS
+
+geode-1 still wedged: `ACCEPTOR WEDGE: :3141 UDP rx_queue=11371584 bytes >= 8388608 for >=
+30000ms → exit(70)` (`lastState.exitCode=70`, `restarts=1`). The quic v0.1.28
+decoupled-drain-cap reduced *how often* it wedges but did **not** keep the rx-queue under
+the threshold at k8s scale — it still reached ~11.4 MB (same magnitude as `-23`/`-28`).
+*(Measurement note, again: the wedge lives in the `--previous` container after `exit(70)`;
+an in-run `logs --tail` on the current container shows `0` and is misleading.)*
+
+### ❌ Gate condition 2 — "no no-leader all-candidate livelock; a quorum-denied candidate demotes; leader re-forms without a manual roll" — FAILS (mixed)
+
+- The cluster **did** fall into the no-leader all-candidate state — and **earlier** than
+  `-28`: leaderless at **burst C (12 kills)** vs `-28`'s burst E (20). All three candidates,
+  **frozen terms** g0=8 / g1=9 / g2=9 (iters climbing = alive but pre-vote-stuck), **no
+  leader for ~6+ min**.
+- A leader **did** re-form without a manual roll (term 10, geode-2 leader + geode-1
+  follower) — **but watchdog-assisted, not by the RC-B demotion**: it only broke after
+  geode-1's `exit(70)` acceptor-watchdog restart cleared its transport. The etcd-style
+  `VoteLost → becomeFollower` demotion did not visibly rescue the frozen quorum on its own.
+- **geode-0 did NOT demote/rejoin**: it stayed a candidate **frozen at term 8** (2 behind
+  the term-10 quorum) for the entire 8-min watch; the quorum write `QW30` replicated `0/1/1`
+  (geode-0 partitioned out). Full 3/3 required a **manual pod roll** (which recovered cleanly
+  → term 11, writes 1/1/1, zero loss). So the cluster ended at a stranded 2/3, not 3/3.
+
+Likely why RC-B didn't fire for geode-0: the demotion triggers on a *quorum of vote
+rejections*, but a node whose transport is degraded (RC-A-adjacent: rx-queue backed up,
+not yet at the `exit(70)` threshold) can't collect a quorum of responses to trigger the
+demotion. **The two root causes are coupled** — the RC-B backstop needs the RC-A transport
+to actually deliver the rejections, so RC-A not being fully closed blunts RC-B.
+
+### Verdict
+
+`v0.6.27-30` is a real step forward (no permanent manual-roll livelock, fewer wedges, zero
+data loss) but **does not pass the k8s gate**: the acceptor still wedges (`exit(70)`,
+~11.4 MB) and sustained churn still produces a multi-minute no-leader window plus a stranded
+node that needs a manual roll. **Recommendation: do not push the tags / do not cut a release
+on this build.** Next: (1) make quic actually bound the kernel rx-queue under a reconnect
+storm (the current decoupled-drain cap still lets it reach 11.4 MB — the drain isn't keeping
+up at pod scale; consider a hard `recvmmsg`-drain loop or `SO_RCVBUF`/backpressure before the
+8 MiB watchdog), and (2) ensure a frozen/lagging candidate can demote even when it *can't*
+reach a response quorum (timer-based step-down to follower after N frozen intervals,
+independent of receiving rejections). Prod untouched (`geode-prod` single-node `0.6.14`).
