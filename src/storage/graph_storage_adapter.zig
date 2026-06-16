@@ -712,18 +712,19 @@ pub const ManagedGraph = struct {
     shard_locks: [sharded_store.SHARD_COUNT]std.Io.RwLock =
         [_]std.Io.RwLock{std.Io.RwLock.init} ** sharded_store.SHARD_COUNT,
 
-    /// Dedicated lock for the `merge_prop_index` (which is keyed by a
-    /// composite string, not by node_id, and therefore cannot be
-    /// sharded by the same function as the other structures).  MERGE
-    /// probes acquire this SHARED for the fast-path lookup;
-    /// insert-if-absent takes it EXCLUSIVE.
-    merge_prop_index_lock: std.Io.RwLock = std.Io.RwLock.init,
+    // GAP-0894 (2026-06-16): the dedicated `merge_prop_index_lock` RwLock was
+    // retired. Both single- and multi-property node MERGE now serialize only
+    // same-tuple writers via the striped `merge_tuple_locks` table below; the
+    // `merge_prop_index` itself is self-synchronized by its own per-shard
+    // internal mutexes (graph_store.MergePropertyIndex). Nothing acquired this
+    // graph-global lock once the single-property path was striped, so it was
+    // removed rather than left as a live-looking lock that nothing locks.
 
     /// CANARY: REQ=REQ-QUIC-HC-109; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeTupleLocks; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
     /// CANARY: REQ=REQ-QUIC-HC-167; FEATURE="High-Concurrency Mutations"; ASPECT=MergeTupleLockStriping; STATUS=IMPL; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-29
     ///
-    /// Striped mutexes for multi-property node MERGE. Single-property MERGE
-    /// uses `merge_prop_index_lock`; multi-property MERGE needs to serialize
+    /// Striped mutexes for node MERGE (both single- and multi-property since
+    /// GAP-0894). MERGE needs to serialize
     /// only requests for the same property tuple while still allowing shard
     /// writes for unrelated tuples to proceed under `rwlock` SHARED. The
     /// stripe table is intentionally larger than the current 4096 sustained
@@ -2283,10 +2284,10 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
-    /// Phase 2 shard-locked MERGE variant.  Probe under
-    /// `merge_prop_index_lock` SHARED for the fast path; on miss,
-    /// acquire the shard lock for `reserved_id` + the merge-index
-    /// lock EXCLUSIVE and re-probe before inserting.
+    /// Phase 2 shard-locked MERGE variant.  Serialize only same-tuple
+    /// writers on the striped `merge_tuple_locks` table (GAP-0894),
+    /// probe under `rwlock` SHARED, and on miss delegate the insert to
+    /// the shard-aligned `bulkInsertNodeWithReservedIdForTenant`.
     ///
     /// The `reserved_id` may be abandoned if the probe discovers an
     /// existing candidate (id-space leak is bounded by ingest size;
