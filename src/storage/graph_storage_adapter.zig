@@ -2330,85 +2330,90 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        const _t_start = monoNanosNow();
-        mg.rwlock.lockSharedUncancelable(io);
-        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
-        defer mg.rwlock.unlockShared(io);
-        const _hold_start = monoNanosNow();
+        // GAP-0894: stripe single-property MERGE through the same per-tuple
+        // lock table the multi-property path uses, instead of taking the
+        // graph-global `merge_prop_index_lock` EXCLUSIVE on every insert.
+        // Disjoint (label, merge_key, merge_value) tuples hash to different
+        // stripes and proceed in parallel; only same-key MERGE races
+        // serialize. The stripe hold spans probe+insert so two writers for
+        // the same key cannot both miss-then-insert (no double node).
+        const merge_props_1 = [_]PropKV{.{ .key = merge_key, .value = merge_value }};
+        const tuple_lock_idx = mergeTupleLockIndex(label, &merge_props_1);
+        const tuple_wait_start = monoNanosNow();
+        mg.merge_tuple_locks[tuple_lock_idx].lockUncancelable(io);
+        const tuple_hold_start = monoNanosNow();
+        const tuple_wait_ns = tuple_hold_start -| tuple_wait_start;
+        _ = mg.merge_tuple_lock_acquired_total.fetchAdd(1, .monotonic);
+        _ = mg.merge_tuple_lock_wait_ns_total.fetchAdd(tuple_wait_ns, .monotonic);
+        observeMaxAtomic(&mg.merge_tuple_lock_max_wait_ns_observed, tuple_wait_ns);
         defer {
-            const _hold_ns = monoNanosNow() -| _hold_start;
-            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
-            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
-            if (_hold_ns > _cur_max) {
-                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
-            }
+            const tuple_hold_ns = monoNanosNow() -| tuple_hold_start;
+            _ = mg.merge_tuple_lock_hold_ns_total.fetchAdd(tuple_hold_ns, .monotonic);
+            observeMaxAtomic(&mg.merge_tuple_lock_max_hold_ns_observed, tuple_hold_ns);
+            mg.merge_tuple_locks[tuple_lock_idx].unlock(io);
         }
 
-        // Probe phase: shared lock on merge-index, fast return on hit.
-        // For apply_on_match (bare-SET MERGE) we skip the early return
-        // and fall through to the exclusive-lock branch so the SET
-        // clauses commit under the same merge_prop_index_lock that
-        // the create branch uses.
-        if (!apply_on_match) {
-            mg.merge_prop_index_lock.lockSharedUncancelable(io);
+        // Probe phase under `rwlock` SHARED. `lookupMergeCandidate` reads the
+        // merge_prop_index under its own leaf mutex; combined with the
+        // per-tuple lock (which serializes same-key writers) this is
+        // sufficient — no graph-global exclusive needed.
+        {
+            const _t_start = monoNanosNow();
+            mg.rwlock.lockSharedUncancelable(io);
+            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+            defer mg.rwlock.unlockShared(io);
+            const _hold_start = monoNanosNow();
+            defer {
+                const _hold_ns = monoNanosNow() -| _hold_start;
+                _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+                _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic);
+                const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+                if (_hold_ns > _cur_max) {
+                    mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+                }
+            }
+
             var probe_id: u64 = 0;
-            const probe = store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id);
-            mg.merge_prop_index_lock.unlockShared(io);
-            switch (probe) {
-                .found => return probe_id,
+            switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id)) {
+                .found => {
+                    if (apply_on_match) {
+                        try store.setNodeProperty(probe_id, merge_key, merge_value);
+                        for (on_create_props) |kv| {
+                            if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                            try store.setNodeProperty(probe_id, kv.key, kv.value);
+                        }
+                    }
+                    return probe_id;
+                },
                 .not_indexable => return error.MergeValueNotIndexable,
                 .not_found => {},
             }
         }
 
-        // Insert / upsert phase: take the shard lock for the reserved
-        // id plus the merge-index lock EXCLUSIVE.  Re-probe under the
-        // exclusive lock so concurrent MERGEs for the same key
-        // serialise correctly.
-        const idx = sharded_store.shardIndex(reserved_id);
-        mg.shard_locks[idx].lockUncancelable(io);
-        defer mg.shard_locks[idx].unlock(io);
+        // Insert phase: delegate to the shard-aligned bulk insert helper —
+        // the same create path the multi-property MERGE uses (:2511).
+        var combined_buf: [64]PropKV = undefined;
+        const combined_len = 1 + on_create_props.len;
+        const combined_props: []PropKV = if (combined_len <= combined_buf.len)
+            combined_buf[0..combined_len]
+        else
+            try self.allocator.alloc(PropKV, combined_len);
+        defer if (combined_len > combined_buf.len) self.allocator.free(combined_props);
 
-        mg.merge_prop_index_lock.lockUncancelable(io);
-        defer mg.merge_prop_index_lock.unlock(io);
-
-        var reprobe_id: u64 = 0;
-        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &reprobe_id)) {
-            .found => {
-                if (apply_on_match) {
-                    // Bare-SET upsert: apply the SET clauses to the
-                    // existing node under the exclusive merge_prop_index
-                    // lock so any prop that ALSO happens to be a merge
-                    // key (e.g. node_id itself) updates atomically.
-                    try store.setNodeProperty(reprobe_id, merge_key, merge_value);
-                    for (on_create_props) |kv| {
-                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
-                        try store.setNodeProperty(reprobe_id, kv.key, kv.value);
-                    }
-                }
-                return reprobe_id;
-            },
-            .not_indexable => return error.MergeValueNotIndexable,
-            .not_found => {},
+        combined_props[0] = .{ .key = merge_key, .value = merge_value };
+        if (on_create_props.len > 0) {
+            @memcpy(combined_props[1..][0..on_create_props.len], on_create_props);
         }
 
-        mg.string_indexes_mutex.lockUncancelable(io);
         const labels_slice = [_][]const u8{label};
-        // GAP-0891 (RC-1): tag the merged node with the captured request tenant.
-        const create_result = store.createNodeWithReservedIdGraphAndTenant(reserved_id, &labels_slice, graph_name, request_tenant);
-        mg.string_indexes_mutex.unlock(io);
-        try create_result;
-
-        // Property writes under the shard lock — setNodeProperty will
-        // update the merge_prop_index (which is protected by the
-        // merge_prop_index_lock we already hold EXCLUSIVE above).
-        try store.setNodeProperty(reserved_id, merge_key, merge_value);
-        for (on_create_props) |kv| {
-            try store.setNodeProperty(reserved_id, kv.key, kv.value);
-        }
-
-        return reserved_id;
+        return try self.bulkInsertNodeWithReservedIdForTenant(
+            graph_name,
+            reserved_id,
+            &labels_slice,
+            combined_props,
+            request_tenant,
+        );
     }
 
     /// Multi-property MERGE fast path for no-RETURN node patterns such as:
