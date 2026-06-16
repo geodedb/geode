@@ -5285,6 +5285,16 @@ pub fn build(b: *std.Build) void {
     const gap0891_step = b.step("test-gap0891-repro", "GAP-0891 regression (native-tenant write tenant tagging + edge reads)");
     gap0891_step.dependOn(&run_gap0891_tests.step);
 
+    // GAP-0894 regression: single-property bulk MERGE must stripe through
+    // merge_tuple_locks (like the multi-property path) instead of taking the
+    // graph-global merge_prop_index_lock EXCLUSIVE on every insert.
+    const gap0894_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0894_single_prop_merge_striping.zig"), .target = target, .optimize = optimize });
+    gap0894_test_mod.addImport("geode", root_mod);
+    const gap0894_tests = b.addTest(.{ .root_module = gap0894_test_mod });
+    const run_gap0894_tests = b.addRunArtifact(gap0894_tests);
+    const gap0894_step = b.step("test-gap0894", "GAP-0894 regression (single-property MERGE striping through merge_tuple_locks)");
+    gap0894_step.dependOn(&run_gap0894_tests.step);
+
     // GAP-0840 regression: opt-in strict-tenancy mode. The shared
     // tenancy.resolveTenantFilter decision (delegated to by both
     // crud_operations.tenantFilterFromContext and
