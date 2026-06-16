@@ -504,6 +504,30 @@ migration-guard:
       python3 scripts/ci/check_migrations.py
       echo "✓ Migration guard passed"
 
+# Unit-tests the failed-spec-only retry selector used by
+# test-harness-integration (scripts/ci/harness_rerun.py). Pure Python, no
+# build. Runs when the selector, its tests, or the harness CI wiring change.
+harness-rerun-selftest:
+  extends: .governance-python
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+      changes:
+        - "scripts/ci/harness_rerun.py"
+        - "scripts/ci/test_harness_rerun.py"
+        - ".gitlab-ci.yml"
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - "scripts/ci/harness_rerun.py"
+        - "scripts/ci/test_harness_rerun.py"
+        - ".gitlab-ci.yml"
+  before_script:
+    - pip install --no-cache-dir pytest
+  script:
+    - |
+      echo "=== Unit-testing harness_rerun selector ==="
+      python3 -m pytest scripts/ci/test_harness_rerun.py -v
+      echo "✓ harness_rerun selftest passed"
+
 # =============================================================================
 # Test Stage - Unit Tests
 # =============================================================================
