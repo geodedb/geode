@@ -142,3 +142,46 @@ test "GAP-0894: concurrent single-property MERGE stripes through merge_tuple_loc
     }
     try std.testing.expectEqual(workers * per_worker, seen.count());
 }
+
+test "GAP-0894: single-property MERGE apply_on_match upserts without duplicating" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    var adapter = try adapter_mod.StorageAdapter.init(allocator, data_dir, .{
+        .data_dir = data_dir,
+        .encryption_key = null,
+    });
+    defer adapter.deinit();
+    _ = try adapter.getOrCreateGraph("g");
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+    const set1 = [_]adapter_mod.StorageAdapter.PropKV{
+        .{ .key = "rank", .value = .{ .String = "species" } },
+    };
+    const set2 = [_]adapter_mod.StorageAdapter.PropKV{
+        .{ .key = "rank", .value = .{ .String = "genus" } },
+    };
+
+    const id1 = try adapter.bulkMergeNodeWithReservedId(
+        "g",
+        store.reserveNodeId(),
+        "Taxon",
+        "taxon_id",
+        .{ .Int = 42 },
+        &set1,
+        true,
+    );
+    const id2 = try adapter.bulkMergeNodeWithReservedId(
+        "g",
+        store.reserveNodeId(),
+        "Taxon",
+        "taxon_id",
+        .{ .Int = 42 },
+        &set2,
+        true,
+    );
+    try std.testing.expectEqual(id1, id2);
+}
