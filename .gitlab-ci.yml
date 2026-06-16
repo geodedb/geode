@@ -1296,6 +1296,22 @@ test-harness-integration:
       - runner_system_failure
       - stuck_or_timeout_failure
       - script_failure
+  cache:
+    # A job-level cache: overrides the top-level default entirely, so we
+    # re-list the two default Zig caches (anchored above) and ADD a tiny,
+    # commit-scoped cache that carries the set of not-yet-passing specs across
+    # job retries. `when: always` uploads it even when the job FAILS — that is
+    # the whole point: attempt 1 fails -> writes .harness-state/rerun_specs.txt
+    # -> the retry restores it and runs ONLY those specs (see the run block
+    # below + scripts/ci/harness_rerun.py). Keyed on the commit SHA so a new
+    # commit always starts from a full run.
+    - *zig-build-cache
+    - *zig-protoc-cache
+    - key: "harness-failed-specs-${CI_COMMIT_SHA}"
+      paths:
+        - .harness-state/
+      policy: pull-push
+      when: always
   before_script:
     - *zig-vendor-cache
     - apt-get update && apt-get install -y python3 python3-pip python3-venv pipx git curl ca-certificates
