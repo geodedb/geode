@@ -203,9 +203,9 @@ test "explicit --cert pointing at a missing file refuses to start (no silent sel
     const missing_key = try std.fmt.allocPrint(aa, "{s}/does-not-exist.key", .{data_dir});
 
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",     "--listen",  "127.0.0.1:31581",
-        "--data-dir", data_dir,    "--cert",    missing_crt,
-        "--key",      missing_key, "--no-auth",
+        BINARY_PATH,  "serve",     "--listen", "127.0.0.1:31581",
+        "--data-dir", data_dir,    "--cert",   missing_crt,
+        "--key",      missing_key,
     };
     const env_ptr = try buildChildEnv(aa);
 
@@ -360,9 +360,9 @@ test "explicit --cert pointing at a real cert is loaded as-is (not discarded)" {
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",      "--listen",  "127.0.0.1:31582",
-        "--data-dir", data_dir,     "--cert",    provided.crt,
-        "--key",      provided.key, "--no-auth",
+        BINARY_PATH,  "serve",      "--listen", "127.0.0.1:31582",
+        "--data-dir", data_dir,     "--cert",   provided.crt,
+        "--key",      provided.key,
     };
     const env_ptr = try buildChildEnv(aa);
 
