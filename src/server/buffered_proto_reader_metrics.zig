@@ -53,6 +53,29 @@ pub fn getIdleNs() u64 {
     return if (now > last) now - last else 0;
 }
 
+/// GAP-0896: compact one-line metrics summary emitted at `info` every
+/// watchdog tick, replacing the ~100-field full registry dump (which is
+/// gated behind GEODE_METRICS_LOG_FULL and the metrics endpoint).
+pub const CompactSummary = struct {
+    delivered_delta: u64,
+    delivered_total: u64,
+    active_streams: usize,
+    proto_idle_ms: u64,
+};
+
+pub fn appendCompactSummary(
+    gpa: std.mem.Allocator,
+    buf: *std.ArrayList(u8),
+    s: CompactSummary,
+) !void {
+    try buf.print(gpa, "msgs_delivered+={d} total={d} active_streams={d} proto_idle_ms={d}", .{
+        s.delivered_delta,
+        s.delivered_total,
+        s.active_streams,
+        s.proto_idle_ms,
+    });
+}
+
 /// Called from main.zig after the registry is created.
 pub fn registerAll(registry: anytype) !void {
     try registry.register("proto_reader_messages_delivered_total", &messages_delivered_total);
@@ -116,4 +139,19 @@ test "getIdleNs grows when no activity is recorded" {
 test "getIdleNs returns 0 when no activity has ever been recorded" {
     last_activity_ns.store(0, .release);
     try testing.expectEqual(@as(u64, 0), getIdleNs());
+}
+
+test "appendCompactSummary formats a single compact line" {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try appendCompactSummary(testing.allocator, &buf, .{
+        .delivered_delta = 1200,
+        .delivered_total = 348000,
+        .active_streams = 7,
+        .proto_idle_ms = 42,
+    });
+    try testing.expect(std.mem.indexOf(u8, buf.items, "msgs_delivered+=1200") != null);
+    try testing.expect(std.mem.indexOf(u8, buf.items, "active_streams=7") != null);
+    try testing.expect(std.mem.indexOf(u8, buf.items, "proto_idle_ms=42") != null);
+    try testing.expect(std.mem.indexOf(u8, buf.items, "\n") == null);
 }
