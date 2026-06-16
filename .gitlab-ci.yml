@@ -1283,8 +1283,18 @@ test-gql-compliance:
 
 # =============================================================================
 # Test Stage - Geode Test Harness Integration
-# Clones the latest geode-test-harness main branch and runs the full spec
-# suite against the freshly built Geode binary. Blocks releases on failure.
+# Clones the latest geode-test-harness main branch and runs the spec suite
+# against the freshly built Geode binary. Blocks releases on failure.
+#
+# Failed-spec-only retries: the first attempt of a commit runs the FULL spec
+# dir. If the job fails and GitLab retries it (retry: max 2) — or someone hits
+# "Retry" — the retry runs ONLY the specs that did not pass last attempt (plus
+# a timed-out run's unreached tail). State is carried across attempts in a
+# per-commit cache (.harness-state/, when: always). A new commit always starts
+# from a full run. Mechanism: scripts/ci/harness_rerun.py (select | record),
+# unit-tested by the harness-rerun-selftest governance job. Note: a green
+# RETRY means "the previously-failing specs now pass"; specs that passed on an
+# earlier attempt are trusted from that attempt.
 # =============================================================================
 
 test-harness-integration:
