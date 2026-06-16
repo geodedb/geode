@@ -62,7 +62,7 @@
 - Create: `scripts/ci/harness_rerun.py`
 - Test: `scripts/ci/test_harness_rerun.py`
 
-- [ ] **Step 1: Write the failing tests for the pure functions**
+- [x] **Step 1: Write the failing tests for the pure functions**
 
 Create `scripts/ci/test_harness_rerun.py`:
 
@@ -150,12 +150,12 @@ def test_spec_basenames_in_dir(tmp_path):
     assert hr.spec_basenames_in_dir(d) == ["a.yml", "b.yaml"]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python3 -m pytest scripts/ci/test_harness_rerun.py -v`
 Expected: FAIL — `harness_rerun.py` does not exist yet (module load error / `AttributeError`).
 
-- [ ] **Step 3: Create `scripts/ci/harness_rerun.py` with the pure functions**
+- [x] **Step 3: Create `scripts/ci/harness_rerun.py` with the pure functions**
 
 ```python
 #!/usr/bin/env python3
@@ -231,12 +231,12 @@ def compute_rerun(attempted: list[str], results: dict) -> list[str]:
     return sorted(set(attempted) - passed_basenames(results))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python3 -m pytest scripts/ci/test_harness_rerun.py -v`
 Expected: PASS — all 6 tests green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/ci/harness_rerun.py scripts/ci/test_harness_rerun.py
@@ -257,7 +257,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `scripts/ci/harness_rerun.py`
 - Test: `scripts/ci/test_harness_rerun.py`
 
-- [ ] **Step 1: Append the failing subcommand + flow tests**
+- [x] **Step 1: Append the failing subcommand + flow tests**
 
 Append to `scripts/ci/test_harness_rerun.py`:
 
@@ -418,12 +418,12 @@ def test_two_attempt_flow(tmp_path, capsys):
     assert state.read_text().strip() == ""  # all clear
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python3 -m pytest scripts/ci/test_harness_rerun.py -v`
 Expected: FAIL — `hr.main` does not exist (`AttributeError: module 'harness_rerun' has no attribute 'main'`).
 
-- [ ] **Step 3: Append `record`, `select`, and `main` to `scripts/ci/harness_rerun.py`**
+- [x] **Step 3: Append `record`, `select`, and `main` to `scripts/ci/harness_rerun.py`**
 
 Append below `compute_rerun` in `scripts/ci/harness_rerun.py`:
 
@@ -535,12 +535,12 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run the full test suite to verify it passes**
+- [x] **Step 4: Run the full test suite to verify it passes**
 
 Run: `python3 -m pytest scripts/ci/test_harness_rerun.py -v`
 Expected: PASS — all tests green (16 total).
 
-- [ ] **Step 5: Make the script executable and smoke-test the CLI**
+- [x] **Step 5: Make the script executable and smoke-test the CLI**
 
 Run:
 ```bash
@@ -549,7 +549,7 @@ python3 scripts/ci/harness_rerun.py select --help
 ```
 Expected: argparse help for the `select` subcommand prints, exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/ci/harness_rerun.py scripts/ci/test_harness_rerun.py
@@ -569,7 +569,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `.gitlab-ci.yml` (top-level `cache:` list, currently ~lines 95–109)
 
-- [ ] **Step 1: Add YAML anchors to the two existing cache entries**
+- [x] **Step 1: Add YAML anchors to the two existing cache entries**
 
 Replace this block (the top-level `cache:` list):
 
@@ -613,7 +613,7 @@ cache:
     policy: pull-push
 ```
 
-- [ ] **Step 2: Verify the YAML still parses and anchors resolve**
+- [x] **Step 2: Verify the YAML still parses and anchors resolve**
 
 Run:
 ```bash
@@ -629,7 +629,7 @@ PY
 ```
 Expected: `OK: top-level cache parses, 2 entries, anchors valid`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .gitlab-ci.yml
@@ -648,7 +648,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `.gitlab-ci.yml` (`test-harness-integration` job — insert a `cache:` key)
 
-- [ ] **Step 1: Add the job-level `cache:` block**
+- [x] **Step 1: Add the job-level `cache:` block**
 
 In the `test-harness-integration:` job, insert a `cache:` key immediately **after** the `retry:` block and **before** `before_script:` (so it is a sibling of `variables`, `retry`, `before_script`). The existing `retry:` block ends with:
 
@@ -686,7 +686,7 @@ Change it to:
   before_script:
 ```
 
-- [ ] **Step 2: Verify the job cache parses and lists three entries**
+- [x] **Step 2: Verify the job cache parses and lists three entries**
 
 Run:
 ```bash
@@ -704,7 +704,7 @@ PY
 ```
 Expected: `OK: job cache has 3 entries incl. per-commit failed-specs cache (when: always)`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .gitlab-ci.yml
@@ -724,7 +724,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `.gitlab-ci.yml` (`test-harness-integration` job `script:`, the "Running Full Test Harness Suite" block, currently ~lines 1404–1412)
 
-- [ ] **Step 1: Replace the `make test` invocation block**
+- [x] **Step 1: Replace the `make test` invocation block**
 
 Replace this block in the job's `script:`:
 
@@ -790,7 +790,7 @@ with:
 
 Note: the lines AFTER this block (`cp -r reports/ "${CI_PROJECT_DIR}/harness-reports/"`, the `=== Test Harness Results ===` gate via `check_harness_results.py`) are **unchanged** — `cd ../geode-test-harness` is still in effect, `reports/results.json` is still produced, and the gate still owns the verdict.
 
-- [ ] **Step 2: Verify the job script parses and contains the new flow (and no longer calls `make test`)**
+- [x] **Step 2: Verify the job script parses and contains the new flow (and no longer calls `make test`)**
 
 Run:
 ```bash
@@ -808,7 +808,7 @@ PY
 ```
 Expected: `OK: run block rewired to select/run/record; gate intact; make test removed`
 
-- [ ] **Step 3: Shell-lint the new script block (best-effort)**
+- [x] **Step 3: Shell-lint the new script block (best-effort)**
 
 Run (only if `shellcheck` is installed — otherwise skip):
 ```bash
@@ -822,7 +822,7 @@ command -v shellcheck >/dev/null && shellcheck -S error /tmp/harness_block.sh ||
 ```
 Expected: no `error`-level findings (style/info warnings are acceptable; the block is embedded YAML, not a standalone script).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .gitlab-ci.yml
@@ -843,7 +843,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `.gitlab-ci.yml` (add a job after `migration-guard`, currently ~line 503)
 
-- [ ] **Step 1: Add the self-test job**
+- [x] **Step 1: Add the self-test job**
 
 Immediately after the `migration-guard` job (after its `echo "✓ Migration guard passed"` line, before the `# ===... Test Stage ...` banner), add:
 
@@ -873,7 +873,7 @@ harness-rerun-selftest:
       echo "✓ harness_rerun selftest passed"
 ```
 
-- [ ] **Step 2: Verify the new job parses and is well-formed**
+- [x] **Step 2: Verify the new job parses and is well-formed**
 
 Run:
 ```bash
@@ -889,7 +889,7 @@ PY
 ```
 Expected: `OK: harness-rerun-selftest job present and well-formed`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .gitlab-ci.yml
@@ -909,7 +909,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `.gitlab-ci.yml` (the comment header above `test-harness-integration:`, currently ~lines 1260–1263)
 
-- [ ] **Step 1: Update the header comment**
+- [x] **Step 1: Update the header comment**
 
 Replace:
 
@@ -941,7 +941,7 @@ with:
 test-harness-integration:
 ```
 
-- [ ] **Step 2: Verify the file still parses**
+- [x] **Step 2: Verify the file still parses**
 
 Run:
 ```bash
@@ -949,7 +949,7 @@ python3 -c "import yaml; yaml.safe_load(open('.gitlab-ci.yml')); print('OK: .git
 ```
 Expected: `OK: .gitlab-ci.yml parses`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .gitlab-ci.yml
@@ -964,12 +964,12 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Files:** (none modified — verification only)
 
-- [ ] **Step 1: Run the full unit-test suite**
+- [x] **Step 1: Run the full unit-test suite**
 
 Run: `python3 -m pytest scripts/ci/test_harness_rerun.py -v`
 Expected: PASS — all tests green.
 
-- [ ] **Step 2: End-to-end simulation against REAL spec basenames + a real results.json**
+- [x] **Step 2: End-to-end simulation against REAL spec basenames + a real results.json**
 
 This proves the helper agrees with the live harness schema (uses the real specs dir and a real `reports/results.json` if present).
 
@@ -1003,7 +1003,7 @@ echo "ALL E2E CHECKS PASSED"
 ```
 Expected: ends with `ALL E2E CHECKS PASSED`. (Note: because the fabricated `results.json` lists only one spec as failed and none as passed, `record` against the full dir carries over *every* spec; the meaningful assertion is that `$BASE` is present and the retry stages it. The two-attempt subset narrowing is fully exercised by `test_two_attempt_flow` in Step 1.)
 
-- [ ] **Step 3: Validate the whole pipeline with `glab ci lint` (if available)**
+- [x] **Step 3: Validate the whole pipeline with `glab ci lint` (if available)**
 
 Run:
 ```bash
@@ -1012,7 +1012,7 @@ command -v glab >/dev/null && glab ci lint .gitlab-ci.yml || \
 ```
 Expected: `Valid` (glab) or `glab not present — YAML parse OK`.
 
-- [ ] **Step 4: Confirm clean working tree and review the diff**
+- [x] **Step 4: Confirm clean working tree and review the diff**
 
 Run:
 ```bash
