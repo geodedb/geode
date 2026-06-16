@@ -80,7 +80,7 @@ def _read_state(state_file: Path) -> list[str]:
     return [ln.strip() for ln in lines if ln.strip()]
 
 
-def _load_results(path: Path):
+def _load_results(path: Path) -> dict | None:
     try:
         with Path(path).open() as fh:
             data = json.load(fh)

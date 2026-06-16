@@ -9,6 +9,7 @@ from pathlib import Path
 # Load the helper module by path (scripts/ci is not a package).
 _MOD_PATH = Path(__file__).resolve().parent / "harness_rerun.py"
 _spec = importlib.util.spec_from_file_location("harness_rerun", _MOD_PATH)
+assert _spec is not None and _spec.loader is not None, f"cannot load {_MOD_PATH}"
 hr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hr)
 
@@ -277,6 +278,8 @@ def test_select_subset_rebuilds_stage_dir(tmp_path, capsys):
             str(stage),
         ]
     )
+    out = capsys.readouterr().out.strip()
+    assert out == str(stage)
     assert hr.spec_basenames_in_dir(stage) == ["a.yml"]
 
 
