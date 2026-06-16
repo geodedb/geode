@@ -93,7 +93,8 @@ default:
 # touches GitHub. Bump the key + path hash when protoc is upgraded (see the
 # `.@"protoc-*"` hashes in the protobuf dep's build.zig.zon).
 cache:
-  - key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+  - &zig-build-cache
+    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
       - "zig-cache-main-protected"
       - "zig-cache-main"
@@ -101,7 +102,8 @@ cache:
       - .zig-cache/
       - zig-cache/
     policy: pull-push
-  - key: "zig-protoc-v32.1" # gitleaks:allow -- public cache key name, not a credential
+  - &zig-protoc-cache
+    key: "zig-protoc-v32.1" # gitleaks:allow -- public cache key name, not a credential
     paths:
       # protoc-linux-x86_64 (host protoc for every linux runner), addressed by
       # the protobuf dep's pinned hash N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.
