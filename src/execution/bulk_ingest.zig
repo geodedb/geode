@@ -263,6 +263,67 @@ pub fn matchSimpleNodeMergeSpec(program: *const ast.Program) ?SimpleNodeMergeSpe
     return buildSimpleNodeMergeSpec(merge_stmt);
 }
 
+/// GAP-0894: a `<graph-selector>; <simple MERGE>` 2-statement program. A
+/// pooled `database/sql` driver (the divelife 14.27M bulk-seed client)
+/// prepends the graph selector — `USE GRAPH <g>` or
+/// `SESSION SET [PROPERTY] GRAPH <g>` — to EVERY statement for connection-pool
+/// safety, so the per-statement program is two statements. The single-
+/// statement detectors reject that (`statements.len != 1`), kicking the MERGE
+/// to the regular executor's whole-graph EXCLUSIVE write lock — the measured
+/// bottleneck (rwlock_exclusive_wait climbing, merge_tuple_lock pinned at 0,
+/// ~50 nodes/sec). This detector returns the selector's graph name plus the
+/// simple-MERGE spec so the dispatcher can fast-path the MERGE. It does NO
+/// authorization itself — the caller fast-paths ONLY when the selector targets
+/// the session's already-bound (RBAC-checked) graph.
+pub const GraphSelectorMergeSpec = struct {
+    graph_name: []const u8,
+    merge: SimpleNodeMergeSpec,
+};
+
+pub fn matchGraphSelectorThenMerge(program: *const ast.Program) ?GraphSelectorMergeSpec {
+    if (program.statements.len != 2) return null;
+    const graph_name = graphSelectorName(&program.statements[0]) orelse return null;
+    const merge_stmt = switch (program.statements[1]) {
+        .Merge => |m| m,
+        else => return null,
+    };
+    const spec = buildSimpleNodeMergeSpec(merge_stmt) orelse return null;
+    return .{ .graph_name = graph_name, .merge = spec };
+}
+
+/// Extract a plain graph name from a leading graph-selector statement, or null
+/// for any other statement / a graph reference we should not fast-path (a typed
+/// initializer, a path/expression, an empty name). A conservative miss is safe:
+/// the caller falls through to the regular executor.
+fn graphSelectorName(stmt: *const ast.Statement) ?[]const u8 {
+    return switch (stmt.*) {
+        .UseGraph => |u| trimGraphRef(u.graph_name),
+        .SessionSet => |s| switch (s.clause_type) {
+            .Graph => |g| trimGraphRef(g.expression),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Trim surrounding quotes/whitespace and accept only a plain identifier-ish
+/// graph name (no whitespace or path/expression syntax). Returns null to mean
+/// "do not fast-path — let the executor resolve this reference".
+fn trimGraphRef(raw: []const u8) ?[]const u8 {
+    var s = std.mem.trim(u8, raw, " \t\r\n");
+    if (s.len >= 2 and ((s[0] == '"' and s[s.len - 1] == '"') or
+        (s[0] == '\'' and s[s.len - 1] == '\'')))
+    {
+        s = s[1 .. s.len - 1];
+    }
+    if (s.len == 0) return null;
+    for (s) |c| {
+        if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or
+            c == '/' or c == '(' or c == ')' or c == '"' or c == '\'') return null;
+    }
+    return s;
+}
+
 /// Allocation-free check used by `matchSingleStatement`.  Returns true iff
 /// the MERGE is a simple-node-merge shape — i.e. `matchSimpleNodeMergeSpec`
 /// would also return non-null for the same statement.

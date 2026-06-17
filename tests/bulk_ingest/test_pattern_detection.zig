@@ -385,3 +385,43 @@ test "MATCH+CREATE edge rejects undirected edge" {
         bulk_ingest.matchSingleStatement(&pr.program),
     );
 }
+
+// ----------------------------------------------------------------------
+// GAP-0894: `<graph-selector>; <simple MERGE>` 2-statement programs (the
+// pooled database/sql driver shape — graph preamble per statement) must be
+// detectable so the QUIC dispatcher can fast-path the MERGE instead of
+// falling to the whole-graph EXCLUSIVE regular executor.
+// ----------------------------------------------------------------------
+
+test "GAP-0894: detects USE GRAPH preamble + simple MERGE" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "USE GRAPH taxa; MERGE (n:Taxon {taxon_id: 1}) SET n.rank = 'species'",
+        allocator,
+    );
+    defer pr.deinit();
+    const gs = bulk_ingest.matchGraphSelectorThenMerge(&pr.program) orelse return error.NotDetected;
+    try testing.expectEqualStrings("taxa", gs.graph_name);
+    try testing.expectEqualStrings("Taxon", gs.merge.label);
+    try testing.expectEqualStrings("taxon_id", gs.merge.merge_key);
+}
+
+test "GAP-0894: single-statement MERGE is not a graph-selector preamble" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql("MERGE (n:Taxon {taxon_id: 1})", allocator);
+    defer pr.deinit();
+    try testing.expectEqual(
+        @as(?bulk_ingest.GraphSelectorMergeSpec, null),
+        bulk_ingest.matchGraphSelectorThenMerge(&pr.program),
+    );
+}
+
+test "GAP-0894: USE GRAPH preamble + non-MERGE is not matched" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql("USE GRAPH taxa; MATCH (n) RETURN n", allocator);
+    defer pr.deinit();
+    try testing.expectEqual(
+        @as(?bulk_ingest.GraphSelectorMergeSpec, null),
+        bulk_ingest.matchGraphSelectorThenMerge(&pr.program),
+    );
+}

@@ -6020,6 +6020,30 @@ fn handleClientMessage(
                 }
             }
 
+            // GAP-0894: a `<graph-selector>; <simple MERGE>` 2-statement
+            // program — the shape a pooled `database/sql` driver emits when it
+            // prepends the graph selector to every statement for connection-
+            // pool safety (the divelife 14.27M bulk-seed client). The single-
+            // statement fast paths above reject it (statements.len != 1), so the
+            // MERGE fell through to the regular executor's whole-graph EXCLUSIVE
+            // write lock — the measured bottleneck (mg_rwlock_exclusive_wait_ns
+            // climbing, mg_merge_tuple_lock_acquired_total pinned at 0,
+            // ~50 nodes/sec). Fast-path the MERGE ONLY when the preamble
+            // re-selects the graph the session is ALREADY bound to
+            // (query_graph_name == state.current_graph, RBAC-checked at HELLO /
+            // first USE GRAPH). A preamble that switches to a DIFFERENT graph
+            // falls through so the graph-access check + session rebind run in
+            // the regular executor. Same gating as the single-statement fast
+            // paths: autocommit, non-cluster (cluster writes must reach Raft).
+            if (is_mutation and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
+                if (geode.bulk_ingest.matchGraphSelectorThenMerge(&parse_result.program)) |gs| {
+                    if (std.mem.eql(u8, gs.graph_name, query_graph_name)) {
+                        try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, gs.merge, query_graph_name, exec_context);
+                        return;
+                    }
+                }
+            }
+
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
             // enough to capture a QueryReadSession snapshot; downstream
