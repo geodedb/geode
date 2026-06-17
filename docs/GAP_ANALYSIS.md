@@ -211,6 +211,45 @@ this host (threads block too briefly / contend on-CPU); it needs a stable bench 
 Profiling toolchain is now available locally (`perf` 6.19, `bpftrace`, `bpfcc-tools`,
 `offcputime-bpfcc`; `kernel.perf_event_paranoid=1`) — see commit `6d269629`.
 
+### Implementation attempt + RESULT — 2026-06-17 (cross-shard group commit does NOT help; reverted)
+
+The cross-shard group-commit barrier from recommendation #1 was fully implemented and
+benchmarked, then **reverted** because it does not beat the existing `deferred` mode at
+the relevant concurrency. Implementation: `graph_storage` `ShardedGraphEngine.syncShard(idx)`
+
+- a geode opt-in `GEODE_WAL_SYNC=group` where shard workers commit deferred (no per-op
+fsync), rendezvous in a short bounded window so their per-shard `fdatasync`s overlap
+(ext4 coalesces concurrent fsyncs ~8–16×, proven by `/tmp/fsynctest.c`), then ack only
+after the fsync (durable; recovery unchanged).
+
+A/B at 16 connections, raw single-property MERGE (`make release`, /var NVMe):
+
+- `sync_each_commit` (default): **~1,673 ops/sec**
+- `group` (window 200µs): **~1,568 ops/sec** (slower than each_commit)
+- `group` (window 100 / 400µs): ~1,461 / ~1,346 ops/sec
+- `deferred`: **~2,431 ops/sec**
+
+**Why it fails:** the gain a group commit can capture is the fsync cost, which at this
+concurrency is only the `each_commit → deferred` gap (~1,673 → ~2,431, i.e. **~1.45×**).
+And it can't even capture that: with 16 *synchronous* connections the effective number of
+commits in flight at any instant is ~1–2 (each connection spends most of its ~5 ms/op
+cycle in processing + round-trip, only ~0.5 ms in fsync), so there is **almost never more
+than one fsync to coalesce** — the rendezvous window is then pure added latency and `group`
+lands *below* `each_commit`. Higher offered concurrency does not rescue it: 64 connections
+*degrades* every mode (contention), so there is no operating point where coalescing wins.
+
+**Corrected conclusion:** the throughput ceiling at the divelife seed's concurrency is
+**per-op CPU/processing (~2,431 ops/sec = the `deferred` ceiling)**, NOT WAL fsync. perf at
+that ceiling: CRC32 ~18% (two polynomials), `NodePropertyExactIndex.add`, wyhash. fsync is
+a secondary ~1.45× factor that the shipped **`GEODE_WAL_SYNC=deferred`** already captures
+for replayable bulk loads (its 6× on the seed comes from removing fsync *and* the
+checkpoint-lock interplay). A durable mode cannot exceed `deferred`'s throughput here, so
+group commit was not worth its complexity/risk and is not shipped. Remaining real levers
+(separate, lower-yield, deferred): (a) cut per-op CPU — hardware CRC32C, cheaper exact
+property-index insert; (b) move the bulk-EDGE path off the whole-graph exclusive lock for
+edge-heavy ingests; (c) a true client batch protocol so writes aren't 1-op synchronous
+round-trips (the only thing that would create the concurrency a group commit needs).
+
 ### Reproduction
 
 ```sh
