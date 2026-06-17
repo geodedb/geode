@@ -7430,9 +7430,32 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     // is set — all store files are written in plaintext.
     const tde_key = tde.loadKey(allocator) catch null;
 
+    // GAP-0900: opt-in relaxed WAL durability for replayable bulk ingest.
+    // The DEFAULT (.sync_each_commit) fsyncs the WAL on every commit — durable
+    // per NFR-SEC-003 but the throughput wall (~1 fdatasync/op; the 16 shards
+    // each fsync their own WAL and a distinct-key MERGE stream hits ~1 op/shard,
+    // so the group-commit coordinator can't coalesce). Setting
+    // GEODE_WAL_SYNC=deferred selects graph_storage's `.deferred` mode: the
+    // COMMIT record is still appended to the WAL but the per-commit fsync is
+    // skipped; commits become durable at the next checkpoint / clean close /
+    // auto-checkpoint (16 MB / 60 s thresholds). Use ONLY for idempotent,
+    // replayable loads that checkpoint (or cleanly close) before treating data
+    // as durable — e.g. the divelife dump seed, which re-runs from its manifest.
+    var sync_mode: gs.SyncMode = .sync_each_commit;
+    if (std.c.getenv("GEODE_WAL_SYNC")) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        if (std.mem.eql(u8, raw, "deferred")) {
+            sync_mode = .deferred;
+            log.warn("GEODE_WAL_SYNC=deferred: per-commit WAL fsync DISABLED (relaxed durability — commits durable only at checkpoint/clean close). Use only for replayable bulk loads (GAP-0900).", &.{});
+        } else if (!std.mem.eql(u8, raw, "each_commit") and raw.len != 0) {
+            log.warn("GEODE_WAL_SYNC unrecognized; using default sync_each_commit (valid: each_commit | deferred)", &.{Attr.string("value", raw)});
+        }
+    }
+
     const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
         .data_dir = data_dir,
         .encryption_key = tde_key,
+        .sync_mode = sync_mode,
     });
     global_adapter = adapter;
 
