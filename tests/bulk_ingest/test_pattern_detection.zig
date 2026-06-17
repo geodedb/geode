@@ -459,3 +459,54 @@ test "GAP-0894: cross-graph preamble is detected but differs from bound graph" {
     // A session bound to "taxa" must NOT fast-path this (eql gate fails).
     try testing.expect(!std.mem.eql(u8, gs.graph_name, "taxa"));
 }
+
+// ----------------------------------------------------------------------
+// GAP-0894 (reopened 2026-06-17): bare `SET` MERGE — the exact shape the
+// divelife `database/sql` driver (geodedb.com/geode) emits after inlining
+// `?` placeholders. The driver sends `MERGE (n:L {k: v}) SET n.a = ..., ...`
+// (a BARE SET, not ON CREATE SET). All prior MERGE detection tests used
+// `ON CREATE SET` or no SET, so this hot shape was never covered — and it
+// falls through to the regular executor's whole-graph EXCLUSIVE write lock
+// (~50 nodes/sec, merge_tuple_lock_acquired=0) in the 14.27M bulk seed.
+// ----------------------------------------------------------------------
+
+test "GAP-0894: detects bare-SET MERGE (single SET prop)" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:Widget {node_id: 'abc'}) SET n.name = 'alpha'",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.simple_node_merge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqualStrings("Widget", spec.label);
+    try testing.expectEqualStrings("node_id", spec.merge_key);
+}
+
+test "GAP-0894: detects real divelife taxon bare-SET MERGE (string key, 19 props, bools)" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:Taxon {taxon_id: 'gbif:200'}) SET " ++
+            "n.scientific_name = 'Amphiprion ocellaris', n.authority = 'Cuvier, 1830', " ++
+            "n.rank = 'Species', n.status = 'accepted', " ++
+            "n.kingdom = 'Animalia', n.phylum = 'Chordata', n.class = 'Actinopteri', " ++
+            "n.t_order = 'Ovalentaria', n.family = 'Pomacentridae', n.genus = 'Amphiprion', " ++
+            "n.is_marine = TRUE, n.is_brackish = FALSE, n.is_freshwater = FALSE, " ++
+            "n.is_terrestrial = FALSE, n.is_extinct = FALSE, " ++
+            "n.citation = '', n.modified = '', n.source = 'gbif', n.run_id = 'r1'",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.simple_node_merge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqualStrings("Taxon", spec.label);
+    try testing.expectEqualStrings("taxon_id", spec.merge_key);
+}

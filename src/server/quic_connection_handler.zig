@@ -1035,39 +1035,45 @@ fn executeBulkSimpleMerge(
             mut_sample.markExecuteDone();
             mut_sample.markLockReleased();
         } else {
-            const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
-            const deadline = monoNanosNow() + write_lock_timeout_ns;
-            const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
-                if (err == error.Deadline) {
-                    log.warn("Write lock acquisition timed out (bulk merge path)", &.{
-                        Attr.string("graph", query_graph_name),
-                        Attr.uint("timeout_ns", write_lock_timeout_ns),
-                    });
-                    try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
-                    return;
-                }
-                return err;
-            };
+            // GAP-0894 (reopened 2026-06-17): single-property MERGE must stripe
+            // through `merge_tuple_locks` exactly like the `merge_kvs.len > 1`
+            // branch above — NOT take the whole-graph EXCLUSIVE write lock.
+            //
+            // The bare-`SET` upsert shape the divelife `database/sql` driver
+            // (geodedb.com/geode) emits — `MERGE (n:L {k: v}) SET n.a = ..., ...`
+            // after inlining `?` placeholders — sets `apply_on_match = true`
+            // with a single merge key, so it landed in this branch and
+            // serialized every concurrent writer on the global exclusive lock
+            // (~50 nodes/sec, `mg_merge_tuple_lock_acquired_total` pinned at 0,
+            // `mg_rwlock_exclusive_wait_ns` climbing — the divelife 14.27M
+            // bulk seed). The original GAP-0894 fix striped the adapter method
+            // (`bulkMergeNodeWithReservedId`) but left this dispatch branch
+            // calling the old whole-graph-locked `bulkMergeNode`, so the stripe
+            // was never reached on the hot single-property path.
+            //
+            // `bulkMergeNodeWithReservedId` re-probes + inserts under the
+            // per-(label, merge_key, value) stripe (and applies the SET clauses
+            // on the match branch when `apply_on_match`), so disjoint keys
+            // proceed in parallel and only same-key MERGE races serialize.
             mut_sample.markLockAcquired();
-
-            const node_id_res = adapter.bulkMergeNode(
+            const store = graph_store.getGlobalStore(graph_store.global_allocator());
+            const reserved_id = store.reserveNodeId();
+            const node_id_res = adapter.bulkMergeNodeWithReservedId(
                 query_graph_name,
+                reserved_id,
                 spec.label,
                 spec.merge_key,
                 merge_value_pv,
                 kvs,
-                null,
                 spec.apply_on_match,
             );
             _ = node_id_res catch |err| {
-                graph_store.releaseGraphLock(lock_handle);
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
             };
 
             mut_sample.markExecuteDone();
-            graph_store.releaseGraphLock(lock_handle);
             mut_sample.markLockReleased();
         }
     } else {

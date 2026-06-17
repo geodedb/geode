@@ -20,6 +20,21 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ### GAP-0894 — single-property bulk MERGE lock serialization (Critical, Closed)
 
+> **REOPENED 2026-06-17 — this closure was incomplete; see the live register in
+> [GAP_ANALYSIS.md](GAP_ANALYSIS.md).** Re-verification against the released
+> `geodedb/geode:dev` (`bfb66f42`) found the divelife single-property bulk seed
+> still ran at ~50 nodes/sec. The "Cause 1" adapter stripe below was real and
+> the adapter unit test passes, but the QUIC handler's single-property MERGE
+> dispatch branch (`executeBulkSimpleMerge`) was never rewired to call it — it
+> kept taking the whole-graph EXCLUSIVE lock + the old `bulkMergeNode`. "Cause 2"
+> (a driver prepending a per-statement graph selector) does NOT occur with the
+> `geodedb.com/geode` v0.1.23 driver, which binds the graph once at HELLO and
+> sends a single inlined-literal MERGE — so the 2-statement detector that was
+> validated never matched the real client. The validation was further masked by
+> GAP-0897 (the stripe metric only reflects the default graph). A follow-up fix
+> (2026-06-17) rewires the handler branch to the striped path (~4–5x), but a
+> global/WAL throughput ceiling keeps GAP-0894 Partial.
+
 Root-caused to TWO distinct serialization points, both fixed:
 
 **Cause 1 (adapter):** `bulkMergeNodeWithReservedIdForTenant` (`src/storage/graph_storage_adapter.zig`) took the graph-global `merge_prop_index_lock` EXCLUSIVE on every insert while the 16384 striped `merge_tuple_locks` were used only by multi-property MERGE. Fix: the single-prop path now probes under `rwlock` SHARED and delegates inserts to `bulkInsertNodeWithReservedIdForTenant`, stripe-keyed through `merge_tuple_locks` exactly like the multi-property path. The now-dead `merge_prop_index_lock` field was removed. Commits: `874731d9`, `b18f5014`, `107e5493`, `18403d5f`.
