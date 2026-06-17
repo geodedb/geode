@@ -309,6 +309,13 @@ fn graphSelectorName(stmt: *const ast.Statement) ?[]const u8 {
 /// Trim surrounding quotes/whitespace and accept only a plain identifier-ish
 /// graph name (no whitespace or path/expression syntax). Returns null to mean
 /// "do not fast-path — let the executor resolve this reference".
+///
+/// Note: the lexer already strips string delimiters before the AST is built,
+/// so `graph_name`/`expression` arrive as bare identifiers; the quote-strip
+/// below is belt-and-suspenders for any future caller that passes a raw
+/// quoted reference, and the byte-exact `==` gate at the dispatch site
+/// compares two values produced by this same lexer path (no normalization
+/// mismatch — graph names are restricted to `[A-Za-z0-9_]` at HELLO).
 fn trimGraphRef(raw: []const u8) ?[]const u8 {
     var s = std.mem.trim(u8, raw, " \t\r\n");
     if (s.len >= 2 and ((s[0] == '"' and s[s.len - 1] == '"') or

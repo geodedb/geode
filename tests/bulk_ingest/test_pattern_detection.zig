@@ -425,3 +425,37 @@ test "GAP-0894: USE GRAPH preamble + non-MERGE is not matched" {
         bulk_ingest.matchGraphSelectorThenMerge(&pr.program),
     );
 }
+
+test "GAP-0894: detects SESSION SET PROPERTY GRAPH preamble + simple MERGE" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "SESSION SET PROPERTY GRAPH taxa; MERGE (n:Taxon {taxon_id: 2})",
+        allocator,
+    );
+    defer pr.deinit();
+    const gs = bulk_ingest.matchGraphSelectorThenMerge(&pr.program) orelse return error.NotDetected;
+    try testing.expectEqualStrings("taxa", gs.graph_name);
+    try testing.expectEqualStrings("Taxon", gs.merge.label);
+}
+
+test "GAP-0894: cross-graph preamble is detected but differs from bound graph" {
+    // Security gate (F4): the detector is shape-detection ONLY — it does no
+    // authorization. The QUIC dispatcher fast-paths the MERGE solely when
+    // `gs.graph_name == query_graph_name` (the session's already-RBAC-checked
+    // bound graph). A preamble selecting a DIFFERENT graph yields a graph_name
+    // the dispatcher's `std.mem.eql` gate rejects, so the MERGE falls through
+    // to the regular executor — which runs the graph-access check + rebind.
+    // This test pins that the detector surfaces the *preamble's* graph name
+    // verbatim, so an attacker cannot smuggle a write into another graph: the
+    // name will not equal the bound graph and the gate will not fire.
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "USE GRAPH other_graph; MERGE (n:Taxon {taxon_id: 1})",
+        allocator,
+    );
+    defer pr.deinit();
+    const gs = bulk_ingest.matchGraphSelectorThenMerge(&pr.program) orelse return error.NotDetected;
+    try testing.expectEqualStrings("other_graph", gs.graph_name);
+    // A session bound to "taxa" must NOT fast-path this (eql gate fails).
+    try testing.expect(!std.mem.eql(u8, gs.graph_name, "taxa"));
+}
