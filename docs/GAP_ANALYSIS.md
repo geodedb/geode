@@ -250,6 +250,47 @@ property-index insert; (b) move the bulk-EDGE path off the whole-graph exclusive
 edge-heavy ingests; (c) a true client batch protocol so writes aren't 1-op synchronous
 round-trips (the only thing that would create the concurrency a group commit needs).
 
+### Lever (a) follow-up — per-op CPU: the dominant cost was a per-poll memset, not CRC (2026-06-17)
+
+Re-profiling the `deferred` ceiling on the shipped **ReleaseSafe** build (not an
+earlier optimize mode) changed the picture: `compiler_rt.memset` was **44% of total
+process CPU**, dwarfing CRC. The breakdown: **~31% inside the QUIC poll loop**
+(`endpoint.Endpoint.pollWithStats` ← the 16 poll worker threads) and **~6.7% in the WAL
+append path** (`wal.WalManager.appendRecord`).
+
+Root cause of the poll-loop share: `pollWithStats` declared its 64×4096-byte receive
+scratch as a stack local `var recv_bufs: [UdpBatchCap][4096]u8 = undefined` (256 KiB).
+In ReleaseSafe a stack `= undefined` is filled with the 0xAA sentinel **on every call**,
+so each poll cycle memset 256 KiB that `recvBatch` then immediately overwrites — pure
+waste, paid per poll across 16 threads.
+
+**Fix (quic `a53197a`, branch `gap0900-pollbuf` off the v0.1.30 pin):** move the scratch
+to `threadlocal` static storage. Release builds run 16 poll workers on the *same*
+endpoint concurrently, so the buffer must be per-thread (a single shared heap buffer
+raced and corrupted received packets → `Utf8ExpectedContinuation` panics in the GQL
+lexer). `threadlocal` matches the old per-call stack isolation but pays the undefined-fill
+**once per thread at TLS setup** instead of once per poll.
+
+**A/B (geode ReleaseSafe, `GEODE_WAL_SYNC=deferred`, baseline = same binary pre-fix
+captured via `/proc/<pid>/exe`):**
+
+- perf: `compiler_rt.memset` **44% → 17.7%**; the poll-loop memset is gone from the call
+  graph — the residual 17.7% is now entirely the WAL `appendRecord` stack buffer.
+- Poll-bound `RETURN 1` bench (32 conns, interleaved A/B ×3, drift-cancelling):
+  **+14.8% mean throughput** (min(fixed) 61,675/s > max(baseline) 57,049/s, no overlap).
+- Write-bound `MERGE` bench: throughput delta within run-to-run noise (~30%) — expected,
+  since MERGE is WAL/commit-bound, not poll-bound; the freed poll-thread CPU does not
+  raise a workload whose wall is elsewhere.
+- Correctness: 300K+ MERGE + 180K+ RETURN 1 ops with zero corruption; round-trip
+  read-back exact; 423,990 nodes intact; `zig build test` (quic) passes.
+
+**Takeaway:** a real, low-risk CPU-efficiency win that frees ~31% of every poll thread's
+CPU and gives ~+15% on poll/read-bound traffic — valuable on loaded multi-tenant servers
+even though it does not move the WAL-bound bulk-seed number. **Status: committed in quic
+locally (`a53197a`), pending release** (push + tag `v0.1.31` + bump the geode `.quic` pin
+hash). The next per-op-CPU target is the WAL `appendRecord` stack buffer (the residual
+17.7% memset). Hardware CRC32C is now lower priority — CRC was not the dominant cost.
+
 ### Reproduction
 
 ```sh
