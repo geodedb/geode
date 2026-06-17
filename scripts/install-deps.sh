@@ -129,26 +129,35 @@ sudo apt-get install -y \
     tcpdump \
     numactl
 
-# Linux perf — sampling profiler. Package name varies by kernel.
-#   On Debian/Ubuntu the matching package is `linux-tools-$(uname -r)` plus the
-#   `linux-tools-generic` umbrella. Some hosts (containers, custom kernels)
-#   only carry one or the other; install both and let dpkg pick.
+# Linux perf — sampling profiler (the primary tool for the GAP-0900 write-path
+# serialization probe). Package naming differs by distro family:
+#   • Ubuntu:      linux-tools-$(uname -r) + linux-tools-generic + linux-tools-common
+#   • Debian/Kali: linux-perf (metapackage) — ships the `perf` wrapper + versioned perf
+# Try each in turn; success = the `perf` command becomes available. Don't let a
+# missing package abort the run (set -e) — guard every attempt with `|| true`.
 echo "→ Installing linux perf tools..."
 KREL=$(uname -r 2>/dev/null || true)
-if [ -n "$KREL" ]; then
-    sudo apt-get install -y "linux-tools-$KREL" linux-tools-generic linux-tools-common 2>/dev/null \
-        || sudo apt-get install -y linux-tools-generic linux-tools-common 2>/dev/null \
-        || echo "⚠ perf install failed — try 'sudo apt-get install linux-tools-\$(uname -r)' manually"
+[ -n "$KREL" ] && sudo apt-get install -y "linux-tools-$KREL" linux-tools-generic linux-tools-common 2>/dev/null || true
+command -v perf >/dev/null 2>&1 || sudo apt-get install -y linux-perf 2>/dev/null || true
+# Debian/Kali sometimes ships the versioned package as linux-perf-<base> (e.g. 6.12).
+command -v perf >/dev/null 2>&1 || sudo apt-get install -y "linux-perf-${KREL%%-*}" 2>/dev/null || true
+if command -v perf >/dev/null 2>&1; then
+    echo "✓ perf available: $(perf --version 2>/dev/null | head -1)"
 else
-    sudo apt-get install -y linux-tools-generic linux-tools-common 2>/dev/null \
-        || echo "⚠ perf install failed — try manually"
+    echo "⚠ perf not installed automatically. Debian/Kali: 'sudo apt-get install linux-perf'; Ubuntu: 'sudo apt-get install linux-tools-\$(uname -r)'"
 fi
 
-# bpftrace — high-level eBPF tracing for production-safe in-kernel probes.
-#   The Debian/Ubuntu package is `bpftrace`; on older releases it may be missing.
-echo "→ Installing bpftrace (eBPF tracing)..."
+# bpftrace + bcc — eBPF tracing, including OFF-CPU profiling. For a single-thread
+# serialization bottleneck (GAP-0900) the on-CPU perf profile shows the hot serial
+# function, while bcc's offcputime/offwaketime show where the OTHER threads BLOCK
+# (lock wait, fsync wait) — together they pinpoint the serialization. bcc needs
+# matching kernel headers.
+echo "→ Installing bpftrace + bcc (eBPF / off-CPU tracing)..."
 sudo apt-get install -y bpftrace 2>/dev/null \
-    || echo "⚠ bpftrace not available on this distro release — skip; gdb + strace + perf cover the most-common needs"
+    || echo "⚠ bpftrace not available on this distro release — perf + gdb + strace cover most needs"
+sudo apt-get install -y bpfcc-tools "linux-headers-$KREL" 2>/dev/null \
+    || sudo apt-get install -y bpfcc-tools 2>/dev/null \
+    || echo "⚠ bpfcc-tools/headers not available — bpftrace covers most eBPF needs"
 
 # Configure QUIC performance optimizations
 echo ""
@@ -196,6 +205,41 @@ else
     echo "✓ Persistent sysctl configuration already exists"
 fi
 
+# Enable userspace profiling.
+# Most distros default to kernel.perf_event_paranoid=2 (Debian/Kali often 3) and
+# kernel.kptr_restrict=1, which block `perf record -p <pid>` from sampling even
+# your OWN processes and from resolving kernel symbols. Lower them so local perf
+# / off-CPU profiling works (needed for the GAP-0900 write-path serialization
+# probe). These are dev-box tunables; they intentionally relax kernel hardening,
+# so they live in their own clearly-named file you can delete to revert.
+echo ""
+echo "=== Enabling userspace profiling (perf) ==="
+echo ""
+PARANOID=$(sysctl -n kernel.perf_event_paranoid 2>/dev/null || echo 3)
+if [ "${PARANOID:-3}" -gt 1 ] 2>/dev/null; then
+    echo "→ Lowering kernel.perf_event_paranoid ${PARANOID}→1 (allow perf to sample processes)..."
+    sudo sysctl -w kernel.perf_event_paranoid=1 || true
+else
+    echo "✓ kernel.perf_event_paranoid already <= 1 ($PARANOID)"
+fi
+echo "→ Setting kernel.kptr_restrict=0 (resolve kernel symbols in perf)..."
+sudo sysctl -w kernel.kptr_restrict=0 2>/dev/null || true
+
+PERF_CONF="/etc/sysctl.d/99-geode-perf.conf"
+if [ ! -f "$PERF_CONF" ]; then
+    echo "→ Persisting profiling sysctls to $PERF_CONF (delete this file to revert)..."
+    sudo tee "$PERF_CONF" > /dev/null << 'EOF'
+# Geode dev-box profiling tunables (created by scripts/install-deps.sh).
+# Relaxes kernel restrictions so `perf record -p <pid>` and off-CPU tracing work
+# for local performance debugging. DELETE this file to restore hardened defaults.
+kernel.perf_event_paranoid=1
+kernel.kptr_restrict=0
+EOF
+    echo "✓ Persistent profiling sysctls created at $PERF_CONF"
+else
+    echo "✓ Persistent profiling sysctls already exist"
+fi
+
 echo ""
 echo "=== Dependency Installation Complete ==="
 echo ""
@@ -204,7 +248,14 @@ echo "  • Build tools and prerequisites"
 echo "  • OpenSSL development files"
 echo "  • QUIC: vendored implementation (no system libmsquic needed)"
 echo "  • Performance + diagnostic tools: gdb, strace, ltrace, valgrind,"
-echo "    lsof, sysstat, tcpdump, numactl, perf (linux-tools), bpftrace"
+echo "    lsof, sysstat, tcpdump, numactl, perf (linux-tools/linux-perf),"
+echo "    bpftrace, bpfcc-tools (off-CPU/eBPF) + kernel headers"
+echo "  • Userspace profiling enabled: kernel.perf_event_paranoid=1,"
+echo "    kernel.kptr_restrict=0 (persisted in /etc/sysctl.d/99-geode-perf.conf)"
+echo ""
+echo "Profiling the write-path serialization (GAP-0900):"
+echo "  perf record -g -p \$(pgrep -n geode) -- sleep 20 && perf report"
+echo "  /usr/sbin/offcputime-bpfcc -p \$(pgrep -n geode) 20   # where threads block"
 echo ""
 echo "QUIC Performance Optimizations:"
 echo "  • UDP buffer sizes increased to 7MB (net.core.rmem_max, net.core.wmem_max)"
