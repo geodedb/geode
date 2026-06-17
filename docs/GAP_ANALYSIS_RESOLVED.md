@@ -2,11 +2,39 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: June 11, 2026
-**Last Verified**: June 11, 2026
+**Last Updated**: June 16, 2026
+**Last Verified**: June 16, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
 **Current Status**: 5 open/partial actionable gaps (2 Critical — both Blocked; 2 High — 1 Blocked-vendor, 1 open/partial; 1 Medium — deferred; 0 Low). See docs/GAP_ANALYSIS.md.
+
+## 2026-06-16 — GAP-0894 / GAP-0895 / GAP-0896: divelife 14.27M bulk-seed fixes (Closed)
+
+**Summary**: Three gaps surfaced during a 14.27M-node divelife taxonomy bulk seed (`data-ingest ingest --from-dump`, 8 connections, single-property `MERGE`) against `geodedb/geode:dev` were fixed, reviewed (spec + code-quality + security), and closed in the same session on branch `fix/gap-0894-0895-0896-bulk-seed`.
+
+| Gap-ID | Severity | Area | Closing commit(s) | Pinning gate | Resolved date |
+|--------|----------|------|-------------------|--------------|---------------|
+| GAP-0894 | Critical | Storage / write concurrency — single-property bulk MERGE lock serialization | `874731d9` (concurrency regression), `b18f5014` (adapter stripe fix), `107e5493` (apply_on_match upsert guard), `18403d5f` (dead-field removal + test strengthening); `c159ca31` (dispatch detector + unit tests), `8ae925f0` (repro script), `3111663e` (SESSION SET + cross-graph security tests) | `zig build test-gap0894` (2/2); `zig build test-bulk-pattern-detection` | 2026-06-16 |
+| GAP-0895 | Medium | Observability / stall watchdog — false-positive per-stream stall on idle control stream | `6018c834` (registry method + unit tests), `b1d36871` (main.zig wiring) | `proto_reader_registry.zig` unit tests (7/7, incl. "idle control stream + active sibling ⇒ no stall") | 2026-06-16 |
+| GAP-0896 | Low | Observability / log verbosity — verbose per-interval metrics dump at `info` | `72bc35e6` (compact summary helper + test), `b1d36871` (main.zig wiring) | `buffered_proto_reader_metrics.zig` unit test (single-line compact summary); `GEODE_METRICS_LOG_FULL=1` enables full dump | 2026-06-16 |
+
+### GAP-0894 — single-property bulk MERGE lock serialization (Critical, Closed)
+
+Root-caused to TWO distinct serialization points, both fixed:
+
+**Cause 1 (adapter):** `bulkMergeNodeWithReservedIdForTenant` (`src/storage/graph_storage_adapter.zig`) took the graph-global `merge_prop_index_lock` EXCLUSIVE on every insert while the 16384 striped `merge_tuple_locks` were used only by multi-property MERGE. Fix: the single-prop path now probes under `rwlock` SHARED and delegates inserts to `bulkInsertNodeWithReservedIdForTenant`, stripe-keyed through `merge_tuple_locks` exactly like the multi-property path. The now-dead `merge_prop_index_lock` field was removed. Commits: `874731d9`, `b18f5014`, `107e5493`, `18403d5f`.
+
+**Cause 2 (dispatch — the actual divelife symptom):** a pooled `database/sql` driver prepends a graph selector (`USE GRAPH <g>` / `SESSION SET PROPERTY GRAPH <g>`) to every statement for connection-pool safety, so each MERGE arrived as a 2-statement program. `matchSimpleNodeMergeSpec` requires exactly 1 statement, so the MERGE fell through to the regular executor's whole-graph EXCLUSIVE write lock. Fix: a new detector `matchGraphSelectorThenMerge` (`src/execution/bulk_ingest.zig`) and a dispatch block (`src/server/quic_connection_handler.zig`) fast-paths the MERGE; the preamble is securely gated — only re-selects the session's already-RBAC-checked bound graph (`gs.graph_name == query_graph_name`); a different-graph preamble falls through to the regular executor's graph-access check. Commits: `c159ca31`, `8ae925f0`, `3111663e`. e2e probe: the 2-statement `USE GRAPH default; MERGE` shape went from `merge_tuple_lock_acquired=0` / `rwlock_exclusive_wait` climbing → `merge_tuple_lock_acquired` 74–80 / `rwlock_exclusive_wait=0`.
+
+Reviews: spec ✅, code-quality ✅ APPROVED, security ✅ Approve-With-Conditions (Low risk; both conditions satisfied — cross-graph gate test + `test-gap0891-repro` tenant-tagging green).
+
+### GAP-0895 — false-positive per-stream proto_reader stall (Medium, Closed)
+
+Fix: new `Registry.connectionLevelStall(now_ns, threshold_ns)` (`src/server/proto_reader_registry.zig`) that only flags a stall when EVERY stream on a connection (grouped by QUIC peer 4-tuple) is idle past threshold; the watchdog in `src/server/main.zig` was rewired to it and demoted from `error` to `warn` (the process-wide all-frozen watchdog retains the error/restart signal). Commits: `6018c834`, `b1d36871`. Reviews: spec ✅, code-quality ✅ APPROVED.
+
+### GAP-0896 — verbose per-interval metrics dump (Low, Closed)
+
+Fix: a compact one-line `info` summary (delivered delta/total, active streams, proto idle) via `appendCompactSummary` (`src/server/buffered_proto_reader_metrics.zig`), with the full dump gated behind `GEODE_METRICS_LOG_FULL` (default off). Commits: `72bc35e6`, `b1d36871`. Reviews: spec ✅, code-quality ✅ APPROVED.
 
 ## 2026-06-10/11 Closure Round — branch gap-closure-2026-06-10 (28 register gaps)
 
