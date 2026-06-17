@@ -20,20 +20,23 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ### GAP-0894 — single-property bulk MERGE lock serialization (Critical, Closed)
 
-> **REOPENED 2026-06-17 — this closure was incomplete; see the live register in
-> [GAP_ANALYSIS.md](GAP_ANALYSIS.md).** Re-verification against the released
-> `geodedb/geode:dev` (`bfb66f42`) found the divelife single-property bulk seed
-> still ran at ~50 nodes/sec. The "Cause 1" adapter stripe below was real and
-> the adapter unit test passes, but the QUIC handler's single-property MERGE
-> dispatch branch (`executeBulkSimpleMerge`) was never rewired to call it — it
-> kept taking the whole-graph EXCLUSIVE lock + the old `bulkMergeNode`. "Cause 2"
-> (a driver prepending a per-statement graph selector) does NOT occur with the
-> `geodedb.com/geode` v0.1.23 driver, which binds the graph once at HELLO and
-> sends a single inlined-literal MERGE — so the 2-statement detector that was
-> validated never matched the real client. The validation was further masked by
-> GAP-0897 (the stripe metric only reflects the default graph). A follow-up fix
-> (2026-06-17) rewires the handler branch to the striped path (~4–5x), but a
-> global/WAL throughput ceiling keeps GAP-0894 Partial.
+> **2026-06-17 re-verification — GAP-0894 stays CLOSED (a brief 2026-06-17
+> "reopen" was RETRACTED).** Re-testing flagged the divelife single-property
+> bulk seed at ~50 nodes/sec, but a **controlled host A/B** (both `make release`
+> binaries, 8 connections, warmup-discarded, 2 rounds each) showed that figure
+> was a **Docker-container UDP-NAT artifact**: the *unmodified* server does
+> ~255–259 nodes/sec on the host for the same workload. A patch that rewired the
+> single-property MERGE handler to the striped `bulkMergeNodeWithReservedId`
+> path **regressed the 8-connection case 2× (259→~130 nodes/sec)** and was
+> reverted — so the single-property exclusive lock is NOT the normal-concurrency
+> bottleneck (the path is per-op WAL-fsync / round-trip bound). Two real issues
+> the stress run *did* expose are tracked in the live register: **GAP-0898**
+> (write stall at high connection concurrency — 32 writers → ~0 nodes/sec) and
+> **GAP-0897** (per-graph metrics name-collision that masked this metric).
+> "Cause 2" below (a driver prepending a per-statement graph selector) does NOT
+> occur with the `geodedb.com/geode` v0.1.23 driver (it binds the graph once at
+> HELLO and inlines params), so that detector was validating a shape no real
+> client sends.
 
 Root-caused to TWO distinct serialization points, both fixed:
 

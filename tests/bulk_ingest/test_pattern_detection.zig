@@ -461,16 +461,17 @@ test "GAP-0894: cross-graph preamble is detected but differs from bound graph" {
 }
 
 // ----------------------------------------------------------------------
-// GAP-0894 (reopened 2026-06-17): bare `SET` MERGE — the exact shape the
-// divelife `database/sql` driver (geodedb.com/geode) emits after inlining
-// `?` placeholders. The driver sends `MERGE (n:L {k: v}) SET n.a = ..., ...`
-// (a BARE SET, not ON CREATE SET). All prior MERGE detection tests used
-// `ON CREATE SET` or no SET, so this hot shape was never covered — and it
-// falls through to the regular executor's whole-graph EXCLUSIVE write lock
-// (~50 nodes/sec, merge_tuple_lock_acquired=0) in the 14.27M bulk seed.
+// Bare-`SET` MERGE coverage (added 2026-06-17). This is the exact shape the
+// `geodedb.com/geode` `database/sql` driver emits after inlining `?`
+// placeholders: `MERGE (n:L {k: v}) SET n.a = ..., ...` (a BARE SET, not
+// `ON CREATE SET`). All prior MERGE detection tests used `ON CREATE SET` or
+// no SET, so the bare-SET shape was never covered. These tests confirm the
+// detector classifies it as `simple_node_merge` (it does — verified during
+// the 2026-06-17 divelife bulk-seed investigation; the detector was never the
+// problem there).
 // ----------------------------------------------------------------------
 
-test "GAP-0894: detects bare-SET MERGE (single SET prop)" {
+test "bare-SET MERGE is detected as simple_node_merge (single SET prop)" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
         "MERGE (n:Widget {node_id: 'abc'}) SET n.name = 'alpha'",
@@ -487,7 +488,7 @@ test "GAP-0894: detects bare-SET MERGE (single SET prop)" {
     try testing.expectEqualStrings("node_id", spec.merge_key);
 }
 
-test "GAP-0894: detects real divelife taxon bare-SET MERGE (string key, 19 props, bools)" {
+test "bare-SET MERGE is detected (real divelife taxon shape: string key, 19 props, bools)" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
         "MERGE (n:Taxon {taxon_id: 'gbif:200'}) SET " ++
