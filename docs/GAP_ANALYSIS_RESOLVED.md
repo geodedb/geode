@@ -8,6 +8,45 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Current Status**: 5 open/partial actionable gaps (2 Critical — both Blocked; 2 High — 1 Blocked-vendor, 1 open/partial; 1 Medium — deferred; 0 Low). See docs/GAP_ANALYSIS.md.
 
+## 2026-06-17 — GAP-0899: checkpoint vs concurrent-writer data race → server crash (Closed)
+
+- **Severity:** Critical (process crash / data race)
+- **Component:** Storage — `checkpointAll` (`src/storage/graph_storage_adapter.zig`) vs the bulk-ingest write path
+- **Status:** **Closed** (fixed 2026-06-17, commit `7dcac17e`)
+- **Symptom:** Under high write concurrency (divelife bulk seed at 32+ connections)
+  the server crashed with `thread N panic: index out of bounds: index 2640, len 2640`
+  in `label_index.zig:115` `scan()`, reached via
+  `checkpointAll → engine.checkpoint() → label_index.saveToFile → scan`. This
+  presented downstream as bulk ingests that "stalled to ~0 nodes/sec" — the
+  server had actually died under the load. At ≤8 connections the race window was
+  rarely hit, so it looked intermittent.
+- **Root cause:** `checkpointAll()` acquired the per-graph `mg.rwlock` in
+  **SHARED** mode to "exclude mutations", but the bulk-ingest write path
+  (`bulkMergeNodeWithReservedId*`) ALSO holds `mg.rwlock` in **SHARED** mode
+  while mutating the shared indexes (`label_index`, `edge_index`), relying on the
+  striped `merge_tuple_locks` only for same-tuple write-write exclusion. SHARED
+  does not exclude SHARED, so the checkpoint ran concurrently with writers:
+  `scan()` allocates `result[set.count()]` then fills it from the live
+  `keyIterator()`, and a concurrent `addNode()` grew the set mid-scan → write
+  past the end → panic → whole-process crash. (The checkpoint's own comment
+  mistakenly assumed "mutations hold the write lock".)
+- **Fix:** `checkpointAll()` now takes `mg.rwlock` **EXCLUSIVE** for
+  `engine.checkpoint()` + property-index snapshot, draining and blocking writers
+  for a consistent, race-free snapshot. Lock ordering is safe (writers take
+  `tuple_lock → rwlock`; checkpoint takes only `rwlock`, never `self.mutex` here —
+  no ABBA). The scalar manifest-count read stays SHARED. Snapshot disk I/O runs
+  under the lock for now (correctness over a crash); a follow-up can snapshot
+  under the lock and write outside it.
+- **Validation:** `make release` binary + containerized image (`Dockerfile.prebuilt`)
+  under divelife-shaped MERGE load on host loopback and over Docker UDP:
+  BEFORE — 64 concurrent writers crashed the server (panic in `label_index` scan);
+  AFTER — 64 writers × 45 s = 132,345 ops, **0 failures, 0 panics**, server stayed
+  up; containerized 64-writer run = 36,211 ops, 0 failures, 0 panics; full sharded
+  `zig build test` suite green (pre-push). The residual high-connection *driver*
+  multi-stream behaviour (intermittent ~0.06% per-op timeouts when >`pool_size`
+  streams multiplex over one connection) is non-crashing and tracked separately as
+  geode-client-go BUG-0002.
+
 ## 2026-06-16 — GAP-0894 / GAP-0895 / GAP-0896: divelife 14.27M bulk-seed fixes (Closed)
 
 **Summary**: Three gaps surfaced during a 14.27M-node divelife taxonomy bulk seed (`data-ingest ingest --from-dump`, 8 connections, single-property `MERGE`) against `geodedb/geode:dev` were fixed, reviewed (spec + code-quality + security), and closed in the same session on branch `fix/gap-0894-0895-0896-bulk-seed`.
