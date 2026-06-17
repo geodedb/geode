@@ -162,13 +162,43 @@ benchmarking (fresh servers intermittently failed to initialize under the accumu
 experiment load). Root cause is proven; the implementation is deliberately deferred to a
 stable, dedicated effort rather than risk an unvalidated WAL change.
 
+### Concurrency characterization — 2026-06-17 (later, perf/bpftrace/microbench)
+
+The ceiling is a **stack of serializations**, not one bottleneck. Measured on /var (NVMe
+ext4), 16-connection distinct-key MERGE, geode `905fddfb`:
+
+| variable removed | ops/sec | factor |
+|---|---|---|
+| baseline (`sync_each_commit`, 500 µs coalesce) | ~1,030–1,107 | 1.0× |
+| `GEODE_GROUP_COMMIT_COALESCE_US=0` | ~1,436 | 1.4× |
+| `GEODE_WAL_SYNC=deferred` (no per-op fsync) | ~2,989 | 2.7× |
+| **OS `fdatasync` ceiling (16 concurrent, ext4)** | **~15,777** | (target) |
+
+Decisive microbenchmark (`/tmp/fsynctest.c`): **ext4 batches concurrent `fdatasync`s** —
+1 thread = 1,995/s, 16 threads = 15,777/s (~8×), 32 = 33,122/s. So the 16 per-shard WALs
+*could* sustain ~16k fsync/s **if the shard commits ran concurrently**. They do not: the
+coordinator runs 16 dedicated shard-worker threads (17-thread pool), but the
+single-property MERGE stream is throttled to ~1,030 ops/sec (≈ one thread's fsync rate),
+i.e. a serialization keeps the per-shard `fdatasync`s from overlapping. Layers found:
+(a) the 500 µs coalesce window adds pure per-op latency for the synchronous distinct-key
+case (no batch to fill) → ~1.4×; (b) per-op fsync inside the commit critical section
+prevents fsync overlap → another ~2×; (c) a residual ~3,000 ops/sec CPU/lock ceiling
+remains even with fsync removed (deferred), seen in perf as CRC32 (~18%),
+`NodePropertyExactIndex.add`, wyhash. Off-CPU sampling could not isolate (c)'s lock on
+this host (threads block too briefly / contend on-CPU); it needs a stable bench host.
+
 ### Recommended fix / required completion
 
-1. **Cross-shard group commit (primary):** introduce a commit coordinator that collects
-   the in-flight per-shard commits across all 16 shards within a small window and issues
-   **one `fdatasync` per group** instead of one per shard-op (a shared WAL, or a
-   group-fsync barrier over the per-shard WALs preserving each shard's append order).
-   Target: fsync/op ≪ 1 and throughput rising with concurrency.
+1. **Make per-shard commit fsyncs overlap (primary).** ext4 already batches concurrent
+   `fdatasync`s ~8–16×, so the fix is to stop serializing them: move the `fdatasync` out
+   of the per-op commit critical section into a **cross-shard group-commit barrier** —
+   shard workers append COMMIT (no fsync) and park; a coordinator fsyncs all dirty shard
+   WALs **concurrently** (16 syscalls the OS coalesces into ≈1 journal commit), then acks
+   all parked submitters whose LSN is now durable. This keeps per-commit durability (ack
+   after fsync) while amortizing to the ~16k/s ceiling. Recovery is unchanged (same WAL
+   records; only un-acked/un-fsynced commits are lost on crash — exactly the existing
+   `deferred` semantics, but acked commits stay durable). Also make the coalesce window
+   adaptive (skip it when the shard queue holds ≤1 op) for the secondary 1.4×.
 2. **Secondary:** convert the bulk EDGE path (`quic_connection_handler.zig:800`) off the
    whole-graph EXCLUSIVE lock onto the shared+striped path the node bulk path uses, so
    edge-heavy ingests (divelife) aren't additionally serialized.
