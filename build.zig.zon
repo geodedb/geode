@@ -184,11 +184,18 @@
             // so client behaviour is unchanged. The raft server reaps a churned
             // peer's stale INBOUND connection (the ~12-min proto_reader stall) so
             // the replacement pod can re-handshake. NOTE: the v0.1.30 tag commit
-            // (245ecae) predates its own .version bump, so the content hash is
+            // (245ecae) predated its own .version bump, so its content hash was
             // labelled 0.1.29 — pinned by commit, reproducible, lockstep with
             // geode-client-zig.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.30#245ecae9f4a2755ae79991bb18a7025da036022e",
-            .hash = "quic-0.1.29-gBIqUaUCPgBVgy1MKj-IzF3GoMEfTpHJ3_p6tUcXkbKl",
+            // 2026-06-17: bump to v0.1.31 (02cee4a) — GAP-0900 lever (a): eliminate
+            // the per-poll 256 KiB memset in endpoint.pollWithStats (stack
+            // `= undefined` is 0xAA-filled every call in ReleaseSafe across 16
+            // poll threads). Moved the receive scratch to threadlocal static.
+            // Validated: compiler_rt.memset 44%→17.7% of CPU, +14.8% poll-bound
+            // RETURN 1 throughput, correctness verified, quic `zig build test` green.
+            // .version now tracks the tag (0.1.31).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.31#02cee4ae5e0516bcf5d7298f65787ac4b0f0bd4b",
+            .hash = "quic-0.1.31-gBIqUdkGPgB-zCfIX5aWkA-7vSMktGzRlhNqNzA06MGZ",
         },
 
         // =======================================================================
@@ -357,8 +364,11 @@
             // (acceptor-wedge RC-A it.2).
             // 2026-06-15: v0.2.16 — lockstep with geode's quic v0.1.30 bump
             // (RC-C dead-connection reaper). Keeps a single quic module instance.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.16#5985be75d7cdba2e8faf241b329915dab248ba7a",
-            .hash = "geode_client_zig-0.2.16-8ysbV-uHCQDUggm7yrgAYnMw6Qjkk6sjMr6UV3nCfiCL",
+            // 2026-06-17: v0.2.17 — quic v0.1.31 lockstep (GAP-0900 poll-loop
+            // memset fix). Both pins now resolve the same quic v0.1.31 module,
+            // so the build graph stays diamond-free.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.17#5defb0b6a2e1f0dc554fb377f41a0a9c1513b7d1",
+            .hash = "geode_client_zig-0.2.17-8ysbV46JCQBPKQsEw0MEOOhiLZYR_TiyBQMncqJ_fH4Y",
         },
 
         // =======================================================================
