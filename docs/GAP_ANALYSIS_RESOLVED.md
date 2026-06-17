@@ -6,7 +6,7 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: June 16, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: 5 open/partial actionable gaps (2 Critical — both Blocked; 2 High — 1 Blocked-vendor, 1 open/partial; 1 Medium — deferred; 0 Low). See docs/GAP_ANALYSIS.md.
+**Current Status**: 7 open/partial actionable gaps (2 Critical — both Blocked; 3 High — GAP-0885 open/partial, GAP-0893 Blocked-vendor, GAP-0900 write-throughput serialization root-caused 2026-06-17; 2 Medium — GAP-0873 deferred, GAP-0897 observability; 0 Low). GAP-0899 (checkpoint-vs-writer crash) closed 2026-06-17. See docs/GAP_ANALYSIS.md.
 
 ## 2026-06-17 — GAP-0899: checkpoint vs concurrent-writer data race → server crash (Closed)
 

@@ -8,10 +8,10 @@ Audited by: 2026-06-10 docs/specs/source/dependency reconciliation, including op
 This live register is authoritative as of 2026-06-11 (round close-out). Archived material has been moved to [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md); when a sibling gap-analysis file conflicts, this register is the current actionable index. The 2026-06-09 audit also normalizes duplicate CaaST IDs: GAP-0838 remains the cross-pod cluster failure, and CaaST tenancy/FLE residuals are tracked as GAP-0846 through GAP-0854. The 2026-06-10 continuation audit pulled the requested downstream repositories, rechecked docs/spec/source claims, and reconciled the open residuals from `docs/*_GAP_ANALYSIS.md`.
 
 - **2026-06-16/17 bulk-seed stress audit + correction:** A 14.27M-node taxonomy bulk seed (divelife `data-ingest ingest --from-dump`, single-property `MERGE`) against `geodedb/geode:dev` surfaced GAP-0894/0895/0896. **GAP-0895 and GAP-0896 are CLOSED** (re-verified fixed on build `bfb66f42` 2026-06-17 — compact one-line metrics, no false stall errors). The 2026-06-16 GAP-0894 "reopen" was **RETRACTED 2026-06-17**: the ~50 nodes/sec figure was measured against the server in a Docker container (UDP-NAT round-trip latency); a controlled host A/B (both binaries, `make release`, 8 connections, warmup-discarded, 2 rounds each) measured the unmodified server at **~255–259 nodes/sec** and a striped single-property handler patch at **~130 nodes/sec — a 2× regression — so the patch was reverted**. The single-property exclusive lock is not the normal-concurrency bottleneck (the path is per-op WAL-fsync / round-trip bound). Reproduction corpus retained at `~/divelife-dump`.
-- **2026-06-17 high-connection ingest stall — isolated to the client, NOT geode:** 1 `data-ingest` process at `--workers 32` stalls the divelife seed (~0 nodes/sec, frozen 75 s, zero client errors, server logs the connections' streams as idle), but **2 processes at `--workers 16` each (= 32 concurrent server connections on one graph) sustain ~259 nodes/sec**. So the geode server handles 32 connections fine; the failure is the single-client 32-worker coordination → a `data-ingest` (or `geodedb.com/geode` driver) client-side deadlock, tracked in the divelife repo. The earlier server-side striped MERGE patch (reverted) confirmed the lock was not it. The one geode-side finding is **GAP-0897 (Medium)** — per-graph metrics register under fixed names so only the default graph's `mg_*` counters export (masked the GAP-0894 validation metric). See the register row below.
-- **Total open/partial gaps:** 6
+- **2026-06-17 high-connection ingest behaviour — corrected:** the bulk-seed "freeze to ~0 nodes/sec" was the **server CRASH GAP-0899** (now CLOSED, commit `7dcac17e`), NOT a client deadlock as first thought (a 2×16 run had got lucky and not crashed). With the crash fixed the ingest runs steadily; what remains is a **write-throughput ceiling, filed as GAP-0900 (High, open):** single-property bulk writes top out at **~1,100 ops/sec regardless of client concurrency** (16 vs 128 connections give the same rate) — a single-threaded serial section in the write/commit path. For the divelife 14.27M taxon seed (~30 server ops/taxon) this is ~36–39 taxa/sec ⇒ ~100 h end-to-end. The other geode-side finding from the run is **GAP-0897 (Medium)** — per-graph metrics register under fixed names so only the default graph's `mg_*` counters export. See the register rows below.
+- **Total open/partial gaps:** 7
 - **Critical:** 2 (GAP-0256, GAP-0838) — both **BLOCKED** (GAP-0256 on org cosign/CI-secret infra — `.goreleaser.yaml:745-753`/`755-767` disabled blocks re-verified 2026-06-11, unblock chain unchanged; GAP-0838 narrowed 2026-06-11: repo-side fixes for BOTH 0.6.14 k8s defects landed — DNS search-domain expansion `test-dns-search` 7/7 + hostname-derived node_id `test-cluster-bootstrap` — leaving only real-cluster Kubernetes end-to-end validation, which cannot run in-repo).
-- **High:** 2 (GAP-0885, GAP-0893). GAP-0885 is the security sibling backlog pointer — open/partial: the open-only `docs/SECURITY_GAP_ANALYSIS.md` still tracks LSP-SEC-002 (vendored MCP bearer compare — mitigated/documented at the geode boundary, pending an upstream patch + fork pin), the deferred SEC-MFA-FIPS-01 / SEC-MON-01 / SEC-INFRA-02 records (defer reasons recorded per row), and the GAP-0818 verified-tenant-derivation residual. GAP-0893 is BLOCKED (vendor): any `--transport grpc` harness run crashes inside vendor `grpc_zig` 0.1.7 (`allocStreamWindows` ← `initServerTls` ← `handleConnection`); gRPC is non-verifiable end-to-end until a vendor fix/pin-bump. (GAP-0880 backup upload/compression and GAP-0881 HMAC-SHA3/TDE-status — previously the other two High rows — closed this round; see `GAP_ANALYSIS_RESOLVED.md`.)
+- **High:** 3 (GAP-0885, GAP-0893, GAP-0900). GAP-0885 is the security sibling backlog pointer — open/partial: the open-only `docs/SECURITY_GAP_ANALYSIS.md` still tracks LSP-SEC-002 (vendored MCP bearer compare — mitigated/documented at the geode boundary, pending an upstream patch + fork pin), the deferred SEC-MFA-FIPS-01 / SEC-MON-01 / SEC-INFRA-02 records (defer reasons recorded per row), and the GAP-0818 verified-tenant-derivation residual. GAP-0893 is BLOCKED (vendor): any `--transport grpc` harness run crashes inside vendor `grpc_zig` 0.1.7 (`allocStreamWindows` ← `initServerTls` ← `handleConnection`); gRPC is non-verifiable end-to-end until a vendor fix/pin-bump. GAP-0900 is the write-throughput serialization ceiling (new 2026-06-17 — full evidence below and in the register). (GAP-0880 backup upload/compression and GAP-0881 HMAC-SHA3/TDE-status — previously two High rows — closed this round; see `GAP_ANALYSIS_RESOLVED.md`.)
 - **Medium:** 2 (GAP-0873, GAP-0897). GAP-0873 — per-tenant at-rest encryption, explicitly deferred to GAP-0290 with the single-master-key limitation documented (`docs/design/TDE_PER_TENANT_KEYS_DEFERRED.md`) and derivation-helper cross-tenant decrypt-fail tests already green (`test-gap0843-tenant-tde`). GAP-0897 — per-graph runtime metrics register under fixed names so only the first (default) graph's counters are ever exported; this masked GAP-0894 validation (`mg_merge_tuple_lock_acquired_total` always read 0 for named graphs).
 - **Low:** 0
 - **2026-06-10/11 closure round (complete):** 28 register gaps closed on branch `gap-closure-2026-06-10` — GAP-0863–0872, GAP-0874–0884, GAP-0886–0890, GAP-0892, and GAP-0514 — plus the security sub-items SEC-SESS-LOG-01, LSP-SEC-005/008, SEC-LSP-BIND-01, SEC-INFRA-03, SEC-S3-SIGV2-01, SEC-CLI-01, SEC-SUPPLY-01, SEC-MIG-02 and the GAP-0818 enforcement gate (GAP-0818 itself stays Partial). Full closure evidence — including the rows formerly struck in this register — lives in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) under "2026-06-10/11 Closure Round". CANARY IMPL debt 499 → 223/5094 (4.4%, TESTED 85.2%); local baseline rebaselined to ~175/179 named `zig build test-*` steps (`docs/KNOWN_TEST_ISSUES.md`); ISO conformance suite re-scoped to 96/96 (parse-only) + executed-query `gql_conformance` 20/20.
@@ -28,7 +28,91 @@ This live register is authoritative as of 2026-06-11 (round close-out). Archived
 | GAP-0893 | High | gRPC transport / e2e verifiability | **BLOCKED (vendor).** Discovered during GAP-0514 Phase 6 P2 (Task 38, journal entry of commit `b51e0b77`): running ANY geode-test-harness spec with `--transport grpc` crashes the geode-side gRPC listener inside vendor `grpc_zig` 0.1.7 — per-connection panic trace `allocStreamWindows` ← `initServerTls` ← `handleConnection`. The QUIC-equivalent runs of the same specs pass (`grpc_mtls_rejection_matrix.yml` 9/9, `grpc_rapid_sequential_writes_479.yml` 29/29, both green over QUIC), isolating the failure to the vendor gRPC accept/TLS path, not geode handler logic. Consequence: the gRPC transport is non-verifiable end-to-end and the 17 `src/transport/grpc_server.zig` CANARY markers honestly stay IMPL. Related harness-hygiene finding from the same session: bash-type specs resolve a STALE `/usr/bin/geode` unless `${GEODE_BINARY}` is used (`auth_chain_cli_offline.yml` already fixed) — other bash-type specs should be audited for the same trap. | Fix or pin-bump `grpc_zig` past the `allocStreamWindows`/`initServerTls` per-connection crash, re-run the grpc specs with `--transport grpc`, then promote the `grpc_server.zig` markers against green runs. Also audit remaining bash-type harness specs for hardcoded `geode` instead of `${GEODE_BINARY}`. |
 
 | GAP-0897 | Medium | Observability — per-graph metrics name collision | **Open (found 2026-06-17).** `StorageAdapter.getOrCreateGraph` (`src/storage/graph_storage_adapter.zig:~4452-4475`) registers each ManagedGraph's counters into the global runtime-metrics registry under FIXED names (`reg.register("mg_merge_tuple_lock_acquired_total", &mg.…) catch {}`, and the whole `mg_rwlock_*` / `mg_merge_*` family). Registration is per-graph but the names are not graph-qualified, so the second-and-later graphs hit a duplicate-name error that is swallowed by `catch {}` — only the FIRST graph created (the default graph) is ever exported. Consequence: for any named graph (e.g. divelife) `mg_merge_tuple_lock_acquired_total` and the `mg_rwlock_*` waits always read the default graph's (here ~0 / idle) values, which is why GAP-0894's striping could not be observed and the original fix was mis-validated as working. | Register per-graph metrics under graph-qualified names (or aggregate across graphs into a labeled gauge), so each graph's `mg_*` counters are independently observable; add a test asserting a second graph's `merge_tuple_lock_acquired_total` is exported and non-zero after a striped MERGE. |
+| GAP-0900 | High | Write throughput — single-threaded commit-path serialization | **Open (root-caused 2026-06-17). Full evidence in the "GAP-0900 — write-throughput serialization" section below.** Single-property bulk `MERGE` throughput is capped at **~1,100 ops/sec and does NOT scale with client concurrency**: a minimal `geodedb.com/geode` reproducer doing one `MERGE` per op sustains ~1,132 ops/sec at 16 connections, and the divelife `data-ingest` seed (rich 19-property taxon `MERGE` + edges, ~30 server ops/taxon) sustains ~36–39 taxa/sec — and crucially **16 connections and 128 connections (8 client processes × 16) give the SAME ~36 taxa/sec aggregate.** During the seed the server burns only **~0.7–0.9 of ONE core on a 24-core host** (23 cores idle), i.e. a single-threaded serial section in the write/commit path is the limiter, not CPU, disk, fsync coalescing, or checkpoints (all ruled out — see below). For the 14.27M-taxon divelife seed this projects to ~100 h end-to-end and makes practical bulk seeding infeasible. The `group_commit` coordinator (`src/storage/group_commit.zig`) is sharded (16 workers, 256-op batches, 1 fsync/batch) but its own header notes it degrades to "mostly single-op shard batches, paying one WAL commit per mutation" at low per-shard concurrency — and adding connections (128) did NOT raise per-shard batch density, so the serialization is upstream of/around shard batching. NOTE: not safely fixable by a speculative WAL/commit rewrite (durability/data-corruption risk); needs a profiler (host had `perf_event_paranoid=3`, perf unavailable) to pinpoint the serial section first. | Profile the write/commit path under a 16-connection single-property MERGE load on a machine with `perf` (or in-process sampling) to identify the single-threaded serial section (suspects: a global WAL append/fsync serialization, the group-commit submit/wait coordinator, or a graph-global structure under one lock). Then parallelize it across the thread pool and/or engage real fsync coalescing across concurrent committers, and re-run the 1/8/16/32/128-connection ladder + the `~/divelife-dump` seed to prove throughput scales. Fix GAP-0897 first so per-graph commit/lock metrics are observable during profiling. |
 
 > **Follow-up note (2026-06-10) — RESOLVED 2026-06-11:** the `gql_conformance` T11/T12/T14 count-pushdown defect was assigned **GAP-0892** and closed (commit `8833fc4a`; row archived in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md)). The original lazy-on-disk-load diagnosis was corrected during the fix: the fast path was skipping the `SESSION SET PROPERTY GRAPH` preamble entirely.
 
 Archived gap records have been moved to [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md). This file intentionally contains only actionable open, partial, blocked, or deferred gaps.
+
+## GAP-0900 — write-throughput serialization (full evidence, 2026-06-17)
+
+**Severity:** High · **Status:** Open (root-caused; fix not attempted — see "Why not fixed yet") · **Area:** Storage / write + commit path.
+
+### Symptom
+
+Bulk write throughput is capped at **~1,100 server ops/sec** and is **flat with respect to client concurrency**. The divelife 14.27M-taxon seed (`data-ingest ingest --from-dump ~/divelife-dump`, rich 19-property `MERGE (n:Taxon {…}) SET …` + parent/rank edges) runs at **~36–39 taxa/sec**, projecting to **~100 hours** end-to-end. This was discovered while validating the GAP-0899 crash fix: with the crash gone the seed no longer dies, but it is throughput-bound.
+
+### Environment
+
+- Host: 24 logical cores, 93 GiB RAM. geode `make release` (ReleaseSafe), build `v0.7.1-29-g7dcac17e` (i.e. includes the GAP-0899 checkpoint-exclusive fix).
+- Client: divelife `data-ingest` (`diver.dev/species` v0.1.2 pipeline) via `geodedb.com/geode` v0.1.23, and a minimal raw-`MERGE` Go reproducer using the same driver.
+- Measurement: server-side `MATCH (n:Taxon) RETURN count(n)` delta over a fixed window after a warmup; raw reproducer counts its own successful `ExecContext` calls.
+
+### Evidence 1 — throughput does NOT scale with client concurrency (the decisive result)
+
+| Client configuration | Connections | Throughput | Notes |
+|---|---|---|---|
+| 1 × `data-ingest` `--workers 16` | 16 | ~38 taxa/sec | single process |
+| 8 × `data-ingest` `--workers 16` (one per taxonomy source) | 128 | ~36 taxa/sec **(aggregate)** | 8 client endpoints; server UP, 0 panics, 1 client error |
+
+8× the connections → **same aggregate throughput**. A bottleneck that does not move when concurrency goes 16→128 is a serial section, not a contended-but-parallel resource.
+
+### Evidence 2 — server is single-thread bound, not CPU bound
+
+During the seed the geode process used **~0.7–0.9 of ONE core** (`ps %cpu` ≈ 70–88%) on a **24-core** host — ~23 cores idle and the 64-worker thread pool largely unused. One thread is the limiter.
+
+### Evidence 3 — server+disk are NOT the bottleneck (the client pipeline issues rich ops, but the server ceiling is the wall)
+
+A minimal raw single-property `MERGE (x:RawProbe {k:?}) SET x.a=?` reproducer against the **same** server/disk sustained **~1,132 ops/sec** at 16 connections. The divelife seed's ~36 taxa/sec × ~30 server ops/taxon ≈ ~1,100 ops/sec — i.e. the seed is already at the server's per-op commit ceiling; both workloads hit the same ~1,100 ops/sec wall.
+
+### Evidence 4 — storage backend changes the constant but not the ceiling shape
+
+| Data dir | fsync latency (4 KiB, measured) | `data-ingest` throughput |
+|---|---|---|
+| `/tmp` (tmpfs / RAM) | ~0.001 ms (~870k/s) | ~128 taxa/sec |
+| `/var` (NVMe, LUKS) | ~0.427 ms (~2.3k/s) | ~38 taxa/sec |
+| `/home` (ext4 on LVM) | ~0.700 ms (~1.4k/s) | ~36 taxa/sec |
+
+tmpfs (no real fsync) is ~3.5× faster, but `/var` (0.427 ms) and `/home` (0.700 ms) give nearly identical throughput despite a 1.6× fsync-latency difference — so it is **not** simple fsync-latency bounding either. Even tmpfs (128/sec) is far below the raw-MERGE ceiling, i.e. the rich-op path has its own serial cost.
+
+### Ruled-out hypotheses (with evidence)
+
+- **Checkpoints / persistence loop:** `--persist-interval 600000` (checkpoints effectively disabled) gave ~37 taxa/sec vs ~36 with the default interval — **no effect**. (The persist flag is honored: `cli_args` → `startPersistenceThread`, `src/server/main.zig:2092`.)
+- **Statement batching / chunk size:** `--chunk-size 100` vs `--chunk-size 1000` → ~36 vs ~38 taxa/sec — **no effect**.
+- **Client (data-ingest / driver):** during the seed the client process used ~13–18% CPU (idle-waiting on the server); the raw reproducer proves the driver can push ~1,132 ops/sec. The earlier "client deadlock" hypothesis was the GAP-0899 server crash, now fixed.
+- **The GAP-0899 checkpoint-exclusive lock:** on tmpfs it does cost ~2× (252→128 in the pre/post comparison), but on a real disk throughput is ~36/sec with checkpoints on OR off, so it is not the dominant real-disk limiter.
+
+### `group_commit` analysis
+
+`src/storage/group_commit.zig` is designed to coalesce: 16 shard workers, each draining up to `max_batch = 256` ops into one statement transaction = **one WAL fsync per shard-batch**, with a `default_shard_coalesce_wait_us = 500` accumulation window. Its own header comment (lines ~44–50) records the failure mode: at low per-shard concurrency it produces "mostly single-op shard batches, paying one WAL commit per mutation." Critically, driving 128 connections (≈8 ops/shard) did **not** raise batch density or throughput, so either the coalescing window never fills (synchronous clients wait for each commit before issuing the next op on a connection → no queue builds per shard) or the serialization is upstream of shard batching. `GEODE_SHARD_COALESCE_WAIT_US` (cap 5000) did not help because there are no concurrent same-shard ops to batch.
+
+### Impact
+
+The 14.27M-taxon divelife seed projects to **~100 hours** at ~38 taxa/sec; practical bulk seeding of a real corpus is infeasible until this is addressed. Correctness is unaffected (the seed completes; it is just slow). The single-property exclusive-lock and GAP-0894 striping are NOT the cause (separately disproven).
+
+### Why not fixed yet
+
+The likely fix touches the WAL/commit path or a graph-global write serialization — the **highest-risk area in the engine** (durability / data corruption). It should not be changed speculatively; the host lacked profiling (`perf_event_paranoid=3`, `perf` unavailable) to pinpoint the exact serial section. The disciplined next step is to profile, then make a targeted, well-tested change.
+
+### Recommended investigation / required completion
+
+1. On a machine with `perf` (or via in-process sampling), profile geode under a steady 16-connection single-property `MERGE` load; identify the hot serial section. Suspects: a global WAL append/fsync serialization; the group-commit submit→wait coordinator (`ApplyOp.done` parking); or a graph-global structure held under a single lock on the apply path.
+2. Either parallelize that section across the thread pool, or make group-commit coalesce real concurrent committers into shared fsyncs (so throughput rises with offered concurrency), being careful to preserve durability ordering.
+3. Fix **GAP-0897** first so per-graph `mg_rwlock_*` / `mg_merge_*` / commit metrics are observable during profiling.
+4. Re-run a connection ladder (1 / 8 / 16 / 32 / 128) plus the `~/divelife-dump` seed and require throughput to scale with connections (target: ≫1,100 ops/sec aggregate) with no regression at low concurrency.
+
+### Reproduction
+
+```sh
+# Server (fixed build) on host loopback, NVMe data dir:
+GEODE_ADMIN_PASSWORD=seed GEODE_ALLOW_INSECURE_TLS=1 \
+  ./zig-out/bin/geode serve --listen 127.0.0.1:3150 --data-dir /var/tmp/seed --log-level warn
+
+# Seed (single process, 16 conns):
+data-ingest ingest --geode-dsn "localhost:3150?insecure=true&user=geode&pass=seed" \
+  --geode-graph divelife --from-dump ~/divelife-dump --workers 16 --chunk-size 100
+# Watch: MATCH (n:Taxon) RETURN count(n) grows ~36–39/sec; server uses <1 core of 24.
+
+# Concurrency-scaling check: launch 8 processes, one per taxonomy source
+# (each --species-data <dir-with-one-source>, 16 workers) → aggregate stays ~36/sec.
+```
