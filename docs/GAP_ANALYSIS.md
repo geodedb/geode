@@ -90,16 +90,67 @@ tmpfs (no real fsync) is ~3.5× faster, but `/var` (0.427 ms) and `/home` (0.700
 
 The 14.27M-taxon divelife seed projects to **~100 hours** at ~38 taxa/sec; practical bulk seeding of a real corpus is infeasible until this is addressed. Correctness is unaffected (the seed completes; it is just slow). The single-property exclusive-lock and GAP-0894 striping are NOT the cause (separately disproven).
 
+### ROOT CAUSE — PROVEN 2026-06-17 (perf + bpftrace, after `make deps` installed them)
+
+`make deps` was fixed to install `perf`/`bpftrace`/`bpfcc-tools` on Debian/Kali and to
+lower `kernel.perf_event_paranoid` (commit `6d269629`), which unblocked the measurement.
+
+**The wall is ~1 `fdatasync` per write op, with no cross-shard coalescing:**
+
+- **bpftrace (decisive):** a steady 16-connection single-property `MERGE` load did
+  **16,607 ops and 17,234 `fdatasync` calls in the geode process — ~1.04 fdatasync/op.**
+  (`bpftrace -e 'tracepoint:syscalls:sys_enter_fdatasync /comm=="geode"/{@=count()}'`.)
+- **Why single-op batches:** the group-commit coordinator IS enabled and on-path, and
+  it batches *within a shard* (one statement txn → one WAL fsync per shard-batch). But
+  the engine is **16 shards, each with its OWN independent GraphEngine + WAL**, and a
+  `MERGE` is routed to a shard by `hash(merge_key)` (required so same-key writers
+  serialize). With 16 connections writing **distinct** keys, the 16 ops fan out to 16
+  shards → **1 op per shard per coalesce window → 1 fsync per op.** The coordinator's
+  per-shard batching can never accumulate >1 op for a distinct-key MERGE stream.
+- **More concurrency makes it WORSE, not better:** 16 conns ≈ 1,100 ops/sec; **64 conns
+  (4×16) ≈ 479 ops/sec aggregate, still ~1 fdatasync/op** — added lock/allocator
+  contention with zero coalescing benefit. So this is NOT fixable by offering more
+  concurrency.
+- **Tuning knobs do NOT help:** `GEODE_GROUP_COMMIT_ACTIVE_SHARDS=2` left MERGE at
+  ~1,088 ops/sec, ~1 fdatasync/op (the knob concentrates *reserve-id*/CREATE sharding,
+  not `hash(merge_key)` MERGE sharding). `GEODE_GROUP_COMMIT_COALESCE_US` cannot help
+  because no shard ever has >1 concurrent op to coalesce.
+- The earlier off-CPU `acquireGraphWriteLockCancelable` blocking corresponds to the
+  **bulk EDGE path** (`quic_connection_handler.zig:800`) which takes the whole-graph
+  EXCLUSIVE lock — a real *secondary* serialization for edge-heavy loads (e.g. the
+  divelife parent edges), separate from the fsync wall.
+
 ### Why not fixed yet
 
-The likely fix touches the WAL/commit path or a graph-global write serialization — the **highest-risk area in the engine** (durability / data corruption). It should not be changed speculatively; the host lacked profiling (`perf_event_paranoid=3`, `perf` unavailable) to pinpoint the exact serial section. The disciplined next step is to profile, then make a targeted, well-tested change.
+The fix is an **architectural change to the WAL/commit path — the highest-risk area in
+the engine (durability / data corruption)** — and it lives in the vendored
+`graph_storage` dependency (16 independent per-shard WALs), not just geode's adapter. A
+correct fix must batch `fdatasync` **across shards** without breaking per-shard WAL
+ordering or crash recovery, then be validated for both correctness (crash/recovery
+tests) and throughput. That is a focused, benchmark-driven effort that must not be
+rushed or shipped unvalidated; this session's host became too unstable for reliable A/B
+benchmarking (fresh servers intermittently failed to initialize under the accumulated
+experiment load). Root cause is proven; the implementation is deliberately deferred to a
+stable, dedicated effort rather than risk an unvalidated WAL change.
 
-### Recommended investigation / required completion
+### Recommended fix / required completion
 
-1. On a machine with `perf` (or via in-process sampling), profile geode under a steady 16-connection single-property `MERGE` load; identify the hot serial section. Suspects: a global WAL append/fsync serialization; the group-commit submit→wait coordinator (`ApplyOp.done` parking); or a graph-global structure held under a single lock on the apply path.
-2. Either parallelize that section across the thread pool, or make group-commit coalesce real concurrent committers into shared fsyncs (so throughput rises with offered concurrency), being careful to preserve durability ordering.
-3. Fix **GAP-0897** first so per-graph `mg_rwlock_*` / `mg_merge_*` / commit metrics are observable during profiling.
-4. Re-run a connection ladder (1 / 8 / 16 / 32 / 128) plus the `~/divelife-dump` seed and require throughput to scale with connections (target: ≫1,100 ops/sec aggregate) with no regression at low concurrency.
+1. **Cross-shard group commit (primary):** introduce a commit coordinator that collects
+   the in-flight per-shard commits across all 16 shards within a small window and issues
+   **one `fdatasync` per group** instead of one per shard-op (a shared WAL, or a
+   group-fsync barrier over the per-shard WALs preserving each shard's append order).
+   Target: fsync/op ≪ 1 and throughput rising with concurrency.
+2. **Secondary:** convert the bulk EDGE path (`quic_connection_handler.zig:800`) off the
+   whole-graph EXCLUSIVE lock onto the shared+striped path the node bulk path uses, so
+   edge-heavy ingests (divelife) aren't additionally serialized.
+3. Fix **GAP-0897** first so per-graph `coord_*` / `mg_*` batch-density + commit metrics
+   are observable (validate fsync/op and ops/batch directly).
+4. **Validate** with the connection ladder (1/8/16/32/64/128) + the `~/divelife-dump`
+   full 14.27M seed: require fsync/op ≪ 1, throughput scaling with concurrency, no
+   low-concurrency regression, AND crash/recovery correctness tests green.
+
+Profiling toolchain is now available locally (`perf` 6.19, `bpftrace`, `bpfcc-tools`,
+`offcputime-bpfcc`; `kernel.perf_event_paranoid=1`) — see commit `6d269629`.
 
 ### Reproduction
 
