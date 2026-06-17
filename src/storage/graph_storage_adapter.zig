@@ -4051,17 +4051,29 @@ pub const StorageAdapter = struct {
         // Checkpoint each graph WITHOUT holding the adapter mutex.
         // The ManagedGraph pointers remain valid because graphs are only
         // removed via dropGraph which also holds self.mutex.
-        // IMPORTANT: Acquire the per-graph read lock during checkpoint to
-        // prevent data races with concurrent mutations (which hold the
-        // write lock). Without this, engine.checkpoint() iterates hash maps
-        // (label_index, edge_index) that mutations can resize concurrently,
-        // causing use-after-free and GPA size mismatch errors.
+        // IMPORTANT: Acquire the per-graph EXCLUSIVE write lock during
+        // checkpoint. The bulk-ingest write path mutates the shared indexes
+        // (label_index, edge_index, …) while holding mg.rwlock in SHARED mode
+        // (see bulkMergeNodeWithReservedId*: striped per-tuple lock + rwlock
+        // SHARED). A SHARED checkpoint lock does NOT exclude those SHARED
+        // writers, so engine.checkpoint() → label_index.saveToFile → scan()
+        // iterated hash maps that a concurrent addNode() resized mid-scan,
+        // producing `index out of bounds` / use-after-free panics that CRASHED
+        // the server under high write concurrency (e.g. divelife bulk seed at
+        // 32+ connections). The EXCLUSIVE lock drains in-flight writers and
+        // blocks new ones for the duration of the snapshot, giving a
+        // consistent, race-free view. Lock ordering is safe: writers take
+        // tuple_lock → rwlock; checkpoint takes only rwlock (and never
+        // self.mutex here), so there is no ABBA cycle.
+        //
+        // NOTE: the snapshot's disk I/O runs while the exclusive lock is held,
+        // so writers pause for the checkpoint duration. Correctness over a
+        // crash; a future optimisation can snapshot under the lock and write
+        // outside it.
         for (graphs_buf[0..graph_count]) |mg| {
             const _t_start = monoNanosNow();
-            mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
-            const _hold_start = monoNanosNow();
+            mg.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
             mg.engine.checkpoint() catch |err| {
                 log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
             };
@@ -4074,13 +4086,7 @@ pub const StorageAdapter = struct {
             } else |err| {
                 log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
             }
-            const _hold_ns = monoNanosNow() -| _hold_start;
-            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
-            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
-            if (_hold_ns > _cur_max) {
-                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
-            }
-            mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+            mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
         // Collect manifest counts under per-graph read lock (no mutex),
