@@ -21,6 +21,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
+const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
 const pooled = @import("transport/thread_pool");
 
@@ -87,6 +88,16 @@ fn realtimeMillis() u64 {
 /// mutation fan-out that made node-id reservation a process-wide bottleneck.
 /// The retained layout is the same upper-half shape: 48-bit logical
 /// millisecond timestamp | 4-bit version(7) | 12-bit sequence.
+/// GAP-0839: generate a fresh persistent graph UUID (UUIDv7, never zero).
+/// Mirrors `graph_storage_adapter.generateUuid` so an in-memory graph's UUID
+/// is indistinguishable in shape from a disk-backed one and passes the
+/// catalog's non-zero-UUID invariant (`catalog.isZeroUuid`).
+fn generatePersistentUuid() [16]u8 {
+    // error-policy: D — newV7's only error is InvalidTimestamp (system clock
+    // before 1970 or beyond i64 milliseconds); impossible on a sane clock.
+    return (uuid.newV7() catch unreachable).bytes;
+}
+
 fn generateTimeBasedId() u64 {
     const now_ms = realtimeMillis();
     const now_base = encodeTimeBasedNodeId(now_ms, 0);
@@ -651,6 +662,22 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphNames; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     // Track known graph names (including empty graphs)
     graphs: std.StringHashMap(void),
+    // GAP-0839: Persistent UUID for every known graph, mirrored from the
+    // storage adapter when one is wired and generated in-process otherwise.
+    // Native multi-tenancy (and the catalog) require every graph to carry a
+    // stable, non-zero persistent UUID; the HELLO handlers reject a
+    // tenant-bound session whose target graph has none ("Graph created
+    // without persistent UUID").  Before this map, an in-memory deployment
+    // (server started without --data-dir, so `global_adapter`/`global_vtable`
+    // are null) created graphs with NO UUID at all, because the only UUID
+    // source was the disk-backed adapter.  This map guarantees `createGraph`
+    // always assigns a UUID and `getGraphUuid` can always return one, making
+    // tenant-bound sessions work transparently even in in-memory mode.  When
+    // an adapter IS present it remains the source of truth (its UUID maps to
+    // the on-disk graph directory); this map is the fallback and stays
+    // consistent with it (createGraph/openOrCreateGraphWithUuid mirror the
+    // adapter UUID here).  Key owned by store allocator.
+    graph_uuids: std.StringHashMap([16]u8),
     // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-23
     // Issue #391: Label-based index for O(1) node lookups instead of O(n) full table scans
     // Maps "graph_name:label" composite key to `LabelPosting { sorted node ids, mutex }`.
@@ -790,6 +817,8 @@ pub const GraphStore = struct {
             .tenant_id = tenant_id,
             .schema_name = schema_name,
             .graphs = std.StringHashMap(void).init(allocator),
+            // GAP-0839: per-graph persistent UUID fallback map.
+            .graph_uuids = std.StringHashMap([16]u8).init(allocator),
             // Issue #391, #392: Initialize performance optimization indexes
             .label_index = std.StringHashMap(LabelPosting).init(allocator),
             .label_counts_by_graph = std.StringHashMap(LabelCountValue).init(allocator),
@@ -809,6 +838,13 @@ pub const GraphStore = struct {
         // Register default graph name
         const default_name = try allocator.dupe(u8, "default");
         try store.graphs.put(default_name, {});
+        // GAP-0839: seed an in-memory persistent UUID for the default graph so
+        // an in-memory (no --data-dir) deployment can serve tenant-bound
+        // sessions on the default graph.  When a disk adapter is wired it
+        // overrides this in `getGraphUuid` with the on-disk graph's UUID.
+        const default_uuid_name = try allocator.dupe(u8, "default");
+        errdefer allocator.free(default_uuid_name);
+        try store.graph_uuids.put(default_uuid_name, generatePersistentUuid());
         return store;
     }
 
@@ -852,6 +888,13 @@ pub const GraphStore = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.graphs.deinit();
+
+        // GAP-0839: Clean up per-graph persistent-UUID map.
+        var uuid_iter = self.graph_uuids.iterator();
+        while (uuid_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.graph_uuids.deinit();
 
         // Issue #391: Clean up label index
         var label_iter = self.label_index.iterator();
@@ -980,6 +1023,18 @@ pub const GraphStore = struct {
         const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
         self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
 
+        // GAP-0839: Reset persistent-UUID map alongside the graph registry and
+        // re-seed the default graph so an in-memory store stays able to serve
+        // tenant-bound sessions on the default graph after a reset.
+        var uuid_reset_iter = self.graph_uuids.iterator();
+        while (uuid_reset_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.graph_uuids.deinit();
+        self.graph_uuids = std.StringHashMap([16]u8).init(self.allocator);
+        const default_uuid_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph uuid key during clearNodes");
+        self.graph_uuids.put(default_uuid_name, generatePersistentUuid()) catch @panic("OOM: failed to register default graph uuid during clearNodes");
+
         // Reset label index
         var label_iter = self.label_index.iterator();
         while (label_iter.next()) |entry| {
@@ -1060,6 +1115,14 @@ pub const GraphStore = struct {
         }
         self.graphs.deinit();
         self.graphs = std.StringHashMap(void).init(self.allocator);
+
+        // GAP-0839: clear the persistent-UUID map in lockstep.
+        var uuid_iter = self.graph_uuids.iterator();
+        while (uuid_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.graph_uuids.deinit();
+        self.graph_uuids = std.StringHashMap([16]u8).init(self.allocator);
     }
 
     // Clear only nodes and edges for a specific graph
@@ -1634,6 +1697,25 @@ pub const GraphStore = struct {
         return out.toOwnedSlice(allocator);
     }
 
+    /// GAP-0839: ensure `self.graph_uuids` carries a persistent UUID for
+    /// `graph_name`.  Prefer the storage adapter's UUID (it maps to the
+    /// on-disk graph directory) so the in-memory map never diverges from the
+    /// disk layout; fall back to a freshly generated UUIDv7 for in-memory
+    /// (no-adapter) deployments.  Idempotent: if a UUID is already recorded
+    /// it is left unchanged.  MUST be called with `graphs_mutex` held.
+    fn recordGraphUuidLocked(self: *GraphStore, graph_name: []const u8) !void {
+        if (self.graph_uuids.contains(graph_name)) return;
+        const resolved: [16]u8 = blk: {
+            if (global_adapter) |adapter| {
+                if (adapter.getGraphUuid(graph_name)) |adapter_uuid| break :blk adapter_uuid;
+            }
+            break :blk generatePersistentUuid();
+        };
+        const name_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(name_copy);
+        try self.graph_uuids.put(name_copy, resolved);
+    }
+
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
         // dsn_graph_binding.yml race fix (2026-05-23): serialize the
         // (vtable get-or-create + in-memory contains/put) pair so two
@@ -1666,12 +1748,21 @@ pub const GraphStore = struct {
         // just now" semantics (none today) would have to gate above
         // this layer.
         if (self.graphs.contains(graph_name)) {
+            // GAP-0839: a graph already in the in-memory registry may still
+            // lack a recorded UUID (e.g. seeded by an older code path or by
+            // loadFromFile); guarantee one exists so getGraphUuid succeeds.
+            try self.recordGraphUuidLocked(graph_name);
             return;
         }
 
         const name_copy = try self.allocator.dupe(u8, graph_name);
         errdefer self.allocator.free(name_copy);
         try self.graphs.put(name_copy, {});
+
+        // GAP-0839: assign + persist a UUID for the freshly created graph so
+        // tenant-bound HELLO sessions (which require a persistent UUID) are
+        // accepted even when no disk adapter is configured.
+        try self.recordGraphUuidLocked(graph_name);
 
         // Initialize IdMap for the new graph
         _ = try self.getOrCreateIdMap(graph_name);
@@ -1691,6 +1782,10 @@ pub const GraphStore = struct {
         if (global_adapter) |adapter| {
             _ = try adapter.openGraphWithUuid(graph_name, graph_uuid);
         }
+        // GAP-0839: record the catalog-supplied UUID verbatim — it is the
+        // authoritative persistent identity recovered from disk, so it must
+        // win over any in-memory placeholder.
+        try self.setGraphUuidLocked(graph_name, graph_uuid);
         if (self.graphs.contains(graph_name)) {
             return;
         }
@@ -1702,11 +1797,41 @@ pub const GraphStore = struct {
         incrementMutationEpoch();
     }
 
-    /// Return the UUID for a named graph from the storage adapter, or null
-    /// if the adapter is not initialized or the graph is not loaded.
+    /// GAP-0839: force `self.graph_uuids[graph_name] = graph_uuid`, overwriting
+    /// any prior value.  Used by catalog recovery where the on-disk UUID is
+    /// authoritative.  MUST be called with `graphs_mutex` held.
+    fn setGraphUuidLocked(self: *GraphStore, graph_name: []const u8, graph_uuid: [16]u8) !void {
+        const gop = try self.graph_uuids.getOrPut(graph_name);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = self.allocator.dupe(u8, graph_name) catch |err| {
+                _ = self.graph_uuids.remove(graph_name);
+                return err;
+            };
+        }
+        gop.value_ptr.* = graph_uuid;
+    }
+
+    /// Return the UUID for a named graph.  Prefers the storage adapter (its
+    /// UUID maps to the on-disk graph directory); GAP-0839 adds a fallback to
+    /// the in-memory `graph_uuids` map so graphs created in in-memory mode
+    /// (server started without --data-dir) still report a persistent UUID and
+    /// tenant-bound sessions are accepted.
     pub fn getGraphUuid(graph_name: []const u8) ?[16]u8 {
         if (global_adapter) |adapter| {
-            return adapter.getGraphUuid(graph_name);
+            if (adapter.getGraphUuid(graph_name)) |adapter_uuid| return adapter_uuid;
+        }
+        // GAP-0839: in-memory fallback.  `getGraphUuid` is a static helper
+        // (no `self`), so reach the primary global store directly.  Use the
+        // non-initializing accessor so a UUID query never has the side effect
+        // of creating a store.
+        if (getCurrentGlobalStore()) |store| {
+            // Read under `graphs_mutex` — the writers (createGraph /
+            // openOrCreateGraphWithUuid / dropGraph) mutate `graph_uuids`
+            // under this same mutex, and a concurrent rehash would otherwise
+            // race this lookup.
+            store.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer store.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            if (store.graph_uuids.get(graph_name)) |mem_uuid| return mem_uuid;
         }
         return null;
     }
@@ -1734,6 +1859,10 @@ pub const GraphStore = struct {
 
         self.clearNodesForGraph(graph_name);
         if (self.graphs.fetchRemove(graph_name)) |kv| {
+            self.allocator.free(kv.key);
+        }
+        // GAP-0839: drop the persistent-UUID entry alongside the graph.
+        if (self.graph_uuids.fetchRemove(graph_name)) |kv| {
             self.allocator.free(kv.key);
         }
         // Clean up IdMap for dropped graph
@@ -9505,4 +9634,99 @@ test "GraphStore.listNodeLabels is callable and filters by tenant" {
     }
     try testing.expectEqual(@as(usize, 1), labels.len);
     try testing.expectEqualStrings("Visible", labels[0]);
+}
+
+// GAP-0839: a graph auto-created at HELLO must carry a persistent UUID so a
+// tenant-bound session is accepted.  Before the fix, an in-memory deployment
+// (server started without --data-dir, so no storage adapter / vtable is wired)
+// created graphs with NO UUID, and all three HELLO handlers
+// (grpc_server.zig:1571/:1697, quic_connection_handler.zig:5342) rejected the
+// session with "Graph created without persistent UUID" via
+//   `const uuid = GraphStore.getGraphUuid(graph) orelse <reject>;`.
+// These tests assert the create path now yields a persistent UUID and that the
+// exact rejection condition (`getGraphUuid(...) == null`) is no longer hit.
+
+fn gap0839IsZeroUuid(u: [16]u8) bool {
+    for (u) |b| {
+        if (b != 0) return false;
+    }
+    return true;
+}
+
+test "GAP-0839: in-memory createGraph assigns a persistent UUID (no adapter)" {
+    // Reset the global singleton so this test owns it, and ensure NO adapter is
+    // wired (in-memory mode) — this is the exact deployment that triggered the
+    // rejection.
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+    setDataDirOverride(testing.allocator, null);
+
+    const store = getGlobalStore(testing.allocator);
+    // Precondition: this is in-memory mode — no storage adapter.
+    try testing.expect(getGlobalAdapter() == null);
+
+    try store.createGraph("gap0839_inmem");
+
+    // The HELLO handlers call the STATIC getGraphUuid and reject when it is
+    // null.  After the fix it must return a non-zero UUID even with no adapter.
+    const u = GraphStore.getGraphUuid("gap0839_inmem") orelse
+        return error.GraphCreatedWithoutPersistentUuid;
+    try testing.expect(!gap0839IsZeroUuid(u));
+
+    // Idempotent create must keep the SAME persistent UUID (stable identity).
+    try store.createGraph("gap0839_inmem");
+    const u_again = GraphStore.getGraphUuid("gap0839_inmem") orelse
+        return error.GraphCreatedWithoutPersistentUuid;
+    try testing.expectEqualSlices(u8, &u, &u_again);
+}
+
+test "GAP-0839: default graph has a persistent UUID in in-memory mode" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+    setDataDirOverride(testing.allocator, null);
+
+    _ = getGlobalStore(testing.allocator);
+    try testing.expect(getGlobalAdapter() == null);
+
+    const u = GraphStore.getGraphUuid("default") orelse
+        return error.GraphCreatedWithoutPersistentUuid;
+    try testing.expect(!gap0839IsZeroUuid(u));
+}
+
+test "GAP-0839: dropGraph clears the persistent-UUID entry" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+    setDataDirOverride(testing.allocator, null);
+
+    const store = getGlobalStore(testing.allocator);
+    try store.createGraph("gap0839_drop");
+    try testing.expect(GraphStore.getGraphUuid("gap0839_drop") != null);
+
+    try store.dropGraph("gap0839_drop");
+    try testing.expect(GraphStore.getGraphUuid("gap0839_drop") == null);
+}
+
+test "GAP-0839: adapter-backed createGraph yields a persistent UUID" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    try testing.expect(getGlobalAdapter() != null);
+
+    try store.createGraph("gap0839_disk");
+    const u = GraphStore.getGraphUuid("gap0839_disk") orelse
+        return error.GraphCreatedWithoutPersistentUuid;
+    try testing.expect(!gap0839IsZeroUuid(u));
+
+    // The adapter is the source of truth and the in-memory fallback mirrors it,
+    // so both must agree on the same UUID for the same graph.
+    const adapter = getGlobalAdapter().?;
+    const adapter_uuid = adapter.getGraphUuid("gap0839_disk") orelse
+        return error.GraphCreatedWithoutPersistentUuid;
+    try testing.expectEqualSlices(u8, &adapter_uuid, &u);
 }
