@@ -2858,6 +2858,7 @@ const FleHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!Exe
 // (ISO/IEC 39075:2024 RQ-0022), so all keys here MUST be lowercase.
 const fle_table = std.StaticStringMap(FleHandler).initComptime(.{
     .{ "geode.fle.configurefield", handleGeodeFleConfigurefield },
+    .{ "geode.fle.grantplaintext", handleGeodeFleGrantplaintext },
     .{ "geode.fle.getfieldconfig", handleGeodeFleGetfieldconfig },
     .{ "geode.fle.listencryptedfields", handleGeodeFleListencryptedfields },
 });
@@ -2872,7 +2873,11 @@ pub fn executeFle(
         // Cluster fail-closed: see GateStorageProcs. configureField writes the
         // durable HMAC-chained FLE field catalog; getfieldconfig /
         // listencryptedfields are reads and stay open.
-        if (std.mem.eql(u8, proc_name, "geode.fle.configurefield")) try cluster_mod.gateUnreplicatedWrite();
+        if (std.mem.eql(u8, proc_name, "geode.fle.configurefield") or
+            std.mem.eql(u8, proc_name, "geode.fle.grantplaintext"))
+        {
+            try cluster_mod.gateUnreplicatedWrite();
+        }
         return try handler(allocator, call_stmt);
     }
     return null;
@@ -2942,6 +2947,61 @@ fn handleGeodeFleConfigurefield(allocator: std.mem.Allocator, call_stmt: ast.Cal
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
     row[0] = Value{ .Str = "configured" };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+fn handleGeodeFleGrantplaintext(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.grantPlaintext(type_name, field_name, role) -> status
+    // ONLINE equivalent of the offline `geode fle grant-plaintext` CLI: grants a
+    // role READ_PLAINTEXT for an encrypted field WITHOUT stopping the server.
+    //
+    // This mirrors handleGeodeFleConfigurefield: it resolves the same process-wide
+    // FLE catalog (fle_catalog.globalCatalog) that configureField writes and that
+    // the decryption read path (fle_integration.canReadPlaintext) consults, then
+    // calls catalog.grantPlaintextAccess(...) — the exact same call the offline CLI
+    // makes (src/admin/fle_commands.zig grantPlaintext). The grant is persisted via
+    // saveCatalog inside grantPlaintextAccess, so it survives restart and is
+    // byte-for-byte identical to the offline grant.
+    //
+    // Example: CALL geode.fle.grantPlaintext('User', 'ssn', 'analyst')
+
+    // Extract arguments (3 string literals)
+    var type_name: []const u8 = "unknown";
+    var field_name: []const u8 = "unknown";
+    var role: []const u8 = "unknown";
+
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 3) {
+            if (args[0].* == .String) {
+                type_name = args[0].String;
+            }
+            if (args[1].* == .String) {
+                field_name = args[1].String;
+            }
+            if (args[2].* == .String) {
+                role = args[2].String;
+            }
+        }
+    }
+
+    // Resolve the same global FLE catalog configureField uses (and the read path
+    // consults), then grant via the identical call the offline CLI makes.
+    const catalog = try fle_catalog.globalCatalog(allocator);
+    try catalog.grantPlaintextAccess(type_name, field_name, role);
+
+    log.info("FLE plaintext access granted (online)", &.{
+        Attr.string("type", type_name),
+        Attr.string("field", field_name),
+        Attr.string("role", role),
+    });
+
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Str = "granted" };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };

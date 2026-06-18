@@ -7472,6 +7472,19 @@ pub fn build(b: *std.Build) void {
     const gap0854_step = b.step("test-gap0854", "Run GAP-0854 FLE configureField auth-chain integrity regression (restart-safe)");
     gap0854_step.dependOn(&run_gap0854_tests.step);
 
+    // FLE online grant-plaintext: `CALL geode.fle.grantPlaintext(label,field,role)`
+    // drives the real storage_dispatch.executeFle path for the online grant and
+    // asserts the role lands in the field visibility list — equivalent to the
+    // offline `geode fle grant-plaintext` CLI. link_libc for FLE catalog/TDE env.
+    const fle_online_grant_mod = b.createModule(.{ .root_source_file = b.path("tests/test_fle_online_grant.zig"), .target = target, .optimize = optimize });
+    fle_online_grant_mod.addImport("geode", root_mod);
+    fle_online_grant_mod.link_libc = true;
+    const fle_online_grant_tests = b.addTest(.{ .root_module = fle_online_grant_mod });
+    const run_fle_online_grant_tests = b.addRunArtifact(fle_online_grant_tests);
+    shardDep(test_step, &run_fle_online_grant_tests.step, 0, test_shard_loads, test_shard_index);
+    const fle_online_grant_step = b.step("test-fle-online-grant", "Run FLE online grant-plaintext dispatch regression (geode.fle.grantPlaintext)");
+    fle_online_grant_step.dependOn(&run_fle_online_grant_tests.step);
+
     // GAP-0858: durable ALTER POLICY write-through to __geode_security. Mirrors
     // the GPS persistence test wiring (geode root + auth_graph_manager +
     // policy_persistence named modules). Drives persist -> alter -> re-hydrate
