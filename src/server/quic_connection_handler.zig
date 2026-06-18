@@ -1095,6 +1095,186 @@ fn executeBulkSimpleMerge(
     updateTxnStateFromProgram(state, program);
 }
 
+/// GAP-0900 lever (c): concurrent batch-write fast path.
+///
+/// A `/*+BATCH*/`-prefixed program carrying N independent simple-MERGE
+/// statements is applied by submitting ALL N ops to the group-commit
+/// coordinator BEFORE awaiting any of them. The 16 shard workers then drain
+/// the per-shard queues concurrently, so the coordinator coalesces many ops
+/// into a handful of fsyncs (the baseline's one-op-per-round-trip pattern
+/// yields ~1 op/batch -> ~1 fsync/op).
+///
+/// Concurrency comes purely from the submit/await split (no threads spawned):
+/// `submitNoWait` runs the per-thread prepare (tenant capture + node-id
+/// reservation) on THIS handler thread and enqueues; `awaitOp` blocks only
+/// after every op is already in flight.
+///
+/// Returns `true` when the request was handled here (response sent). Returns
+/// `false` to signal the caller to fall back to the general executor for the
+/// WHOLE program — this happens when group-commit is disabled, when there are
+/// no statements, or when ANY statement is not a simple node MERGE (no partial
+/// batching). On `false` no response has been sent and no side effects remain.
+fn executeBatchSimpleMerge(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    program: *const gql_ast.Program,
+    query_graph_name: []const u8,
+    ctx: execution.ExecutionContext,
+) !bool {
+    if (!group_commit.isEnabled()) return false;
+    if (program.statements.len == 0) return false;
+
+    const geode_eval = geode.eval;
+    const property_codec = geode.property_value_codec;
+    const PropKV = geode.graph_storage_adapter.StorageAdapter.PropKV;
+
+    // The arena owns every ApplyOp plus all borrowed property-value slices
+    // (label/merge_key/value/props). It MUST outlive the final awaitOp — the
+    // shard workers read these slices during apply and the submitter only
+    // unblocks once apply completes. Freed once all awaits return.
+    var batch_arena = std.heap.ArenaAllocator.init(gpa);
+    var arena_live = true;
+    defer if (arena_live) batch_arena.deinit();
+    const ba = batch_arena.allocator();
+
+    const env = geode.makeEnv(
+        ba,
+        &.{},
+        &.{},
+        .{ .names = ctx.query_param_names, .values = ctx.query_param_values },
+    );
+
+    const n = program.statements.len;
+    const ops = try ba.alloc(group_commit.ApplyOp, n);
+
+    // Classify + evaluate every statement BEFORE submitting anything. If ANY
+    // statement is not a simple node merge, abandon the whole batch (free the
+    // arena, no submits issued) and let the caller run the general executor.
+    var labels = try ba.alloc([]const u8, n);
+    for (program.statements, 0..) |*stmt, i| {
+        const spec = geode.bulk_ingest.matchSimpleNodeMergeSpecStmt(stmt) orelse {
+            // Not a simple merge -> no partial batching. Nothing submitted yet.
+            return false;
+        };
+
+        // Evaluate merge filter values into the arena. The detector already
+        // screened `isScalarPropExpr`, so eval/encode must succeed.
+        const merge_kvs = try ba.alloc(PropKV, spec.merge_props.len);
+        for (spec.merge_props, 0..) |prop, j| {
+            const v = try geode_eval.evalExpr(ba, prop.value.*, env);
+            const pv = try property_codec.valueToPropertyValue(ba, v);
+            merge_kvs[j] = .{ .key = prop.key, .value = pv };
+        }
+
+        // Evaluate ON CREATE SET values into the arena. NOTE: the spec's
+        // `on_create_props` aliases a thread-local scratch buffer reused on
+        // the NEXT classifier call, so we copy (by re-evaluating) here.
+        const kvs = try ba.alloc(PropKV, spec.on_create_props.len);
+        for (spec.on_create_props, 0..) |prop, j| {
+            const v = try geode_eval.evalExpr(ba, prop.value.*, env);
+            const pv = try property_codec.valueToPropertyValue(ba, v);
+            kvs[j] = .{ .key = prop.key, .value = pv };
+        }
+
+        labels[i] = spec.label;
+        ops[i] = if (merge_kvs.len == 1)
+            group_commit.ApplyOp{ .bulk_merge_node = .{
+                .label = spec.label,
+                .merge_key = spec.merge_key,
+                .merge_value = merge_kvs[0].value,
+                .on_create_props = kvs,
+                .result = .{},
+                .apply_on_match = spec.apply_on_match,
+            } }
+        else
+            group_commit.ApplyOp{ .bulk_merge_node_props = .{
+                .label = spec.label,
+                .merge_props = merge_kvs,
+                .on_create_props = kvs,
+                .result = .{},
+            } };
+    }
+
+    const adapter_opt = graph_store.getGlobalAdapter();
+    if (adapter_opt == null) {
+        try sendExecuteError(gpa, stream, "XX000", "batch fast-path: no adapter registered", &.{}, &.{});
+        return true;
+    }
+    const adapter = adapter_opt.?;
+
+    const coord = group_commit.getOrStartCoordinator(
+        graph_store.global_allocator(),
+        adapter,
+        query_graph_name,
+    ) catch |err| {
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return true;
+    };
+
+    var mut_sample = mutation_timing.begin();
+    mut_sample.markLockAcquired();
+
+    // Phase A: enqueue ALL ops. They pile into the per-shard queues so the
+    // coordinator coalesces them. We skip the single-merge Phase-1 read probe
+    // entirely — `bulkMergeNode*` re-probes the merge index inside the write
+    // critical section, so concurrent/duplicate keys are handled there.
+    var submit_err: ?anyerror = null;
+    var submitted: usize = 0;
+    while (submitted < n) : (submitted += 1) {
+        coord.submitNoWait(&ops[submitted]) catch |err| {
+            submit_err = err;
+            break;
+        };
+    }
+
+    // Phase B: await everything we managed to submit. Even on a submit error
+    // we must drain the ops already enqueued so their borrowed arena slices
+    // are not freed out from under an in-flight worker.
+    var first_op_err: ?anyerror = null;
+    var succeeded: usize = 0;
+    var k: usize = 0;
+    while (k < submitted) : (k += 1) {
+        _ = coord.awaitOp(&ops[k]) catch |err| {
+            if (first_op_err == null) first_op_err = err;
+            continue;
+        };
+        succeeded += 1;
+    }
+
+    mut_sample.markExecuteDone();
+    mut_sample.markLockReleased();
+
+    // Auto-index every distinct merge label (idempotent), mirroring the
+    // single-merge path's `ensureAutoIndexes` hook.
+    execution.ensureAutoIndexes(gpa, labels);
+
+    // All awaits have returned -> the borrowed arena slices are no longer
+    // referenced by any worker. Safe to free now (response uses gpa).
+    batch_arena.deinit();
+    arena_live = false;
+
+    const reportable_err: ?anyerror = if (submit_err) |se| se else first_op_err;
+    if (reportable_err) |e| {
+        const info = proto_util.mapError(e);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return true;
+    }
+
+    quic_response_metrics.recordFirstStreamMutationQueryExecute(mut_sample.execute_done_ns -| mut_sample.lock_acquire_start_ns);
+    // No-RETURN success shape: same empty schema + final data page the
+    // single-statement merge fast path emits. `succeeded` is the count of
+    // applied merges (all of them when no error fired).
+    try sendEmptySuccessResult(gpa, stream);
+
+    mut_sample.record("batch_simple_merge");
+    auditQueryExecution(state, "batch_simple_merge", true);
+    syncGraphFromSession(state);
+    updateTxnStateFromProgram(state, program);
+    return true;
+}
+
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
     allocator: std.mem.Allocator,
@@ -5828,6 +6008,35 @@ fn handleClientMessage(
 
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
+
+            // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
+            // A client signals "this program is a batch of independent simple
+            // MERGEs, submit them concurrently" by prefixing the raw query
+            // text with the literal sentinel `/*+BATCH*/` (a block comment the
+            // lexer already strips, so `parse_result.program` is exactly the
+            // parsed remainder — no re-parse needed). The default path (no
+            // sentinel) is completely unchanged.
+            //
+            // Gating mirrors the single-statement merge fast paths: mutation,
+            // autocommit (skip the undo log), non-cluster (cluster writes must
+            // reach Raft), and an adapter present. `executeBatchSimpleMerge`
+            // returns false (no response sent, no side effects) when it cannot
+            // batch — group-commit disabled or any statement is not a simple
+            // node MERGE — and we fall through to the normal dispatch.
+            const BATCH_SENTINEL = "/*+BATCH*/";
+            const batch_requested = std.mem.startsWith(u8, query_text, BATCH_SENTINEL);
+            if (batch_requested and
+                is_mutation and
+                !state.in_txn and
+                graph_store.getGlobalAdapter() != null and
+                geode.distributed.cluster.getGlobalClusterCoordinator() == null)
+            {
+                if (try executeBatchSimpleMerge(gpa, stream, state, &parse_result.program, query_graph_name, exec_context)) {
+                    return;
+                }
+                // Not batchable -> fall through to the regular dispatch, which
+                // handles the (already-parsed) multi-statement program.
+            }
 
             // CANARY: REQ=REQ-QUIC-HC-008; FEATURE="QUIC High-Concurrency Reads"; ASPECT=CountReadSnapshotBypass; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
             //

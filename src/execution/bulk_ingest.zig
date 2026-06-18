@@ -255,7 +255,23 @@ pub fn matchEdgeSpec(program: *const ast.Program) ?MatchCreateEdgeSpec {
 ///     no `SET n = {...}`, no cross-variable targets, no non-scalar values.
 pub fn matchSimpleNodeMergeSpec(program: *const ast.Program) ?SimpleNodeMergeSpec {
     if (program.statements.len != 1) return null;
-    const stmt = &program.statements[0];
+    return matchSimpleNodeMergeSpecStmt(&program.statements[0]);
+}
+
+/// Per-statement sibling of `matchSimpleNodeMergeSpec`: classify ONE
+/// statement (no whole-program statement-count gate) into a simple-node-merge
+/// spec, or null if it is not a simple MERGE. GAP-0900 lever (c): the batch
+/// executor walks every statement of a multi-statement `/*+BATCH*/` program
+/// and classifies each independently via this entry point.
+///
+/// IMPORTANT (caller contract): the returned `on_create_props` slice aliases
+/// the thread-local scratch buffer documented on `buildSimpleNodeMergeSpec` —
+/// it is overwritten on the NEXT detector call. A caller that classifies many
+/// statements in a loop must COPY `on_create_props` (and `merge_props`) into
+/// caller-owned storage before invoking this again. The scalar pointer fields
+/// (`label`, `merge_key`, `merge_value`, each `PropExpr.key`/`.value`) alias
+/// the ParseResult arena and remain stable for its lifetime.
+pub fn matchSimpleNodeMergeSpecStmt(stmt: *const ast.Statement) ?SimpleNodeMergeSpec {
     const merge_stmt = switch (stmt.*) {
         .Merge => |m| m,
         else => return null,

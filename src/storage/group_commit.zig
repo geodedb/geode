@@ -421,19 +421,31 @@ pub const ShardedCoordinator = struct {
         }
     }
 
-    pub fn submit(self: *ShardedCoordinator, op: *ApplyOp) !u64 {
+    /// Submit an op to its shard queue WITHOUT blocking on completion.
+    ///
+    /// GAP-0900 lever (c): split from `submit()` so a handler can enqueue N
+    /// independent ops back-to-back (filling the per-shard queues) and only
+    /// then await them. The coordinator's shard workers drain those queues
+    /// concurrently and the group-commit coordinator coalesces them into far
+    /// fewer fsyncs. This MUST run on the caller (handler) thread because it
+    /// reads per-thread state via `tenantPreferringActiveContext()` and
+    /// `reserveNodeIdForActiveWriteShard()`.
+    ///
+    /// On the SourceNodeNotFound early-out the op is completed in place
+    /// (done=1, no error) exactly as the original `submit()` did; a later
+    /// `awaitOp` on it returns 0 immediately.
+    pub fn submitNoWait(self: *ShardedCoordinator, op: *ApplyOp) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const collect_phase_metrics = phaseMetricsEnabled();
-        const submit_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         if (collect_phase_metrics) _ = self.submit_calls_total.fetchAdd(1, .monotonic);
 
         // GAP-0891 (RC-1): capture the request tenant on THIS (handler) thread,
         // where the active ExecutionContext / per-thread tenant is valid, and
         // stamp it on the op. The shard worker that drains this op has neither,
         // so without this the worker tags every bulk-written row "default". The
-        // slice is borrowed (not duped): `submit()` blocks until the worker
-        // wakes it, so the captured tenant outlives the apply — identical
-        // ownership to the borrowed `labels`/`props` already on the op.
+        // slice is borrowed (not duped): the caller blocks (via awaitOp) until
+        // the worker wakes it, so the captured tenant outlives the apply —
+        // identical ownership to the borrowed `labels`/`props` on the op.
         const request_tenant = fle_integration.tenantPreferringActiveContext();
         switch (op.*) {
             .bulk_insert_node => |*p| p.tenant = request_tenant,
@@ -469,10 +481,7 @@ pub const ShardedCoordinator = struct {
                         res.node_or_edge_id = 0;
                         res.err = null;
                         res.done.store(1, .release);
-                        if (collect_phase_metrics) {
-                            recordDuration(&self.submit_total_ns_total, &self.submit_total_max_ns, monoNanosNow() -| submit_start_ns);
-                        }
-                        return 0;
+                        return;
                     },
                     else => return err,
                 }
@@ -499,17 +508,32 @@ pub const ShardedCoordinator = struct {
         if (collect_phase_metrics) {
             recordDuration(&self.submit_enqueue_ns_total, &self.submit_enqueue_max_ns, enqueue_done_ns -| enqueue_start_ns);
         }
+    }
 
+    /// Block until `op` has been applied (or completed in place), then return
+    /// its result. Pairs with `submitNoWait`. Safe to call after the op was
+    /// already completed (e.g. SourceNodeNotFound early-out) — the wait loop
+    /// returns immediately.
+    pub fn awaitOp(self: *ShardedCoordinator, op: *ApplyOp) !u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const collect_phase_metrics = phaseMetricsEnabled();
+        const wait_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
+        const result = op.resultPtr();
         while (result.done.load(.acquire) == 0) {
             std.Io.futexWaitUncancelable(io, u32, &result.done.raw, 0);
         }
         if (collect_phase_metrics) {
-            const submit_done_ns = monoNanosNow();
-            recordDuration(&self.submit_wait_ns_total, &self.submit_wait_max_ns, submit_done_ns -| enqueue_done_ns);
-            recordDuration(&self.submit_total_ns_total, &self.submit_total_max_ns, submit_done_ns -| submit_start_ns);
+            const wait_done_ns = monoNanosNow();
+            recordDuration(&self.submit_wait_ns_total, &self.submit_wait_max_ns, wait_done_ns -| wait_start_ns);
+            recordDuration(&self.submit_total_ns_total, &self.submit_total_max_ns, wait_done_ns -| wait_start_ns);
         }
         if (result.err) |e| return e;
         return result.node_or_edge_id;
+    }
+
+    pub fn submit(self: *ShardedCoordinator, op: *ApplyOp) !u64 {
+        try self.submitNoWait(op);
+        return self.awaitOp(op);
     }
 
     /// Register the coordinator's throughput counters with the

@@ -327,7 +327,7 @@ with the GAP-0899 checkpoint/`label_index` exclusive-lock invariant) and is out 
 for an edge-specific lever — so no code change. The remaining write-throughput wall is the
 per-op/round-trip ceiling (lever c).
 
-### Lever (c) — client batch protocol: root cause quantified; fix scoped, not shipped (2026-06-18)
+### Lever (c) — client batch protocol: SHIPPED + validated (2026-06-18)
 
 Lever (c) is the batch/pipeline write protocol — the only thing that creates the
 same-shard write concurrency the `group_commit` coordinator needs to coalesce fsyncs
@@ -356,27 +356,39 @@ loops one statement at a time), and the Go driver's `BatchExec` wraps N statemen
 txn but still sends N round-trips (`conn.go` one send + one receive per `ExecContext`).
 None of these submit concurrent same-shard ops, so none move avg-batch off ~1.
 
-**Design (recommended next work item, ~3–5 days, NOT implemented here).** Add a dedicated
-batch opcode rather than retrofitting parallelism into the transaction-aware serial
-executor:
+**Implementation (shipped).** Rather than a new wire opcode + driver change, the concurrency
+is created with a server-side concurrent-submit path that needs no protocol change:
 
-- Wire: new `BatchExecuteRequest { session_id, repeated ExecuteStatement { query, params } }`
-  - a `batch_execute` arm in the client-message union.
-- Server: a handler branch that submits every statement's mutation op to the
-  `ShardedCoordinator` concurrently (the ops route to shards by merge-key, exactly as the
-  existing fast paths do), then awaits all `ApplyOp.done` futexes and returns aggregated
-  results. The existing `execution/parallel.zig` infra can drive the fan-out.
-- Driver: a real `BatchExecute` that sends one `BatchExecuteRequest` instead of N
-  `ExecContext` calls.
-- Projected upside: avg-batch 1 → up to `max_batch`=256 per shard collapses N fsyncs into
-  1, so `sync_each_commit` bulk throughput can climb from ~1k ops/s toward the measured
-  OS fdatasync ceiling (~16k/s, 16 concurrent on ext4). This is the durable-mode analogue
-  of the 6× that `GEODE_WAL_SYNC=deferred` already gives replayable loads.
+- `ShardedCoordinator.submit` (src/storage/group_commit.zig) was split into `submitNoWait`
+  (per-thread prepare — tenant capture + node-id reservation — then enqueue + signal) and
+  `awaitOp` (block on the `ApplyOp.done` futex). `submit` is now `submitNoWait` + `awaitOp`,
+  so single-op behavior is unchanged.
+- `executeBatchSimpleMerge` (src/server/quic_connection_handler.zig) classifies every
+  statement of the program (via the new per-statement `matchSimpleNodeMergeSpecStmt` in
+  bulk_ingest.zig), builds all N `ApplyOp`s into one arena, `submitNoWait`s them ALL (so they
+  pile into the per-shard queues and the coordinator coalesces them), then `awaitOp`s all and
+  sends one no-RETURN response. Falls back to the general executor (no side effects, no
+  response) if group-commit is off or any statement is not a simple node MERGE.
+- Opt-in with no wire/driver change: a `/*+BATCH*/` sentinel prefix on the query text (a
+  block comment the lexer already strips) routes the program here. The default path (no
+  sentinel) is byte-for-byte unchanged. All prepare stays on the handler thread; no threads
+  are spawned — concurrency is purely "enqueue all, then await all".
 
-Not shipped: this spans the wire protocol + a new concurrent server execution path + the
-driver, and it touches the durable commit path — it requires its own implement→A/B→validate
-cycle (the same discipline that reverted the speculative group-commit barrier), not a
-drive-by change. Filed as the concrete follow-up to lift the `sync_each_commit` ceiling.
+**Validation (make-release build; fresh copy of the provisioned graph; batch=100):**
+
+- Coalescing: avg ops-per-shard-batch **1.09 → 12.76** (coordinator `coord_apply_*` counters).
+- Throughput `deferred`: **2,864 → 7,340 ops/s (~2.5×)**, 16 conns → 8 conns batched.
+- Throughput `sync_each_commit` (durable, the real target): **1,688 → 6,225 ops/s (~3.7×)** —
+  fewer fsyncs per op, exactly the predicted durable-mode lift.
+- Correctness: a batch of 50 distinct keys each with a distinct value round-trips exactly
+  (0 missing / 0 wrong); `coord_apply_ops_total` equals submitted statements on every run
+  (0 errors); no panic; default single-MERGE path unaffected; coordinator unit tests pass.
+
+Caveats: best operating point is moderate concurrency × batch size (e.g. 8 conns × 100);
+piling more connections on top of batching hits diminishing returns. The sentinel form shares
+one param set across the program, so the current path suits literal/templated multi-statement
+batches; a driver `BatchExecute` helper and per-statement params are a clean follow-up but were
+not needed to land or prove the win.
 
 ### Reproduction
 
