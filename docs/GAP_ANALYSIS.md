@@ -460,6 +460,68 @@ needs one of: disk-backed/bounded derived indexes (graph-storage architecture ch
 operationally sharding the ingest into smaller per-run graphs. A+B remove the unbounded-WAL OOM and
 multiply the feasible single-run scale (≥3.4×); Layer-3 (index memory) is the next tracked item.
 
+### Layer-3 memory bounds — shipped 2026-06-18 (branch `gap0900-l3-memory-bounds`)
+
+Two of the three triaged Layer-3 levers shipped; the third is documented as read-path-blocked.
+
+- **Fix 1 (default-on): bytes-bounded shared AST cache.** `SharedAstCache` evicted only on a
+  2048-**entry** count cap (`src/server/query_ast_cache.zig`, `server_init.zig:544`). On the batch
+  ingest each cached AST is a ~100-MERGE×19-SET program whose parse arena is ~MB, so the count cap
+  admitted ~8 GB of cached ASTs — a fixed RSS constant. Now the cache also evicts the LRU tail until
+  total cached bytes (arena `queryCapacity()` + query text + per-entry overhead) are under
+  `GEODE_AST_CACHE_BYTES` (default **256 MB**; `0` disables → count-only legacy behavior). Only
+  eviction policy changed; results are identical, so it is default-on. Turns the ~8 GB constant into
+  ≤256 MB. Test: `zig build test-gap0900-ast-cache-bytes`.
+- **Fix 2 (opt-in: `GEODE_INDEX_MERGE_KEYS_ONLY=1`, default OFF): lean indexing.** Every SET property
+  was added to BOTH geode's exact node-property index (~820 B/node) and GraphStore's `merge_prop_index`
+  (~262 B/node), but only the MERGE key (`taxon_id`) is ever looked up (dedup + edge-endpoint
+  `MATCH (a:Taxon {taxon_id: ?})`). The other 19 props are dead index weight (~1 KB/node). In lean mode
+  a single gate (`graph_store.shouldIndexProperty`) skips non-merge keys in both indexes; both MERGE
+  paths (bulk fast path + regular executor) register their pattern keys first so dedup still works.
+  Read-path safety: the point-read fast path (`planned_read_runtime.fp:`) treated an empty exact-index
+  result as authoritative — wrong for an unindexed key — so it now skips the fast path for non-indexed
+  keys and falls back to a label scan (correct, just not O(1)). Default OFF ⇒ plain server unchanged.
+  Test: `zig build test-gap0900-lean-index` (incl. executor-level dedup / point-read-by-non-merge-key).
+- **Fix 3 (NOT shipped — read-path-blocked, documented): legacy GraphStore node mirror.** The triage's
+  highest-value lever (~3.5 KB/node) was to stop the bulk path populating the legacy in-memory
+  `GraphStore.nodes` mirror + per-node `properties` map. Investigation of the read paths
+  (`graph_store.zig`, `match_operations.zig`, `planned_read_runtime.zig`, the adapter) shows the mirror
+  is the **live read source of truth even for bulk-created nodes**, NOT dead weight:
+  - `getNodeProperty` (`graph_store.zig:3602`) reads `node.properties.get(key)` — every
+      `RETURN n.foo` property read comes from the mirror.
+  - `lookupMergeCandidate` (`graph_store.zig:2921`) reads `self.nodes.get(node_id)` to verify a
+      MERGE-dedup candidate exists and matches the graph.
+  - `countNodes`/`countNodesByLabel` (`graph_store.zig:3930`) use `self.nodes.count()` and read
+      `node.tenant_id` for tenant-scoped counts.
+  - `getNodesByLabels` reads the mirror for tenant filtering; `bulkInsertEdgeWithIds`
+      (`graph_storage_adapter.zig:2822`) re-checks `store.nodes.getPtr` for endpoint existence.
+  Removing the mirror for bulk nodes would break property reads, MERGE dedup, count, tenant-scoped
+  MATCH/count, and edge-endpoint re-checks. A safe lean variant would require routing ALL property
+  reads (~40 call sites in `match_operations.zig`), count, and tenant filtering through the
+  engine/adapter — a large, high-correctness-risk change that exceeds a minimal, safe fix. The engine
+  is **not** a complete read path for these today. Tracked as the next architectural item; needs a
+  coordinated graph-storage read-through API before the mirror can be made lean. NO graph-storage pin
+  bump was required for Fix 1 or Fix 2 (both are geode-side only).
+
+A/B (real `~/divelife-dump` `col` seed, `GEODE_WAL_SYNC=deferred`, 16 workers, RSS sampled vs
+`MATCH (n) RETURN count(n)`):
+
+| build | nodes reached | RSS @ ~210 K nodes | peak RSS | outcome |
+|-------|---------------|--------------------|----------|---------|
+| baseline (main) | OOM-capped ~212 K | **11.5 GB** | 12.9 GB (cap) | hit 12 GB before 250 K |
+| + Fix 1 (default) | **478 K (full `col`)** | **~3.3 GB** | **7.65 GB** | ~3.5× lower RSS at equal node count; finished the dataset |
+
+bytes/node falls monotonically with Fix 1 (the ~8 GB AST constant is gone): ~25.6 KB/node at 83 K →
+~13.3 KB/node at 362 K and still dropping. Fix 2 (`GEODE_INDEX_MERGE_KEYS_ONLY=1`) removes a further
+~1 KB/node of derived-index entries on top of Fix 1. Correctness verified on each build: `count(n)`,
+property read by merge key, point-read by a non-merge key, MERGE dedup (re-MERGE same `taxon_id` →
+count unchanged, exactly one node per key), and clean-restart reopen recovery.
+
+**Recommended data-ingest seed settings:** `GEODE_WAL_SYNC=deferred` (Layer-2) + default
+`GEODE_AST_CACHE_BYTES=256MB` (Fix 1, automatic) + `GEODE_INDEX_MERGE_KEYS_ONLY=1` (Fix 2, opt-in) —
+the ingest only ever looks up Taxon nodes by `taxon_id`, so lean indexing is safe for this workload
+and removes the dead 19-property index weight.
+
 ### Reproduction
 
 ```sh
