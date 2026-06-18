@@ -6443,6 +6443,19 @@ pub fn build(b: *std.Build) void {
     const bulk_shard_step = b.step("test-bulk-shard-concurrency", "Run Phase 2 shard-locked bulk-helper concurrency tests");
     bulk_shard_step.dependOn(&run_bulk_shard_tests.step);
 
+    // GAP-0900 regression: deferred-mode periodic checkpoint must fire during a
+    // sustained bulk ingest (currently it never does — engine WAL/dirty pages
+    // grow unbounded => OOM). Drives the bulk fast path + the checkpoint-cadence
+    // decision (`StorageAdapter.maybeCheckpoint`) deterministically.
+    const gap0900_ckpt_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0900_deferred_checkpoint_cadence.zig"), .target = target, .optimize = optimize });
+    gap0900_ckpt_mod.addImport("geode", root_mod);
+    gap0900_ckpt_mod.addImport("graph_storage", graph_storage_mod);
+    const gap0900_ckpt_tests = b.addTest(.{ .root_module = gap0900_ckpt_mod });
+    const run_gap0900_ckpt_tests = b.addRunArtifact(gap0900_ckpt_tests);
+    shardDep(test_step, &run_gap0900_ckpt_tests.step, 2, test_shard_loads, test_shard_index);
+    const gap0900_ckpt_step = b.step("test-gap0900-deferred-checkpoint", "GAP-0900: deferred-mode bulk-ingest checkpoint-cadence regression");
+    gap0900_ckpt_step.dependOn(&run_gap0900_ckpt_tests.step);
+
     // Phase 2 Task 6 (2026-04-23) — N-way ShardedCoordinator end-to-end.
     //     Pins the invariant that 16 concurrent submitters pushing
     //     node-insert ops land in well under 15 s via the sharded

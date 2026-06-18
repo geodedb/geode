@@ -1429,6 +1429,28 @@ pub const StorageAdapter = struct {
     registry_path: []const u8, // owned
     mutex: std.Io.Mutex,
 
+    // GAP-0900 (observability + checkpoint-cadence): the group-commit bulk
+    // fast paths (bulkInsertNodeWithReservedId* / bulkMergeNode*) write through
+    // the engine-backed adapter WITHOUT touching the legacy CDC WAL
+    // (`notifyMutation`) or `GraphStore.dirty`. In `deferred` sync mode that
+    // means the persistence loop's checkpoint triggers never observe the bulk
+    // writes, so `checkpointAll` is never invoked between startup and shutdown
+    // during a pure bulk ingest — the engine WAL + dirty pages grow unbounded
+    // until OOM. These fields let a periodic trigger make an adapter-level
+    // checkpoint decision that does NOT depend on the legacy signals.
+    //
+    //   * `checkpoints_total`  — count of completed `checkpointAll` runs.
+    //     Production observability AND the assertion surface for the
+    //     deferred-mode bulk-ingest checkpoint regression test.
+    //   * `pending_bulk_ops`   — bulk write ops applied since the last
+    //     checkpoint. The FIX wires the bulk fast paths to bump this; until
+    //     then it stays 0 and `maybeCheckpoint` never fires for bulk writes.
+    //   * `last_checkpoint_mono_ns` — monotonic timestamp of the last
+    //     checkpoint, used for the time-based cadence trigger.
+    checkpoints_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    pending_bulk_ops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    last_checkpoint_mono_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     /// Create a new `StorageAdapter`.
     ///
     /// `data_dir` is the root directory under which per-graph subdirectories
@@ -1462,6 +1484,10 @@ pub const StorageAdapter = struct {
             .registry = gs.registry.GraphRegistry.init(allocator),
             .registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{owned_dir}),
             .mutex = std.Io.Mutex.init,
+            // GAP-0900: checkpoint-cadence observability counters.
+            .checkpoints_total = std.atomic.Value(u64).init(0),
+            .pending_bulk_ops = std.atomic.Value(u64).init(0),
+            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(monoNanosNow()),
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
@@ -4163,6 +4189,65 @@ pub const StorageAdapter = struct {
                 log.warn("failed to persist graph registry: {}", .{err});
             };
         }
+
+        // GAP-0900: a checkpoint has landed — record the observable and reset
+        // the cadence state so the next `maybeCheckpoint` decision starts from
+        // a clean slate (pending ops drained, clock restarted).
+        _ = self.checkpoints_total.fetchAdd(1, .monotonic);
+        self.pending_bulk_ops.store(0, .release);
+        self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
+    }
+
+    /// Number of completed `checkpointAll` runs since process start.
+    ///
+    /// GAP-0900 observability: lets operators (and the deferred-mode bulk
+    /// ingest regression test) confirm that the periodic checkpoint actually
+    /// fires during a sustained bulk load.
+    pub fn checkpointsTotal(self: *const StorageAdapter) u64 {
+        return self.checkpoints_total.load(.monotonic);
+    }
+
+    /// Bulk write ops applied since the last checkpoint.
+    ///
+    /// GAP-0900: the FIX wires the group-commit bulk fast paths
+    /// (bulkInsertNodeWithReservedId* / bulkMergeNode*) to bump this counter so
+    /// the periodic checkpoint trigger can observe bulk-ingest pressure. Until
+    /// the fix lands this stays 0 even under a heavy bulk load, which is exactly
+    /// the bug.
+    pub fn pendingBulkOps(self: *const StorageAdapter) u64 {
+        return self.pending_bulk_ops.load(.acquire);
+    }
+
+    /// GAP-0900 checkpoint-cadence decision point.
+    ///
+    /// This is the entry point the persistence loop calls each tick to decide
+    /// whether a periodic checkpoint is due, WITHOUT consulting the legacy CDC
+    /// WAL (`g_wal.needsCheckpoint`) or `GraphStore.dirty` — neither of which
+    /// the group-commit bulk fast path feeds. A checkpoint is due when either:
+    ///   * `pending_bulk_ops >= ops_threshold` (the byte/op cadence), or
+    ///   * at least `time_threshold_ms` have elapsed since the last checkpoint
+    ///     AND there is un-checkpointed work (`pending_bulk_ops > 0`).
+    ///
+    /// `now_mono_ns` is injected so the time trigger is deterministic in tests
+    /// (production passes `monoNanosNow()`).
+    ///
+    /// Returns `true` iff a checkpoint was performed.
+    pub fn maybeCheckpoint(
+        self: *StorageAdapter,
+        ops_threshold: u64,
+        time_threshold_ms: u64,
+        now_mono_ns: u64,
+    ) !bool {
+        const pending = self.pending_bulk_ops.load(.acquire);
+        const last_ns = self.last_checkpoint_mono_ns.load(.acquire);
+        const elapsed_ms = (now_mono_ns -| last_ns) / std.time.ns_per_ms;
+
+        const by_ops = ops_threshold != 0 and pending >= ops_threshold;
+        const by_time = pending > 0 and time_threshold_ms != 0 and elapsed_ms >= time_threshold_ms;
+        if (!by_ops and !by_time) return false;
+
+        try self.checkpointAll();
+        return true;
     }
 
     // ------------------------------------------------------------------
