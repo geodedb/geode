@@ -1460,6 +1460,14 @@ pub const StorageAdapter = struct {
     // Threshold 0 disables load-driven checkpointing (set from env at init).
     checkpoint_in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     checkpoint_ops_threshold: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // GAP-0900 (B): write-backpressure hard cap. When `pending_bulk_ops` reaches
+    // this many un-checkpointed ops, a writer that finds a checkpoint already in
+    // progress BLOCKS until it drains, instead of racing ahead — bounding the
+    // un-checkpointed WAL/dirty-page set even if a checkpoint is momentarily slow
+    // (defense-in-depth so deferred bulk ingest can never OOM from a dirty-page
+    // spike). 0 disables backpressure. Set from env at init (default = a multiple
+    // of `checkpoint_ops_threshold`).
+    checkpoint_max_pending: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     /// Create a new `StorageAdapter`.
     ///
@@ -4350,6 +4358,12 @@ pub const StorageAdapter = struct {
         self.checkpoint_ops_threshold.store(threshold, .release);
     }
 
+    /// GAP-0900 (B): install the write-backpressure hard cap (un-checkpointed
+    /// ops). 0 disables. See `checkpoint_max_pending`.
+    pub fn setCheckpointMaxPending(self: *StorageAdapter, max_pending: u64) void {
+        self.checkpoint_max_pending.store(max_pending, .release);
+    }
+
     /// GAP-0900: load-driven inline checkpoint trigger.
     ///
     /// Invoked from the bulk write fast paths after they bump
@@ -4367,9 +4381,28 @@ pub const StorageAdapter = struct {
     pub fn maybeCheckpointInline(self: *StorageAdapter) void {
         const threshold = self.checkpoint_ops_threshold.load(.acquire);
         if (threshold == 0) return;
-        if (self.pending_bulk_ops.load(.acquire) < threshold) return;
-        // Only one checkpoint at a time; losers keep writing.
-        if (self.checkpoint_in_progress.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+        const pending = self.pending_bulk_ops.load(.acquire);
+        if (pending < threshold) return;
+        // Only one checkpoint at a time; losers normally keep writing.
+        if (self.checkpoint_in_progress.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            // GAP-0900 (B) write-backpressure: a checkpoint is already running.
+            // If we have blown past the hard cap, BLOCK until it drains rather
+            // than letting the un-checkpointed set grow without bound (the
+            // dirty-page/WAL spike that would otherwise OOM under a slow
+            // checkpoint). Bounded spin so a stuck checkpoint can never deadlock
+            // the writer; the light checkpoint is O(dirty) so the wait is short.
+            const max_pending = self.checkpoint_max_pending.load(.acquire);
+            if (max_pending != 0 and pending >= max_pending) {
+                var spins: u64 = 0;
+                while (spins < 2_000_000_000 and
+                    self.checkpoint_in_progress.load(.acquire) and
+                    self.pending_bulk_ops.load(.acquire) >= threshold) : (spins += 1)
+                {
+                    std.atomic.spinLoopHint();
+                }
+            }
+            return;
+        }
         defer self.checkpoint_in_progress.store(false, .release);
         // Re-check under the guard: another thread may have just checkpointed
         // and reset the counter between our load and the CAS.

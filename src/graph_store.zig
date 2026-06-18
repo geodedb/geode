@@ -7465,6 +7465,15 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     // (below) is only a backstop, because its futex timeout is starved under
     // sustained ingest. Threshold is env-overridable (GEODE_CHECKPOINT_OPS).
     adapter.setCheckpointOpsThreshold(envU64("GEODE_CHECKPOINT_OPS", DEFAULT_CHECKPOINT_OPS));
+    // GAP-0900 (B) write-backpressure: hard-cap un-checkpointed ops so a slow
+    // checkpoint can never let the dirty-page/WAL set grow without bound (OOM
+    // safety net). Default = DEFAULT_CHECKPOINT_MAX_PENDING_MULT × the ops
+    // threshold; env-overridable (GEODE_CHECKPOINT_MAX_PENDING, 0 disables).
+    {
+        const ckpt_ops = envU64("GEODE_CHECKPOINT_OPS", DEFAULT_CHECKPOINT_OPS);
+        const default_max_pending = ckpt_ops *| DEFAULT_CHECKPOINT_MAX_PENDING_MULT;
+        adapter.setCheckpointMaxPending(envU64("GEODE_CHECKPOINT_MAX_PENDING", default_max_pending));
+    }
 
     // Build vtable with type-erased function pointers
     const Dispatch = struct {
@@ -7833,6 +7842,9 @@ var g_persist_interval_ms: u64 = 5000;
 // Both are overridable via env for tuning / tests.
 const DEFAULT_CHECKPOINT_OPS: u64 = 50_000;
 const DEFAULT_CHECKPOINT_INTERVAL_MS: u64 = 60_000;
+// GAP-0900 (B): default write-backpressure cap = this many × the ops threshold
+// of un-checkpointed work before writers block on an in-progress checkpoint.
+const DEFAULT_CHECKPOINT_MAX_PENDING_MULT: u64 = 4;
 
 fn envU64(name: [*:0]const u8, default: u64) u64 {
     if (std.c.getenv(name)) |raw_z| {
