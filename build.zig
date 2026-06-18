@@ -1906,6 +1906,24 @@ pub fn build(b: *std.Build) void {
     gap0810_parse_cache_tests.root_module.addImport("geode", root_mod);
     const run_gap0810_parse_cache_tests = b.addRunArtifact(gap0810_parse_cache_tests);
 
+    // GAP-0900 Layer-3 (Fix 1): the shared AST cache must evict on a total-bytes
+    // budget so the batch-ingest workload's ~MB-sized ASTs cannot accumulate to
+    // ~8 GB under the 2048-entry count cap. Run via
+    // `zig build test-gap0900-ast-cache-bytes`.
+    const gap0900_ast_cache_bytes_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0900_ast_cache_byte_bound.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0900_ast_cache_bytes_tests.root_module.addImport("geode", root_mod);
+    const run_gap0900_ast_cache_bytes_tests = b.addRunArtifact(gap0900_ast_cache_bytes_tests);
+    const gap0900_ast_cache_bytes_step = b.step(
+        "test-gap0900-ast-cache-bytes",
+        "GAP-0900 Layer-3 Fix 1: shared AST cache evicts by total bytes",
+    );
+    gap0900_ast_cache_bytes_step.dependOn(&run_gap0900_ast_cache_bytes_tests.step);
+
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST
     // cache via optional `ast_cache` fields + `setAstCache()` methods.

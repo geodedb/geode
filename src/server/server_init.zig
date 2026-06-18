@@ -544,6 +544,22 @@ pub fn initialize(
         break :blk 2048;
     };
 
+    // GAP-0900 Layer-3 (Fix 1): total-bytes budget for the shared AST cache.
+    // The count cap (above) alone admits ~8 GB on the batch-ingest workload
+    // because each ~100-MERGE×19-SET program's arena is ~4 MB. Bounding by
+    // bytes turns that ~8 GB constant into a modest budget while still holding
+    // thousands of typical KB-sized ASTs. Default 256 MB; override with
+    // GEODE_AST_CACHE_BYTES (0 disables the byte bound → count-only legacy
+    // behavior).
+    const ast_cache_bytes = blk: {
+        if (getEnvVarOwned(allocator, "GEODE_AST_CACHE_BYTES")) |v| {
+            defer allocator.free(v);
+            const parsed = std.fmt.parseInt(usize, v, 10) catch 256 * 1024 * 1024;
+            break :blk parsed;
+        } else |_| {}
+        break :blk 256 * 1024 * 1024;
+    };
+
     // Issue #460: Initialize shared query optimizer (cross-connection plan cache)
     const plan_cache_size = blk: {
         if (getEnvVarOwned(allocator, "GEODE_PLAN_CACHE_SIZE")) |v| {
@@ -569,7 +585,7 @@ pub fn initialize(
     };
 
     if (ast_cache_size > 0) {
-        ctx.shared_ast_cache_storage = query_ast_cache.SharedAstCache.init(allocator, ast_cache_size);
+        ctx.shared_ast_cache_storage = query_ast_cache.SharedAstCache.initWithByteBudget(allocator, ast_cache_size, ast_cache_bytes);
         // NOTE: Do NOT set ctx.shared_ast_cache here — the pointer would dangle
         // after this struct is returned by value. Caller must use fixupSelfPointers().
     }

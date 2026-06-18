@@ -225,6 +225,18 @@ pub const SharedAstCache = struct {
     allocator: std.mem.Allocator,
     cache: std.AutoHashMap(u64, SharedCachedAst),
     max_size: usize,
+    // GAP-0900 Layer-3 (Fix 1): bound the cache by TOTAL BYTES, not just entry
+    // count. The batch-ingest AST is a ~100-MERGE×19-SET program whose arena is
+    // ~4 MB; a 2048-entry count cap therefore admits ~8 GB of cached ASTs. We
+    // additionally evict the LRU tail until the sum of per-entry byte estimates
+    // is under `max_bytes`. Typical non-batch ASTs are KB, so a 256 MB default
+    // budget still holds thousands of them — behavior for small ASTs is
+    // unchanged. `max_bytes == 0` disables the byte bound (count-only), which
+    // keeps `init(allocator, max_size)` callers (tests) behaving exactly as
+    // before. `total_bytes` is the running sum of `SharedCachedAst.byte_size`
+    // for all resident entries; it is mutated only under the exclusive lock.
+    max_bytes: usize,
+    total_bytes: usize = 0,
     hit_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     miss_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     // CANARY: REQ=REQ-QUIC-HC-164; FEATURE="High-Concurrency Query Cache"; ASPECT=SharedAstConcurrentHits; STATUS=IMPL; TEST=query_ast_cache_shared_singleflight; OWNER=engine; UPDATED=2026-05-29
@@ -240,12 +252,35 @@ pub const SharedAstCache = struct {
     lru_tail: ?u64 = null,
 
     pub fn init(allocator: std.mem.Allocator, max_size: usize) SharedAstCache {
+        // Byte bound disabled (count-only) — preserves the historical contract
+        // for in-process / test callers that pass only a max entry count.
+        return initWithByteBudget(allocator, max_size, 0);
+    }
+
+    /// GAP-0900 Layer-3 (Fix 1): construct a cache that evicts on BOTH an entry
+    /// count cap (`max_size`) and a total-bytes budget (`max_bytes`). Pass
+    /// `max_bytes == 0` to disable the byte bound (count-only, == `init`).
+    pub fn initWithByteBudget(allocator: std.mem.Allocator, max_size: usize, max_bytes: usize) SharedAstCache {
         return .{
             .allocator = allocator,
             .cache = std.AutoHashMap(u64, SharedCachedAst).init(allocator),
             .inflight_misses = std.AutoHashMap(u64, void).init(allocator),
             .max_size = max_size,
+            .max_bytes = max_bytes,
         };
+    }
+
+    /// Estimate the resident bytes a cached AST holds. The parser stores all AST
+    /// nodes (statements, clauses, expressions, and zero-copy lexeme slices into
+    /// the query text) inside `ParseResult.arena`, so the arena's allocated
+    /// capacity is the dominant, accurate measure. We add the cached query-text
+    /// copy and the fixed per-entry overhead (the heap `ParseResult` plus the
+    /// HashMap value slot) so the budget reflects true footprint.
+    fn estimateAstBytes(query_text: []const u8, pr: *const geode.ParseResult) usize {
+        return query_text.len +
+            pr.arena.queryCapacity() +
+            @sizeOf(geode.ParseResult) +
+            @sizeOf(SharedCachedAst);
     }
 
     pub fn deinit(self: *SharedAstCache) void {
@@ -322,6 +357,8 @@ pub const SharedAstCache = struct {
                 if (cached.ref_count.load(.acquire) == 0) {
                     self.lruRemoveNodeUnlocked(key);
                     if (self.cache.fetchRemove(key)) |kv| {
+                        // GAP-0900 Layer-3 (Fix 1): keep byte accounting in sync.
+                        self.total_bytes -|= kv.value.byte_size;
                         kv.value.parse_result.deinit();
                         self.allocator.destroy(kv.value.parse_result);
                         self.allocator.free(kv.value.query_text);
@@ -396,6 +433,11 @@ pub const SharedAstCache = struct {
                     self.evictLeastUsedUnlocked();
                 }
 
+                // GAP-0900 Layer-3 (Fix 1): record this entry's footprint so we
+                // can bound the cache by bytes. Computed before insert so the
+                // value can be stored on the entry and added to `total_bytes`.
+                const entry_bytes = estimateAstBytes(query_text_copy, pr_ptr);
+
                 // Use query_text_copy directly as the cached query_text.
                 // AST lexeme slices already point into this buffer, so no
                 // second dupe is needed.
@@ -406,6 +448,7 @@ pub const SharedAstCache = struct {
                     .last_accessed = std.atomic.Value(i64).init(compat_timestamp()),
                     .access_count = std.atomic.Value(u64).init(1),
                     .ref_count = std.atomic.Value(u32).init(1),
+                    .byte_size = entry_bytes,
                 };
                 errdefer {
                     cached_ast.parse_result.deinit();
@@ -420,6 +463,11 @@ pub const SharedAstCache = struct {
                     return err;
                 };
                 self.lruInsertHeadUnlocked(key);
+                self.total_bytes += entry_bytes;
+                // GAP-0900 Layer-3 (Fix 1): evict LRU entries until under the
+                // byte budget. The just-inserted entry is ref-counted (1) and at
+                // the LRU head, so it is never the eviction victim here.
+                self.evictUntilUnderByteBudgetUnlocked();
                 _ = self.inflight_misses.remove(key);
                 _ = self.miss_generation.fetchAdd(1, .release);
                 std.Io.Threaded.global_single_threaded.io().futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
@@ -485,6 +533,8 @@ pub const SharedAstCache = struct {
             if (entry.ref_count.load(.acquire) == 0) {
                 self.lruRemoveNodeUnlocked(key);
                 if (self.cache.fetchRemove(key)) |kv| {
+                    // GAP-0900 Layer-3 (Fix 1): keep the byte accounting in sync.
+                    self.total_bytes -|= kv.value.byte_size;
                     kv.value.parse_result.deinit();
                     self.allocator.destroy(kv.value.parse_result);
                     self.allocator.free(kv.value.query_text);
@@ -492,6 +542,35 @@ pub const SharedAstCache = struct {
                 return;
             }
             key_opt = entry.lru_prev;
+        }
+    }
+
+    /// GAP-0900 Layer-3 (Fix 1): evict LRU entries (skipping any still
+    /// referenced) until `total_bytes <= max_bytes`. No-op when the byte bound
+    /// is disabled (`max_bytes == 0`). Caller holds the exclusive lock.
+    fn evictUntilUnderByteBudgetUnlocked(self: *SharedAstCache) void {
+        if (self.max_bytes == 0) return;
+        var key_opt = self.lru_tail;
+        while (self.total_bytes > self.max_bytes) {
+            const key = key_opt orelse return;
+            const entry = self.cache.getPtr(key) orelse return;
+            // Advance to the next-older entry BEFORE we (possibly) unlink this
+            // one, so the walk is stable across removal.
+            const prev = entry.lru_prev;
+            if (entry.ref_count.load(.acquire) == 0) {
+                self.lruRemoveNodeUnlocked(key);
+                if (self.cache.fetchRemove(key)) |kv| {
+                    self.total_bytes -|= kv.value.byte_size;
+                    kv.value.parse_result.deinit();
+                    self.allocator.destroy(kv.value.parse_result);
+                    self.allocator.free(kv.value.query_text);
+                }
+            }
+            // If the entry was pinned (ref_count > 0) we skip it and keep
+            // walking toward the head; an all-pinned cache simply stays over
+            // budget until references are released, which is correct (we must
+            // not free live ASTs).
+            key_opt = prev;
         }
     }
 
@@ -552,6 +631,10 @@ const SharedCachedAst = struct {
     last_accessed: std.atomic.Value(i64),
     access_count: std.atomic.Value(u64),
     ref_count: std.atomic.Value(u32),
+    // GAP-0900 Layer-3 (Fix 1): cached byte estimate for this entry, recorded at
+    // insert time so eviction can subtract it from `total_bytes` without
+    // re-walking the arena. See SharedAstCache.estimateAstBytes.
+    byte_size: usize = 0,
     lru_prev: ?u64 = null,
     lru_next: ?u64 = null,
 };
