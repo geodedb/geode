@@ -291,6 +291,93 @@ locally (`a53197a`), pending release** (push + tag `v0.1.31` + bump the geode `.
 hash). The next per-op-CPU target is the WAL `appendRecord` stack buffer (the residual
 17.7% memset). Hardware CRC32C is now lower priority — CRC was not the dominant cost.
 
+### Lever (b) follow-up — bulk-EDGE lock: already on the shared+striped path (2026-06-18)
+
+Hypothesis: bulk edge inserts take the whole-graph EXCLUSIVE lock
+(`acquireGraphWriteLockCancelable`) and should move onto the same shared+striped
+path node inserts use. Investigated + **empirically verified — for the seed's edge
+shape it is already on the striped path**, so no change is warranted.
+
+Findings:
+
+- `group_commit.isEnabled()` returns **true by default** (only an explicit
+  `GEODE_GROUP_COMMIT` disable value turns it off). The handler has single-statement
+  fast paths — `executeBulkInsertNode`, `executeBulkMatchCreateEdge`,
+  `executeBulkMergeNode` (`src/server/quic_connection_handler.zig` ~504/~683/~932) —
+  each of which, when group commit is on, submits to the `ShardedCoordinator` instead
+  of taking the exclusive lock.
+- The divelife seed's edge statement (`internal/geode/taxon.go`) is a single
+  `MATCH (a:Taxon {…}), (b:Taxon {…}) CREATE (a)-[:PARENT_OF {…}]->(b)` — exactly the
+  `executeBulkMatchCreateEdge` shape.
+- perf on an edge-only workload of that exact shape (16 conns, default config,
+  `GEODE_WAL_SYNC=deferred`): **0 samples in `acquireGraphWriteLock`** vs **85 in the
+  group-commit edge path**. Full stack: `executeBulkMatchCreateEdge →
+  ShardedCoordinator.submit → applyShardBatch → bulkInsertEdgeWithIdsShardLockedForTenant
+  → bulkInsertEdgeInnerShardLocked → addEdgeTxn` (shared graph lock + 1–2 per-shard
+  striped locks; all edge state — `edge_index`, `adj_out/in`, node head pointers,
+  `manifest.next_edge_id/edge_count` — is per-shard, so striping is safe).
+- The exclusive lock only appears for **multi-statement / general mutations** that miss
+  every fast path (verified: a 3-`MERGE` edge program does take it, via the general
+  write path `quic_connection_handler.zig:433-434`). The seed does not use that shape.
+
+Conclusion: the bulk-edge lever is already satisfied for single-statement edge creates
+(the seed's pattern). Moving the *general* multi-statement path off the exclusive lock is
+a much larger, riskier change (it is the arbitrary-mutation catch-all and is intertwined
+with the GAP-0899 checkpoint/`label_index` exclusive-lock invariant) and is out of scope
+for an edge-specific lever — so no code change. The remaining write-throughput wall is the
+per-op/round-trip ceiling (lever c).
+
+### Lever (c) — client batch protocol: root cause quantified; fix scoped, not shipped (2026-06-18)
+
+Lever (c) is the batch/pipeline write protocol — the only thing that creates the
+same-shard write concurrency the `group_commit` coordinator needs to coalesce fsyncs
+(the cross-shard group-commit attempt was reverted precisely because synchronous
+1-op-per-round-trip clients never build a per-shard queue).
+
+**Root cause now MEASURED (not just inferred).** Read the coordinator counters via the
+Prometheus endpoint (`GEODE_METRICS_PORT`) — `coord_apply_ops_total /
+coord_apply_batches_total` is the average ops-per-shard-batch (= ops per fsync in
+sync_each_commit). Single-property node `MERGE`, 16 connections, fresh graph:
+
+- `sync_each_commit`: 977 ops/s, **avg batch = 1.03** (29,515 ops / 28,578 batches)
+- `deferred`: 1,335 ops/s, **avg batch = 1.05** (40,290 ops / 38,522 batches)
+
+The coordinator is coalescing essentially nothing: ~1 op per batch ⇒ ~1 fsync per op in
+the durable mode. Raising `GEODE_SHARD_COALESCE_WAIT_US` cannot help — with synchronous
+clients the next op on a connection is not issued until the previous one's response
+returns, so ops never overlap within the window regardless of its length. This is the
+definitive confirmation that the write ceiling is the synchronous round-trip, and that
+group commit is dead weight until concurrency exists.
+
+**Why it can't be a minimal change.** The wire protocol carries one statement per
+`ExecuteRequest` (`proto/schema.zig`); multi-statement GQL programs *parse* (parser.zig
+`parseProgram` loops) but *execute serially* (`execution.zig` `executeProgramWithContext`
+loops one statement at a time), and the Go driver's `BatchExec` wraps N statements in a
+txn but still sends N round-trips (`conn.go` one send + one receive per `ExecContext`).
+None of these submit concurrent same-shard ops, so none move avg-batch off ~1.
+
+**Design (recommended next work item, ~3–5 days, NOT implemented here).** Add a dedicated
+batch opcode rather than retrofitting parallelism into the transaction-aware serial
+executor:
+
+- Wire: new `BatchExecuteRequest { session_id, repeated ExecuteStatement { query, params } }`
+  - a `batch_execute` arm in the client-message union.
+- Server: a handler branch that submits every statement's mutation op to the
+  `ShardedCoordinator` concurrently (the ops route to shards by merge-key, exactly as the
+  existing fast paths do), then awaits all `ApplyOp.done` futexes and returns aggregated
+  results. The existing `execution/parallel.zig` infra can drive the fan-out.
+- Driver: a real `BatchExecute` that sends one `BatchExecuteRequest` instead of N
+  `ExecContext` calls.
+- Projected upside: avg-batch 1 → up to `max_batch`=256 per shard collapses N fsyncs into
+  1, so `sync_each_commit` bulk throughput can climb from ~1k ops/s toward the measured
+  OS fdatasync ceiling (~16k/s, 16 concurrent on ext4). This is the durable-mode analogue
+  of the 6× that `GEODE_WAL_SYNC=deferred` already gives replayable loads.
+
+Not shipped: this spans the wire protocol + a new concurrent server execution path + the
+driver, and it touches the durable commit path — it requires its own implement→A/B→validate
+cycle (the same discipline that reverted the speculative group-commit barrier), not a
+drive-by change. Filed as the concrete follow-up to lift the `sync_each_commit` ceiling.
+
 ### Reproduction
 
 ```sh
