@@ -420,7 +420,7 @@ RSS to ~1.4 GB at 137K nodes (~10 KB/node) vs the old 12.6 GB at 254K, with chec
 test `zig build test-gap0900-deferred-checkpoint` (RED before, GREEN after). Tune `GEODE_CHECKPOINT_OPS`
 lower for tighter memory / higher for fewer checkpoint pauses.
 
-**Residual (Layer 2 — OPEN, not closed by the trigger fix; needs incremental checkpointing):**
+**Residual (Layer 2 — was OPEN after the trigger fix; CLOSED 2026-06-18 by incremental checkpoint + backpressure, see below):**
 The trigger fix closes the primary cause (checkpoints were firing ZERO times — now they fire), but
 a sustained **rich, sharded** ingest (the real divelife `col` taxa: 2-key coalesce MERGE, ~14 KB
 WAL/op, divelife sharded into ~16 engines) still grows RSS at scale because the per-graph checkpoint
@@ -434,8 +434,31 @@ heads to OOM, just slower. The simple single-key path (e.g. `MERGE (n:N {k:?}) S
 sawtooth/bound cleanly (small WAL/op), so the trigger fix fully solves moderate/non-rich workloads.
 Proper close for 13M-scale needs **incremental/bounded checkpointing** (flush only dirty pages,
 O(dirty) not O(graph) — and/or WAL rotation + dirty-page write-backpressure so memory is hard-capped)
-in graph-storage. Tracked as the next GAP-0900 work item; it is a graph-storage architecture change
-(release + pin bump), not a drive-by fix.
+in graph-storage.
+
+**Layer-2 fix SHIPPED 2026-06-18 — incremental checkpoint (A) + write-backpressure (B):**
+
+- **(A) Incremental "light" checkpoint** — graph-storage **v0.2.3** (`98f179b`): `engine.checkpointLight()`
+  / `sharded_engine.checkpointLight()` flush dirty pages + truncate the WAL but SKIP the O(graph)
+  derived-index re-save; recovery rebuilds those indexes from pages when stale (engine.zig:335-337,
+  already present). geode `9df76443` pins v0.2.3 and routes the load-driven periodic checkpoint
+  (`maybeCheckpointInline`) through the light path; clean shutdown / DDL keep the FULL checkpoint so a
+  clean restart loads without a rebuild. Light path also skips geode's O(graph) `prop_exact.idx`
+  re-serialize (reopen rebuilds). Validated: real `col` ingest reached **865K nodes (3.4× past the
+  prior ~254K OOM point)**, sub-linear KB/node, WAL truncated on a sawtooth, checkpoint cadence keeping
+  pace; clean restart recovered exactly (865,600 nodes).
+- **(B) Write-backpressure** — geode `7730cac8`: hard-cap un-checkpointed work (`GEODE_CHECKPOINT_MAX_PENDING`,
+  default 4× `GEODE_CHECKPOINT_OPS`); when exceeded and a checkpoint is in progress, the writer blocks
+  (bounded spin) until it drains. Guarantees the dirty-page/WAL set can never blow up under a cadence
+  stall (OOM safety net). Validated: ingest progresses with no hang under a tight cap.
+
+**Remaining limit (Layer 3 — index memory, NOT WAL/checkpoint):** with A+B the WAL/dirty-page growth
+is bounded, but RSS still tracks the **in-memory derived indexes** at ~8 KB/node (the buffer pool is
+already capped at ≤512 MB/engine; the marginal growth is label/property/edge index maps held in RAM).
+At ~8 KB/node a full 13M ingest needs ~110 GB+ on this 93 GB box → still OOMs. Closing 13M-on-this-box
+needs one of: disk-backed/bounded derived indexes (graph-storage architecture change), more RAM, or
+operationally sharding the ingest into smaller per-run graphs. A+B remove the unbounded-WAL OOM and
+multiply the feasible single-run scale (≥3.4×); Layer-3 (index memory) is the next tracked item.
 
 ### Reproduction
 
