@@ -390,6 +390,37 @@ one param set across the program, so the current path suits literal/templated mu
 batches; a driver `BatchExecute` helper and per-statement params are a clean follow-up but were
 not needed to land or prove the win.
 
+### Deferred-mode checkpoint cadence — SHIPPED + validated (2026-06-18, fix `4020356c`)
+
+Running the full 13M `--from-dump` ingest (deferred mode, 16 workers) surfaced a separate
+scaling wall: server RSS grew unbounded (12.6 GB at ~254K nodes, ~50 KB/node) and throughput
+decayed (5,000 → 567 ops/s), heading to OOM; **zero checkpoints fired** in 6 minutes.
+
+Root cause (triaged — the initial "checkpoint exclusive-lock starvation" hypothesis was
+disproven; the per-graph `std.Io.RwLock` is writer-fair): the group-commit bulk fast path
+writes through the engine-backed adapter but calls NEITHER `notifyMutation` (legacy CDC WAL)
+NOR sets `GraphStore.dirty`. `persistenceLoop`'s two checkpoint triggers are gated on exactly
+those signals, so `checkpointAll` is never invoked between startup and shutdown during a pure
+bulk ingest → engine WAL + dirty pages grow without bound. Compounding it, the timer-based
+persistence loop is itself starved under sustained ingest (its futex-timeout tick never fires
+when all I/O workers are busy — 0 ticks in 3 min at the 30 s interval).
+
+Fix (geode-only, no graph-storage change): make checkpointing **load-driven** from the bulk
+write path. The adapter counts `pending_bulk_ops` on every applied bulk node/edge op and, once
+it crosses `GEODE_CHECKPOINT_OPS` (default 50,000 ≈ 16 MB WAL) or `GEODE_CHECKPOINT_INTERVAL_MS`,
+the first thread to win a `checkpoint_in_progress` CAS runs `checkpointAll` inline — AFTER the
+bulk helper's shared rwlock + shard locks are released (checkpointAll needs the exclusive lock,
+so triggering in-lock would self-deadlock) — while other writers proceed. The persistence loop
+calls the same `maybeCheckpoint` decision as a backstop. Observability: `checkpoints_total`,
+`pending_bulk_ops`.
+
+Validated: a sustained deferred MERGE load now truncates the engine WAL on a sawtooth and bounds
+RSS to ~1.4 GB at 137K nodes (~10 KB/node) vs the old 12.6 GB at 254K, with checkpoints firing
+(0→2 over the run); data correct; coordinator/merge/wal/adapter test suites green; new regression
+test `zig build test-gap0900-deferred-checkpoint` (RED before, GREEN after). Tune `GEODE_CHECKPOINT_OPS`
+lower for tighter memory / higher for fewer checkpoint pauses. The full 13M ingest can now run
+without OOM (memory bounded by the cadence).
+
 ### Reproduction
 
 ```sh
