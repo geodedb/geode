@@ -134,6 +134,14 @@ pub const MatchCreateEdgeSpec = struct {
 pub const PropExpr = struct {
     key: []const u8,
     value: *const ast.Expr,
+    /// True when the SET source was `coalesce(<scalar>, <merge_var>.<key>)`.
+    /// `value` then points at the scalar first argument. Semantics: the
+    /// caller evaluates `value`; if it is NULL the prop is OMITTED entirely
+    /// (so on-create the prop stays unset and on-match the existing value is
+    /// kept — exactly `coalesce(null, existing)`); if non-null the prop is
+    /// emitted normally (`coalesce(nonnull, _) == nonnull`). Plain scalar
+    /// SET props leave this false and are always emitted.
+    coalesce: bool = false,
 };
 
 /// Spec describing a simple `MERGE (n:L {merge_key: v})` pattern with an
@@ -393,7 +401,13 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
     // path in the QUIC handler.
     const props = np.props orelse return null;
     if (props.len == 0 or props.len > max_merge_props) return null;
-    if (props.len > 1 and m.on_match.len != 0) return null;
+    // GAP-0900 coalesce-upsert: multi-key MERGE + bare `SET` (the species
+    // taxon-ingest shape) is now a supported fast path. The bare SET is
+    // duplicated into `on_match` (`set_is_bare = true`, gated above), and
+    // `apply_on_match` carries it through to the multi-prop adapter, which
+    // applies the SET props on the match branch too. Merge-KEY props are
+    // still required to be strictly scalar (validated below); only SET
+    // values may be `coalesce(...)`.
     for (props) |prop| {
         if (!isScalarPropExpr(prop.value.*)) return null;
     }
@@ -405,10 +419,13 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
     // and msft-graph always spells it.
     const merge_var = np.name;
 
-    // ON CREATE SET must be a flat list of `n.prop = literal_or_param`
-    // where `n` is the merge variable.  Anything else (label updates,
-    // `SET n = {...}`, arithmetic, cross-variable target) kicks us back
-    // to the general executor.
+    // ON CREATE / bare SET must be a flat list of `n.prop = <value>` where
+    // `n` is the merge variable. `<value>` may be either a plain scalar
+    // (`isScalarPropExpr`) or, per GAP-0900, a self-referential
+    // `coalesce(<scalar>, n.prop)` upsert over the SAME property. Anything
+    // else (label updates, `SET n = {...}`, arithmetic, cross-variable
+    // target, coalesce over a different property/variable) kicks us back to
+    // the general executor.
     //
     // Stash PropExpr entries in a process-global ring slot — there is
     // exactly one active detector call per worker thread and the caller
@@ -416,15 +433,7 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
     // Thread-local keeps the buffer re-entrant-safe across workers.
     const n_set = m.on_create.len;
     if (n_set > max_merge_on_create_props) return null;
-    for (m.on_create) |sc| switch (sc) {
-        .Property => |p| {
-            if (!isScalarPropExpr(p.value)) return null;
-            if (merge_var == null) return null;
-            if (!std.mem.eql(u8, p.target.object, merge_var.?)) return null;
-        },
-        .Labels => return null,
-        .AllProperties => return null,
-    };
+    if (n_set > 0 and merge_var == null) return null;
 
     const prop_buf = &t_merge_props_buf;
     var p_i: usize = 0;
@@ -435,18 +444,37 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
         };
     }
 
-    // Populate the thread-local prop list from the set clauses.  Take
-    // `*const SetClause` so `&sc.Property.value` yields a stable pointer
-    // into the parser arena (the owning ParseResult outlives the dispatcher
-    // call per `matchSimpleNodeMergeSpec`'s doc contract).
+    // Validate + populate the thread-local prop list from the set clauses in
+    // one pass. Take `*const SetClause` so `&sc.Property.value` yields a
+    // stable pointer into the parser arena (the owning ParseResult outlives
+    // the dispatcher call per `matchSimpleNodeMergeSpec`'s doc contract).
+    // For a coalesce upsert, store the scalar first argument (also an arena
+    // pointer) and flag `coalesce = true`.
     const buf = &t_merge_on_create_buf;
     var i: usize = 0;
     while (i < n_set) : (i += 1) {
         const sc: *const ast.SetClause = &m.on_create[i];
-        buf[i] = .{
-            .key = sc.Property.target.property,
-            .value = &sc.Property.value,
+        const p = switch (sc.*) {
+            .Property => |pp| pp,
+            .Labels => return null,
+            .AllProperties => return null,
         };
+        if (!std.mem.eql(u8, p.target.object, merge_var.?)) return null;
+        if (coalesceScalarArg(p.value, merge_var.?, p.target.property)) |scalar| {
+            buf[i] = .{
+                .key = p.target.property,
+                .value = scalar,
+                .coalesce = true,
+            };
+        } else if (isScalarPropExpr(p.value)) {
+            buf[i] = .{
+                .key = p.target.property,
+                .value = &sc.Property.value,
+                .coalesce = false,
+            };
+        } else {
+            return null;
+        }
     }
 
     return .{
@@ -631,6 +659,61 @@ fn isBareVarRef(np: ast.NodePattern, expected_var: []const u8) bool {
     if (np.labels.len != 0) return false;
     if (np.props) |ps| if (ps.len != 0) return false;
     return true;
+}
+
+/// GAP-0900 coalesce-upsert: recognise a SET source of the form
+/// `coalesce(<scalar>, <merge_var>.<set_target_key>)` and, when valid,
+/// return the scalar first argument so the caller can store it as the
+/// PropExpr `value` (with `coalesce = true`).
+///
+/// Validity (all must hold):
+///   * `e` is a `.Call` whose callee is an `.Ident` naming `coalesce`
+///     (case-insensitive),
+///   * exactly two arguments,
+///   * arg[0] passes `isScalarPropExpr` (a literal or bound param),
+///   * arg[1] is a property access `<merge_var>.<set_target_key>` — i.e.
+///     the SAME variable the SET targets and the SAME property key being
+///     assigned (this is what makes the coalesce a self-referential
+///     "keep existing if param is null" upsert). The parser emits dotted
+///     property access inside an expression as `.Member{target=Ident,
+///     field}`; the `.PropertyAccess` node is also accepted for robustness.
+///
+/// Any deviation returns null → the prop is not coalesce-shaped and the
+/// caller falls back to the plain `isScalarPropExpr` check (and ultimately
+/// to the general executor if that also fails).
+fn coalesceScalarArg(
+    e: ast.Expr,
+    merge_var: []const u8,
+    set_target_key: []const u8,
+) ?*const ast.Expr {
+    const call = switch (e) {
+        .Call => |c| c,
+        else => return null,
+    };
+    const name = switch (call.callee.*) {
+        .Ident => |id| id.orig,
+        else => return null,
+    };
+    if (!std.ascii.eqlIgnoreCase(name, "coalesce")) return null;
+    if (call.args.len != 2) return null;
+    if (!isScalarPropExpr(call.args[0].*)) return null;
+    // arg[1] must be `<merge_var>.<set_target_key>`.
+    switch (call.args[1].*) {
+        .Member => |m| {
+            const obj = switch (m.target.*) {
+                .Ident => |id| id.orig,
+                else => return null,
+            };
+            if (!std.mem.eql(u8, obj, merge_var)) return null;
+            if (!std.mem.eql(u8, m.field, set_target_key)) return null;
+        },
+        .PropertyAccess => |pa| {
+            if (!std.mem.eql(u8, pa.object, merge_var)) return null;
+            if (!std.mem.eql(u8, pa.property, set_target_key)) return null;
+        },
+        else => return null,
+    }
+    return call.args[0];
 }
 
 /// True when `e` is a literal or bound parameter — safe to evaluate without

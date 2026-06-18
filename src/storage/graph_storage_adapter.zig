@@ -2434,6 +2434,7 @@ pub const StorageAdapter = struct {
         label: []const u8,
         merge_props: []const PropKV,
         on_create_props: []const PropKV,
+        apply_on_match: bool,
     ) !u64 {
         // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
         return self.bulkMergeNodeWithReservedIdMultiPropForTenant(
@@ -2442,11 +2443,15 @@ pub const StorageAdapter = struct {
             label,
             merge_props,
             on_create_props,
+            apply_on_match,
             fle_integration.tenantPreferringActiveContext(),
         );
     }
 
     // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedIdMultiProp.
+    // GAP-0900: `apply_on_match` upserts `on_create_props` onto an existing
+    // node found via the merge keys (bare-`SET` multi-key MERGE coalesce
+    // upsert), mirroring the single-key path's on-match apply.
     pub fn bulkMergeNodeWithReservedIdMultiPropForTenant(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -2454,6 +2459,7 @@ pub const StorageAdapter = struct {
         label: []const u8,
         merge_props: []const PropKV,
         on_create_props: []const PropKV,
+        apply_on_match: bool,
         request_tenant: []const u8,
     ) !u64 {
         if (merge_props.len == 0) return error.InvalidMergePattern;
@@ -2494,7 +2500,33 @@ pub const StorageAdapter = struct {
                 }
             }
 
-            break :existing_blk try findNodeMatchingMergeProps(self.allocator, mg, store, graph_name, label, merge_props);
+            const found = try findNodeMatchingMergeProps(self.allocator, mg, store, graph_name, label, merge_props);
+            // GAP-0900 coalesce-upsert: apply the SET props to the existing
+            // node on the match branch, mirroring the single-key path
+            // (~:2381). Done under the same shared-rwlock + per-tuple-lock
+            // critical section as the probe so a concurrent same-key writer
+            // is serialized. The merge keys themselves are re-asserted (they
+            // already hold the matched values); on_create_props that name a
+            // merge key are skipped to avoid clobbering the index tuple.
+            if (apply_on_match) {
+                if (found) |existing| {
+                    for (merge_props) |kv| {
+                        try store.setNodeProperty(existing, kv.key, kv.value);
+                    }
+                    for (on_create_props) |kv| {
+                        var is_merge_key = false;
+                        for (merge_props) |mp| {
+                            if (std.mem.eql(u8, kv.key, mp.key)) {
+                                is_merge_key = true;
+                                break;
+                            }
+                        }
+                        if (is_merge_key) continue;
+                        try store.setNodeProperty(existing, kv.key, kv.value);
+                    }
+                }
+            }
+            break :existing_blk found;
         };
         if (existing_id) |existing| {
             return existing;

@@ -916,18 +916,26 @@ fn executeBulkSimpleMerge(
     }
     const merge_value_pv = merge_kvs[0].value;
 
-    // Evaluate all ON CREATE SET property values upfront.  The detector
-    // already guaranteed each is scalar.
+    // Evaluate all ON CREATE / bare SET property values upfront. The
+    // detector guaranteed each is scalar (or a coalesce over a scalar). For
+    // a coalesce prop (GAP-0900) whose scalar evaluates to NULL we OMIT the
+    // prop entirely: on create it stays unset (= coalesce(null, null)); on
+    // match it is untouched (= coalesce(null, existing)). The buffer is
+    // sized to the max possible count and trimmed to the kept props.
     var kvs_buf: [32]geode.graph_storage_adapter.StorageAdapter.PropKV = undefined;
     var kvs: []geode.graph_storage_adapter.StorageAdapter.PropKV = if (spec.on_create_props.len <= kvs_buf.len)
         kvs_buf[0..spec.on_create_props.len]
     else
         try eval_allocator.alloc(geode.graph_storage_adapter.StorageAdapter.PropKV, spec.on_create_props.len);
-    for (spec.on_create_props, 0..) |prop, i| {
+    var kvs_len: usize = 0;
+    for (spec.on_create_props) |prop| {
         const v = try geode_eval.evalExpr(eval_allocator, prop.value.*, env);
+        if (prop.coalesce and geode.value_types.isNull(v)) continue;
         const pv = try property_codec.valueToPropertyValue(eval_allocator, v);
-        kvs[i] = .{ .key = prop.key, .value = pv };
+        kvs[kvs_len] = .{ .key = prop.key, .value = pv };
+        kvs_len += 1;
     }
+    kvs = kvs[0..kvs_len];
 
     var mut_sample = mutation_timing.begin();
 
@@ -1008,6 +1016,7 @@ fn executeBulkSimpleMerge(
                     .merge_props = merge_kvs,
                     .on_create_props = kvs,
                     .result = .{},
+                    .apply_on_match = spec.apply_on_match,
                 } };
             _ = coord.submit(&op) catch |err| {
                 const info = proto_util.mapError(err);
@@ -1026,6 +1035,7 @@ fn executeBulkSimpleMerge(
                 spec.label,
                 merge_kvs,
                 kvs,
+                spec.apply_on_match,
             );
             _ = node_id_res catch |err| {
                 const info = proto_util.mapError(err);
@@ -1167,15 +1177,22 @@ fn executeBatchSimpleMerge(
             merge_kvs[j] = .{ .key = prop.key, .value = pv };
         }
 
-        // Evaluate ON CREATE SET values into the arena. NOTE: the spec's
-        // `on_create_props` aliases a thread-local scratch buffer reused on
-        // the NEXT classifier call, so we copy (by re-evaluating) here.
-        const kvs = try ba.alloc(PropKV, spec.on_create_props.len);
-        for (spec.on_create_props, 0..) |prop, j| {
+        // Evaluate ON CREATE / bare SET values into the arena. NOTE: the
+        // spec's `on_create_props` aliases a thread-local scratch buffer
+        // reused on the NEXT classifier call, so we copy (by re-evaluating)
+        // here. GAP-0900: a coalesce prop whose scalar evaluates to NULL is
+        // OMITTED (kept-existing on match / unset on create), so trim to the
+        // kept count.
+        const kvs_full = try ba.alloc(PropKV, spec.on_create_props.len);
+        var kvs_len: usize = 0;
+        for (spec.on_create_props) |prop| {
             const v = try geode_eval.evalExpr(ba, prop.value.*, env);
+            if (prop.coalesce and geode.value_types.isNull(v)) continue;
             const pv = try property_codec.valueToPropertyValue(ba, v);
-            kvs[j] = .{ .key = prop.key, .value = pv };
+            kvs_full[kvs_len] = .{ .key = prop.key, .value = pv };
+            kvs_len += 1;
         }
+        const kvs = kvs_full[0..kvs_len];
 
         labels[i] = spec.label;
         ops[i] = if (merge_kvs.len == 1)
@@ -1193,6 +1210,7 @@ fn executeBatchSimpleMerge(
                 .merge_props = merge_kvs,
                 .on_create_props = kvs,
                 .result = .{},
+                .apply_on_match = spec.apply_on_match,
             } };
     }
 

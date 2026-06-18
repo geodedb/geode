@@ -240,6 +240,11 @@ pub const ApplyOp = union(enum) {
         assigned_id: u64 = 0,
         /// GAP-0891 (RC-1): see bulk_insert_node.tenant.
         tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
+        /// GAP-0900 coalesce-upsert: when true (bare-`SET` multi-key MERGE),
+        /// `on_create_props` is also applied to a node found via the merge
+        /// keys — mirrors `bulk_merge_node.apply_on_match` for the single-key
+        /// path. False for classic `ON CREATE SET` (no-op on match).
+        apply_on_match: bool = false,
     },
 
     pub fn resultPtr(self: *ApplyOp) *ApplyResult {
@@ -775,6 +780,7 @@ pub const ShardedCoordinator = struct {
                         p.label,
                         p.merge_props,
                         p.on_create_props,
+                        p.apply_on_match,
                         p.tenant,
                     )) |id| {
                         res.node_or_edge_id = id;

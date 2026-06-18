@@ -643,6 +643,50 @@ test "bulk fast-path detector accepts bare SET, sets apply_on_match=true" {
     try testing.expectEqualStrings("name", spec.on_create_props[0].key);
 }
 
+test "GAP-0900: detector accepts multi-key bare SET with coalesce upsert" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var parsed = try geode.parseGql(
+        "MERGE (t:Taxon {source: $s, source_id: $sid}) " ++
+            "SET t.scientific_name = coalesce($sn, t.scientific_name), " ++
+            "t.authority = coalesce($a, t.authority), " ++
+            "t.updated_at = $u",
+        arena.allocator(),
+    );
+    defer parsed.deinit();
+
+    const spec_opt = geode.bulk_ingest.matchSimpleNodeMergeSpec(&parsed.program);
+    const spec = spec_opt orelse return error.DetectorRejectedCoalesceUpsert;
+    try testing.expect(spec.apply_on_match);
+    try testing.expectEqualStrings("Taxon", spec.label);
+    try testing.expectEqual(@as(usize, 2), spec.merge_props.len);
+    try testing.expectEqual(@as(usize, 3), spec.on_create_props.len);
+    // scientific_name + authority are coalesce; updated_at is plain.
+    try testing.expectEqualStrings("scientific_name", spec.on_create_props[0].key);
+    try testing.expect(spec.on_create_props[0].coalesce);
+    try testing.expectEqualStrings("authority", spec.on_create_props[1].key);
+    try testing.expect(spec.on_create_props[1].coalesce);
+    try testing.expectEqualStrings("updated_at", spec.on_create_props[2].key);
+    try testing.expect(!spec.on_create_props[2].coalesce);
+}
+
+test "GAP-0900: detector rejects coalesce over a DIFFERENT property" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    // coalesce arg[1] references t.other, not the SET target t.name -> reject.
+    var parsed = try geode.parseGql(
+        "MERGE (t:Taxon {source: $s}) SET t.name = coalesce($n, t.other)",
+        arena.allocator(),
+    );
+    defer parsed.deinit();
+
+    try testing.expect(geode.bulk_ingest.matchSimpleNodeMergeSpec(&parsed.program) == null);
+}
+
 test "bulk fast-path detector rejects explicit ON MATCH SET" {
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
