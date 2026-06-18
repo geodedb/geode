@@ -1219,6 +1219,11 @@ fn removeCrossShardEdge(mg: *ManagedGraph, from_id: u64, to_id: u64, edge_id: u6
 }
 
 fn addIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) !void {
+    // GAP-0900 Layer-3 (Fix 2): in lean mode (GEODE_INDEX_MERGE_KEYS_ONLY=1),
+    // only MERGE/declared keys go into the exact property index; other props are
+    // never used for an exact-index lookup (the point-read fast path falls back
+    // to a label scan for them — still correct). Default off: index everything.
+    if (!graph_store.shouldIndexProperty(property_key)) return;
     const value_hash = try hashStorageProperty(mg.engine.allocator, value);
     try mg.exact_node_property_index.add(label_id, property_key, value_hash, node_id);
 }
@@ -1231,6 +1236,9 @@ fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u
 /// Zero-copy variant: index a property using pre-encoded bytes from the iterator.
 /// Avoids the decode-then-re-encode round-trip that `addIndexedNodeProperty` performs.
 fn addIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, encoded_value: []const u8) !void {
+    // GAP-0900 Layer-3 (Fix 2): see addIndexedNodeProperty — skip non-merge keys
+    // in lean mode. Default off: index everything.
+    if (!graph_store.shouldIndexProperty(property_key)) return;
     const value_hash = hashEncodedPropertyBytes(encoded_value);
     try mg.exact_node_property_index.add(label_id, property_key, value_hash, node_id);
 }
@@ -2393,6 +2401,11 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
         request_tenant: []const u8,
     ) !u64 {
+        // GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key must stay
+        // indexed so dedup + edge-endpoint resolution still find this node by
+        // its key. Registering is a no-op when lean mode is off. Idempotent.
+        graph_store.registerMergeIndexKey(merge_key);
+
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -2535,6 +2548,10 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         if (merge_props.len == 0) return error.InvalidMergePattern;
+
+        // GAP-0900 Layer-3 (Fix 2): keep all multi-prop MERGE keys indexed in
+        // lean mode (no-op when off). Idempotent.
+        for (merge_props) |mp| graph_store.registerMergeIndexKey(mp.key);
 
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());

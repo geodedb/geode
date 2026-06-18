@@ -48,6 +48,108 @@ pub fn lastLoadHadChecksumError() bool {
     return false;
 }
 
+// ============================================================================
+// GAP-0900 Layer-3 (Fix 2): opt-in lean indexing.
+//
+// Every SET property on a created node is normally added to BOTH geode's exact
+// node-property index (graph_storage_adapter.exact_node_property_index) and this
+// module's merge_prop_index. But only the MERGE pattern key(s) (and explicitly
+// declared indexes, which live in the separate IndexManager and are unaffected)
+// are ever used for lookup. On the batch ingest the per-node Taxon write indexes
+// taxon_id + 19 never-queried SET props — ~1 KB/node of dead index entries.
+//
+// When `GEODE_INDEX_MERGE_KEYS_ONLY=1` is set, the indexing helpers consult
+// `shouldIndexProperty(key)` and skip any key that is NOT a registered merge
+// key. The merge fast path registers each `merge_key` it sees via
+// `registerMergeIndexKey`, so MERGE dedup and edge-endpoint resolution
+// (MATCH (a:Taxon {taxon_id: ?})) still work — those lookups are keyed by the
+// merge key, which stays indexed.
+//
+// Default is OFF: `shouldIndexProperty` returns true for every key, so a plain
+// server's property-lookup point-read fast path is completely unchanged. The
+// flag is read once, lazily, on first use.
+//
+// The registered-key set is intentionally tiny and append-only: real workloads
+// MERGE on a small, fixed set of keys (here just "taxon_id"). Keys are copied
+// into a fixed static buffer under a leaf mutex; overflow simply falls back to
+// indexing the key (safe — over-indexing never breaks correctness).
+const lean_index_max_keys: usize = 64;
+const lean_index_key_cap: usize = 128;
+
+var g_lean_index_mutex: std.Io.Mutex = std.Io.Mutex.init;
+var g_lean_index_enabled: bool = false;
+var g_lean_index_flag_loaded: bool = false;
+var g_lean_index_key_bufs: [lean_index_max_keys][lean_index_key_cap]u8 = undefined;
+var g_lean_index_key_lens: [lean_index_max_keys]usize = [_]usize{0} ** lean_index_max_keys;
+var g_lean_index_key_count: usize = 0;
+
+fn leanIndexEnabledLocked() bool {
+    if (!g_lean_index_flag_loaded) {
+        g_lean_index_flag_loaded = true;
+        if (std.c.getenv("GEODE_INDEX_MERGE_KEYS_ONLY")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            g_lean_index_enabled = std.mem.eql(u8, raw, "1") or
+                std.mem.eql(u8, raw, "true") or
+                std.mem.eql(u8, raw, "yes");
+            if (g_lean_index_enabled) {
+                log.info("GEODE_INDEX_MERGE_KEYS_ONLY: lean indexing ON — only MERGE keys are added to the exact + merge property indexes (non-merge property point-reads fall back to label scan).", &.{});
+            }
+        }
+    }
+    return g_lean_index_enabled;
+}
+
+/// True if lean indexing is enabled (env opt-in). Cheap after first call.
+pub fn leanIndexingEnabled() bool {
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    return leanIndexEnabledLocked();
+}
+
+/// Register a key that MUST stay indexed even in lean mode (a MERGE pattern
+/// key). Idempotent; safe to call on every merge. No-op when lean mode is off.
+pub fn registerMergeIndexKey(key: []const u8) void {
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (!leanIndexEnabledLocked()) return;
+    if (key.len == 0 or key.len > lean_index_key_cap) return;
+    var i: usize = 0;
+    while (i < g_lean_index_key_count) : (i += 1) {
+        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) return;
+    }
+    if (g_lean_index_key_count >= lean_index_max_keys) return; // overflow: tolerate
+    @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
+    g_lean_index_key_lens[g_lean_index_key_count] = key.len;
+    g_lean_index_key_count += 1;
+}
+
+/// Test-only: force lean-index mode on/off and clear the registered-key set,
+/// bypassing the env read. Used by the GAP-0900 Fix-2 regression test so it can
+/// exercise both modes deterministically in one process. NOT for production
+/// paths (production reads GEODE_INDEX_MERGE_KEYS_ONLY once, lazily).
+pub fn setLeanIndexingForTest(enabled: bool) void {
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    g_lean_index_flag_loaded = true;
+    g_lean_index_enabled = enabled;
+    g_lean_index_key_count = 0;
+}
+
+/// Whether a property `key` should be added to the exact + merge property
+/// indexes. Always true when lean mode is off (default). When on, true only for
+/// registered merge keys. Over-indexing is always safe; this only ever SKIPS
+/// indexing of keys that are never used for lookup in lean mode.
+pub fn shouldIndexProperty(key: []const u8) bool {
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (!leanIndexEnabledLocked()) return true;
+    var i: usize = 0;
+    while (i < g_lean_index_key_count) : (i += 1) {
+        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) return true;
+    }
+    return false;
+}
+
 const node_id_sequence_mask: u64 = 0x0fff;
 const node_id_version_bits: u64 = 0x7000;
 const node_id_timestamp_mask: u64 = 0x0000_ffff_ffff_ffff;
@@ -2991,6 +3093,10 @@ pub const GraphStore = struct {
 
     /// Insert an entry into the merge property index for each label on the node.
     fn addToMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64) !void {
+        // GAP-0900 Layer-3 (Fix 2): in lean mode, only MERGE/declared keys are
+        // indexed. Non-merge keys are never looked up via this index, so skip
+        // them. Default (lean off) indexes every key — unchanged behavior.
+        if (!shouldIndexProperty(prop_key)) return;
         var buf: [1024]u8 = undefined;
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;

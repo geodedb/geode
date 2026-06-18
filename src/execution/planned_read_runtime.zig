@@ -1349,6 +1349,16 @@ fn collectStartSlots(
             break :fp;
         }
 
+        // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared keys
+        // are present in the exact property index. The fast path below treats an
+        // empty exact-index result as authoritative ("no such node"), which is
+        // correct only when the key is actually indexed. For a non-indexed key
+        // an empty result is meaningless, so we MUST NOT use the fast path —
+        // fall through to the label-scan-and-filter path, which reads each
+        // node's properties from the store and filters correctly. No-op when
+        // lean mode is off (shouldIndexProperty is then always true).
+        if (!graph_store.shouldIndexProperty(fp_key)) break :fp;
+
         const prop_env = Env{
             .names = &.{},
             .values = &.{},

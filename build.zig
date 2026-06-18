@@ -1924,6 +1924,23 @@ pub fn build(b: *std.Build) void {
     );
     gap0900_ast_cache_bytes_step.dependOn(&run_gap0900_ast_cache_bytes_tests.step);
 
+    // GAP-0900 Layer-3 (Fix 2): opt-in lean indexing — only MERGE/declared keys
+    // are added to the exact + merge property indexes. Run via
+    // `zig build test-gap0900-lean-index`.
+    const gap0900_lean_index_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0900_lean_index_mode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0900_lean_index_tests.root_module.addImport("geode", root_mod);
+    const run_gap0900_lean_index_tests = b.addRunArtifact(gap0900_lean_index_tests);
+    const gap0900_lean_index_step = b.step(
+        "test-gap0900-lean-index",
+        "GAP-0900 Layer-3 Fix 2: lean-index mode indexes only merge/declared keys",
+    );
+    gap0900_lean_index_step.dependOn(&run_gap0900_lean_index_tests.step);
+
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST
     // cache via optional `ast_cache` fields + `setAstCache()` methods.

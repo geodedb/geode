@@ -2956,6 +2956,16 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     if (m.pattern.chains.len > 0 and m.pattern.chains[0].head != null) {
         const node_pattern = m.pattern.chains[0].head.?;
 
+        // GAP-0900 Layer-3 (Fix 2): in lean-index mode the MERGE pattern keys
+        // MUST stay indexed in the merge_prop_index, otherwise dedup breaks (a
+        // second MERGE on the same key would not find the first node and would
+        // create a duplicate). The bulk fast path registers its merge_key; the
+        // regular executor MERGE registers here so both paths dedup correctly.
+        // No-op when lean mode is off.
+        if (node_pattern.props) |pp| {
+            for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
+        }
+
         // Look for existing node matching the pattern (filtered by graph)
         var found_node: ?*graph_store.Node = null;
         const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
