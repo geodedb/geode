@@ -418,8 +418,24 @@ Validated: a sustained deferred MERGE load now truncates the engine WAL on a saw
 RSS to ~1.4 GB at 137K nodes (~10 KB/node) vs the old 12.6 GB at 254K, with checkpoints firing
 (0→2 over the run); data correct; coordinator/merge/wal/adapter test suites green; new regression
 test `zig build test-gap0900-deferred-checkpoint` (RED before, GREEN after). Tune `GEODE_CHECKPOINT_OPS`
-lower for tighter memory / higher for fewer checkpoint pauses. The full 13M ingest can now run
-without OOM (memory bounded by the cadence).
+lower for tighter memory / higher for fewer checkpoint pauses.
+
+**Residual (Layer 2 — OPEN, not closed by the trigger fix; needs incremental checkpointing):**
+The trigger fix closes the primary cause (checkpoints were firing ZERO times — now they fire), but
+a sustained **rich, sharded** ingest (the real divelife `col` taxa: 2-key coalesce MERGE, ~14 KB
+WAL/op, divelife sharded into ~16 engines) still grows RSS at scale because the per-graph checkpoint
+is **O(total graph size)** (`engine.checkpoint() → label_index.saveToFile → scan()` rewrites the
+whole index each time), so it cannot keep pace with sustained writes — and in deferred mode the
+buffer pool cannot evict dirty pages until they are checkpointed. Measured: default
+`GEODE_CHECKPOINT_OPS=50000` → only 2 checkpoints in 316K ops, per-shard WAL ~290 MB, RSS ~11.7 GB.
+Aggressive `GEODE_CHECKPOINT_OPS=3000` → 38 checkpoints, total WAL bounded better (89→366 MB) but
+still rising, RSS ~7.2 GB at 120K nodes (~60 KB/node) and climbing. So the full 13M ingest still
+heads to OOM, just slower. The simple single-key path (e.g. `MERGE (n:N {k:?}) SET n.a=?`) DOES
+sawtooth/bound cleanly (small WAL/op), so the trigger fix fully solves moderate/non-rich workloads.
+Proper close for 13M-scale needs **incremental/bounded checkpointing** (flush only dirty pages,
+O(dirty) not O(graph) — and/or WAL rotation + dirty-page write-backpressure so memory is hard-capped)
+in graph-storage. Tracked as the next GAP-0900 work item; it is a graph-storage architecture change
+(release + pin bump), not a drive-by fix.
 
 ### Reproduction
 
