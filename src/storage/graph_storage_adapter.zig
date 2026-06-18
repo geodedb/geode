@@ -1450,6 +1450,16 @@ pub const StorageAdapter = struct {
     checkpoints_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     pending_bulk_ops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     last_checkpoint_mono_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // GAP-0900: load-driven checkpoint cadence. The timer-based persistence
+    // loop is unreliable under sustained ingest (its futex timeout is starved
+    // when all I/O workers are busy), so the bulk write path itself drives the
+    // checkpoint: once `pending_bulk_ops` crosses `checkpoint_ops_threshold`,
+    // ONE thread (winner of the `checkpoint_in_progress` CAS) runs
+    // `checkpointAll` inline while the rest keep writing. `checkpoint_in_progress`
+    // bounds it to a single concurrent checkpoint so writers don't stampede.
+    // Threshold 0 disables load-driven checkpointing (set from env at init).
+    checkpoint_in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    checkpoint_ops_threshold: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     /// Create a new `StorageAdapter`.
     ///
@@ -1487,7 +1497,11 @@ pub const StorageAdapter = struct {
             // GAP-0900: checkpoint-cadence observability counters.
             .checkpoints_total = std.atomic.Value(u64).init(0),
             .pending_bulk_ops = std.atomic.Value(u64).init(0),
-            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(monoNanosNow()),
+            // GAP-0900: 0 means "no checkpoint has run yet". The persistence
+            // loop and tests pass a monotonic `now`; until the first
+            // checkpointAll resets this to a real `monoNanosNow()`, the
+            // time-based cadence is measured from process start (clock 0).
+            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(0),
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
@@ -1994,13 +2008,17 @@ pub const StorageAdapter = struct {
         // group-commit worker path uses the *ForTenant variant with the tenant
         // captured on the handler thread at submit time (the worker thread has
         // neither a context nor a per-thread tenant).
-        return self.bulkInsertNodeWithReservedIdForTenant(
+        const id = try self.bulkInsertNodeWithReservedIdForTenant(
             graph_name,
             reserved_id,
             labels,
             props,
             fle_integration.tenantPreferringActiveContext(),
         );
+        // GAP-0900: safe to checkpoint here — the ForTenant call has returned,
+        // so its per-graph SHARED rwlock + shard locks are released.
+        self.maybeCheckpointInline();
+        return id;
     }
 
     // GAP-0891 (RC-1): tenant-threaded variant of bulkInsertNodeWithReservedId.
@@ -2175,6 +2193,15 @@ pub const StorageAdapter = struct {
             }
             try store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries);
         }
+        // GAP-0900: feed the checkpoint-cadence signal. The group-commit bulk
+        // fast path bypasses notifyMutation / GraphStore.dirty, so without this
+        // the checkpoint cadence never sees bulk-ingest pressure and never fires
+        // in deferred mode → unbounded WAL/RSS growth. The actual inline
+        // checkpoint trigger (maybeCheckpointInline) is invoked by the CALLER
+        // once it has released the per-graph SHARED rwlock + shard locks held
+        // here — checkpointAll needs the EXCLUSIVE rwlock, so triggering it
+        // while these locks are held would self-deadlock.
+        _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
         return reserved_id;
     }
 
@@ -2307,6 +2334,9 @@ pub const StorageAdapter = struct {
             }
             try store.setEdgePropertiesBatch(edge_id, entries);
         }
+        // GAP-0900: feed the checkpoint-cadence signal for bulk edge writes too
+        // — like the node bulk path, this bypasses notifyMutation / dirty.
+        _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
         return edge_id;
     }
 
@@ -2329,7 +2359,7 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
     ) !u64 {
         // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
-        return self.bulkMergeNodeWithReservedIdForTenant(
+        const id = try self.bulkMergeNodeWithReservedIdForTenant(
             graph_name,
             reserved_id,
             label,
@@ -2339,6 +2369,8 @@ pub const StorageAdapter = struct {
             apply_on_match,
             fle_integration.tenantPreferringActiveContext(),
         );
+        self.maybeCheckpointInline(); // GAP-0900: locks released; safe to checkpoint.
+        return id;
     }
 
     // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedId.
@@ -2410,6 +2442,10 @@ pub const StorageAdapter = struct {
                             if (std.mem.eql(u8, kv.key, merge_key)) continue;
                             try store.setNodeProperty(probe_id, kv.key, kv.value);
                         }
+                        // GAP-0900: the on-match upsert writes to the engine WAL
+                        // too — count it toward the checkpoint cadence. (The
+                        // create branch is counted by the delegated bulkInsert.)
+                        _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
                     }
                     return probe_id;
                 },
@@ -2463,7 +2499,7 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
     ) !u64 {
         // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
-        return self.bulkMergeNodeWithReservedIdMultiPropForTenant(
+        const id = try self.bulkMergeNodeWithReservedIdMultiPropForTenant(
             graph_name,
             reserved_id,
             label,
@@ -2472,6 +2508,8 @@ pub const StorageAdapter = struct {
             apply_on_match,
             fle_integration.tenantPreferringActiveContext(),
         );
+        self.maybeCheckpointInline(); // GAP-0900: locks released; safe to checkpoint.
+        return id;
     }
 
     // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedIdMultiProp.
@@ -2550,6 +2588,10 @@ pub const StorageAdapter = struct {
                         if (is_merge_key) continue;
                         try store.setNodeProperty(existing, kv.key, kv.value);
                     }
+                    // GAP-0900: on-match upsert writes hit the engine WAL; count
+                    // them toward the checkpoint cadence (create branch is
+                    // counted by the delegated bulkInsert).
+                    _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
                 }
             }
             break :existing_blk found;
@@ -2819,6 +2861,11 @@ pub const StorageAdapter = struct {
         }
 
         if (stmt_txn_open) try stmt_txn.commit();
+        // GAP-0900: feed the checkpoint-cadence signal. No inline trigger here:
+        // the caller holds the per-graph EXCLUSIVE write lock, so checkpointAll
+        // (which re-acquires it) would self-deadlock; the node bulk paths /
+        // coordinator drive the actual inline checkpoint once locks are free.
+        _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
         return edge_id;
     }
 
@@ -4248,6 +4295,47 @@ pub const StorageAdapter = struct {
 
         try self.checkpointAll();
         return true;
+    }
+
+    /// GAP-0900: install the load-driven checkpoint op-count threshold.
+    ///
+    /// Called once at server bring-up with the configured (env-overridable)
+    /// threshold. When set non-zero, the bulk write path self-checkpoints once
+    /// `pending_bulk_ops` crosses it, independent of the timer-based
+    /// persistence loop (which is starved under sustained ingest).
+    pub fn setCheckpointOpsThreshold(self: *StorageAdapter, threshold: u64) void {
+        self.checkpoint_ops_threshold.store(threshold, .release);
+    }
+
+    /// GAP-0900: load-driven inline checkpoint trigger.
+    ///
+    /// Invoked from the bulk write fast paths after they bump
+    /// `pending_bulk_ops`. When the pending op count has crossed the configured
+    /// threshold, the FIRST thread to win the `checkpoint_in_progress` CAS runs
+    /// a real `checkpointAll` (flushing + truncating the engine WAL, resetting
+    /// the cadence state) while every other writer proceeds unblocked. This
+    /// bounds the engine WAL / dirty-page growth that the bulk fast path would
+    /// otherwise let grow without limit in deferred mode (GAP-0900), and does
+    /// NOT depend on the timer-based persistence loop firing.
+    ///
+    /// `checkpointAll` itself takes the per-graph exclusive lock for the
+    /// snapshot, so concurrent writers pause only for the checkpoint duration —
+    /// the same contract the persistence loop already relies on.
+    pub fn maybeCheckpointInline(self: *StorageAdapter) void {
+        const threshold = self.checkpoint_ops_threshold.load(.acquire);
+        if (threshold == 0) return;
+        if (self.pending_bulk_ops.load(.acquire) < threshold) return;
+        // Only one checkpoint at a time; losers keep writing.
+        if (self.checkpoint_in_progress.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+        defer self.checkpoint_in_progress.store(false, .release);
+        // Re-check under the guard: another thread may have just checkpointed
+        // and reset the counter between our load and the CAS.
+        if (self.pending_bulk_ops.load(.acquire) < threshold) return;
+        self.checkpointAll() catch |err| {
+            log.warn("GAP-0900 load-driven checkpoint failed: {s}", .{@errorName(err)});
+            return;
+        };
+        log.info("GAP-0900 load-driven checkpoint fired total={d}", .{self.checkpoints_total.load(.monotonic)});
     }
 
     // ------------------------------------------------------------------

@@ -853,6 +853,16 @@ pub const ShardedCoordinator = struct {
             recordDuration(&self.apply_wake_ns_total, &self.apply_wake_max_ns, monoNanosNow() -| wake_start_ns);
             recordDuration(&self.apply_batch_ns_total, &self.apply_batch_max_ns, monoNanosNow() -| batch_start_ns);
         }
+
+        // GAP-0900: load-driven checkpoint. The bulk fast paths bumped
+        // `pending_bulk_ops`; trigger a checkpoint here — AFTER the batch
+        // committed, waiters were woken, and every per-graph lock the helpers
+        // took was released — once the pending op count crosses the configured
+        // threshold. This bounds engine WAL / dirty-page growth in deferred
+        // mode WITHOUT depending on the timer-based persistence loop (whose
+        // futex timeout is starved under sustained ingest). Only one applier
+        // thread checkpoints at a time (CAS guard inside); the rest keep going.
+        self.adapter.maybeCheckpointInline();
     }
 
     pub fn shardQueueDepthForTest(self: *ShardedCoordinator, shard_idx: usize) usize {

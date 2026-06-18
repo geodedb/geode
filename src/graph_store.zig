@@ -7459,6 +7459,13 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     });
     global_adapter = adapter;
 
+    // GAP-0900: install the load-driven checkpoint threshold so the bulk write
+    // fast path self-checkpoints once `pending_bulk_ops` crosses it. This is
+    // the primary deferred-mode memory bound — the timer-based persistence loop
+    // (below) is only a backstop, because its futex timeout is starved under
+    // sustained ingest. Threshold is env-overridable (GEODE_CHECKPOINT_OPS).
+    adapter.setCheckpointOpsThreshold(envU64("GEODE_CHECKPOINT_OPS", DEFAULT_CHECKPOINT_OPS));
+
     // Build vtable with type-erased function pointers
     const Dispatch = struct {
         fn castAdapter(ptr: *anyopaque) *graph_storage_adapter.StorageAdapter {
@@ -7811,6 +7818,30 @@ var g_persist_shutdown: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var g_persist_pool: ?*pooled.ThreadPool = null;
 var g_persist_interval_ms: u64 = 5000;
 
+// GAP-0900: deferred-mode auto-checkpoint cadence. The group-commit bulk fast
+// path bypasses notifyMutation / GraphStore.dirty, so the legacy
+// `needs_checkpoint` and `persistSplitPhase` triggers never fire during a pure
+// bulk ingest and the engine WAL + dirty pages grow unbounded (RSS ∝ nodes →
+// OOM). The persistence loop also consults the engine-backed cadence
+// (StorageAdapter.maybeCheckpoint), which fires a real checkpoint when either:
+//   * `pending_bulk_ops >= GEODE_CHECKPOINT_OPS` bulk ops have accumulated
+//     since the last checkpoint (op-count proxy for ~16 MB of WAL: a node/edge
+//     record + WAL framing is on the order of a few hundred bytes, so 50_000
+//     ops ≈ 16 MB), or
+//   * `GEODE_CHECKPOINT_INTERVAL_MS` have elapsed since the last checkpoint AND
+//     there is un-checkpointed bulk work (matches the documented 60 s cadence).
+// Both are overridable via env for tuning / tests.
+const DEFAULT_CHECKPOINT_OPS: u64 = 50_000;
+const DEFAULT_CHECKPOINT_INTERVAL_MS: u64 = 60_000;
+
+fn envU64(name: [*:0]const u8, default: u64) u64 {
+    if (std.c.getenv(name)) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        return std.fmt.parseInt(u64, raw, 10) catch default;
+    }
+    return default;
+}
+
 pub fn startPersistenceThread(interval_ms: u64) void {
     g_persist_interval_ms = interval_ms;
     g_persist_shutdown.store(0, .release);
@@ -7874,6 +7905,9 @@ fn persistenceLoop() void {
     // doesn't burn CPU). See
     // docs/performance/2026-04-25-edges-contains/diagnosis.md.
     const poll_ms: u64 = @max(g_persist_interval_ms, 100);
+    // GAP-0900: deferred-mode auto-checkpoint thresholds, read once at loop start.
+    const checkpoint_ops: u64 = envU64("GEODE_CHECKPOINT_OPS", DEFAULT_CHECKPOINT_OPS);
+    const checkpoint_interval_ms: u64 = envU64("GEODE_CHECKPOINT_INTERVAL_MS", DEFAULT_CHECKPOINT_INTERVAL_MS);
     const io = std.Io.Threaded.global_single_threaded.io();
     while (g_persist_shutdown.load(.acquire) == 0) {
         const timeout: std.Io.Timeout = .{ .duration = .{
@@ -7891,6 +7925,34 @@ fn persistenceLoop() void {
             // so that committed mutations reach stable storage promptly.
             if (g_wal_sync_fn) |sync_fn| {
                 sync_fn();
+            }
+
+            // GAP-0900: engine-backed checkpoint cadence. The group-commit bulk
+            // fast path bumps `pending_bulk_ops` but feeds NEITHER the legacy
+            // CDC WAL (`g_wal.needsCheckpoint`) NOR `GraphStore.dirty`, so the
+            // two triggers below never fire during a pure bulk ingest. Consult
+            // the adapter cadence here so deferred-mode bulk loads checkpoint
+            // (flushing + truncating the engine WAL) and bound RSS. When this
+            // fires it has already done the real per-graph checkpoint and reset
+            // the cadence state, so skip the legacy triggers this tick to avoid
+            // double-checkpointing.
+            if (global_adapter) |adapter| {
+                const fired = adapter.maybeCheckpoint(
+                    checkpoint_ops,
+                    checkpoint_interval_ms,
+                    monoNanosNow(),
+                ) catch |err| blk: {
+                    log.err("deferred-mode auto-checkpoint failed", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    break :blk false;
+                };
+                if (fired) {
+                    log.info("deferred-mode auto-checkpoint fired", &.{
+                        Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
+                    });
+                    continue;
+                }
             }
 
             // GAP-0268: When WAL hooks are installed and a checkpoint is needed,
