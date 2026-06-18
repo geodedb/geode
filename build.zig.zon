@@ -393,9 +393,15 @@
         // recovery. Microbench verified ≥4× throughput vs single-engine at 16 cores.
         // See docs/superpowers/specs/2026-04-24-sharded-graph-engine-design.md
         // in the graph-storage repo.
+        // 2026-06-18: v0.2.3 (98f179b) — GAP-0900 Layer-2 incremental checkpoint:
+        // adds engine.checkpointLight()/sharded_engine.checkpointLight() that flush
+        // dirty pages + truncate the WAL but SKIP the O(graph) derived-index save
+        // (recovery rebuilds those from pages). Cherry-picked onto v0.2.2 so sibling
+        // dep pins are unchanged. Bounds deferred-mode checkpoint cost to O(dirty) so
+        // the periodic checkpoint keeps pace with sustained bulk ingest.
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.2#6f2726756bd00518fbee973579cf4014f887531a",
-            .hash = "graph_storage-0.2.1-9UyJS1i6EQB00YSg8UIZYWXpoIiwE5vpn8YJgHTTdNG3",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.3#98f179ba0dd3f39b8a71ca8c48994e7ec9f8a457",
+            .hash = "graph_storage-0.2.3-9UyJSwTgEQC56ELOwa_keyRQqHpQQcblB48eqlTCk1dF",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

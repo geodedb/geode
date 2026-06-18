@@ -4137,7 +4137,30 @@ pub const StorageAdapter = struct {
     }
 
     /// Run a checkpoint on every loaded graph engine.
+    /// Full checkpoint of every graph (backward-compatible wrapper).
+    ///
+    /// Used by the CLEAN-SHUTDOWN path and explicit/test callers so a restart
+    /// loads the derived indexes from disk without a rebuild.
     pub fn checkpointAll(self: *StorageAdapter) !void {
+        return self.checkpointAllEx(false);
+    }
+
+    /// GAP-0900 Layer-2: incremental/bounded checkpoint of every graph.
+    ///
+    /// Runs the LIGHT engine checkpoint (flush dirty pages, sync, manifest, WAL
+    /// truncate, free store, label dict, declared B+tree indexes) but SKIPS the
+    /// O(graph-size) derived-index snapshot save. This keeps the periodic
+    /// load-driven checkpoint O(dirty) so it can keep pace during a multi-million
+    /// node ingest in deferred mode (the full derived-index re-save was O(graph)
+    /// and fell behind, letting the WAL + dirty pages grow until OOM). On reopen,
+    /// graph-storage rebuilds the stale derived indexes from the durable pages.
+    pub fn checkpointAllLight(self: *StorageAdapter) !void {
+        return self.checkpointAllEx(true);
+    }
+
+    /// Core checkpoint implementation. When `light` is true each graph runs the
+    /// bounded `engine.checkpointLight()` instead of the full `engine.checkpoint()`.
+    pub fn checkpointAllEx(self: *StorageAdapter, light: bool) !void {
         // Collect ManagedGraph pointers under brief mutex hold.
         var graphs_buf: [64]*ManagedGraph = undefined;
         var graph_count: usize = 0;
@@ -4179,14 +4202,33 @@ pub const StorageAdapter = struct {
             const _t_start = monoNanosNow();
             mg.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            mg.engine.checkpoint() catch |err| {
-                log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
-            };
-            // Persist the exact property index alongside the engine checkpoint.
-            if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
-                mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
-                    log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+            // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
+            // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
+            // checkpoint so a restart loads the derived indexes without a rebuild.
+            if (light) {
+                mg.engine.checkpointLight() catch |err| {
+                    log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
                 };
+            } else {
+                mg.engine.checkpoint() catch |err| {
+                    log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                };
+            }
+            // Persist the exact property index alongside the engine checkpoint.
+            // This is a FULL O(graph) re-serialize, so the light (periodic) path
+            // skips it to stay O(dirty). The on-disk prop_exact.idx is removed
+            // instead so a reopen (the file has no staleness counter) falls back
+            // to rebuildExactNodePropertyIndex from the durable pages rather than
+            // loading a stale snapshot. The clean-shutdown FULL checkpoint always
+            // rewrites it fresh, so a clean restart still loads it without a rebuild.
+            if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+                if (light) {
+                    invalidateExactPropertyIndexFile(self.allocator, dir_path);
+                } else {
+                    mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                        log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+                    };
+                }
                 self.allocator.free(dir_path);
             } else |err| {
                 log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
@@ -4293,7 +4335,8 @@ pub const StorageAdapter = struct {
         const by_time = pending > 0 and time_threshold_ms != 0 and elapsed_ms >= time_threshold_ms;
         if (!by_ops and !by_time) return false;
 
-        try self.checkpointAll();
+        // GAP-0900 L2: periodic trigger uses the bounded (light) checkpoint.
+        try self.checkpointAllLight();
         return true;
     }
 
@@ -4331,7 +4374,9 @@ pub const StorageAdapter = struct {
         // Re-check under the guard: another thread may have just checkpointed
         // and reset the counter between our load and the CAS.
         if (self.pending_bulk_ops.load(.acquire) < threshold) return;
-        self.checkpointAll() catch |err| {
+        // GAP-0900 L2: the load-driven trigger uses the bounded (light)
+        // checkpoint so it stays O(dirty) and keeps pace during bulk ingest.
+        self.checkpointAllLight() catch |err| {
             log.warn("GAP-0900 load-driven checkpoint failed: {s}", .{@errorName(err)});
             return;
         };
@@ -4381,6 +4426,22 @@ pub const StorageAdapter = struct {
             data_dir,
             &hex,
         });
+    }
+
+    /// GAP-0900 L2: remove a stale `prop_exact.idx` so a reopen rebuilds the
+    /// exact node-property index from pages instead of loading a snapshot that
+    /// the light (periodic) checkpoint deliberately did not refresh. The file has
+    /// no staleness counter, so leaving an out-of-date copy would load wrong
+    /// data after a crash. Best-effort: a missing file (already invalidated, or
+    /// never written) is success.
+    fn invalidateExactPropertyIndexFile(allocator: Allocator, graph_dir_path: []const u8) void {
+        const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return;
+        defer allocator.free(idx_path);
+        const inv_io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().deleteFile(inv_io, idx_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => log.warn("failed to invalidate stale prop_exact.idx: {s}", .{@errorName(err)}),
+        };
     }
 
     fn freeStoreMaskCount(total_pages: u64) usize {
