@@ -173,6 +173,21 @@ const NodePropertyExactIndex = struct {
     }
 
     fn add(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) !void {
+        return self.addEx(label_id, property_key, value_hash, node_id, false);
+    }
+
+    /// GAP-0900 throughput: `assume_new=true` skips the linear de-dup scan of the
+    /// posting list. The scan (O(posting-list-length) per call) exists only to
+    /// avoid inserting the same node_id twice into one (label,key,value) posting.
+    /// On the bulk-INSERT path the node_id is freshly reserved and has never been
+    /// indexed, so it provably cannot already be present — the scan is pure waste.
+    /// For a low-selectivity indexed key (e.g. a composite-MERGE key component
+    /// shared by millions of nodes) the posting list grows to N, making the scan
+    /// O(N) per insert and the whole bulk load O(N^2) (measured: 54.85% of CPU at
+    /// ~4M nodes). Skipping it on fresh inserts restores O(1) amortized append.
+    /// Update/re-index paths keep `assume_new=false` (the node may already be in
+    /// the posting from a prior value).
+    fn addEx(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64, assume_new: bool) !void {
         const owned_key = try self.encodeKey(label_id, property_key, value_hash);
         const shard_idx = exactNodePropertyIndexShardForEncodedKey(owned_key);
         const shard = &self.shards[shard_idx];
@@ -187,8 +202,10 @@ const NodePropertyExactIndex = struct {
         var inserted_new = false;
         if (gop.found_existing) {
             self.allocator.free(owned_key);
-            for (gop.value_ptr.items) |existing_id| {
-                if (existing_id == node_id) return;
+            if (!assume_new) {
+                for (gop.value_ptr.items) |existing_id| {
+                    if (existing_id == node_id) return;
+                }
             }
         } else {
             gop.value_ptr.* = std.ArrayList(u64).empty;
@@ -1219,13 +1236,20 @@ fn removeCrossShardEdge(mg: *ManagedGraph, from_id: u64, to_id: u64, edge_id: u6
 }
 
 fn addIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) !void {
+    return addIndexedNodePropertyEx(mg, label_id, node_id, property_key, value, false);
+}
+
+/// `assume_new=true` is passed by first-time-indexing callers (bulk insert, load
+/// rebuild, addNodeLabel) so the exact index skips its O(posting-length) de-dup
+/// scan — see NodePropertyExactIndex.addEx. GAP-0900 O(N^2) bulk-load fix.
+fn addIndexedNodePropertyEx(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue, assume_new: bool) !void {
     // GAP-0900 Layer-3 (Fix 2): in lean mode (GEODE_INDEX_MERGE_KEYS_ONLY=1),
     // only MERGE/declared keys go into the exact property index; other props are
     // never used for an exact-index lookup (the point-read fast path falls back
     // to a label scan for them — still correct). Default off: index everything.
     if (!graph_store.shouldIndexProperty(property_key)) return;
     const value_hash = try hashStorageProperty(mg.engine.allocator, value);
-    try mg.exact_node_property_index.add(label_id, property_key, value_hash, node_id);
+    try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
 }
 
 fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) void {
@@ -1235,12 +1259,13 @@ fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u
 
 /// Zero-copy variant: index a property using pre-encoded bytes from the iterator.
 /// Avoids the decode-then-re-encode round-trip that `addIndexedNodeProperty` performs.
-fn addIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, encoded_value: []const u8) !void {
+fn addIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, encoded_value: []const u8, assume_new: bool) !void {
     // GAP-0900 Layer-3 (Fix 2): see addIndexedNodeProperty — skip non-merge keys
     // in lean mode. Default off: index everything.
+    // `assume_new`: first-time-indexing callers skip the de-dup scan (O(N^2) fix).
     if (!graph_store.shouldIndexProperty(property_key)) return;
     const value_hash = hashEncodedPropertyBytes(encoded_value);
-    try mg.exact_node_property_index.add(label_id, property_key, value_hash, node_id);
+    try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
 }
 
 /// Zero-copy variant: remove a property from the index using pre-encoded bytes.
@@ -1249,6 +1274,10 @@ fn removeIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId,
     mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
 }
 
+/// Indexes a node's properties under the given labels. Always a FIRST-TIME
+/// indexing of `node_id` under `label_ids` (fresh insert, load rebuild, or a
+/// newly-added label → a new (label,key,value) posting), so it passes
+/// `assume_new=true` to skip the exact-index de-dup scan (GAP-0900 O(N^2) fix).
 fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) !void {
     if (prop_head == 0 or label_ids.len == 0) return;
 
@@ -1265,7 +1294,7 @@ fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []cons
         // iterator instead of re-fetching, decoding (which heap-allocates for
         // strings/ext), and re-encoding.
         for (label_ids) |label_id| {
-            try addIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value);
+            try addIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value, true);
         }
     }
 }
@@ -2183,7 +2212,9 @@ pub const StorageAdapter = struct {
                 const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
-                    try addIndexedNodeProperty(mg, label_id, slot_id, kv.key, storage_val);
+                    // GAP-0900 throughput: bulk insert reserves a FRESH slot_id
+                    // that has never been indexed → skip the O(N) de-dup scan.
+                    try addIndexedNodePropertyEx(mg, label_id, slot_id, kv.key, storage_val, true);
                 }
             }
             try node_shard.putNodeTxn(slot_id, rec, local_txn);
@@ -6756,4 +6787,39 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     try std.testing.expect(adapter.getTimeseriesStore("__geode_security") == null);
     try std.testing.expect(adapter.getFulltextIndex("__geode_security") == null);
     try std.testing.expect(!adapter.graphExists("__geode_security"));
+}
+
+test "GAP-0900 throughput: addEx(assume_new) builds a complete low-selectivity posting (O(n^2) scan fix)" {
+    const allocator = std.testing.allocator;
+
+    // Low-selectivity scenario: many fresh node_ids share ONE (label,key,value),
+    // so the posting list grows to N. The old `add` linear-scanned that list on
+    // every insert (O(N) per op → O(N^2) total, 54.85% of CPU at ~4M nodes). The
+    // bulk-insert path now calls addEx(assume_new=true) to skip the scan because a
+    // freshly-reserved node_id provably can't already be present. This test locks
+    // that the skip still yields a COMPLETE, correct posting (no missing ids).
+    var idx = NodePropertyExactIndex.init(allocator);
+    defer idx.deinit();
+
+    const N: u64 = 20_000;
+    const H: u64 = 0xA5A5_1234; // identical value_hash for all → single big posting
+    var i: u64 = 1;
+    while (i <= N) : (i += 1) {
+        try idx.addEx(1, "source", H, i, true); // fresh insert: skip de-dup scan
+    }
+
+    const posting = idx.get(1, "source", H) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, N), posting.len);
+    // Gauss sum catches any missing or duplicated id cheaply.
+    var sum: u128 = 0;
+    for (posting) |id| sum += id;
+    try std.testing.expectEqual(@as(u128, N) * (N + 1) / 2, sum);
+
+    // The update path (assume_new=false) must still de-dup a repeated node_id.
+    var idx2 = NodePropertyExactIndex.init(allocator);
+    defer idx2.deinit();
+    try idx2.addEx(2, "k", H, 7, false);
+    try idx2.addEx(2, "k", H, 7, false); // duplicate → scan removes the redundancy
+    const p2 = idx2.get(2, "k", H) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), p2.len);
 }
