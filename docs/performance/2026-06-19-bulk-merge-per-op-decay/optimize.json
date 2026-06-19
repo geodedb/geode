@@ -1,0 +1,16 @@
+{
+  "slug": "bulk-merge-per-op-decay",
+  "target_benchmarks": ["bulk_merge_scale"],
+  "goal_metrics": [
+    {"name": "ops_per_sec_at_300k", "direction": "higher_is_better", "unit": "ops/s"},
+    {"name": "decay_slope", "direction": "lower_is_better", "unit": "ops/s per 100k nodes"}
+  ],
+  "success_thresholds": {"target_gain_pct": 5.0, "max_regression_pct": -3.0},
+  "allowed_paths": [
+    "src/storage/**",
+    "src/config.zig",
+    "src/execution/bulk_ingest.zig"
+  ],
+  "forbidden_paths": ["tests/**", ".github/**", "benchmarks/**/harness*", "src/server/**"],
+  "max_hypotheses_per_session": 6
+}
