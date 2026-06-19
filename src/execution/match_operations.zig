@@ -8644,7 +8644,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
 test "#733 passesTenantFilter - admin pass-through and exact-match isolation" {
     const allocator = std.testing.allocator;
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    var props = graph_store.CompactPropertyMap.init(allocator);
     defer props.deinit();
     var no_labels = [_][]const u8{};
     const node = graph_store.Node{
@@ -8679,7 +8679,7 @@ test "#733 passesTenantFilter - hierarchy grants ancestor access, denies sibling
     rls_types.setGlobalExprRLSEngine(@ptrCast(&engine));
     defer rls_types.setGlobalExprRLSEngine(prev);
 
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    var props = graph_store.CompactPropertyMap.init(allocator);
     defer props.deinit();
     var no_labels = [_][]const u8{};
     const child_node = graph_store.Node{

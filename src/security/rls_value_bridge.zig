@@ -54,7 +54,7 @@ pub fn toRLSValue(val: value_types.Value) rls.Value {
 /// Caller owns the returned map (must call .deinit()).
 pub fn nodePropertiesToRLSRow(
     allocator: Allocator,
-    properties: *const std.StringHashMap(graph_store.PropertyValue),
+    properties: *const graph_store.CompactPropertyMap,
 ) !std.StringHashMap(rls.Value) {
     var row = std.StringHashMap(rls.Value).init(allocator);
     errdefer row.deinit();
@@ -82,7 +82,7 @@ pub fn nodePropertiesToRLSRow(
 /// avoid one HashMap init/deinit per matched node.
 pub fn nodePropertiesToRLSRowInto(
     row: *std.StringHashMap(rls.Value),
-    properties: *const std.StringHashMap(graph_store.PropertyValue),
+    properties: *const graph_store.CompactPropertyMap,
 ) !void {
     row.clearRetainingCapacity();
     try row.ensureTotalCapacity(@as(u32, @intCast(properties.count())));
@@ -164,7 +164,7 @@ test "toRLSValue: List maps to rls null (fallthrough)" {
 test "nodePropertiesToRLSRow: converts all property variants" {
     const allocator = std.testing.allocator;
 
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    var props = graph_store.CompactPropertyMap.init(allocator);
     defer props.deinit();
 
     try props.put("name", .{ .String = "Alice" });
@@ -200,7 +200,7 @@ test "nodePropertiesToRLSRow: converts all property variants" {
 
 test "nodePropertiesToRLSRow: empty properties produces empty row" {
     const allocator = std.testing.allocator;
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    var props = graph_store.CompactPropertyMap.init(allocator);
     defer props.deinit();
 
     var row = try nodePropertiesToRLSRow(allocator, &props);

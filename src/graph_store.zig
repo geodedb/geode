@@ -308,7 +308,7 @@ pub const INTERNAL_TENANT_ID_PROPERTY_KEY = "__geode_tenant_id";
 pub const Node = struct {
     id: u64,
     labels: [][]const u8,
-    properties: std.StringHashMap(PropertyValue),
+    properties: CompactPropertyMap,
     // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this node belongs to - enables per-graph data isolation
     graph_name: []const u8 = DEFAULT_GRAPH_NAME,
@@ -322,7 +322,7 @@ pub const Edge = struct {
     from_id: u64,
     to_id: u64,
     label: []const u8,
-    properties: std.StringHashMap(PropertyValue),
+    properties: CompactPropertyMap,
     // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this edge belongs to - enables per-graph data isolation
     graph_name: []const u8 = DEFAULT_GRAPH_NAME,
@@ -340,6 +340,216 @@ pub const PropertyValue = union(enum) {
     ExtValue: @import("eval_extended.zig").ExtValue,
     // CANARY: REQ=REQ-GQL-DECIMAL-001; FEATURE="DecimalPrecision"; ASPECT=PropertyStorage; STATUS=TESTED; TEST=geodetestlab/specs/gap_analysis_fixes_january_2026.yml; OWNER=core; UPDATED=2026-01-25
     Decimal: struct { coeff: i128, scale: u8 },
+};
+
+// ============================================================================
+// GAP-0900 Layer-3 (Fix 3): compact per-node/edge property store.
+//
+// Every node/edge in the legacy in-memory mirror previously held a
+// `CompactPropertyMap`. A StringHashMap rounds its slot table up
+// to the next power-of-two ≥ count/0.8 and keeps one (key-ptr + value + 1B
+// metadata) slot for EVERY bucket, used or not. For the batch-ingest Taxon node
+// (~20 properties) that means a 32-slot table — ~12 unused slots — plus the map
+// header, i.e. the ~3 KB/node of slack the triage measured (graph_store.zig
+// node-mirror dominating O(nodes) RSS after Fix 1 + Fix 2).
+//
+// `CompactPropertyMap` replaces that hashmap with a single growable slice of
+// `(key, value)` entries kept sorted by key, with O(log n) binary-search
+// lookup. The backing slice is allocated to EXACTLY the live length on every
+// mutation (no power-of-two table, no growth-factor slack), so a 20-property
+// node stores 20 entries and nothing more. Property counts per node are small
+// (tens), so binary search over a packed slice is as fast as — and far more
+// cache-friendly than — the hashmap it replaces.
+//
+// This is a PURE internal-representation swap: the ownership contract is
+// IDENTICAL to `CompactPropertyMap`.
+//   * The caller still owns and frees property-name key strings: on a NEW key,
+//     `getOrPut().found_existing == false` and the caller writes the duped key
+//     into `key_ptr.*` exactly as before; on delete, `fetchRemove` hands the
+//     stored key back in `.key` for the caller to free; on `deinit`, the caller
+//     iterates and frees every `key_ptr.*` first (the map frees only its own
+//     entry slice). No key string is duplicated or interned by the map itself.
+//   * `get`, `getOrPut`, `put`, `fetchRemove`, `count`, `iterator`, `deinit`
+//     preserve the same signatures and return shapes used across the codebase
+//     (key_ptr / value_ptr / found_existing on getOrPut; .key / .value on
+//     fetchRemove; key_ptr / value_ptr on the iterator entry).
+//
+// Pointer-stability note: like the std hashmap's, the pointers returned by
+// `getOrPut`/`get`/the iterator are valid only until the next mutation of the
+// SAME map. Every call site uses them immediately (audited: setNodeProperty,
+// the batch paths, the no-save paths, the clone path, eval/match/index readers)
+// — none holds a value_ptr/key_ptr across another insert or remove on the same
+// map, so the exact-length reallocation on insert/remove is safe.
+//
+// Default-ON: there is no behavioral or correctness difference versus the
+// hashmap, only memory representation, so no env flag is required.
+pub const CompactPropertyMap = struct {
+    const Self = @This();
+
+    pub const Entry = struct {
+        key: []const u8,
+        value: PropertyValue,
+    };
+
+    /// Mirrors std.StringHashMap.GetOrPutResult.
+    pub const GetOrPutResult = struct {
+        key_ptr: *[]const u8,
+        value_ptr: *PropertyValue,
+        found_existing: bool,
+    };
+
+    /// Mirrors the kv returned by std.StringHashMap.fetchRemove.
+    pub const KV = struct {
+        key: []const u8,
+        value: PropertyValue,
+    };
+
+    /// Iterator entry exposes key_ptr/value_ptr like the std hashmap iterator.
+    pub const IterEntry = struct {
+        key_ptr: *[]const u8,
+        value_ptr: *PropertyValue,
+    };
+
+    pub const Iterator = struct {
+        entries: []Entry,
+        index: usize = 0,
+
+        pub fn next(self: *Iterator) ?IterEntry {
+            if (self.index >= self.entries.len) return null;
+            const e = &self.entries[self.index];
+            self.index += 1;
+            return IterEntry{ .key_ptr = &e.key, .value_ptr = &e.value };
+        }
+    };
+
+    allocator: std.mem.Allocator,
+    entries: []Entry = &[_]Entry{},
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{ .allocator = allocator, .entries = &[_]Entry{} };
+    }
+
+    /// Frees only the entry slice. Per the ownership contract (identical to the
+    /// std hashmap), the caller is responsible for freeing each entry's key
+    /// string and any owned value payload BEFORE calling deinit — every current
+    /// caller iterates and frees keys/values first.
+    pub fn deinit(self: *Self) void {
+        if (self.entries.len > 0) self.allocator.free(self.entries);
+        self.entries = &[_]Entry{};
+    }
+
+    pub fn count(self: *const Self) usize {
+        return self.entries.len;
+    }
+
+    /// Binary search for `key`. Returns the index when found, otherwise the
+    /// insertion index (where a new entry with `key` should go to keep sorted).
+    fn search(self: *const Self, key: []const u8) struct { found: bool, index: usize } {
+        var lo: usize = 0;
+        var hi: usize = self.entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, self.entries[mid].key, key)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return .{ .found = true, .index = mid },
+            }
+        }
+        return .{ .found = false, .index = lo };
+    }
+
+    pub fn get(self: *const Self, key: []const u8) ?PropertyValue {
+        const r = self.search(key);
+        if (!r.found) return null;
+        return self.entries[r.index].value;
+    }
+
+    pub fn getPtr(self: *const Self, key: []const u8) ?*PropertyValue {
+        const r = self.search(key);
+        if (!r.found) return null;
+        return &self.entries[r.index].value;
+    }
+
+    pub fn contains(self: *const Self, key: []const u8) bool {
+        return self.search(key).found;
+    }
+
+    /// Identical contract to std.StringHashMap.getOrPut: on a miss it inserts a
+    /// slot (key/value left undefined for the caller to fill) and returns
+    /// found_existing=false; on a hit it returns the existing slot pointers.
+    pub fn getOrPut(self: *Self, key: []const u8) !GetOrPutResult {
+        const r = self.search(key);
+        if (r.found) {
+            return .{
+                .key_ptr = &self.entries[r.index].key,
+                .value_ptr = &self.entries[r.index].value,
+                .found_existing = true,
+            };
+        }
+        // Grow the slice by exactly one entry and shift to keep sorted order.
+        const old = self.entries;
+        const new_entries = try self.allocator.alloc(Entry, old.len + 1);
+        @memcpy(new_entries[0..r.index], old[0..r.index]);
+        @memcpy(new_entries[r.index + 1 ..], old[r.index..]);
+        // Leave the new slot's key/value undefined; caller fills them, exactly
+        // as with the std hashmap's getOrPut.
+        new_entries[r.index].key = undefined;
+        new_entries[r.index].value = undefined;
+        if (old.len > 0) self.allocator.free(old);
+        self.entries = new_entries;
+        return .{
+            .key_ptr = &self.entries[r.index].key,
+            .value_ptr = &self.entries[r.index].value,
+            .found_existing = false,
+        };
+    }
+
+    /// Identical contract to std.StringHashMap.put: inserts the key/value when
+    /// absent (storing the passed key slice), or overwrites only the value when
+    /// present (keeping the previously stored key — the passed key is the
+    /// caller's to manage, same as the std hashmap).
+    pub fn put(self: *Self, key: []const u8, value: PropertyValue) !void {
+        const res = try self.getOrPut(key);
+        if (!res.found_existing) {
+            res.key_ptr.* = key;
+        }
+        res.value_ptr.* = value;
+    }
+
+    /// Identical contract to std.StringHashMap.fetchRemove: removes the entry
+    /// and returns the stored key + value for the caller to free, or null.
+    pub fn fetchRemove(self: *Self, key: []const u8) ?KV {
+        const r = self.search(key);
+        if (!r.found) return null;
+        const removed = KV{ .key = self.entries[r.index].key, .value = self.entries[r.index].value };
+        const old = self.entries;
+        if (old.len == 1) {
+            self.allocator.free(old);
+            self.entries = &[_]Entry{};
+            return removed;
+        }
+        const new_entries = self.allocator.alloc(Entry, old.len - 1) catch {
+            // Allocation failure on shrink: fall back to in-place compaction so
+            // the entry is still removed (correctness over the slack saving).
+            std.mem.copyForwards(Entry, old[r.index .. old.len - 1], old[r.index + 1 ..]);
+            self.entries = old[0 .. old.len - 1];
+            return removed;
+        };
+        @memcpy(new_entries[0..r.index], old[0..r.index]);
+        @memcpy(new_entries[r.index..], old[r.index + 1 ..]);
+        self.allocator.free(old);
+        self.entries = new_entries;
+        return removed;
+    }
+
+    /// Identical to std.StringHashMap.remove: returns whether a key was removed.
+    pub fn remove(self: *Self, key: []const u8) bool {
+        return self.fetchRemove(key) != null;
+    }
+
+    pub fn iterator(self: *const Self) Iterator {
+        return .{ .entries = self.entries, .index = 0 };
+    }
 };
 
 // CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
@@ -1342,7 +1552,7 @@ pub const GraphStore = struct {
                 labels_copy[i] = try self.allocator.dupe(u8, label);
             }
 
-            var props = std.StringHashMap(PropertyValue).init(self.allocator);
+            var props = CompactPropertyMap.init(self.allocator);
             var prop_it = src_node.properties.iterator();
             while (prop_it.next()) |prop| {
                 const key = try self.allocator.dupe(u8, prop.key_ptr.*);
@@ -1391,7 +1601,7 @@ pub const GraphStore = struct {
         var edge_it = source.edges.iterator();
         while (edge_it.next()) |entry| {
             const src_edge = entry.value_ptr.*;
-            var props = std.StringHashMap(PropertyValue).init(self.allocator);
+            var props = CompactPropertyMap.init(self.allocator);
             var prop_it = src_edge.properties.iterator();
             while (prop_it.next()) |prop| {
                 const key = try self.allocator.dupe(u8, prop.key_ptr.*);
@@ -2143,7 +2353,7 @@ pub const GraphStore = struct {
         const node = Node{
             .id = reserved_id,
             .labels = labels_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };
@@ -2217,7 +2427,7 @@ pub const GraphStore = struct {
         const node = Node{
             .id = id,
             .labels = labels_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };
@@ -2391,7 +2601,7 @@ pub const GraphStore = struct {
             const node = Node{
                 .id = public_id,
                 .labels = labels_copy,
-                .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+                .properties = CompactPropertyMap.init(self.allocator),
                 .graph_name = graph_name_copy,
                 .tenant_id = tenant_id_copy,
             };
@@ -2646,7 +2856,7 @@ pub const GraphStore = struct {
         const node = Node{
             .id = node_id,
             .labels = labels_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };
@@ -4788,7 +4998,7 @@ pub const GraphStore = struct {
             .from_id = from_id,
             .to_id = to_id,
             .label = edge_type_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };
@@ -4911,7 +5121,7 @@ pub const GraphStore = struct {
             .from_id = from_id,
             .to_id = to_id,
             .label = edge_type_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };
@@ -6532,7 +6742,7 @@ pub const GraphStore = struct {
                 var node = Node{
                     .id = node_uuid,
                     .labels = labels,
-                    .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+                    .properties = CompactPropertyMap.init(self.allocator),
                     .graph_name = graph_name_copy,
                     .tenant_id = tenant_id_copy,
                 };
@@ -6684,7 +6894,7 @@ pub const GraphStore = struct {
                         .from_id = node_uuid,
                         .to_id = target_uuid,
                         .label = edge_label_copy,
-                        .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+                        .properties = CompactPropertyMap.init(self.allocator),
                         .graph_name = edge_graph_name_copy,
                         .tenant_id = edge_tenant_id_copy,
                     };
@@ -6873,7 +7083,7 @@ pub const GraphStore = struct {
     }
 
     /// Append a property map as a JSON object: {"key":"val","key2":123}
-    fn appendPropertiesJson(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, props: *const std.StringHashMap(PropertyValue)) !void {
+    fn appendPropertiesJson(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, props: *const CompactPropertyMap) !void {
         try buf.append(allocator, '{');
         var first = true;
         var it = props.iterator();
@@ -7243,7 +7453,7 @@ pub const GraphStore = struct {
         const node = Node{
             .id = node_id,
             .labels = labels_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };
@@ -7275,7 +7485,7 @@ pub const GraphStore = struct {
             .from_id = from_id,
             .to_id = to_id,
             .label = label_copy,
-            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .properties = CompactPropertyMap.init(self.allocator),
             .graph_name = graph_name_copy,
             .tenant_id = tenant_id_copy,
         };

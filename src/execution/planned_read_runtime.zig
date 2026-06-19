@@ -1641,7 +1641,7 @@ fn materializeNodeProjected(
     node.* = .{
         .id = external_id,
         .labels = labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(scratch),
+        .properties = graph_store.CompactPropertyMap.init(scratch),
         .graph_name = try scratch.dupe(u8, graph_name),
     };
     errdefer {
@@ -1690,7 +1690,7 @@ pub fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slo
     node.* = .{
         .id = external_id,
         .labels = labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(scratch),
+        .properties = graph_store.CompactPropertyMap.init(scratch),
         .graph_name = try scratch.dupe(u8, graph_name),
     };
     errdefer {
@@ -1730,7 +1730,7 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
         .from_id = from_id,
         .to_id = to_id,
         .label = try edgeTypeName(scratch, graph_name, edge_step.rel_type),
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(scratch),
+        .properties = graph_store.CompactPropertyMap.init(scratch),
         .graph_name = try scratch.dupe(u8, graph_name),
     };
     errdefer {

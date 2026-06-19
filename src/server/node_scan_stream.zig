@@ -349,7 +349,7 @@ fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id
     node.* = .{
         .id = external_id,
         .labels = labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
+        .properties = graph_store.CompactPropertyMap.init(allocator),
         .graph_name = try allocator.dupe(u8, graph_name),
     };
     errdefer {

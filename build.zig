@@ -1034,6 +1034,23 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run the full CI-safe benchmark suite");
     bench_step.dependOn(&run_tde_bench.step);
 
+    // GAP-0900 Layer-3 (Fix 3) A/B harness: in-memory node-mirror RSS / bytes-per-node.
+    // Run via `zig build bench-gap0900-node-mirror -- <node_count>`.
+    const gap0900_mirror_bench_exe = b.addExecutable(.{ .name = "benchmark_gap0900_node_mirror_rss", .root_module = b.createModule(.{
+        .root_source_file = b.path("benchmarks/benchmark_gap0900_node_mirror_rss.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0900_mirror_bench_exe.root_module.addImport("geode", root_mod);
+    const run_gap0900_mirror_bench = b.addRunArtifact(gap0900_mirror_bench_exe);
+    if (b.args) |bench_args| run_gap0900_mirror_bench.addArgs(bench_args);
+    const gap0900_mirror_bench_step = b.step(
+        "bench-gap0900-node-mirror",
+        "GAP-0900 Layer-3 Fix 3: measure in-memory node-mirror bytes/node (A/B)",
+    );
+    gap0900_mirror_bench_step.dependOn(&run_gap0900_mirror_bench.step);
+
     // File-level TDE encryption benchmark (GraphStore storage layer)
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
     const tde_file_encryption_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
@@ -1940,6 +1957,26 @@ pub fn build(b: *std.Build) void {
         "GAP-0900 Layer-3 Fix 2: lean-index mode indexes only merge/declared keys",
     );
     gap0900_lean_index_step.dependOn(&run_gap0900_lean_index_tests.step);
+
+    // GAP-0900 Layer-3 (Fix 3): the legacy in-memory node mirror stores
+    // properties in a CompactPropertyMap (sorted slice, exact-length backing,
+    // no power-of-two hashmap slack) instead of std.StringHashMap. Pins the
+    // representation/ownership contract parity + the bounded-footprint invariant
+    // + executor read-path correctness. Run via
+    // `zig build test-gap0900-compact-node-store`.
+    const gap0900_compact_node_store_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0900_compact_node_store.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0900_compact_node_store_tests.root_module.addImport("geode", root_mod);
+    const run_gap0900_compact_node_store_tests = b.addRunArtifact(gap0900_compact_node_store_tests);
+    const gap0900_compact_node_store_step = b.step(
+        "test-gap0900-compact-node-store",
+        "GAP-0900 Layer-3 Fix 3: compact per-node/edge property store bounds the mirror",
+    );
+    gap0900_compact_node_store_step.dependOn(&run_gap0900_compact_node_store_tests.step);
 
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST

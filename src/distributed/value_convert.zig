@@ -94,7 +94,7 @@ pub fn propertyValueToProto(allocator: Allocator, value: graph_store.PropertyVal
 
 pub fn mapEntriesFromProperties(
     allocator: Allocator,
-    props: *const std.StringHashMap(graph_store.PropertyValue),
+    props: *const graph_store.CompactPropertyMap,
 ) !std.ArrayList(schema.MapEntry) {
     var entries = std.ArrayList(schema.MapEntry).init(allocator);
     var it = props.iterator();

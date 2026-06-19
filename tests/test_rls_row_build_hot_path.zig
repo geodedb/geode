@@ -14,8 +14,8 @@ const rls = @import("rls");
 const graph_store = geode.graph_store;
 const rls_value_bridge = @import("rls_value_bridge");
 
-fn buildPropertyMap(allocator: std.mem.Allocator, n: usize) !std.StringHashMap(graph_store.PropertyValue) {
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+fn buildPropertyMap(allocator: std.mem.Allocator, n: usize) !graph_store.CompactPropertyMap {
+    var props = graph_store.CompactPropertyMap.init(allocator);
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const key = try std.fmt.allocPrint(allocator, "k{d}", .{i});
@@ -24,9 +24,9 @@ fn buildPropertyMap(allocator: std.mem.Allocator, n: usize) !std.StringHashMap(g
     return props;
 }
 
-fn freePropertyMap(allocator: std.mem.Allocator, props: *std.StringHashMap(graph_store.PropertyValue)) void {
-    var it = props.keyIterator();
-    while (it.next()) |k| allocator.free(k.*);
+fn freePropertyMap(allocator: std.mem.Allocator, props: *graph_store.CompactPropertyMap) void {
+    var it = props.iterator();
+    while (it.next()) |e| allocator.free(e.key_ptr.*);
     props.deinit();
 }
 
@@ -88,7 +88,7 @@ test "nodePropertiesToRLSRowInto: reuse 1000 cycles does not leak" {
 
 test "nodePropertiesToRLSRow: empty property map produces empty row" {
     const allocator = std.testing.allocator;
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    var props = graph_store.CompactPropertyMap.init(allocator);
     defer props.deinit();
 
     var row = try rls_value_bridge.nodePropertiesToRLSRow(allocator, &props);

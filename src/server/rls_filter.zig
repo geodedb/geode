@@ -602,7 +602,7 @@ test "rowContainsDeniedLabel uses snapshot correctly" {
         .label = "Secret",
         .from_id = 1,
         .to_id = 2,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
+        .properties = graph_store.CompactPropertyMap.init(allocator),
     };
     const edge_val = Value{ .Edge = &secret_edge };
     const row = [_]Value{edge_val};
@@ -615,7 +615,7 @@ test "rowContainsDeniedLabel uses snapshot correctly" {
         .label = "Public",
         .from_id = 1,
         .to_id = 2,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
+        .properties = graph_store.CompactPropertyMap.init(allocator),
     };
     const ok_edge_val = Value{ .Edge = &public_edge };
     const ok_row = [_]Value{ok_edge_val};
