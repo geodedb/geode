@@ -8321,6 +8321,14 @@ fn monoNanosNow() u64 {
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
+/// Public accessor for the same CLOCK_MONOTONIC source used to compute
+/// `acquireStoreWriteLockCancelable` deadlines. Callers that need to build a
+/// deadline (absolute mono ns) for the cancelable lock acquire MUST use this
+/// so their deadline is on the same clock the acquire compares against.
+pub fn monoNanosNowPub() u64 {
+    return monoNanosNow();
+}
+
 /// Release exclusive write lock
 pub fn releaseStoreWriteLock() void {
     g_store_rwlock.unlock(std.Io.Threaded.global_single_threaded.io());

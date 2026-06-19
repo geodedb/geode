@@ -4653,6 +4653,11 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_auth_graph_manager_tests = b.addRunArtifact(auth_graph_manager_tests);
     shardDep(test_step, &run_auth_graph_manager_tests.step, 1, test_shard_loads, test_shard_index);
+    // Named step so the inline auth_graph_manager source tests (HMAC verify,
+    // tamper detection, gap0900 deadlock-fix coverage: interval-0-disabled +
+    // runVerifyRound tamper) can be run in isolation.
+    const auth_graph_manager_src_step = b.step("test-auth-graph-manager-src", "Run AuthGraphManager source-file unit tests (HMAC verify/seal/tamper, gap0900 deadlock-fix coverage)");
+    auth_graph_manager_src_step.dependOn(&run_auth_graph_manager_tests.step);
 
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("geode_auth", auth_mod);
@@ -6623,6 +6628,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_rwlock_fairness_tests.step, 1, test_shard_loads, test_shard_index);
     const rwlock_fairness_step = b.step("test-rwlock-fairness-under-load", "Run mg.rwlock fairness regression under sustained 16-way SHARED contention");
     rwlock_fairness_step.dependOn(&run_rwlock_fairness_tests.step);
+
+    // gap0900-read-write-deadlock: three-actor lock-ordering deadlock regression
+    // (auth periodic verify ⨯ persistence checkpoint ⨯ bulk ingest).
+    const auth_verify_deadlock_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_verify_checkpoint_deadlock.zig"), .target = target, .optimize = optimize });
+    auth_verify_deadlock_mod.addImport("geode", root_mod);
+    auth_verify_deadlock_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const auth_verify_deadlock_tests = b.addTest(.{ .root_module = auth_verify_deadlock_mod });
+    const run_auth_verify_deadlock_tests = b.addRunArtifact(auth_verify_deadlock_tests);
+    shardDep(test_step, &run_auth_verify_deadlock_tests.step, 1, test_shard_loads, test_shard_index);
+    const auth_verify_deadlock_step = b.step("test-auth-verify-checkpoint-deadlock", "Run the gap0900 auth-verify ⨯ checkpoint ⨯ ingest deadlock regression");
+    auth_verify_deadlock_step.dependOn(&run_auth_verify_deadlock_tests.step);
 
     const conn_pool_lifetime_mod = b.createModule(.{ .root_source_file = b.path("tests/test_handle_quic_connection_pool_lifetime.zig"), .target = target, .optimize = optimize });
     conn_pool_lifetime_mod.addImport("geode", root_mod);

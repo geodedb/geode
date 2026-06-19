@@ -92,6 +92,18 @@ const Attr = logging.Attr;
 // between the FLE exclusion guard and the auth/HMAC machinery.
 const SECURITY_GRAPH_NAME = graph_store.SECURITY_GRAPH_NAME;
 const HAS_ROLE_EDGE = "HAS_ROLE";
+
+// gap0900-read-write-deadlock: upper bound on how long the periodic HMAC
+// verify loop will spend trying to acquire the GLOBAL store EXCLUSIVE lock
+// before it gives up and retries on the next interval. The acquire uses
+// `acquireStoreWriteLockCancelable` (spins on tryLock, never registers a
+// pending writer), so exceeding this bound means the store is continuously
+// busy under shared load (heavy bulk ingest + checkpoint); skipping this
+// round keeps the loop from ever becoming a blocking writer that could wedge
+// the server. 2 s is generous for the brief windows the store lock is free
+// between shared acquires, yet bounded enough that a stuck verify is visible
+// in logs promptly.
+const VERIFY_LOCK_ACQUIRE_BOUND_NS: u64 = 2 * std.time.ns_per_s;
 const geode_hkdf_config = auth_hmac.HkdfConfig{
     .salt = "geode-auth-hmac-v1",
     .info = "auth-chain-integrity",
@@ -177,6 +189,18 @@ pub const AuthGraphManager = struct {
     /// struct is moved after the thread starts, the pointer becomes dangling
     /// and the server will GPF when the thread wakes up.
     pub fn startPeriodicVerification(self: *Self, hmac_key: *const [32]u8, interval_minutes: u32) void {
+        // gap0900-read-write-deadlock: interval 0 means DISABLED. The loop's
+        // sleep is gated by `elapsed < target_ns` where target_ns = interval *
+        // 60s; with interval 0 that inner sleep never runs, so the loop would
+        // busy-acquire the GLOBAL store EXCLUSIVE lock in a tight spin —
+        // continuously stalling every reader/writer and pinning a CPU. The
+        // documented intent (struct default is 0) is that 0 = off, so do not
+        // spawn the thread at all.
+        if (interval_minutes == 0) {
+            self.verify_interval_minutes = 0;
+            log.info("Periodic HMAC verification disabled (interval=0)", &.{});
+            return;
+        }
         // Copy the key into the struct so the thread references owned memory
         // instead of a caller-provided pointer that may go out of scope.
         self.hmac_key = hmac_key.*;
@@ -221,31 +245,64 @@ pub const AuthGraphManager = struct {
                 elapsed += std.time.ns_per_s;
             }
             if (self.shutdown.load(.acquire)) break;
-            // Acquire the EXCLUSIVE write lock before reading graph data.
-            //
-            // verifyChain reads label_index (via getNodesByLabel) and node
-            // properties (via getNodeProperty).  QUIC query handlers hold the
-            // SHARED lock (lockShared) while executing MERGE statements that
-            // call addNodeLabel → label_index.getOrPut(), which may rehash
-            // and free the old backing array.
-            //
-            // Using acquireStoreLock() (shared / lockShared) was insufficient:
-            // multiple shared-lock holders run concurrently, so the verify
-            // thread and a query handler could still race on label_index.
-            //
-            // The exclusive write lock (lock()) blocks until all shared-lock
-            // holders have released, and prevents new shared locks from being
-            // acquired while it is held.  This fully serialises the verify
-            // read against any concurrent MERGE writes.
-            graph_store.acquireStoreWriteLock();
-            const verify_result = self.verifyChain(&self.hmac_key);
-            graph_store.releaseStoreWriteLock();
-            verify_result catch |err| {
-                log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
-                continue;
-            };
-            log.debug("Periodic HMAC chain verification passed", &.{});
+            self.runVerifyRound();
         }
+    }
+
+    /// Run one periodic-verification round: acquire the global store lock,
+    /// verify the HMAC chain, release.  Factored out of `periodicVerifyLoop`
+    /// so the deadlock regression test can drive a single round deterministically
+    /// (the loop's real cadence is in MINUTES).  Returns nothing — failures are
+    /// logged, matching the loop's fire-and-continue contract.
+    ///
+    /// Acquire the EXCLUSIVE write lock before reading graph data.
+    ///
+    /// verifyChain reads label_index (via getNodesByLabel) and node properties
+    /// (via getNodeProperty).  QUIC query handlers hold the SHARED lock
+    /// (lockShared) while executing MERGE statements that call addNodeLabel →
+    /// label_index.getOrPut(), which may rehash and free the old backing array.
+    /// Using acquireStoreLock() (shared) was insufficient: multiple shared-lock
+    /// holders run concurrently, so the verify thread and a query handler could
+    /// still race on label_index.  The exclusive write lock excludes all
+    /// shared-lock holders for the duration of the scan, which fully serialises
+    /// the verify read against any concurrent MERGE writes — preserving the
+    /// tamper detection guarantee.
+    ///
+    /// gap0900-read-write-deadlock: we MUST NOT use the blocking
+    /// `acquireStoreWriteLock()` here.  That primitive registers a pending writer
+    /// (Io.RwLock adds the `writer` count BEFORE parking), and
+    /// `lockSharedUncancelable` then refuses every NEW shared acquire until the
+    /// writer wins (writer-fair).  Under a heavy bulk ingest, an ingest worker
+    /// holding a PER-GRAPH shared lock can be blocked here trying to take the
+    /// global store lock SHARED, which prevents it releasing the per-graph lock,
+    /// which prevents the persistence-loop checkpoint (holding the global store
+    /// lock SHARED) from taking the per-graph EXCLUSIVE lock, which keeps the
+    /// global store lock SHARED held forever — so this exclusive acquire never
+    /// completes.  Classic three-actor lock-ordering deadlock that wedges the
+    /// whole server.
+    ///
+    /// `acquireStoreWriteLockCancelable` instead spins on `tryLock`, which only
+    /// succeeds when the lock is fully free and NEVER registers a pending writer.
+    /// A failed attempt leaves the lock state untouched, so concurrent shared
+    /// acquires (ingest + checkpoint) keep flowing and the cycle can never form.
+    /// If we can't grab the exclusive lock within the bound, we skip this verify
+    /// round and retry next interval (logged, never silent) rather than becoming
+    /// a blocking writer.
+    pub fn runVerifyRound(self: *Self) void {
+        const deadline_ns = graph_store.monoNanosNowPub() + VERIFY_LOCK_ACQUIRE_BOUND_NS;
+        graph_store.acquireStoreWriteLockCancelable(deadline_ns) catch |lock_err| {
+            log.warn("Periodic HMAC verification skipped this round: could not acquire exclusive store lock within bound (retrying next interval)", &.{
+                Attr.string("error", @errorName(lock_err)),
+            });
+            return;
+        };
+        const verify_result = self.verifyChain(&self.hmac_key);
+        graph_store.releaseStoreWriteLock();
+        verify_result catch |err| {
+            log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+        log.debug("Periodic HMAC chain verification passed", &.{});
     }
 
     /// Signal the periodic verification thread to stop and wait for it to finish.
@@ -1603,6 +1660,62 @@ test "verifyChain fails after tampering with a user property" {
 
     // Verify should fail
     try testing.expectError(error.RecordHmacMismatch, mgr.verifyChain(&hmac_key));
+}
+
+// gap0900-read-write-deadlock: the deadlock fix moved verifyChain behind the
+// non-blocking `acquireStoreWriteLockCancelable` in `runVerifyRound`. The
+// tamper-detection guarantee MUST survive that change: when runVerifyRound
+// acquires the lock (the uncontended test case always does) it must still run
+// verifyChain and observe tampering. runVerifyRound itself logs-and-returns on
+// failure (fire-and-continue, matching the loop), so we assert the underlying
+// verifyChain still rejects the tampered chain — which is what runVerifyRound
+// invokes under the lock.
+test "runVerifyRound path: verifyChain still detects tampering after deadlock fix" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var mgr = try AuthGraphManager.init(testing.allocator, &store);
+    defer mgr.deinit();
+
+    const hmac_key = [_]u8{0xcd} ** 32;
+    const result = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    defer {
+        testing.allocator.free(result.username);
+        testing.allocator.free(result.password);
+    }
+    mgr.hmac_key = hmac_key; // runVerifyRound reads self.hmac_key
+
+    // Clean chain verifies (the bound is generous and the lock is uncontended,
+    // so the cancelable acquire always succeeds here).
+    try mgr.verifyChain(&hmac_key);
+    mgr.runVerifyRound(); // exercises the real acquire→verify→release body
+
+    // Tamper, then confirm verifyChain (the function runVerifyRound calls under
+    // the exclusive lock) still detects it.
+    var record = mgr.storage.getUser(result.user_id).?;
+    record.is_superuser = false;
+    try mgr.storage.user_cache.put(result.user_id, record);
+    try testing.expectError(error.RecordHmacMismatch, mgr.verifyChain(&hmac_key));
+}
+
+// gap0900-read-write-deadlock: interval 0 must mean DISABLED, not a tight
+// busy-acquire loop on the global exclusive store lock.
+test "startPeriodicVerification with interval 0 is disabled (no thread spawned)" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var mgr = try AuthGraphManager.init(testing.allocator, &store);
+    defer mgr.deinit();
+
+    const hmac_key = [_]u8{0xef} ** 32;
+    mgr.startPeriodicVerification(&hmac_key, 0);
+
+    // No verification thread/pool must be created for the disabled interval.
+    try testing.expect(mgr.verify_pool == null);
+    try testing.expectEqual(@as(u32, 0), mgr.verify_interval_minutes);
+
+    // requestShutdown must be a clean no-op (nothing to join).
+    mgr.requestShutdown();
+    try testing.expect(mgr.verify_pool == null);
 }
 
 test "sealChain fixes a tampered chain" {
