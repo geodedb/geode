@@ -315,7 +315,13 @@ pub const WriteAheadLog = struct {
     /// engine (via adapter.checkpointAll()), saves IdMaps, then truncates this
     /// logical WAL for space management.
     pub fn checkpoint(self: *WriteAheadLog, store: *graph_store.GraphStore) !void {
-        try store.saveToFile(); // calls adapter.checkpointAll() + legacy sidecar cleanup
+        // GAP-0900 Layer-2: periodic WAL checkpoint uses the LIGHT engine
+        // checkpoint (O(dirty): pages flushed + engine WAL truncated; derived
+        // indexes rebuilt from pages on reopen). A FULL O(graph) checkpoint here
+        // stalls a large ingest for minutes under the exclusive store lock.
+        // Truncating the legacy WAL is safe after a light checkpoint because the
+        // mutations are durable in the flushed pages.
+        try store.saveToFileEx(true); // light engine checkpoint + legacy sidecar cleanup
         const checkpoint_at = self.inner.currentLsn();
         try self.truncate(checkpoint_at);
     }
@@ -586,14 +592,15 @@ fn walCheckpointHook(store: *graph_store.GraphStore) void {
             log.err("WAL checkpoint failed", &.{
                 Attr.string("error", @errorName(err)),
             });
-            // Fall back to engine checkpoint + IdMap save directly
-            store.saveToFile() catch |save_err| {
+            // Fall back to engine checkpoint + IdMap save directly (light: the
+            // periodic hook must stay O(dirty), not O(graph)).
+            store.saveToFileEx(true) catch |save_err| {
                 log.err("WAL: fallback saveToFile also failed — data may not be persisted", &.{Attr.string("error", @errorName(save_err))});
             };
         };
     } else {
-        // No WAL — delegate to adapter checkpoint + IdMap save
-        store.saveToFile() catch |err| {
+        // No WAL — delegate to adapter checkpoint + IdMap save (light: periodic).
+        store.saveToFileEx(true) catch |err| {
             log.err("WAL: saveToFile failed — data may not be persisted", &.{Attr.string("error", @errorName(err))});
         };
     }

@@ -6525,8 +6525,25 @@ pub const GraphStore = struct {
     // Save delegates to adapter checkpoint. Public ID mappings are now stored
     // inside graph-storage properties rather than a sidecar id_map.dat file.
     pub fn saveToFile(self: *GraphStore) !void {
+        return self.saveToFileEx(false);
+    }
+
+    /// GAP-0900 Layer-2: `light=true` runs the BOUNDED (light) engine checkpoint
+    /// — flush dirty pages + truncate the engine WAL, but SKIP the O(graph-size)
+    /// derived-index re-save (rebuilt from pages on reopen). The periodic
+    /// persistence loop + WAL checkpoint hook use light so a RUNTIME checkpoint
+    /// stays O(dirty) instead of O(total graph); a full checkpoint here holds the
+    /// exclusive store lock for minutes at multi-million-node scale (66 min at
+    /// 7.8M nodes observed), stalling the whole ingest and ballooning RSS.
+    /// `light=false` (full, with derived indexes) is kept for explicit saves:
+    /// clean shutdown, backup, snapshot, cluster transfer.
+    pub fn saveToFileEx(self: *GraphStore, light: bool) !void {
         if (global_adapter) |adapter| {
-            try adapter.checkpointAll();
+            if (light) {
+                try adapter.checkpointAllLight();
+            } else {
+                try adapter.checkpointAll();
+            }
         }
         self.cleanupLegacySidecars();
         self.dirty.store(false, .release);
@@ -8488,7 +8505,10 @@ fn persistenceLoop() void {
                         releaseGraphLock(ckpt_handle);
                     }
                     // Checkpoint per-graph storage on WAL checkpoint ticks.
-                    adapter.checkpointAll() catch |err| {
+                    // GAP-0900 Layer-2: LIGHT — a runtime checkpoint must stay
+                    // O(dirty); a full O(graph) checkpoint here stalls a large
+                    // ingest for minutes under the exclusive store lock.
+                    adapter.checkpointAllLight() catch |err| {
                         log.err("per-graph storage checkpoint failed", &.{
                             Attr.string("error", @errorName(err)),
                         });
@@ -8523,8 +8543,11 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
 
     // P1: Checkpoint per-graph storage using per-graph write locks one at a time.
     // Falls back to checkpointAll (which uses the adapter mutex) when adapter unavailable.
+    // GAP-0900 Layer-2: LIGHT — this is the periodic dirty-flush backstop; it must
+    // stay O(dirty). A full O(graph) checkpoint here stalls a large ingest for
+    // minutes under the exclusive store lock (full is kept for clean shutdown).
     if (global_adapter) |adapter| {
-        adapter.checkpointAll() catch |err| {
+        adapter.checkpointAllLight() catch |err| {
             log.err("per-graph storage checkpoint failed", &.{
                 Attr.string("error", @errorName(err)),
             });
