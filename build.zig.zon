@@ -400,8 +400,8 @@
         // dep pins are unchanged. Bounds deferred-mode checkpoint cost to O(dirty) so
         // the periodic checkpoint keeps pace with sustained bulk ingest.
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.3#98f179ba0dd3f39b8a71ca8c48994e7ec9f8a457",
-            .hash = "graph_storage-0.2.3-9UyJSwTgEQC56ELOwa_keyRQqHpQQcblB48eqlTCk1dF",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.4#8e786a0996a9507d650a581578ff45343fbe9559",
+            .hash = "graph_storage-0.2.4-9UyJSzguEgBRZa76L-HMPHZUP4XX0BPNtDm4DWo4A8NK",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
