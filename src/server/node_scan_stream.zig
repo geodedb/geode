@@ -159,6 +159,17 @@ pub fn prepare(
     };
 }
 
+/// GAP-0900 (scan-no-clone): pure-AST predicate — true iff `prepare` would
+/// handle this query through the engine-backed streaming path (bounded
+/// `MATCH (n:Label) RETURN n [LIMIT k]`, no WHERE/ORDER/aggregation/traversal).
+/// The transport handlers use this to skip the O(graph) `QueryReadSession`
+/// deep-clone for shapes the streaming path serves engine-side in O(result).
+/// It does no I/O and inspects only the parsed query, so it is safe to call
+/// before acquiring any lock.
+pub fn isEligible(q: *const ast.Query) bool {
+    return eligibleQuery(q) != null;
+}
+
 fn eligibleQuery(q: *const ast.Query) ?Eligibility {
     if (q.optional_match) return null;
     if (q.where_clause != null or q.filter_clause != null) return null;

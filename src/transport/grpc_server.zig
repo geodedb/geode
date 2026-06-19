@@ -1729,6 +1729,22 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
     return encodeMessage(allocator, resp);
 }
 
+/// GAP-0900 (scan-no-clone): mirror of
+/// `quic_connection_handler.readWillStreamEngineSide`. True iff this read is
+/// served by the engine-backed `node_scan_stream` path in the `.rows` arm, so
+/// the handler can skip the O(graph) QueryReadSession deep-clone. Conditions
+/// are a strict subset of the `.rows` arm's streaming gate.
+fn readWillStreamEngineSide(state: *const server_state.ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
+    if (graph_store.getGlobalAdapter() == null) return false;
+    if (analysis.kind != .rows) return false;
+    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
+    if (rls_active) return false;
+    if (analysis.has_effectful_preamble) return false;
+    const target = analysis.target orelse return false;
+    if (target.* != .Query) return false;
+    return node_scan_stream.isEligible(&target.Query);
+}
+
 fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch |err| {
@@ -2151,6 +2167,15 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                             graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
+                } else if (readWillStreamEngineSide(state, &analysis)) {
+                    // GAP-0900 (scan-no-clone): a bounded label/all-node scan is
+                    // served engine-side by `node_scan_stream` in the `.rows`
+                    // arm below (O(result) with LIMIT pushdown, never consuming
+                    // the active read store). Skip the O(graph) QueryReadSession
+                    // deep-clone — see the same fix + rationale in
+                    // src/server/quic_connection_handler.zig. Snapshot isolation,
+                    // FLE decrypt-on-read, and tenant/RLS filtering are all
+                    // preserved (RLS reads are excluded by the predicate).
                 } else {
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-

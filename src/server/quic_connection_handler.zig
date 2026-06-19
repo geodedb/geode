@@ -5243,6 +5243,31 @@ fn mutationWriteLockTimeoutNs(state: *const ServerState) u64 {
     return default_mutation_write_lock_timeout_ms * std.time.ns_per_ms;
 }
 
+/// GAP-0900 (scan-no-clone): true iff this read will be served by the
+/// engine-backed `node_scan_stream` path in the `.rows` arm, so the handler
+/// can skip the O(graph) `QueryReadSession` deep-clone. The conditions are a
+/// strict subset of what the `.rows` arm checks before calling
+/// `node_scan_stream.prepare`, guaranteeing we never skip the snapshot for a
+/// query that then falls through to the snapshot-consuming legacy executor:
+///   - a storage adapter must exist (the streaming path returns no rows
+///     without one; the legacy fallback needs the snapshot in that case);
+///   - the query must be `.rows` shaped with a single `.Query` target;
+///   - no RLS engine active for an authenticated user (RLS reads must keep the
+///     snapshot path so `passesRLSFilter` runs per candidate node);
+///   - no effectful preamble (multi-statement programs run the full executor);
+///   - the target must be streaming-eligible per `node_scan_stream.isEligible`
+///     (bounded `MATCH (n:Label) RETURN n [LIMIT k]`, no WHERE/ORDER/etc.).
+fn readWillStreamEngineSide(state: *const ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
+    if (graph_store.getGlobalAdapter() == null) return false;
+    if (analysis.kind != .rows) return false;
+    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
+    if (rls_active) return false;
+    if (analysis.has_effectful_preamble) return false;
+    const target = analysis.target orelse return false;
+    if (target.* != .Query) return false;
+    return node_scan_stream.isEligible(&target.Query);
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -6353,6 +6378,28 @@ fn handleClientMessage(
                             graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
+                } else if (readWillStreamEngineSide(state, &analysis)) {
+                    // GAP-0900 (scan-no-clone): a bounded label/all-node scan
+                    // (`MATCH (n:Label) RETURN n [LIMIT k]`, no WHERE / ORDER /
+                    // aggregation / traversal, no RLS, no effectful preamble)
+                    // is served by the engine-backed `node_scan_stream` path in
+                    // the `.rows` arm below. That path reads slot ids + node
+                    // bytes straight from the storage adapter (O(result) with
+                    // LIMIT pushdown) and never consumes the active read store,
+                    // so the O(graph) `QueryReadSession` deep-clone here was
+                    // pure wasted work — it made every such scan cost O(total
+                    // graph) and added write contention during the clone.
+                    //
+                    // Skip the snapshot entirely: leave the active read store
+                    // unpushed so the streaming path's `getGlobalStore` resolves
+                    // to the live store (whose IdMap is the authoritative source
+                    // the clone copied anyway). The streaming path takes its own
+                    // brief per-page read lock while materializing nodes, so
+                    // snapshot isolation against concurrent ingest is preserved
+                    // exactly as it already is for this shape today. FLE
+                    // decrypt-on-read and tenant/RLS filtering are unaffected:
+                    // FLE applies inside `materializeNode`, and RLS-evaluating
+                    // reads are excluded by `readWillStreamEngineSide`.
                 } else {
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-

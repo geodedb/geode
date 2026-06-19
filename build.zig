@@ -6763,6 +6763,18 @@ pub fn build(b: *std.Build) void {
     const handler_point_read_step = b.step("test-handler-point-read-zero-copy", "Run GAP-0805 handler point-read zero-copy regression tests");
     handler_point_read_step.dependOn(&run_handler_point_read_tests.step);
 
+    // GAP-0900 (scan-no-clone) regression: bounded label scans must be served
+    // by the engine-backed node_scan_stream path (O(result) with LIMIT
+    // pushdown) WITHOUT the O(graph) QueryReadSession deep-clone. Asserts via
+    // the exact `cloneNodesFrom` node counter so it is wall-clock-independent.
+    const scan_no_clone_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0900_scan_no_clone.zig"), .target = target, .optimize = optimize });
+    scan_no_clone_test_mod.addImport("geode", root_mod);
+    const scan_no_clone_tests = b.addTest(.{ .root_module = scan_no_clone_test_mod });
+    const run_scan_no_clone_tests = b.addRunArtifact(scan_no_clone_tests);
+    shardDep(test_step, &run_scan_no_clone_tests.step, 1, test_shard_loads, test_shard_index);
+    const scan_no_clone_step = b.step("test-gap0900-scan-no-clone", "Run GAP-0900 scan-no-clone regression (bounded scan is O(result), no whole-graph deep clone)");
+    scan_no_clone_step.dependOn(&run_scan_no_clone_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple

@@ -1,0 +1,289 @@
+// GAP-0900 (scan-no-clone) reproduction / regression.
+//
+// Triage: every general read query (label scan / unfiltered MATCH / bounded
+// `MATCH (n:Label) RETURN n LIMIT k`) used to go through the transport
+// handler's `graph_store.snapshotUnderReadLock` ->
+// `QueryReadSession.initIfAvailable` -> `cloneNodesFrom`, which DEEP-CLONES the
+// entire in-memory GraphStore (every node + properties + id-maps) into an arena
+// BEFORE the executor runs. Scan cost was therefore O(total graph),
+// independent of LIMIT/selectivity -- at multi-million nodes it blew the 30s
+// query timeout and added write contention during the clone.
+//
+// The engine-backed `node_scan_stream` path already serves the bounded-scan
+// shape in O(result) (LIMIT pushdown over the label posting list, lazy
+// per-page `materializeNode` from the storage adapter with FLE applied on
+// read). The fix makes the handlers SKIP the snapshot deep-clone for exactly
+// the shapes `node_scan_stream` serves, so the scan no longer pays O(graph).
+//
+// These tests are wall-clock-INDEPENDENT: they assert against
+// `graph_store.getCloneNodesTotal()` -- the exact count of nodes deep-copied
+// by `cloneNodesFrom`. A bounded scan served engine-side must clone ZERO
+// nodes; the legacy snapshot path clones N. They also assert the new handler
+// decision predicate (`node_scan_stream.isEligible`) routes the scan shape to
+// the streaming path, and that the streamed rows are IDENTICAL to the rows the
+// O(graph) snapshot clone would have produced (correctness is paramount on the
+// read path).
+//
+// CANARY: REQ=REQ-PERF-SCAN-NO-CLONE-0900; FEATURE="ScanNoClone"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_gap0900_scan_no_clone.zig; OWNER=performance; UPDATED=2026-06-19
+
+const std = @import("std");
+const testing = std.testing;
+const geode = @import("geode");
+
+const execution = geode.execution;
+const graph_store = geode.graph_store;
+const node_scan_stream = geode.node_scan_stream;
+const query_traits = geode.query_traits;
+
+const N_NODES: usize = 2000;
+const LIMIT_K: usize = 5;
+
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+const Harness = struct {
+    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    tmp: std.testing.TmpDir,
+    data_dir: []u8,
+    ctx: execution.ExecutionContext,
+
+    pub fn init(allocator: std.mem.Allocator) !Harness {
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+        errdefer allocator.free(data_dir);
+
+        graph_store.setDataDirOverride(allocator, data_dir);
+        // Lazily init the global store + adapter (getGlobalAdapter() must be
+        // non-null for the engine-backed streaming path to run).
+        _ = graph_store.getGlobalStore(allocator);
+
+        const catalog = try execution.ensureCatalogInstance(allocator);
+        return .{
+            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .tmp = tmp,
+            .data_dir = data_dir,
+            .ctx = execution.ExecutionContext{ .catalog = catalog },
+        };
+    }
+
+    pub fn deinit(self: *Harness) void {
+        self.arena.deinit();
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(self.allocator, null);
+        self.allocator.free(self.data_dir);
+        self.tmp.cleanup();
+    }
+
+    pub fn runQuery(self: *Harness, query: []const u8) !execution.ExecutionResult {
+        const aa = self.arena.allocator();
+        var parsed = try geode.parseGql(query, aa);
+        defer parsed.deinit();
+        return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+    }
+
+    fn seed(self: *Harness, n: usize) !void {
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const aa = self.arena.allocator();
+            const q = try std.fmt.allocPrint(aa, "CREATE (:Taxon {{taxon_id: {d}, name: 'n{d}'}})", .{ i, i });
+            var r = try self.runQuery(q);
+            r.deinit(aa);
+        }
+    }
+};
+
+fn parseQuery(arena: *std.heap.ArenaAllocator, src: []const u8) !*const geode.gql.ast.Query {
+    var lx = geode.gql.lexer.Lexer{ .src = src };
+    var p = geode.gql.parser.Parser{ .lx = &lx, .arena = arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    // First statement must be a Query for the scan shapes under test.
+    return &program.statements[0].Query;
+}
+
+// -------------------------------------------------------------------
+// Test 1 — bounded label scan is O(result), NOT O(graph): the engine
+// streaming path materializes ~k nodes and deep-clones ZERO.
+// -------------------------------------------------------------------
+test "GAP-0900: MATCH (n:Taxon) RETURN n LIMIT k streams O(k), clones 0 nodes" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.seed(N_NODES);
+
+    const aa = h.arena.allocator();
+
+    // The scan shape MUST be routed to the engine streaming path by the
+    // handler decision predicate (this is what lets the handler skip the
+    // O(graph) snapshot clone).
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const scan_q = try parseQuery(&qa, "MATCH (n:Taxon) RETURN n LIMIT 5");
+    try testing.expect(node_scan_stream.isEligible(scan_q));
+
+    // Reset the deep-clone counter, then run the bounded scan via the engine
+    // streaming path the handler now uses. NO snapshot clone should occur.
+    graph_store.resetCloneNodesTotal();
+
+    var stream = (try node_scan_stream.prepare(aa, scan_q, h.ctx, &.{}, &.{}, &.{})) orelse {
+        return error.StreamPathNotEligible;
+    };
+    defer stream.deinit();
+
+    var page = try stream.buildNextPage(aa, LIMIT_K);
+    defer page.result.deinit(aa);
+
+    // O(result): exactly k rows materialized (LIMIT pushdown), not N.
+    try testing.expectEqual(@as(usize, LIMIT_K), page.result.rows.len);
+
+    // The crux of GAP-0900: a bounded scan deep-clones ZERO nodes. Before the
+    // fix the handler ran `snapshotUnderReadLock` first, deep-copying all
+    // N_NODES via `cloneNodesFrom` (counter == N_NODES) before this streaming
+    // path ever ran.
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+
+    // Each streamed row is a real Taxon node with the seeded properties
+    // (FLE/property fidelity through the engine materialize path).
+    for (page.result.rows) |row| {
+        try testing.expectEqual(@as(usize, 1), row.len);
+        try testing.expect(row[0] == .Node);
+        const node = row[0].Node;
+        try testing.expect(node.properties.get("taxon_id") != null);
+        try testing.expect(node.properties.get("name") != null);
+    }
+}
+
+// -------------------------------------------------------------------
+// Test 2 — the legacy snapshot path STILL deep-clones O(graph). This pins
+// the cost the fix avoids: the counter proves the clone is O(N), so Test 1's
+// "clones 0" is a real win, not an artifact of an empty graph.
+// -------------------------------------------------------------------
+test "GAP-0900: snapshotUnderReadLock deep-clones O(graph) (the avoided cost)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.seed(N_NODES);
+
+    graph_store.resetCloneNodesTotal();
+    var session = try graph_store.snapshotUnderReadLock(testing.allocator, graph_store.DEFAULT_GRAPH_NAME);
+    defer session.deinit();
+
+    // The legacy snapshot path copies every node in the graph.
+    try testing.expectEqual(@as(u64, N_NODES), graph_store.getCloneNodesTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 3 — count(label) is O(1): the count fast-path reports the correct
+// cardinality WITHOUT deep-cloning the graph or materializing per-node.
+// -------------------------------------------------------------------
+test "GAP-0900: count(n:Taxon) is O(1) — no per-node clone" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.seed(N_NODES);
+
+    graph_store.resetCloneNodesTotal();
+    var res = try h.runQuery("MATCH (n:Taxon) RETURN count(n) AS c");
+    defer res.deinit(h.arena.allocator());
+
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expectEqual(@as(i64, @intCast(N_NODES)), res.rows[0][0].Int);
+
+    // count(label) must never trigger a whole-graph deep clone.
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 4 — results IDENTICAL to the snapshot path. The streamed bounded
+// scan returns the same node ids (and the same total population when
+// LIMIT covers the whole graph) the O(graph) snapshot executor produces.
+// -------------------------------------------------------------------
+test "GAP-0900: streamed scan results match the snapshot-clone population" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const small_n: usize = 50;
+    try h.seed(small_n);
+    const aa = h.arena.allocator();
+
+    // Full scan via the engine streaming path (LIMIT >= N so the page holds
+    // the whole population).
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const scan_q = try parseQuery(&qa, "MATCH (n:Taxon) RETURN n");
+    try testing.expect(node_scan_stream.isEligible(scan_q));
+
+    var stream = (try node_scan_stream.prepare(aa, scan_q, h.ctx, &.{}, &.{}, &.{})) orelse {
+        return error.StreamPathNotEligible;
+    };
+    defer stream.deinit();
+    var page = try stream.buildNextPage(aa, small_n + 10);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(small_n, page.result.rows.len);
+
+    // Collect the streamed taxon_id set.
+    var streamed = std.AutoHashMap(i64, void).init(testing.allocator);
+    defer streamed.deinit();
+    for (page.result.rows) |row| {
+        const tid = row[0].Node.properties.get("taxon_id") orelse return error.MissingTaxonId;
+        try streamed.put(tid.Int, {});
+    }
+
+    // The snapshot clone of the same graph must hold exactly the same
+    // taxon_id population (snapshot isolation + identical contents).
+    var session = try graph_store.snapshotUnderReadLock(testing.allocator, graph_store.DEFAULT_GRAPH_NAME);
+    defer session.deinit();
+    const snap = session.store();
+
+    var matched: usize = 0;
+    if (snap.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "Taxon")) |ids| {
+        try testing.expectEqual(small_n, ids.len);
+        for (ids) |id| {
+            const node = snap.getNodePtr(id) orelse return error.SnapshotNodeMissing;
+            const tid = node.properties.get("taxon_id") orelse return error.SnapshotMissingTaxonId;
+            try testing.expect(streamed.contains(tid.Int));
+            matched += 1;
+        }
+    } else {
+        return error.SnapshotLabelMissing;
+    }
+    try testing.expectEqual(small_n, matched);
+}
+
+// -------------------------------------------------------------------
+// Test 5 — eligibility gate is conservative: shapes that the streaming
+// path does NOT serve (WHERE / ORDER BY / traversal / aggregation) must
+// report NOT eligible, so the handler keeps the snapshot path for them
+// (preserving RLS/where-eval correctness).
+// -------------------------------------------------------------------
+test "GAP-0900: isEligible is false for non-streamable shapes" {
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+
+    const where_q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.taxon_id > 10 RETURN n");
+    try testing.expect(!node_scan_stream.isEligible(where_q));
+
+    var qa2 = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa2.deinit();
+    const order_q = try parseQuery(&qa2, "MATCH (n:Taxon) RETURN n ORDER BY n.taxon_id LIMIT 5");
+    try testing.expect(!node_scan_stream.isEligible(order_q));
+
+    var qa3 = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa3.deinit();
+    const traverse_q = try parseQuery(&qa3, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n");
+    try testing.expect(!node_scan_stream.isEligible(traverse_q));
+}

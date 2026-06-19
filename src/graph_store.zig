@@ -1564,6 +1564,10 @@ pub const GraphStore = struct {
 
         var node_it = source.nodes.iterator();
         while (node_it.next()) |entry| {
+            // GAP-0900 (scan-no-clone): count every node we deep-copy so a
+            // regression test can detect O(graph) clone cost on a read that
+            // should be O(result).
+            _ = g_clone_nodes_total.fetchAdd(1, .monotonic);
             const src_node = entry.value_ptr.*;
             const labels_copy = try self.allocator.alloc([]const u8, src_node.labels.len);
             for (src_node.labels, 0..) |label, i| {
@@ -8124,6 +8128,13 @@ var global_store: ?GraphStore = null;
 var global_store_allocator: ?std.mem.Allocator = null;
 threadlocal var g_active_query_read_store: ?*GraphStore = null;
 var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0900 (scan-no-clone): per-node counter incremented once for every node
+// deep-copied by `cloneNodesFrom`. Unlike the session-init counter (1 per
+// snapshot, regardless of graph size) this exposes the O(graph) cost of the
+// clone directly, so a regression test can assert a bounded scan does NOT
+// deep-clone the whole graph (counter stays 0 when the engine-backed streaming
+// path serves the query) instead of relying on wall-clock timing.
+var g_clone_nodes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
@@ -8136,6 +8147,18 @@ pub fn resetQueryReadSessionInitCount() void {
 
 pub fn getQueryReadSessionInitCount() u64 {
     return g_query_read_session_init_count.load(.acquire);
+}
+
+/// GAP-0900 (scan-no-clone): reset/read the count of nodes deep-copied by
+/// `cloneNodesFrom`. A bounded scan (`MATCH (n:L) RETURN n LIMIT k`) served by
+/// the engine-backed streaming path must NOT increment this — it is O(graph)
+/// only when a full snapshot clone runs.
+pub fn resetCloneNodesTotal() void {
+    g_clone_nodes_total.store(0, .release);
+}
+
+pub fn getCloneNodesTotal() u64 {
+    return g_clone_nodes_total.load(.acquire);
 }
 
 pub fn resetGetNodesByLabelsCount() void {
