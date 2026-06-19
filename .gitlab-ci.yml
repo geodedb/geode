@@ -42,6 +42,7 @@ include:
       gpg_key_name: geode.gpg
       sign_needs: build-release
       allow_failure: false
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.27.0
 
 # Auto-cancel redundant pipelines on push (non-tag builds only).
 # Tagged release pipelines are never cancelled — they must run to completion.
