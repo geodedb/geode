@@ -3953,6 +3953,7 @@ REQ-PERF-LABEL-INDEX-004,LabelBasedIndex,MergeOptimization,IMPL,,,perf,2026-01-2
 REQ-PERF-LABEL-INDEX-005,LabelBasedIndex,UnitTests,TESTED,,,perf,2026-01-28,src/graph_store.zig
 REQ-PERF-LAZY-001,Performance,LazyEvaluation,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-PERF-LEAN-INDEX-0900,LeanMergeKeyIndexing,IndexKeyGate,TESTED,,,performance,2026-06-18,tests/test_gap0900_lean_index_mode.zig
+REQ-PERF-LEAN-INDEX-0900,LeanMergeKeyIndexing,ReopenReMergeDedup,TESTED,,,performance,2026-06-18,tests/test_gap0900_reopen_remerge_dup.zig
 REQ-PERF-LIMIT-PUSHDOWN-001,LimitPushdown,MultiNodeMatch,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig
 REQ-PERF-LIMIT-PUSHDOWN-001,LimitPushdown,UnitTest,TESTED,,,engine,2026-03-13,tests/test_limit_pushdown.zig
 REQ-PERF-LOG-GATE-001,HotPathLogGating,DebugLogControl,EXEMPT,,,perf,2026-06-11,src/cli/main.zig

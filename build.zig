@@ -1978,6 +1978,24 @@ pub fn build(b: *std.Build) void {
     );
     gap0900_compact_node_store_step.dependOn(&run_gap0900_compact_node_store_tests.step);
 
+    // GAP-0900 Layer-3: reopen re-MERGE dedup. The merge property index must be
+    // rebuilt for nodes hydrated from the engine on reopen, else a re-MERGE of
+    // an existing key creates a duplicate. Run via
+    // `zig build test-gap0900-reopen-remerge-dup`.
+    const gap0900_reopen_remerge_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0900_reopen_remerge_dup.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0900_reopen_remerge_tests.root_module.addImport("geode", root_mod);
+    const run_gap0900_reopen_remerge_tests = b.addRunArtifact(gap0900_reopen_remerge_tests);
+    const gap0900_reopen_remerge_step = b.step(
+        "test-gap0900-reopen-remerge-dup",
+        "GAP-0900 Layer-3: re-MERGE after reopen dedups (merge index rebuilt on hydration)",
+    );
+    gap0900_reopen_remerge_step.dependOn(&run_gap0900_reopen_remerge_tests.step);
+
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST
     // cache via optional `ast_cache` fields + `setAstCache()` methods.

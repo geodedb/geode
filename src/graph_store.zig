@@ -109,18 +109,36 @@ pub fn leanIndexingEnabled() bool {
 /// Register a key that MUST stay indexed even in lean mode (a MERGE pattern
 /// key). Idempotent; safe to call on every merge. No-op when lean mode is off.
 pub fn registerMergeIndexKey(key: []const u8) void {
-    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (!leanIndexEnabledLocked()) return;
-    if (key.len == 0 or key.len > lean_index_key_cap) return;
-    var i: usize = 0;
-    while (i < g_lean_index_key_count) : (i += 1) {
-        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) return;
+    const newly_registered = blk: {
+        g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (!leanIndexEnabledLocked()) break :blk false;
+        if (key.len == 0 or key.len > lean_index_key_cap) break :blk false;
+        var i: usize = 0;
+        while (i < g_lean_index_key_count) : (i += 1) {
+            if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) break :blk false;
+        }
+        if (g_lean_index_key_count >= lean_index_max_keys) break :blk false; // overflow: tolerate
+        @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
+        g_lean_index_key_lens[g_lean_index_key_count] = key.len;
+        g_lean_index_key_count += 1;
+        break :blk true;
+    };
+
+    // GAP-0900 Layer-3 (Fix 3): a key that becomes indexable for the FIRST time
+    // in lean mode may already have loaded nodes carrying it (hydrated from disk
+    // before this registration). `addToMergePropertyIndex` skipped those at load
+    // because the key was not yet registered, so the merge index has no entry —
+    // and the first re-MERGE after a reopen would create a duplicate. Backfill
+    // the index for this single key now by scanning loaded nodes. Done OUTSIDE
+    // `g_lean_index_mutex` (a leaf lock) so the scan can take the per-shard node
+    // locks without inverting lock order. Only the primary global store is
+    // backfilled; ad-hoc unit stores never reopen, so they need no backfill.
+    if (newly_registered) {
+        if (getCurrentGlobalStore()) |store| {
+            store.backfillMergeIndexForKey(key);
+        }
     }
-    if (g_lean_index_key_count >= lean_index_max_keys) return; // overflow: tolerate
-    @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
-    g_lean_index_key_lens[g_lean_index_key_count] = key.len;
-    g_lean_index_key_count += 1;
 }
 
 /// Test-only: force lean-index mode on/off and clear the registered-key set,
@@ -3311,6 +3329,25 @@ pub const GraphStore = struct {
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
             try self.merge_prop_index.putOrUpdate(probe, node_id);
+        }
+    }
+
+    /// GAP-0900 Layer-3 (Fix 3): backfill the merge property index for a single
+    /// key by scanning all currently-loaded nodes. Called when a NEW merge key
+    /// is registered in lean mode (`registerMergeIndexKey`) AFTER the graph was
+    /// hydrated from disk — at hydration time the key was not yet registered, so
+    /// `addToMergePropertyIndex` skipped it and the index had no entry for the
+    /// loaded nodes. Without this, the first re-MERGE of that key after a reopen
+    /// would create a duplicate. Real workloads register a tiny fixed set of
+    /// merge keys once at startup, so this scan runs a handful of times total —
+    /// never per node. Indexes only the named key (lean's RAM bound is intact:
+    /// the other ~19 never-queried SET props stay unindexed).
+    pub fn backfillMergeIndexForKey(self: *GraphStore, key: []const u8) void {
+        var node_iter = self.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            const value = node.properties.get(key) orelse continue;
+            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value, node.id) catch {};
         }
     }
 
@@ -6794,6 +6831,29 @@ pub const GraphStore = struct {
                 const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
                 try self.addNodeToGraphIndex(graph_name, node_uuid);
                 try self.bumpIntrospectionForNode(stored_node_ptr);
+
+                // GAP-0900 Layer-3 (Fix 3): rebuild the merge property index for
+                // this hydrated node. Without this, a re-MERGE of an existing
+                // key after shutdown+reopen finds an empty index, takes the
+                // create branch, and produces a DUPLICATE — breaking resumable /
+                // idempotent seeding. `addToMergePropertyIndex` honors lean mode:
+                // off (default) indexes every key; on
+                // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
+                // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
+                // fresh server process) are backfilled at registration time by
+                // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
+                {
+                    var merge_prop_iter = stored_node_ptr.properties.iterator();
+                    while (merge_prop_iter.next()) |prop_entry| {
+                        self.addToMergePropertyIndex(
+                            stored_node_ptr.graph_name,
+                            stored_node_ptr.labels,
+                            prop_entry.key_ptr.*,
+                            prop_entry.value_ptr.*,
+                            stored_node_ptr.id,
+                        ) catch {};
+                    }
+                }
 
                 var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
                 defer out_edges.deinit();
