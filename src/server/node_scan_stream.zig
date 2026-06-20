@@ -6,6 +6,7 @@ const eval = @import("../eval.zig");
 const execution = @import("../execution.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
@@ -811,16 +812,63 @@ fn collectMatchingSlotIds(
     var result = try std.ArrayList(u64).initCapacity(allocator, if (required_rows) |cap| @min(cap, 1024) else 256);
     errdefer result.deinit(allocator);
 
-    if (pattern.labels.len > 0) {
-        if (try adapter.iterateNodesByLabel(graph_name, pattern.labels[0], allocator)) |label_iter_init| {
-            var label_iter = label_iter_init;
-            defer label_iter.deinit();
-
-            while (try label_iter.next()) |slot_id| {
+    // KNOWN BUG #1 fix: inline-property equality reads on an INDEXED property
+    // (the unique MERGE key or any key the exact node-property index covers)
+    // must seek the index (O(matching)) instead of full-scanning the label
+    // (O(graph)). `seekIndexedCandidates` returns the candidate slot ids from
+    // the exact index, or null when no inline equality predicate targets an
+    // indexed, seekable scalar (in which case we fall back to the scan below).
+    //
+    // Correctness: the index seek only NARROWS the candidate set. Every
+    // returned candidate is then re-verified by the unchanged
+    // `nodeMatchesPattern` (full label-set + ALL inline-property equality,
+    // tolerating hash collisions), so a NON-EMPTY seek's result set is
+    // byte-for-byte identical to the full-scan path.
+    //
+    // SEEK SOUNDNESS (correctness-critical): the seek (whether it returns rows
+    // or empty) is trustworthy ONLY when the exact node-property index is
+    // guaranteed COMPLETE for the key — i.e. it contains an entry for EVERY live
+    // node carrying that key. That holds when lean indexing is OFF (the default
+    // server): every property is indexed on every write, and the reopen rebuild
+    // re-indexes every key. Under GEODE_INDEX_MERGE_KEYS_ONLY the exact index is
+    // rebuilt on reopen BEFORE any merge key is (re)registered, so a registered
+    // key's index can be INCOMPLETE for pre-reopen nodes; seeking it could drop
+    // live rows (an empty/partial result) — a wrong answer. Since correctness is
+    // paramount, the seek is gated to the lean-OFF case where completeness is
+    // guaranteed; lean mode falls through to the lock-safe full scan (correct,
+    // just not O(1)). A future change can persist + re-register merge keys
+    // before the reopen rebuild so the lean path is also seek-eligible.
+    if (pattern.labels.len > 0 and pattern.props != null and !graph_store.leanIndexingEnabled()) {
+        if (try seekIndexedCandidates(allocator, adapter, graph_name, pattern, param_names, param_values, context)) |candidates| {
+            defer allocator.free(candidates);
+            for (candidates) |slot_id| {
                 if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
                 try result.append(allocator, slot_id);
                 if (result.items.len >= row_cap) break;
             }
+            return try result.toOwnedSlice(allocator);
+        }
+    }
+
+    if (pattern.labels.len > 0) {
+        // CRASH FIX (read-stress): collect the label's live slot ids via the
+        // LOCK-SAFE `getNodesByLabelCapped` (each shard materialized under its
+        // SHARED read lock) instead of the lazy `iterateNodesByLabel` fan-out,
+        // whose per-shard `LabelIndex.scan` ran with NO shard lock and raced a
+        // concurrent ingest `addNode` into an out-of-bounds PANIC. The early
+        // cap is safe to push down ONLY when there is no per-slot filter
+        // (`pattern.props == null`), because then collected == matched. With
+        // inline props the per-slot `nodeMatchesPattern` filter decides matches,
+        // so we collect ALL slots (cap = null) and let the `row_cap` break below
+        // bound the matched rows — capping slot collection would under-return.
+        const collect_cap: ?usize = if (pattern.props == null and required_rows != null) row_cap else null;
+        const slots = try adapter.getNodesByLabelCapped(graph_name, pattern.labels[0], collect_cap, allocator);
+        defer allocator.free(slots);
+
+        for (slots) |slot_id| {
+            if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+            try result.append(allocator, slot_id);
+            if (result.items.len >= row_cap) break;
         }
     } else {
         const entries = try adapter.scanAllNodes(graph_name, allocator);
@@ -834,6 +882,97 @@ fn collectMatchingSlotIds(
     }
 
     return try result.toOwnedSlice(allocator);
+}
+
+/// KNOWN BUG #1 fix: when an inline `{prop: val}` equality targets an INDEXED
+/// property, return the exact-index candidate slot ids (the caller re-verifies
+/// each against the full pattern). Returns `null` when no inline equality
+/// predicate targets an indexed, seekable scalar value — the caller then falls
+/// back to the full label scan.
+///
+/// Selection: the most selective indexed equality wins. We probe the posting
+/// length for every indexed inline prop and seek on the shortest one (fewest
+/// candidates to verify). Ties / single-prop reduce to one seek. This keeps the
+/// hot path O(matching) for the unique MERGE key (source_id) while remaining
+/// correct for multi-property inline patterns (the non-seeked props are checked
+/// by `nodeMatchesPattern`).
+fn seekIndexedCandidates(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    pattern: ast.NodePattern,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    context: ExecutionContext,
+) !?[]u64 {
+    const props = pattern.props orelse return null;
+    if (props.len == 0 or pattern.labels.len == 0) return null;
+
+    const env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+        .exec_context = @constCast(&context),
+    };
+
+    // Pick the most selective indexed equality prop: smallest posting length.
+    // `best_pv` (when set) is owned here and freed before every return below.
+    var best_key: ?[]const u8 = null;
+    var best_pv: ?graph_store.PropertyValue = null;
+    var best_len: usize = std.math.maxInt(usize);
+
+    for (props) |prop| {
+        // Only equality on a key the exact index actually covers is seekable.
+        if (!graph_store.shouldIndexProperty(prop.key)) continue;
+
+        // Evaluate the inline value to a concrete scalar. Eligibility already
+        // restricted inline values to streamable literals/params, so this is a
+        // pure constant fold. A failure or a non-scalar (e.g. NULL / list /
+        // node ref) means we cannot seek on this prop — skip it.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
+        // NULL inline equality never matches via the index path the same way
+        // (`{p: null}` is unusual); leave it to the scan/verify path.
+        if (pv == .Null) {
+            property_value_codec.freePropertyValue(allocator, pv);
+            continue;
+        }
+
+        const posting_len = adapter.countCandidateNodesByLabelAndProperty(
+            graph_name,
+            pattern.labels[0],
+            prop.key,
+            pv,
+        ) catch {
+            property_value_codec.freePropertyValue(allocator, pv);
+            continue;
+        };
+
+        if (posting_len < best_len) {
+            if (best_pv) |old| property_value_codec.freePropertyValue(allocator, old);
+            best_len = posting_len;
+            best_key = prop.key;
+            best_pv = pv;
+            // A unique-key hit (<=1 candidate) cannot be beaten; stop probing.
+            if (posting_len <= 1) break;
+        } else {
+            property_value_codec.freePropertyValue(allocator, pv);
+        }
+    }
+
+    const key = best_key orelse return null;
+    const pv = best_pv orelse return null;
+    defer property_value_codec.freePropertyValue(allocator, pv);
+
+    return try adapter.getCandidateNodesByLabelAndProperty(
+        graph_name,
+        pattern.labels[0],
+        key,
+        pv,
+        allocator,
+    );
 }
 
 fn nodeMatchesPattern(

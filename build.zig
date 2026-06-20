@@ -6838,6 +6838,30 @@ pub fn build(b: *std.Build) void {
     const scan_no_clone_step = b.step("test-gap0900-scan-no-clone", "Run GAP-0900 scan-no-clone regression (bounded scan is O(result), no whole-graph deep clone)");
     scan_no_clone_step.dependOn(&run_scan_no_clone_tests.step);
 
+    // Inline-key index-seek regression (read-stress KNOWN BUG #1): inline
+    // `{indexed_prop: val}` equality reads seek the exact-property index
+    // (O(matching)) instead of full-scanning the label (O(graph)); results are
+    // identical to the scan path.
+    const inline_seek_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_inline_key_index_seek.zig"), .target = target, .optimize = optimize });
+    inline_seek_test_mod.addImport("geode", root_mod);
+    const inline_seek_tests = b.addTest(.{ .root_module = inline_seek_test_mod });
+    const run_inline_seek_tests = b.addRunArtifact(inline_seek_tests);
+    shardDep(test_step, &run_inline_seek_tests.step, 1, test_shard_loads, test_shard_index);
+    const inline_seek_step = b.step("test-inline-key-index-seek", "Run inline-key index-seek regression (indexed inline-property reads seek the index, not a full scan)");
+    inline_seek_step.dependOn(&run_inline_seek_tests.step);
+
+    // Concurrent scan+ingest crash regression (read-stress): the streaming read
+    // path holds the SHARED per-graph read lock across `prepare` so the
+    // label-index slot-collection scan cannot OOB-panic when a concurrent
+    // writer grows the posting set.
+    const scan_race_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_scan_ingest_race.zig"), .target = target, .optimize = optimize });
+    scan_race_test_mod.addImport("geode", root_mod);
+    const scan_race_tests = b.addTest(.{ .root_module = scan_race_test_mod });
+    const run_scan_race_tests = b.addRunArtifact(scan_race_tests);
+    shardDep(test_step, &run_scan_race_tests.step, 1, test_shard_loads, test_shard_index);
+    const scan_race_step = b.step("test-scan-ingest-race", "Run concurrent scan+ingest crash regression (LabelIndex.scan race under streaming read path)");
+    scan_race_step.dependOn(&run_scan_race_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple

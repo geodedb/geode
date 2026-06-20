@@ -3632,6 +3632,28 @@ pub const StorageAdapter = struct {
     }
 
     pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
+        return self.getNodesByLabelCapped(graph_name, label, null, allocator);
+    }
+
+    /// Lock-safe label slot-id collection with an optional early-termination cap.
+    ///
+    /// CRASH FIX (read-stress): the streaming read path previously consumed the
+    /// lazy `iterateNodesByLabel` fan-out iterator, whose per-shard
+    /// `LabelIndex.scan` runs with NO shard lock held. A concurrent ingest
+    /// `addNode` mutating the same shard's posting set (it holds only
+    /// `mg.rwlock` SHARED + `shard_locks[idx]` EXCLUSIVE — NOT the whole-graph
+    /// exclusive) races the scan's count()-sized buffer fill and hash-map
+    /// iteration, producing an out-of-bounds write / corrupted iteration that
+    /// PANICS the whole server (observed under 64-reader + 16-writer load).
+    ///
+    /// This variant materializes the slot ids one shard at a time UNDER that
+    /// shard's SHARED read lock (`appendLiveNodesForLabelShard`), exactly as
+    /// `getNodesByLabel` already does — fencing concurrent shard writers while
+    /// other readers proceed in parallel. `cap` preserves the bounded-scan
+    /// early-termination the lazy iterator gave: once `cap` live slots are
+    /// collected we stop probing further shards (a per-shard overshoot beyond
+    /// `cap` is harmless; the caller's LIMIT/`row_cap` bounds the final rows).
+    pub fn getNodesByLabelCapped(self: *StorageAdapter, graph_name: []const u8, label: []const u8, cap: ?usize, allocator: Allocator) ![]u64 {
         _ = g_label_scan_lookup_count.fetchAdd(1, .monotonic);
         const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return try allocator.alloc(u64, 0);
         var result = std.ArrayList(u64).empty;
@@ -3639,6 +3661,9 @@ pub const StorageAdapter = struct {
 
         for (ctx.mg.engine.shards, 0..) |_, shard_idx| {
             try appendLiveNodesForLabelShard(ctx.mg, shard_idx, ctx.label_id, allocator, &result);
+            if (cap) |c| {
+                if (result.items.len >= c) break;
+            }
         }
 
         return try result.toOwnedSlice(allocator);
@@ -3753,6 +3778,31 @@ pub const StorageAdapter = struct {
         }
 
         return try result.toOwnedSlice(allocator);
+    }
+
+    /// Cheap selectivity probe for an exact `(label, property = value)` posting.
+    /// Returns the raw posting-list length (including any stale entries) without
+    /// copying the list or touching the engine — used by the read fast path to
+    /// pick the most selective indexed inline property before the real seek.
+    /// Returns 0 when the label is unknown or the posting is absent.
+    pub fn countCandidateNodesByLabelAndProperty(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+    ) !usize {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const label_id = mg.label_dict.getId(label) orelse return 0;
+
+        const storage_value = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_value);
+        const value_hash = try hashStorageProperty(self.allocator, storage_value);
+        return (try mg.exact_node_property_index.postingLenIfPresent(label_id, property_key, value_hash)) orelse 0;
     }
 
     // ------------------------------------------------------------------
