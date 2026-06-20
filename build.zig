@@ -6730,6 +6730,47 @@ pub fn build(b: *std.Build) void {
     // full server module in TEST mode.
     shardDep(test_step, &run_first_stream_lifetime_tests.step, 8, test_shard_loads, test_shard_index);
 
+    // Focused runner for the idle-connection reap-cap regression
+    // (docs/bugs/2026-06-18-idle-pool-spin-reap-cap.md). `nextMessage` reaps a
+    // lingering connection on a WouldBlock-attempt counter whose comment
+    // assumes a 1ms park; the real park is 100ms, so the reap deadline is
+    // ~8.3h, not the intended ~300s — idle connections wake the pool every
+    // 100ms for hours (post-ingest CPU spin). The inline test
+    // "proto_reader_idle_connection_reap_deadline_regression" lives in
+    // src/server/quic_connection_handler.zig and is test-discovered through the
+    // SAME test root that the first_stream inline tests use (a plain runtime
+    // @import of quic_connection_handler from server/main.zig does NOT pull its
+    // inline tests into the test graph under Zig 0.16; the
+    // first_stream_owner_lifetime_test_root.zig root `pub const` re-export
+    // does). Reuse that fully-wired module so the test compiles in TEST mode.
+    const proto_reap_mod = b.createModule(.{
+        .root_source_file = b.path("src/first_stream_owner_lifetime_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        var it = geode_exe.root_module.import_table.iterator();
+        while (it.next()) |entry| {
+            proto_reap_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    proto_reap_mod.link_libc = true;
+    if (enable_openssl) {
+        proto_reap_mod.linkSystemLibrary("ssl", .{});
+        proto_reap_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        proto_reap_mod.linkSystemLibrary("dl", .{});
+    }
+    proto_reap_mod.addOptions("openssl_config", openssl_options);
+    const proto_reap_tests = b.addTest(.{
+        .root_module = proto_reap_mod,
+        .filters = &.{"proto_reader_idle_connection_reap_deadline_regression"},
+    });
+    const run_proto_reap_tests = b.addRunArtifact(proto_reap_tests);
+    const proto_reap_step = b.step("test-proto-reader-idle-reap", "Run idle-connection reap-cap regression (8.3h vs 300s reap deadline)");
+    proto_reap_step.dependOn(&run_proto_reap_tests.step);
+
     // geode-reachable supporting suite for the same REQ (framing-pin lives here;
     // imports only the public `geode` surface).
     const first_stream_lifetime_doc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_first_stream_owner_lifetime.zig"), .target = target, .optimize = optimize });

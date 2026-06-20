@@ -1513,6 +1513,36 @@ const BufferedProtoReader = struct {
         }
     }
 
+    // Idle-connection reap policy for `nextMessage`.
+    //
+    // BUG (docs/bugs/2026-06-18-idle-pool-spin-reap-cap.md): `nextMessage`
+    // reaps a lingering/idle client connection by counting WouldBlock
+    // attempts: `max_would_block_attempts = 300000` with a comment claiming
+    // "300s at 1ms sleep". But each WouldBlock parks for
+    // `quic_transport.server_handler_wait_for_poll_ns` which is 100ms, NOT
+    // 1ms — so the real reap deadline is 300000 × 100ms = 30,000,000ms ≈
+    // 8.3 HOURS. Idle connections linger ~8.3h, each waking the thread pool
+    // every 100ms → sustained pool spin / high CPU post-ingest.
+    //
+    // The intended idle-connection reap is ~300 seconds, robust to the wait
+    // duration (a WALL-CLOCK deadline rather than an attempt count).
+    //
+    // STUB — the bug-fixer replaces both the constant and the predicate body
+    // with the correct wall-clock 300s logic and wires `nextMessage` to use
+    // `shouldReapIdleConnection`. The values below intentionally encode the
+    // CURRENT (buggy) ~8.3h deadline so the red regression test in
+    // `test "proto_reader_idle_connection_reap_deadline_regression"` FAILS
+    // until the fix lands.
+    pub const proto_reader_idle_reap_deadline_ms: i64 = 300_000 * 100; // BUG: 30,000,000ms ≈ 8.3h; correct value is ~300_000ms (300s)
+
+    /// Pure reap predicate: given how long a connection has been idle (no
+    /// readable bytes, only WouldBlock), decide whether to reap it. Takes the
+    /// elapsed time as a parameter so it is deterministic and unit-testable —
+    /// it must NOT read the clock itself.
+    pub fn shouldReapIdleConnection(elapsed_idle_ms: i64) bool {
+        return elapsed_idle_ms >= proto_reader_idle_reap_deadline_ms;
+    }
+
     // Reads the next length-prefixed message.
     // Length is 4 bytes Big Endian.
     pub fn nextMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
@@ -8381,4 +8411,43 @@ test "first_stream_decode_buffered_framing_bounds_pin" {
     // returns null (need more data) — never slices out of bounds.
     const truncated = [_]u8{ 0, 0, 0, 8, 0xAA, 0xBB };
     try std.testing.expect((try decodeBufferedMessageForTest(allocator, &truncated, 0)) == null);
+}
+
+// Regression test for the idle-connection reap-cap bug.
+// docs/bugs/2026-06-18-idle-pool-spin-reap-cap.md
+//
+// `BufferedProtoReader.nextMessage` reaps an idle/lingering connection on a
+// WouldBlock-attempt counter (`max_would_block_attempts = 300000`) whose
+// comment assumes a 1ms park. The actual park is
+// `quic_transport.server_handler_wait_for_poll_ns` == 100ms, so the real reap
+// deadline is 300000 × 100ms ≈ 8.3 HOURS, not the intended ~300s. Idle
+// connections linger ~8.3h, waking the thread pool every 100ms → sustained
+// pool spin / high CPU after ingest.
+//
+// This test pins the CORRECT contract against the pure reap predicate
+// `shouldReapIdleConnection` / `proto_reader_idle_reap_deadline_ms`:
+//   - NOT reaped well before 300s,
+//   - reaped at/after ~300s,
+//   - and (the anti-regression bound that catches the original 8.3h bug) the
+//     deadline is far under 30 minutes.
+// It is RED with the buggy 8.3h stub and GREEN once the fixer converts the
+// policy to a ~300s wall-clock deadline.
+test "proto_reader_idle_connection_reap_deadline_regression" {
+    const second_ms: i64 = 1000;
+
+    // An idle connection is NOT reaped well before the ~300s deadline.
+    try std.testing.expect(!BufferedProtoReader.shouldReapIdleConnection(0));
+    try std.testing.expect(!BufferedProtoReader.shouldReapIdleConnection(100 * second_ms));
+    try std.testing.expect(!BufferedProtoReader.shouldReapIdleConnection(290 * second_ms));
+
+    // An idle connection IS reaped at/after the ~300s deadline.
+    try std.testing.expect(BufferedProtoReader.shouldReapIdleConnection(300 * second_ms));
+    try std.testing.expect(BufferedProtoReader.shouldReapIdleConnection(305 * second_ms));
+    try std.testing.expect(BufferedProtoReader.shouldReapIdleConnection(310 * second_ms));
+
+    // Anti-regression: with the buggy 8.3h logic the deadline is 30,000,000ms,
+    // so neither of these holds. A 600s-idle connection MUST be reaped, and the
+    // deadline constant MUST be well under 30 minutes (1,800,000ms).
+    try std.testing.expect(BufferedProtoReader.shouldReapIdleConnection(600 * second_ms));
+    try std.testing.expect(BufferedProtoReader.proto_reader_idle_reap_deadline_ms < 1_800_000);
 }
