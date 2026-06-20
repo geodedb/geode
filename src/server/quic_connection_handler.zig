@@ -1515,25 +1515,22 @@ const BufferedProtoReader = struct {
 
     // Idle-connection reap policy for `nextMessage`.
     //
-    // BUG (docs/bugs/2026-06-18-idle-pool-spin-reap-cap.md): `nextMessage`
-    // reaps a lingering/idle client connection by counting WouldBlock
-    // attempts: `max_would_block_attempts = 300000` with a comment claiming
+    // FIX (docs/bugs/2026-06-18-idle-pool-spin-reap-cap.md): the previous
+    // policy reaped a lingering/idle client connection by counting WouldBlock
+    // attempts (`max_would_block_attempts = 300000`) with a comment claiming
     // "300s at 1ms sleep". But each WouldBlock parks for
     // `quic_transport.server_handler_wait_for_poll_ns` which is 100ms, NOT
-    // 1ms — so the real reap deadline is 300000 × 100ms = 30,000,000ms ≈
-    // 8.3 HOURS. Idle connections linger ~8.3h, each waking the thread pool
+    // 1ms — so the real reap deadline was 300000 × 100ms = 30,000,000ms ≈
+    // 8.3 HOURS. Idle connections lingered ~8.3h, each waking the thread pool
     // every 100ms → sustained pool spin / high CPU post-ingest.
     //
-    // The intended idle-connection reap is ~300 seconds, robust to the wait
-    // duration (a WALL-CLOCK deadline rather than an attempt count).
-    //
-    // STUB — the bug-fixer replaces both the constant and the predicate body
-    // with the correct wall-clock 300s logic and wires `nextMessage` to use
-    // `shouldReapIdleConnection`. The values below intentionally encode the
-    // CURRENT (buggy) ~8.3h deadline so the red regression test in
-    // `test "proto_reader_idle_connection_reap_deadline_regression"` FAILS
-    // until the fix lands.
-    pub const proto_reader_idle_reap_deadline_ms: i64 = 300_000 * 100; // BUG: 30,000,000ms ≈ 8.3h; correct value is ~300_000ms (300s)
+    // This is now a WALL-CLOCK deadline measured with `compat_milliTimestamp()`
+    // rather than an attempt count, so it is robust to the wait duration
+    // (server_handler_wait_for_poll_ns = 100ms): the reap fires at ~300s of
+    // CONTINUOUS idleness regardless of how long each park lasts, instead of
+    // mis-scaling with the park duration. 300s matches the QUIC idle-timeout
+    // intent for reaping lingering client connections.
+    pub const proto_reader_idle_reap_deadline_ms: i64 = 300_000; // ~300s wall-clock idle reap deadline
 
     /// Pure reap predicate: given how long a connection has been idle (no
     /// readable bytes, only WouldBlock), decide whether to reap it. Takes the
@@ -1546,8 +1543,11 @@ const BufferedProtoReader = struct {
     // Reads the next length-prefixed message.
     // Length is 4 bytes Big Endian.
     pub fn nextMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
-        var would_block_attempts: usize = 0;
-        const max_would_block_attempts: usize = 300000; // 300s at 1ms sleep — matches QUIC idle timeout
+        // Wall-clock idle reap: lazily capture the first-WouldBlock timestamp
+        // and reap after `proto_reader_idle_reap_deadline_ms` of CONTINUOUS
+        // idleness. Robust to the park duration (server_handler_wait_for_poll_ns
+        // = 100ms), unlike the old attempt-count cap which mis-scaled to ~8.3h.
+        var idle_start_ms: ?i64 = null;
 
         while (true) {
             if (try self.decodeBufferedMessage()) |msg| return msg;
@@ -1556,11 +1556,16 @@ const BufferedProtoReader = struct {
             const read_generation = self.stream.readGeneration();
             const n = self.stream.read(&self.read_buf) catch |err| {
                 if (err == error.WouldBlock) {
-                    would_block_attempts += 1;
                     _ = proto_reader_metrics.would_block_loop_iterations_total.fetchAdd(1, .monotonic);
                     proto_reader_metrics.recordActivity();
                     self.recordActivity();
-                    if (would_block_attempts >= max_would_block_attempts) {
+                    const start_ms = idle_start_ms orelse blk: {
+                        const now = compat_milliTimestamp();
+                        idle_start_ms = now;
+                        break :blk now;
+                    };
+                    const elapsed_ms = compat_milliTimestamp() - start_ms;
+                    if (shouldReapIdleConnection(elapsed_ms)) {
                         return error.Timeout;
                     }
                     // QUIC-HC-037: wait on this connection's RX generation.
@@ -1573,7 +1578,10 @@ const BufferedProtoReader = struct {
                 return err;
             };
 
-            would_block_attempts = 0;
+            // Any progress (real read or EOF) resets the continuous-idle clock,
+            // so the deadline only measures uninterrupted no-bytes time — same
+            // intent as the old `would_block_attempts = 0` reset.
+            idle_start_ms = null;
 
             if (n == 0) {
                 if (self.start_index == self.buffer.items.len) {
