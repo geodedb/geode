@@ -452,6 +452,43 @@ test "GAP-0900: filtered count(n) streams, clones 0, correct tally" {
 }
 
 // -------------------------------------------------------------------
+// Test 11b — inline {prop: val} count tallies the FILTER, not the whole
+// label. Regression for the over-count bug: count mode with inline props
+// (and no WHERE) used to take the O(1) `countNodesByLabel` precompute,
+// which counts EVERY node of the label and silently ignores the inline
+// `{prop: val}` filter — so `count(n {taxon_id: 7})` returned N_NODES
+// instead of 1. The fix routes inline-prop counts through the streamed
+// slot tally (slots already filtered by the inline props during
+// collection), still clone==0.
+// -------------------------------------------------------------------
+test "GAP-0900: inline {prop:val} count tallies the filter, not the label" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+
+    // Exactly one node has taxon_id == 7.
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon {taxon_id: 7}) RETURN count(n) AS c", 16);
+    defer page.result.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    try testing.expectEqualStrings("c", page.result.columns[0]);
+    try testing.expectEqual(@as(i64, 1), page.result.rows[0][0].Int);
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+
+    // No node has taxon_id == 999999 → empty filter → count 0 (not N).
+    var miss = try streamSinglePage(&h, aa, "MATCH (n:Taxon {taxon_id: 999999}) RETURN count(n) AS c", 16);
+    defer miss.result.deinit(aa);
+    try testing.expectEqual(@as(i64, 0), miss.result.rows[0][0].Int);
+
+    // Equivalence with the snapshot executor over the same filter.
+    var res = try h.runQuery("MATCH (n:Taxon {taxon_id: 7}) RETURN count(n) AS c");
+    defer res.deinit(aa);
+    try testing.expectEqual(@as(i64, 1), res.rows[0][0].Int);
+}
+
+// -------------------------------------------------------------------
 // Test 12 — results equivalence: streamed projection rows == snapshot
 // executor rows (same set of (taxon_id, name) values).
 // -------------------------------------------------------------------

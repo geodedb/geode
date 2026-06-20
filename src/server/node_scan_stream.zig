@@ -337,17 +337,27 @@ pub const NodeScanStream = struct {
         }
 
         const n: usize = if (self.count_precomputed) |c| c else blk: {
-            // Filtered count: stream the label posting, materialize each node,
-            // evaluate the predicate, and tally matches. O(scanned), no clone.
-            var matched: usize = 0;
-            const where_expr = self.where_expr.?;
-            for (self.slot_ids) |slot_id| {
-                const node = materializeNode(allocator, self.graph_name, slot_id) catch continue;
-                defer destroyNode(allocator, node);
-                const passes = self.evalPredicate(allocator, where_expr, node) catch false;
-                if (passes) matched += 1;
+            // Filtered count, no O(1) precompute available.
+            if (self.where_expr) |where_expr| {
+                // A WHERE predicate is present: stream the matching slots,
+                // materialize each node, evaluate the predicate, and tally
+                // matches. O(scanned), no clone. (Inline `{prop: val}` filters,
+                // if any, were already applied during slot collection.)
+                var matched: usize = 0;
+                for (self.slot_ids) |slot_id| {
+                    const node = materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                    defer destroyNode(allocator, node);
+                    const passes = self.evalPredicate(allocator, where_expr, node) catch false;
+                    if (passes) matched += 1;
+                }
+                break :blk matched;
             }
-            break :blk matched;
+            // No WHERE predicate but no O(1) precompute either → inline
+            // `{prop: val}`-filtered count. Every collected slot already passed
+            // the inline-property filter in `collectMatchingSlotIds`, so the
+            // tally is exactly the number of matching slots. O(matched), no
+            // per-node materialization, no clone.
+            break :blk self.slot_ids.len;
         };
 
         self.count_emitted = true;
@@ -452,9 +462,19 @@ pub fn prepare(
         where_expr = cloneExpr(aa, w) catch return null;
     }
 
-    // count mode: O(1) cardinality from the label index when unfiltered.
+    // count mode: O(1) cardinality from the label index when TRULY unfiltered.
+    //
+    // The O(1) label/graph count is correct ONLY when there is no per-node
+    // filter of any kind. A WHERE/FILTER predicate is one filter; inline
+    // `{prop: val}` patterns on the matched node are ANOTHER. `eligibleQuery`
+    // accepts inline-prop count (it is streamable), but those props must be
+    // applied per node — using `countNodesByLabel` here would count EVERY node
+    // of the label and silently ignore the `{prop: val}` filter (over-count).
+    // So gate the O(1) precompute on having NO inline props as well; inline-
+    // prop counts fall through to the streamed slot-tally path below.
+    const has_inline_props = eligibility.pattern.props != null;
     var count_precomputed: ?usize = null;
-    if (eligibility.mode == .count and where_expr == null) {
+    if (eligibility.mode == .count and where_expr == null and !has_inline_props) {
         if (graph_store.getGlobalAdapter()) |adapter| {
             if (eligibility.pattern.labels.len == 1) {
                 count_precomputed = @intCast(adapter.countNodesByLabel(graph_name, eligibility.pattern.labels[0]) catch return null);
@@ -490,16 +510,22 @@ pub fn prepare(
     var row_limit: usize = std.math.maxInt(usize);
     var row_offset: usize = 0;
 
-    if (eligibility.mode == .count and where_expr == null) {
+    if (count_precomputed != null) {
         // O(1) count: no slots needed.
-    } else if (where_expr != null) {
-        // Predicate-filtered: collect every pattern-matching slot (unbounded);
-        // LIMIT/OFFSET apply to matched rows.
+    } else if (eligibility.mode == .count) {
+        // Filtered count (inline `{prop: val}` and/or WHERE): collect every
+        // pattern-matching slot UNBOUNDED — LIMIT on a count query does not
+        // bound the inner scan (the result is a single row regardless), so we
+        // must not pass `required` here. Inline-prop filters are applied during
+        // collection; a WHERE predicate (if any) is re-evaluated per node in
+        // `buildCountPage`'s tally. The tally counts matched slots (no clone).
         slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, owned_param_names, owned_param_values, context);
-        if (eligibility.mode != .count) {
-            row_offset = offset;
-            if (limit) |l| row_limit = l;
-        }
+    } else if (where_expr != null) {
+        // Predicate-filtered rows/projection: collect every pattern-matching
+        // slot (unbounded); LIMIT/OFFSET apply to matched rows.
+        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, owned_param_names, owned_param_values, context);
+        row_offset = offset;
+        if (limit) |l| row_limit = l;
     } else {
         // No predicate: matched == scanned, so bound slot collection by
         // OFFSET+LIMIT and start paging at OFFSET.

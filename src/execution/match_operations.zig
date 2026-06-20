@@ -299,7 +299,17 @@ fn passesRLSExprFilter(
     return allowed;
 }
 
-fn activeRlsPoliciesConfigured() bool {
+/// Context-free check: does ANY active RLS engine have at least one policy
+/// installed? The server registers EMPTY RLS engines at startup so policy
+/// procedures can populate them later; empty engines are default-allow and
+/// must NOT force hot authenticated reads onto the snapshot/clone path. This
+/// is the policy-aware half of `wouldEvaluateRLS` (which additionally requires
+/// an authenticated active context). Exposed publicly so transport read-path
+/// routing (GAP-0900 node-scan streaming) can use the SAME default-allow
+/// contract the count/point-read fast paths already use, instead of the
+/// coarser "any engine registered" test that disabled streaming for every
+/// authenticated user even when no policies exist.
+pub fn activeRlsPoliciesConfigured() bool {
     if (rls_types.getGlobalRLSFilterEngine()) |filter_engine| {
         if (filter_engine.policyCount() != 0) return true;
     }

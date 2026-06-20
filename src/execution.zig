@@ -212,6 +212,7 @@ pub const executeMatchQueryImpl = match_operations.executeMatchQueryImpl;
 pub const countNodesFastPath = match_operations.countNodesFastPath;
 pub const countNodesLabelRefcountFastPath = match_operations.countNodesLabelRefcountFastPath;
 pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
+pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 
 // Re-export statement handler functions for backward compatibility (M1 Phase 7 extraction)
 pub const executeShow = statement_handlers.executeShow;

@@ -5243,6 +5243,27 @@ fn mutationWriteLockTimeoutNs(state: *const ServerState) u64 {
     return default_mutation_write_lock_timeout_ms * std.time.ns_per_ms;
 }
 
+/// GAP-0900 (live-routing): policy-aware "does a REAL RLS policy exist?" gate
+/// used by the node-scan streaming routing. Returns true only when an
+/// authenticated session is present AND at least one RLS policy is installed in
+/// ANY of the active engines. The server registers EMPTY (default-allow) RLS
+/// engines at startup, so the previous `getGlobalRLSFilterEngine() != null`
+/// test was true for every authenticated session even with no policy — which
+/// disabled engine-side streaming for all authenticated reads and forced them
+/// onto the O(graph) snapshot clone. We check BOTH the server-side label
+/// engine (`rls_filter`, the one the handler actually applies) AND the shared
+/// `rls_types`/expression engines (`execution.activeRlsPoliciesConfigured`), so
+/// a best-effort sync failure between the two engines can never let a streamed
+/// read bypass an installed policy. When any real policy exists, streaming is
+/// disabled and the snapshot path runs `passesRLSFilter` per candidate node.
+fn authenticatedReadNeedsRlsSnapshot(state: *const ServerState) bool {
+    if (state.authenticated_user == null) return false;
+    if (rls_filter.getGlobalRLSFilterEngine()) |engine| {
+        if (engine.policyCount() != 0) return true;
+    }
+    return execution.activeRlsPoliciesConfigured();
+}
+
 /// GAP-0900 (scan-no-clone): true iff this read will be served by the
 /// engine-backed `node_scan_stream` path in the `.rows` arm, so the handler
 /// can skip the O(graph) `QueryReadSession` deep-clone. The conditions are a
@@ -5257,12 +5278,42 @@ fn mutationWriteLockTimeoutNs(state: *const ServerState) u64 {
 ///   - no effectful preamble (multi-statement programs run the full executor);
 ///   - the target must be streaming-eligible per `node_scan_stream.isEligible`
 ///     (bounded `MATCH (n:Label) RETURN n [LIMIT k]`, no WHERE/ORDER/etc.).
-fn readWillStreamEngineSide(state: *const ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
+/// GAP-0900 (live-routing): true iff any effectful preamble does NOT block the
+/// node-scan streaming fast path for `query_graph_name`. A fully empty preamble
+/// is fine. A preamble consisting solely of graph selectors that all name the
+/// graph the stream will scan (`query_graph_name`) is ALSO fine: re-selecting
+/// the already-bound target graph is a no-op for the streamed query, so skipping
+/// its execution drops no observable side effect and the target still scans the
+/// intended graph. Any other effectful preamble (a different graph, a SET, DDL,
+/// a braced transaction body, ...) blocks streaming — the full executor must run
+/// so those side effects take hold and the target sees them. This is the read
+/// analogue of GAP-0894's `<graph-selector>; <MERGE>` write fast path, and is
+/// the 2-statement shape the CLI `-g` flag and pooled `database/sql` drivers
+/// emit on EVERY query (without this, every such scan paid the O(graph) clone).
+fn preamblePermitsStreaming(analysis: *const query_traits.ProgramAnalysis, query_graph_name: []const u8) bool {
+    if (!analysis.has_effectful_preamble) return true;
+    const selector = analysis.preamble_graph_selector orelse return false;
+    return std.mem.eql(u8, selector, query_graph_name);
+}
+
+fn readWillStreamEngineSide(
+    state: *const ServerState,
+    analysis: *const query_traits.ProgramAnalysis,
+    query_graph_name: []const u8,
+) bool {
     if (graph_store.getGlobalAdapter() == null) return false;
     if (analysis.kind != .rows) return false;
-    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
-    if (rls_active) return false;
-    if (analysis.has_effectful_preamble) return false;
+    // GAP-0900 (live-routing fix): use the POLICY-AWARE RLS gate, not the
+    // coarse "any engine registered" test. The server installs EMPTY (default-
+    // allow) RLS engines at startup, so `getGlobalRLSFilterEngine() != null`
+    // was true for EVERY authenticated session even with no policy — which
+    // disabled engine-side streaming for all authenticated reads and forced
+    // them onto the O(graph) snapshot clone (the measured live slow path: a
+    // `LIMIT 5` projection on 200K nodes took ~8s). Only a REAL installed
+    // policy requires the snapshot path so RLS runs per candidate node; this
+    // matches the contract the count and point-read fast paths already use.
+    if (authenticatedReadNeedsRlsSnapshot(state)) return false;
+    if (!preamblePermitsStreaming(analysis, query_graph_name)) return false;
     const target = analysis.target orelse return false;
     if (target.* != .Query) return false;
     return node_scan_stream.isEligible(&target.Query);
@@ -6378,7 +6429,7 @@ fn handleClientMessage(
                             graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
-                } else if (readWillStreamEngineSide(state, &analysis)) {
+                } else if (readWillStreamEngineSide(state, &analysis, query_graph_name)) {
                     // GAP-0900 (scan-no-clone): a bounded label/all-node scan
                     // (`MATCH (n:Label) RETURN n [LIMIT k]`, no WHERE / ORDER /
                     // aggregation / traversal, no RLS, no effectful preamble)
@@ -6649,10 +6700,23 @@ fn handleClientMessage(
                     // GAP-0260: Non-txn saves deferred to background persistence thread
                 },
                 .rows => {
-                    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
-                    // GAP-0892: node-scan streaming executes only `analysis.target`;
-                    // bail when other statements (SESSION SET, DDL, ...) must run.
-                    if (!rls_active and !analysis.has_effectful_preamble) {
+                    // GAP-0900 (live-routing fix): this gate MUST agree with
+                    // `readWillStreamEngineSide` (which decides whether the
+                    // O(graph) snapshot clone was skipped above). Use the same
+                    // POLICY-AWARE RLS test: an empty default-allow engine no
+                    // longer disables streaming for authenticated sessions. Only
+                    // a real installed policy forces the snapshot path so RLS is
+                    // evaluated per candidate node.
+                    const rls_active = authenticatedReadNeedsRlsSnapshot(state);
+                    // GAP-0892 / GAP-0900: node-scan streaming executes only
+                    // `analysis.target`; it may run when the preamble is empty OR
+                    // is solely a same-graph selector (a no-op re-selection of the
+                    // graph the target already scans — see `preamblePermitsStreaming`).
+                    // Any other effectful preamble (different graph, SET, DDL, txn
+                    // body) must run through the full executor. This MUST agree with
+                    // `readWillStreamEngineSide` so the snapshot-skip decision and
+                    // the execute decision never diverge.
+                    if (!rls_active and preamblePermitsStreaming(&analysis, query_graph_name)) {
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;

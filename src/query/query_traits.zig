@@ -43,6 +43,18 @@ pub const ProgramAnalysis = struct {
     /// evaluates the target against the request-start session graph and
     /// silently drops the skipped statement's side effects.
     has_effectful_preamble: bool = false,
+    /// GAP-0900 (live-routing): when the ONLY effectful preamble statements are
+    /// graph selectors (`USE GRAPH g` / `SESSION SET PROPERTY GRAPH g`) that all
+    /// name the SAME graph, this holds that graph name. The node-scan streaming
+    /// fast path may then run when this selector equals the graph it will scan
+    /// (`query_graph_name`): re-selecting the already-bound graph is a no-op for
+    /// the streamed target, so skipping its execution drops no observable side
+    /// effect and the target still scans the intended graph. This is the read
+    /// analogue of GAP-0894's `<graph-selector>; <MERGE>` write fast path, and
+    /// is exactly the 2-statement shape the CLI `-g` flag and pooled
+    /// `database/sql` drivers emit on every query. Null when the preamble is
+    /// empty, contains a non-selector statement, or selects multiple graphs.
+    preamble_graph_selector: ?[]const u8 = null,
 };
 
 pub const NormalizedQuery = struct {
@@ -123,6 +135,12 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
     // the other statements' side effects (e.g. `SESSION SET PROPERTY GRAPH
     // "G1"; MATCH (n) RETURN count(*)` counted the wrong graph —
     // gql_conformance T11/T12/T14).
+    // GAP-0900: track whether every effectful preamble statement is a graph
+    // selector naming the SAME graph (so the streaming fast path can run when
+    // that graph is also the one it will scan). Any non-selector effectful
+    // statement, or a second selector naming a DIFFERENT graph, disqualifies it.
+    var selector_graph: ?[]const u8 = null;
+    var selector_only = true;
     for (program.statements, 0..) |*stmt, i| {
         if (target_idx) |t| {
             if (i == t) continue;
@@ -132,13 +150,57 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
             // whose statements (e.g. SESSION SET) escape this loop —
             // treat it as effectful unless the body is absent.
             .StartTransaction => |txn| {
-                if (txn.body != null) analysis.has_effectful_preamble = true;
+                if (txn.body != null) {
+                    analysis.has_effectful_preamble = true;
+                    selector_only = false;
+                }
             },
             .Commit, .Rollback => {},
-            else => analysis.has_effectful_preamble = true,
+            else => {
+                analysis.has_effectful_preamble = true;
+                if (preambleGraphSelectorName(stmt)) |g| {
+                    if (selector_graph) |prev| {
+                        if (!std.mem.eql(u8, prev, g)) selector_only = false;
+                    } else {
+                        selector_graph = g;
+                    }
+                } else {
+                    selector_only = false;
+                }
+            },
         }
     }
+    if (selector_only) analysis.preamble_graph_selector = selector_graph;
     return analysis;
+}
+
+/// GAP-0900: extract the plain graph name from a leading graph-selector
+/// statement (`USE GRAPH g` / `SESSION SET PROPERTY GRAPH g`), or null for any
+/// other statement or a non-plain reference. Conservative: a null means the
+/// caller must NOT treat the preamble as a skippable same-graph re-selection.
+/// Mirrors `bulk_ingest.graphSelectorName`'s acceptance rules.
+fn preambleGraphSelectorName(stmt: *const ast.Statement) ?[]const u8 {
+    const raw = switch (stmt.*) {
+        .UseGraph => |u| u.graph_name,
+        .SessionSet => |s| switch (s.clause_type) {
+            .Graph => |g| g.expression,
+            else => return null,
+        },
+        else => return null,
+    };
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    var s = trimmed;
+    if (s.len >= 2 and ((s[0] == '"' and s[s.len - 1] == '"') or
+        (s[0] == '\'' and s[s.len - 1] == '\'')))
+    {
+        s = s[1 .. s.len - 1];
+    }
+    if (s.len == 0) return null;
+    for (s) |c| {
+        if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or
+            c == '/' or c == '(' or c == ')' or c == '"' or c == '\'') return null;
+    }
+    return s;
 }
 
 fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void {
