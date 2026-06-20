@@ -4045,6 +4045,28 @@ pub fn build(b: *std.Build) void {
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
 
+    // CANARY: REQ=REQ-QUIC-HC-180; FEATURE="Sequential Single-Connection Upsert Liveness"; ASPECT=FirstStreamSchedulerLostWakeBuild; STATUS=TESTED; OWNER=transport; UPDATED=2026-06-19
+    // BUG_STREAM_DESYNC regression: 250+ sequential find+create on ONE connection.
+    // Root cause was an O(n^2) per-connection accumulator in the vendored quic lib;
+    // FIXED in quic v0.1.32 (now pinned). Run via `zig build test-quic-sequential-upsert-desync`.
+    const quic_sequential_upsert_e2e = b.addExecutable(.{ .name = "e2e_quic_sequential_upsert_desync", .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_sequential_upsert_desync.zig"), .target = target, .optimize = optimize }) });
+    quic_sequential_upsert_e2e.root_module.addImport("geode", root_mod);
+    quic_sequential_upsert_e2e.root_module.addImport("protobuf", protobuf_mod);
+    quic_sequential_upsert_e2e.root_module.addImport("schema", schema_mod);
+    quic_sequential_upsert_e2e.root_module.addImport("transport/quic", transport_quic_mod);
+    quic_sequential_upsert_e2e.root_module.link_libc = true;
+    if (enable_openssl) {
+        quic_sequential_upsert_e2e.root_module.linkSystemLibrary("ssl", .{});
+        quic_sequential_upsert_e2e.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        quic_sequential_upsert_e2e.root_module.linkSystemLibrary("dl", .{});
+    }
+    const run_quic_sequential_upsert_e2e = b.addRunArtifact(quic_sequential_upsert_e2e);
+    run_quic_sequential_upsert_e2e.step.dependOn(&install_geode_exe.step);
+    const quic_sequential_upsert_e2e_step = b.step("test-quic-sequential-upsert-desync", "Run sequential single-connection find+create stream-desync regression (BUG_STREAM_DESYNC; fixed in quic v0.1.32)");
+    quic_sequential_upsert_e2e_step.dependOn(&run_quic_sequential_upsert_e2e.step);
+
     // Issue #746: QueryDeadlineState lifetime regression test — pins the
     // contract that `finish()` must join the watchdog thread before
     // returning, so callers (cmdQuery) are safe to free the state (e.g. by

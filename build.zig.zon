@@ -194,8 +194,8 @@
             // Validated: compiler_rt.memset 44%→17.7% of CPU, +14.8% poll-bound
             // RETURN 1 throughput, correctness verified, quic `zig build test` green.
             // .version now tracks the tag (0.1.31).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.31#02cee4ae5e0516bcf5d7298f65787ac4b0f0bd4b",
-            .hash = "quic-0.1.31-gBIqUdkGPgB-zCfIX5aWkA-7vSMktGzRlhNqNzA06MGZ",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.32#b95123ecb4c77d67663dd3cb55d60d6d04051a2b",
+            .hash = "quic-0.1.32-gBIqUWkpPgCTF8ybiSRYesDqTuVeec6MhePLQ_Sn9esa",
         },
 
         // =======================================================================
@@ -367,8 +367,8 @@
             // 2026-06-17: v0.2.17 — quic v0.1.31 lockstep (GAP-0900 poll-loop
             // memset fix). Both pins now resolve the same quic v0.1.31 module,
             // so the build graph stays diamond-free.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.17#5defb0b6a2e1f0dc554fb377f41a0a9c1513b7d1",
-            .hash = "geode_client_zig-0.2.17-8ysbV46JCQBPKQsEw0MEOOhiLZYR_TiyBQMncqJ_fH4Y",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.2#1777930f3ef68eae99cbc9adf1ff4e591dc152b8",
+            .hash = "geode_client_zig-0.3.2-8ysbV8CrCgApEQ2H_BxDP3a3GqZBhm-e1uaLVPj9u6yk",
         },
 
         // =======================================================================
