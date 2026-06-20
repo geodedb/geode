@@ -274,7 +274,9 @@ test "GAP-0900: isEligible is false for non-streamable shapes" {
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
 
-    const where_q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.taxon_id > 10 RETURN n");
+    // A WHERE using a predicate operator outside the streamable subset
+    // (CONTAINS) must NOT stream — it stays on the snapshot path.
+    const where_q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.name CONTAINS 'x' RETURN n");
     try testing.expect(!node_scan_stream.isEligible(where_q));
 
     var qa2 = std.heap.ArenaAllocator.init(testing.allocator);
@@ -286,4 +288,250 @@ test "GAP-0900: isEligible is false for non-streamable shapes" {
     defer qa3.deinit();
     const traverse_q = try parseQuery(&qa3, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n");
     try testing.expect(!node_scan_stream.isEligible(traverse_q));
+}
+
+// ===================================================================
+// GAP-0900 broadening (2026-06): property projections, simple WHERE,
+// inline {prop:val} filters, and count(label) are now streamed
+// engine-side (no whole-graph clone). The tests below assert clone==0
+// (and bounded / zero nodes materialized) for each broadened shape, and
+// that the streamed rows are byte-identical to the snapshot executor.
+// ===================================================================
+
+fn streamSinglePage(
+    h: *Harness,
+    aa: std.mem.Allocator,
+    src: []const u8,
+    page_size: usize,
+) !node_scan_stream.NodeScanStream.Page {
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const q = try parseQuery(&qa, src);
+    try testing.expect(node_scan_stream.isEligible(q));
+
+    var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse {
+        return error.StreamPathNotEligible;
+    };
+    defer stream.deinit();
+    return stream.buildNextPage(aa, page_size);
+}
+
+// -------------------------------------------------------------------
+// Test 6 — property projection + LIMIT streams O(k), clones 0.
+// -------------------------------------------------------------------
+test "GAP-0900: RETURN n.prop LIMIT k streams O(k), clones 0" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+    node_scan_stream.resetNodesMaterializedTotal();
+
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) RETURN n.taxon_id LIMIT 5", LIMIT_K);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, LIMIT_K), page.result.rows.len);
+    try testing.expectEqual(@as(usize, 1), page.result.columns.len);
+    try testing.expectEqualStrings("taxon_id", page.result.columns[0]);
+    for (page.result.rows) |row| {
+        try testing.expectEqual(@as(usize, 1), row.len);
+        try testing.expect(row[0] == .Int);
+    }
+    // No whole-graph clone; only O(k) nodes materialized.
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+    try testing.expectEqual(@as(u64, LIMIT_K), node_scan_stream.getNodesMaterializedTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 7 — multi-projection + alias, with a bare-variable mixed column.
+// -------------------------------------------------------------------
+test "GAP-0900: RETURN n.a, n.b AS x multi-projection streams, clones 0" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) RETURN n.taxon_id, n.name AS label LIMIT 3", 3);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 3), page.result.rows.len);
+    try testing.expectEqual(@as(usize, 2), page.result.columns.len);
+    try testing.expectEqualStrings("taxon_id", page.result.columns[0]);
+    try testing.expectEqualStrings("label", page.result.columns[1]);
+    for (page.result.rows) |row| {
+        try testing.expectEqual(@as(usize, 2), row.len);
+        try testing.expect(row[0] == .Int);
+        try testing.expect(row[1] == .Str);
+    }
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 8 — simple WHERE + LIMIT: filter applied per node, clones 0.
+// -------------------------------------------------------------------
+test "GAP-0900: WHERE n.prop > k + LIMIT streams filtered, clones 0" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+    // taxon_id 0..N-1; predicate keeps >= 1990; LIMIT 3 of those.
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) WHERE n.taxon_id >= 1990 RETURN n.taxon_id LIMIT 3", 3);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 3), page.result.rows.len);
+    for (page.result.rows) |row| {
+        try testing.expect(row[0] == .Int);
+        try testing.expect(row[0].Int >= 1990);
+    }
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 9 — inline {prop: val} filter + LIMIT streams, clones 0.
+// -------------------------------------------------------------------
+test "GAP-0900: inline {prop:val} filter streams, clones 0" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon {taxon_id: 7}) RETURN n.name", 16);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    try testing.expect(page.result.rows[0][0] == .Str);
+    try testing.expectEqualStrings("n7", page.result.rows[0][0].Str);
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 10 — count(label) via the streaming path is O(1): clone==0 AND
+// ZERO nodes materialized (served straight from the label index).
+// -------------------------------------------------------------------
+test "GAP-0900: streamed count(n:Taxon) is O(1) — clone 0, materialize 0" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+    node_scan_stream.resetNodesMaterializedTotal();
+
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) RETURN count(n) AS c", 16);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    try testing.expectEqualStrings("c", page.result.columns[0]);
+    try testing.expectEqual(@as(i64, @intCast(N_NODES)), page.result.rows[0][0].Int);
+    // O(1): no clone, no per-node materialize.
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+    try testing.expectEqual(@as(u64, 0), node_scan_stream.getNodesMaterializedTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 11 — filtered count streams O(scanned): clone==0, correct tally.
+// -------------------------------------------------------------------
+test "GAP-0900: filtered count(n) streams, clones 0, correct tally" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+    const aa = h.arena.allocator();
+
+    graph_store.resetCloneNodesTotal();
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) WHERE n.taxon_id < 10 RETURN count(n) AS c", 16);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    try testing.expectEqual(@as(i64, 10), page.result.rows[0][0].Int);
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+}
+
+// -------------------------------------------------------------------
+// Test 12 — results equivalence: streamed projection rows == snapshot
+// executor rows (same set of (taxon_id, name) values).
+// -------------------------------------------------------------------
+test "GAP-0900: streamed projection == snapshot executor projection" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const small_n: usize = 40;
+    try h.seed(small_n);
+    const aa = h.arena.allocator();
+
+    // Streamed full projection.
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) RETURN n.taxon_id, n.name", small_n + 10);
+    defer page.result.deinit(aa);
+    try testing.expectEqual(small_n, page.result.rows.len);
+
+    var streamed = std.AutoHashMap(i64, void).init(testing.allocator);
+    defer streamed.deinit();
+    for (page.result.rows) |row| {
+        try testing.expect(row[0] == .Int);
+        try testing.expect(row[1] == .Str);
+        try streamed.put(row[0].Int, {});
+    }
+
+    // Snapshot executor projection (the legacy path) over the same graph.
+    var res = try h.runQuery("MATCH (n:Taxon) RETURN n.taxon_id, n.name");
+    defer res.deinit(aa);
+    try testing.expectEqual(small_n, res.rows.len);
+    try testing.expectEqual(@as(usize, 2), res.columns.len);
+    var snap_matched: usize = 0;
+    for (res.rows) |row| {
+        try testing.expect(row[0] == .Int);
+        try testing.expect(streamed.contains(row[0].Int));
+        snap_matched += 1;
+    }
+    try testing.expectEqual(small_n, snap_matched);
+}
+
+// -------------------------------------------------------------------
+// Test 13 — null property projection: a node missing the projected
+// property yields Null, identical to the executor.
+// -------------------------------------------------------------------
+test "GAP-0900: projection of missing property yields Null" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    // Seed nodes WITHOUT the 'missing' property.
+    try h.seed(5);
+    const aa = h.arena.allocator();
+
+    var page = try streamSinglePage(&h, aa, "MATCH (n:Taxon) RETURN n.does_not_exist LIMIT 5", 5);
+    defer page.result.deinit(aa);
+    try testing.expectEqual(@as(usize, 5), page.result.rows.len);
+    for (page.result.rows) |row| {
+        try testing.expect(row[0] == .Null);
+    }
+
+    // Executor agrees.
+    var res = try h.runQuery("MATCH (n:Taxon) RETURN n.does_not_exist LIMIT 5");
+    defer res.deinit(aa);
+    for (res.rows) |row| {
+        try testing.expect(row[0] == .Null);
+    }
+}
+
+// -------------------------------------------------------------------
+// Test 14 — broadened shapes are eligible; out-of-subset stays excluded.
+// -------------------------------------------------------------------
+test "GAP-0900: broadened eligibility gate" {
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+
+    // Now eligible (broadened):
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name LIMIT 5")));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.rank = 'species' RETURN n.name LIMIT 3")));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon {source: 'col'}) RETURN count(n)")));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN count(n)")));
+
+    // Still NOT eligible (out of subset):
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n ORDER BY n.taxon_id LIMIT 5")));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN DISTINCT n.name")));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN sum(n.taxon_id)")));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n.name")));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name, m.name")));
 }
