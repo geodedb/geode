@@ -6894,6 +6894,19 @@ pub fn build(b: *std.Build) void {
     const scan_race_step = b.step("test-scan-ingest-race", "Run concurrent scan+ingest crash regression (LabelIndex.scan race under streaming read path)");
     scan_race_step.dependOn(&run_scan_race_tests.step);
 
+    // Scan-writer-progress concurrency regression: a long label scan's
+    // per-shard SHARED hold must NOT starve the per-shard EXCLUSIVE apply.
+    // The slot-collection scan chunks `mg.shard_locks[idx]` per page-batch so
+    // concurrent ingest keeps making progress during a scan, while the scan
+    // still returns a consistent (no-duplicate, all-live) subset.
+    const scan_writer_progress_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_scan_writer_progress.zig"), .target = target, .optimize = optimize });
+    scan_writer_progress_test_mod.addImport("geode", root_mod);
+    const scan_writer_progress_tests = b.addTest(.{ .root_module = scan_writer_progress_test_mod });
+    const run_scan_writer_progress_tests = b.addRunArtifact(scan_writer_progress_tests);
+    shardDep(test_step, &run_scan_writer_progress_tests.step, 5, test_shard_loads, test_shard_index);
+    const scan_writer_progress_step = b.step("test-scan-writer-progress", "Run scan-writer-progress concurrency regression (long scan must not starve per-shard apply)");
+    scan_writer_progress_step.dependOn(&run_scan_writer_progress_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple
