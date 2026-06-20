@@ -3681,6 +3681,19 @@ pub const StorageAdapter = struct {
         return try result.toOwnedSlice(allocator);
     }
 
+    /// Number of label slots collected per per-shard SHARED-lock hold.
+    ///
+    /// CHUNKING (scan-writer-progress): the slot-collection scan acquires +
+    /// releases `mg.shard_locks[shard_idx]` SHARED once per batch of this many
+    /// posting-list entries instead of holding it across the whole O(graph)
+    /// loop. The per-shard apply (`bulkInsertNode*`) takes the SAME shard lock
+    /// EXCLUSIVE, so an unbounded SHARED hold starves ingest on that shard. A
+    /// bounded hold lets the EXCLUSIVE apply interleave between batches (it
+    /// waits at most one batch). 1024 is small enough to bound the hold to a
+    /// few hundred microseconds of raw page reads, large enough to amortise the
+    /// lock acquire/release and page-pin churn across the batch.
+    const label_scan_batch_slots: usize = 1024;
+
     fn appendLiveNodesForLabelShard(
         mg: *ManagedGraph,
         shard_idx: usize,
@@ -3689,11 +3702,17 @@ pub const StorageAdapter = struct {
         result: *std.ArrayList(u64),
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
-        mg.shard_locks[shard_idx].lockSharedUncancelable(io);
-        defer mg.shard_locks[shard_idx].unlockShared(io);
 
         const shard = mg.engine.shards[shard_idx];
+
+        // `scanLabelIter` snapshots the label's posting list into a private,
+        // IMMUTABLE owned slice up front (under the LabelIndex rwlock SHARED,
+        // released before it returns) and exposes a MONOTONIC cursor. So the
+        // iterator itself needs no shard lock, and we may release + reacquire
+        // the shard lock between batches without re-collecting or risking
+        // duplicates — the cursor never rewinds and the snapshot never changes.
         var iter = try shard.scanLabelIter(label_id);
+        defer iter.deinit();
 
         // Filter out deleted/empty nodes whose slot IDs are still present
         // in the label index.  We read raw page bytes via the buffer pool
@@ -3704,54 +3723,86 @@ pub const StorageAdapter = struct {
         const NodeRec = node_mod.NodeRec;
         const hdr_size = gs.node.PAGE_HEADER_SIZE;
 
-        // Scan one shard at a time under that shard's read lock. This fences
-        // concurrent shard writers while preserving parallel reads, and avoids
-        // the previous fan-out path that could interleave raw buffer-pool pins
-        // from multiple shard cursors during parallel UNION planning.
         const nstore = &shard.node_store;
         const bp = nstore.buffer_pool;
         const npp = nstore.nodes_per_page;
-        var cached_page_id: ?u64 = null;
-        var cached_frame: *gs.page_frame.PageFrame = undefined;
-        var cached_frame_idx: u32 = 0;
-        defer if (cached_page_id != null) bp.unpin(cached_frame_idx, false);
 
-        while (try iter.next()) |nid| {
-            const page_id = nid / npp;
+        // Process the posting-list snapshot in batches. Each batch holds the
+        // shard SHARED lock for at most `label_scan_batch_slots` raw page
+        // reads, then RELEASES it so a queued EXCLUSIVE apply on this shard can
+        // proceed before the next batch reacquires. The page pin is dropped at
+        // the batch boundary WHILE the lock is still held (a pinned frame is
+        // only valid under the shard lock — once released the buffer pool may
+        // evict/reuse it). Re-pinning in the next batch is safe: the `nid`s are
+        // an immutable snapshot, and a node deleted across the gap simply fails
+        // the per-batch isDeleted/isEmpty re-check (skipped, as it would be
+        // anyway). We never release mid-node: each node's flag read completes
+        // under one contiguous SHARED hold, so no torn read can be exposed.
+        var exhausted = false;
+        while (!exhausted) {
+            mg.shard_locks[shard_idx].lockSharedUncancelable(io);
 
-            // Page not allocated → node cannot be live (stale index entry)
-            if (!nstore.free_space.isAllocated(page_id)) continue;
+            // Scan one shard at a time under that shard's read lock. This fences
+            // concurrent shard writers while preserving parallel reads, and
+            // avoids the previous fan-out path that could interleave raw
+            // buffer-pool pins from multiple shard cursors during parallel
+            // UNION planning.
+            var cached_page_id: ?u64 = null;
+            var cached_frame: *gs.page_frame.PageFrame = undefined;
+            var cached_frame_idx: u32 = 0;
 
-            // Unpin cached frame when moving to a different page.
-            //
-            // CRITICAL: clear the cached_page_id tracking BETWEEN the old
-            // unpin and the new pin. If `bp.pin` errors,
-            // `cached_frame` still points at the just-unpinned old frame,
-            // and the function-exit `defer` would otherwise call `unpin`
-            // again on it (`bp.unpin(bp.frameIndex(cached_frame), false)`).
-            // The buffer pool asserts `pin_count > 0` on every unpin, so
-            // that double-unpin surfaces as a SIGABRT — observed under the
-            // 16-way concurrent UNION DISTINCT load in
-            // test_gap0814_union_parallelism.
-            if (cached_page_id == null or cached_page_id.? != page_id) {
-                if (cached_page_id != null) {
-                    const old_frame_idx = cached_frame_idx;
-                    cached_page_id = null;
-                    bp.unpin(old_frame_idx, false);
+            // On any error inside the batch, drop the pin THEN release the
+            // shard lock (LIFO unwind: errdefers run bottom-up).
+            errdefer mg.shard_locks[shard_idx].unlockShared(io);
+            errdefer if (cached_page_id != null) bp.unpin(cached_frame_idx, false);
+
+            var in_batch: usize = 0;
+            while (in_batch < label_scan_batch_slots) : (in_batch += 1) {
+                const nid = (try iter.next()) orelse {
+                    exhausted = true;
+                    break;
+                };
+                const page_id = nid / npp;
+
+                // Page not allocated → node cannot be live (stale index entry)
+                if (!nstore.free_space.isAllocated(page_id)) continue;
+
+                // Unpin cached frame when moving to a different page.
+                //
+                // CRITICAL: clear the cached_page_id tracking BETWEEN the old
+                // unpin and the new pin. If `bp.pin` errors,
+                // `cached_frame` still points at the just-unpinned old frame,
+                // and the errdefer would otherwise call `unpin`
+                // again on it (`bp.unpin(cached_frame_idx, false)`).
+                // The buffer pool asserts `pin_count > 0` on every unpin, so
+                // that double-unpin surfaces as a SIGABRT — observed under the
+                // 16-way concurrent UNION DISTINCT load in
+                // test_gap0814_union_parallelism.
+                if (cached_page_id == null or cached_page_id.? != page_id) {
+                    if (cached_page_id != null) {
+                        const old_frame_idx = cached_frame_idx;
+                        cached_page_id = null;
+                        bp.unpin(old_frame_idx, false);
+                    }
+                    cached_frame = try bp.pin(.nodes, page_id);
+                    cached_frame_idx = bp.frameIndex(cached_frame);
+                    cached_page_id = page_id;
                 }
-                cached_frame = try bp.pin(.nodes, page_id);
-                cached_frame_idx = bp.frameIndex(cached_frame);
-                cached_page_id = page_id;
+
+                const slot: u32 = @intCast(nid % npp);
+                const slot_offset = hdr_size + slot * @sizeOf(NodeRec);
+                const data = cached_frame.dataSlice();
+                const rec = std.mem.bytesToValue(NodeRec, data[slot_offset..][0..@sizeOf(NodeRec)]);
+
+                if (node_mod.isDeleted(&rec)) continue;
+                if (node_mod.isEmpty(&rec)) continue;
+                try result.append(allocator, nid);
             }
 
-            const slot: u32 = @intCast(nid % npp);
-            const slot_offset = hdr_size + slot * @sizeOf(NodeRec);
-            const data = cached_frame.dataSlice();
-            const rec = std.mem.bytesToValue(NodeRec, data[slot_offset..][0..@sizeOf(NodeRec)]);
-
-            if (node_mod.isDeleted(&rec)) continue;
-            if (node_mod.isEmpty(&rec)) continue;
-            try result.append(allocator, nid);
+            // Drop the page pin BEFORE releasing the shard lock — the pinned
+            // frame is only valid while the lock is held.
+            if (cached_page_id != null) bp.unpin(cached_frame_idx, false);
+            mg.shard_locks[shard_idx].unlockShared(io);
         }
     }
 
