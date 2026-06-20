@@ -103,7 +103,6 @@ pub fn main() !void {
         std.process.exit(0);
     };
     defer server.deinit();
-
     const addr = server.getAddr();
     std.debug.print("sequential upsert desync: connecting to {s} ops={d}\n", .{ addr, op_count });
 
@@ -113,7 +112,26 @@ pub fn main() !void {
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
 
-    // Use a dedicated label so this run is independent of any other state.
+    // Seed exactly ONE node up front. The per-op workload below then operates
+    // on this single fixed node so that *server-side cost per op is constant*
+    // (a single-node label match + single-property update). This deliberately
+    // isolates the transport / first-stream-scheduler liveness from any
+    // storage-side O(n) graph-growth cost: if this loop wedges, it is because
+    // the per-connection proto_reader stopped delivering (the BUG_STREAM_DESYNC
+    // hard wedge: `total` pins, `active_streams=1`, `proto_idle_ms` climbs
+    // without bound), NOT because queries got slower as the graph grew.
+    {
+        var seed_res = try client.executeAndCollectWithTimeout(
+            allocator,
+            "CREATE (n:SeqUpsert { id: 0, seq: 0 })",
+            util.emptyParams(),
+            128,
+            per_op_timeout_secs,
+        );
+        defer seed_res.deinit(allocator);
+        try expectNoQueryError(&seed_res);
+    }
+
     const run_start_ns = monoNs();
     const overall_deadline_ns = run_start_ns +| overall_deadline_secs * std.time.ns_per_s;
 
@@ -127,17 +145,12 @@ pub fn main() !void {
             return error.SequentialUpsertWedged;
         }
 
-        // FIND (read): the keelhaul replay first looks up the node by id.
-        const find_query = try std.fmt.allocPrint(
-            allocator,
-            "MATCH (n:SeqUpsert {{ id: {d} }}) RETURN n",
-            .{i},
-        );
-        defer allocator.free(find_query);
-
+        const op_t0 = monoNs();
+        // FIND (read): the keelhaul replay first looks up the node by id. Fixed
+        // id 0 => constant-cost single-node match (no graph-growth confounder).
         var find_res = client.executeAndCollectWithTimeout(
             allocator,
-            find_query,
+            "MATCH (n:SeqUpsert { id: 0 }) RETURN n",
             util.emptyParams(),
             128,
             per_op_timeout_secs,
@@ -151,34 +164,39 @@ pub fn main() !void {
         };
         find_res.deinit(allocator);
 
-        // CREATE (write): the replay then inserts the node. Read-then-write on
-        // the same connection is the exact pattern that wedges.
-        const create_query = try std.fmt.allocPrint(
+        // WRITE: the replay then mutates. Read-then-write on the same
+        // connection is the exact keelhaul pattern that wedges. SET on the
+        // single seeded node keeps per-op cost constant.
+        const write_query = try std.fmt.allocPrint(
             allocator,
-            "CREATE (n:SeqUpsert {{ id: {d}, seq: {d} }})",
-            .{ i, i },
+            "MATCH (n:SeqUpsert {{ id: 0 }}) SET n.seq = {d}",
+            .{i},
         );
-        defer allocator.free(create_query);
+        defer allocator.free(write_query);
 
-        var create_res = client.executeAndCollectWithTimeout(
+        var write_res = client.executeAndCollectWithTimeout(
             allocator,
-            create_query,
+            write_query,
             util.emptyParams(),
             128,
             per_op_timeout_secs,
         ) catch |err| {
             std.debug.print(
-                "sequential upsert desync: WEDGED on CREATE op {d}/{d}: {s} " ++
+                "sequential upsert desync: WEDGED on WRITE op {d}/{d}: {s} " ++
                     "(stream desync — client blocked waiting for response on stream_id=0)\n",
                 .{ i, op_count, @errorName(err) },
             );
             return err;
         };
-        defer create_res.deinit(allocator);
-        try expectNoQueryError(&create_res);
+        defer write_res.deinit(allocator);
+        try expectNoQueryError(&write_res);
 
+        // Track per-op latency: the wedge manifests as per-op latency growing
+        // without bound (the per-connection proto_reader idle time climbs as the
+        // QUIC recovery/congestion bookkeeping degrades under sustained load).
+        const op_ms = (monoNs() -| op_t0) / std.time.ns_per_ms;
         if (i != 0 and i % 50 == 0) {
-            std.debug.print("sequential upsert desync: progress {d}/{d} ops ok\n", .{ i, op_count });
+            std.debug.print("sequential upsert desync: progress {d}/{d} ops ok (last op {d} ms)\n", .{ i, op_count, op_ms });
         }
     }
 
