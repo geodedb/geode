@@ -1130,7 +1130,7 @@ pub const QuicTransport = struct {
         // Close streams and connection. The QUIC library's closeStream/
         // closeConnection are thread-safe (per-connection mutex).
         for (conn.streams.items) |stream| {
-            conn.inner.closeStream(stream.stream_id, 0) catch {}; // Best-effort cleanup
+            finalizeStreamSend(conn.inner, stream.stream_id); // FIN (with TX-init fallback)
             conn.allocator.destroy(stream);
         }
         conn.streams.deinit(conn.allocator);
@@ -1344,7 +1344,7 @@ pub const QuicConnection = struct {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
         for (self.streams.items) |stream| {
-            self.inner.closeStream(stream.stream_id, 0) catch {}; // Best-effort cleanup
+            finalizeStreamSend(self.inner, stream.stream_id); // FIN (with TX-init fallback)
             self.allocator.destroy(stream);
         }
         self.streams.deinit(self.allocator);
@@ -1396,6 +1396,36 @@ pub const QuicConnection = struct {
         }
     }
 };
+
+/// Guarantee the peer observes end-of-stream on `stream_id` by emitting a FIN.
+///
+/// `closeStream` sends a graceful FIN, but for a server-accepted,
+/// client-initiated stream that the server never wrote a response to, the
+/// vendored QUIC library has no send-side TX state for the stream yet and
+/// `closeStream` returns `error.InvalidStream` WITHOUT emitting any frame. The
+/// old best-effort `closeStream(...) catch {}` therefore silently left the
+/// peer's receive direction half-open with no terminator — the receive-path
+/// deadlock (server reaps the handler, active_streams drops to 0, no FIN) that
+/// geode-client-go v0.1.26 could only mitigate client-side via context
+/// cancellation.
+///
+/// `writeStream(id, &.{}, fin=true)` lazily initializes that TX state for a
+/// server-side client-initiated stream and then emits a FIN-only frame, so it
+/// succeeds exactly where `closeStream` cannot. Try the graceful FIN first
+/// (cheapest, also covers stream 0 and already-written streams), then fall back
+/// to the writeStream FIN so a terminator is ALWAYS emitted on close.
+///
+/// Generic over `conn` so the fallback policy is unit-testable with a fake
+/// connection that simulates the no-TX `error.InvalidStream` path.
+fn finalizeStreamSend(conn: anytype, stream_id: u64) void {
+    conn.closeStream(stream_id, 0) catch {
+        // No graceful FIN was emitted (e.g. InvalidStream: no TX state for a
+        // never-written accepted stream). Emit a FIN via the writeStream path,
+        // which lazily creates the server-side TX state. Still best-effort: if
+        // the stream was already FIN'd/aborted this is a harmless no-op.
+        _ = conn.writeStream(stream_id, &.{}, true) catch {};
+    };
+}
 
 pub const QuicStream = struct {
     allocator: std.mem.Allocator,
@@ -1598,7 +1628,7 @@ pub const QuicStream = struct {
         defer {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
-        self.connection.closeStream(self.stream_id, 0) catch {}; // Best-effort cleanup
+        finalizeStreamSend(self.connection, self.stream_id);
     }
 
     pub fn finish(self: *QuicStream) !void {
@@ -2216,4 +2246,99 @@ test "PollSync: enterIo/leaveIo/enterPoll/leavePoll still correct" {
     try std.testing.expect(ps.poll_requested);
     ps.leavePoll();
     try std.testing.expect(!ps.poll_requested);
+}
+
+// ---------------------------------------------------------------------------
+// finalizeStreamSend — guaranteed end-of-stream terminator (receive-path
+// deadlock fix; cross-repo "Ask #3" with geode-client-go v0.1.26).
+//
+// Root cause: the vendored QUIC `closeStream` sends a graceful FIN but cannot
+// initialize send-side TX state for a server-accepted, client-initiated stream
+// that was never written to — it returns error.InvalidStream WITHOUT emitting a
+// frame. The previous best-effort `closeStream(...) catch {}` thus silently left
+// the client's receive direction half-open (no terminator), so a client blocked
+// in a raw QUIC read with QUIC keep-alives suppressing the idle timeout would
+// hang forever. `writeStream(id, &.{}, fin=true)` lazily creates that TX state
+// and emits a FIN-only frame, so it terminates exactly the streams `closeStream`
+// cannot. These tests pin the FIN-then-writeStream-FIN fallback policy.
+// ---------------------------------------------------------------------------
+
+test "finalizeStreamSend: graceful FIN path, no fallback when closeStream succeeds" {
+    const FakeConn = struct {
+        close_calls: u32 = 0,
+        write_calls: u32 = 0,
+        fin_written: bool = false,
+        fn closeStream(self: *@This(), id: u64, code: u64) !void {
+            _ = id;
+            _ = code;
+            self.close_calls += 1;
+        }
+        fn writeStream(self: *@This(), id: u64, data: []const u8, fin: bool) !usize {
+            _ = id;
+            self.write_calls += 1;
+            if (fin and data.len == 0) self.fin_written = true;
+            return 0;
+        }
+    };
+    var fc = FakeConn{};
+    finalizeStreamSend(&fc, 0);
+    // Graceful FIN succeeded → exactly one closeStream, no writeStream fallback.
+    try std.testing.expectEqual(@as(u32, 1), fc.close_calls);
+    try std.testing.expectEqual(@as(u32, 0), fc.write_calls);
+}
+
+test "finalizeStreamSend: falls back to writeStream FIN when closeStream cannot init TX" {
+    // Reproduces the deadlock root cause: a server-accepted, client-initiated
+    // stream the server never wrote to. closeStream has no TX state for it and
+    // returns InvalidStream without emitting a frame; the fallback must still
+    // emit a FIN-only frame so the client observes end-of-stream (never hangs).
+    const FakeConn = struct {
+        close_calls: u32 = 0,
+        write_calls: u32 = 0,
+        fin_written: bool = false,
+        fn closeStream(self: *@This(), id: u64, code: u64) !void {
+            _ = id;
+            _ = code;
+            self.close_calls += 1;
+            return error.InvalidStream; // never-written accepted stream: no TX yet
+        }
+        fn writeStream(self: *@This(), id: u64, data: []const u8, fin: bool) !usize {
+            _ = id;
+            self.write_calls += 1;
+            if (fin and data.len == 0) self.fin_written = true;
+            return 0;
+        }
+    };
+    var fc = FakeConn{};
+    finalizeStreamSend(&fc, 4);
+    try std.testing.expectEqual(@as(u32, 1), fc.close_calls);
+    try std.testing.expectEqual(@as(u32, 1), fc.write_calls);
+    // A terminator WAS emitted via the fallback — the half-open hang is gone.
+    try std.testing.expect(fc.fin_written);
+}
+
+test "finalizeStreamSend: both terminators failing is a harmless no-op (already closed)" {
+    // When the stream is already FIN'd/aborted, both calls fail; finalizeStreamSend
+    // must swallow and not panic — the terminator was already delivered earlier.
+    const FakeConn = struct {
+        close_calls: u32 = 0,
+        write_calls: u32 = 0,
+        fn closeStream(self: *@This(), id: u64, code: u64) !void {
+            _ = id;
+            _ = code;
+            self.close_calls += 1;
+            return error.StreamStopped;
+        }
+        fn writeStream(self: *@This(), id: u64, data: []const u8, fin: bool) !usize {
+            _ = id;
+            _ = data;
+            _ = fin;
+            self.write_calls += 1;
+            return error.StreamStopped;
+        }
+    };
+    var fc = FakeConn{};
+    finalizeStreamSend(&fc, 4); // must not panic
+    try std.testing.expectEqual(@as(u32, 1), fc.close_calls);
+    try std.testing.expectEqual(@as(u32, 1), fc.write_calls);
 }

@@ -1513,6 +1513,20 @@ pub fn build(b: *std.Build) void {
     const slow_poll_warn_step = b.step("test-quic-slow-poll-warning", "Run slow-poll rate-limited warning unit test (2026-06-07 liveness-kill fix)");
     slow_poll_warn_step.dependOn(&run_slow_poll_warn_tests.step);
 
+    // Transport-layer unit tests (src/transport/quic.zig), including the
+    // finalizeStreamSend guaranteed-terminator policy that fixes the
+    // receive-path deadlock (cross-repo "Ask #3" with geode-client-go v0.1.26:
+    // a server-accepted, never-written stream whose graceful FIN cannot be
+    // emitted left the client's receive direction half-open with no terminator).
+    const transport_quic_tests = b.addTest(.{
+        .root_module = transport_quic_mod,
+        .filters = &.{"finalizeStreamSend"},
+    });
+    transport_quic_tests.root_module.link_libc = true;
+    const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);
+    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend guaranteed-terminator unit tests");
+    transport_quic_step.dependOn(&run_transport_quic_tests.step);
+
     // Out-of-band /health liveness breadcrumb regression for
     // docs/bugs/2026-06-07-unresponsive-under-sustained-query-load-liveness-kill-503.md
     // Subprocess test: with GEODE_METRICS_PORT set, `geode serve` must print a
@@ -3154,6 +3168,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_proto_util_cluster_error_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_write_idempotency_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_acceptor_watchdog_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_transport_quic_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);
