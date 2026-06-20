@@ -109,6 +109,15 @@ pub fn leanIndexingEnabled() bool {
 /// Register a key that MUST stay indexed even in lean mode (a MERGE pattern
 /// key). Idempotent; safe to call on every merge. No-op when lean mode is off.
 pub fn registerMergeIndexKey(key: []const u8) void {
+    registerMergeIndexKeyInner(key, true);
+}
+
+/// Register a merge key WITHOUT writing it back to the persisted sidecar. Used
+/// by `loadPersistedMergeIndexKeys` on reopen: the key is already in the file we
+/// are reading, so re-persisting would only append a duplicate line (load
+/// de-dups, but the file would grow on every restart). All other effects
+/// (registry membership, in-memory merge-index backfill) are identical.
+fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
     const newly_registered = blk: {
         g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -138,6 +147,114 @@ pub fn registerMergeIndexKey(key: []const u8) void {
         if (getCurrentGlobalStore()) |store| {
             store.backfillMergeIndexForKey(key);
         }
+        // LEAN-MERGE-KEY-SEEK (Part 1): persist the newly-registered merge key
+        // so it survives a restart. On reopen the adapter loads this set BEFORE
+        // it opens any graph (and thus before the exact-index rebuild runs), so
+        // the rebuild — which consults `shouldIndexProperty` — indexes the
+        // merge key's values for ALL existing nodes. Without this, the rebuild
+        // runs while the key is still UNregistered, skips it, and leaves the
+        // exact index INCOMPLETE for that key after a lean reopen — which would
+        // make a completeness-gated seek wrongly return empty for live nodes.
+        // Best-effort: a persist failure only costs the seek-eligibility of
+        // that key on the NEXT reopen (it falls back to full scan — correct,
+        // just slow); it never corrupts data.
+        if (persist) {
+            if (getGlobalAdapter()) |adapter| {
+                persistMergeIndexKey(adapter.allocator, adapter.data_dir, key);
+            }
+        }
+    }
+}
+
+/// Sidecar file (inside `data_dir`) that records the set of registered merge
+/// index keys so they survive a restart. Append-only, line-oriented: one key
+/// per line. See `persistMergeIndexKey` / `loadPersistedMergeIndexKeys`.
+const merge_index_keys_filename = "merge_index_keys.dat";
+
+/// Append `key` to the persisted merge-key sidecar in `data_dir`, allocating
+/// scratch with `alloc`. Idempotent at the registry level (callers only persist
+/// a key the first time it is registered), but the file itself tolerates
+/// duplicate lines — load de-dups via `registerMergeIndexKey`. Best-effort:
+/// failures are logged and swallowed (a missing entry only degrades the seek to
+/// a full scan on the next reopen, never a wrong answer). No-op when `data_dir`
+/// is empty (ad-hoc unit stores).
+pub fn persistMergeIndexKey(alloc: std.mem.Allocator, data_dir: []const u8, key: []const u8) void {
+    if (data_dir.len == 0) return;
+    if (key.len == 0 or key.len > lean_index_key_cap) return;
+
+    const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ data_dir, merge_index_keys_filename }) catch return;
+    defer alloc.free(path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    // Append mode: keep previously-recorded keys. createFile with truncate=false
+    // opens-or-creates; positional writes at the current end append. (Mirrors
+    // the verified append pattern in src/client/repl/repl_history.zig.)
+    const file = std.Io.Dir.cwd().createFile(io, path, .{ .truncate = false }) catch |err| {
+        log.warn("failed to open merge-key sidecar for append", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    defer file.close(io);
+
+    const st = file.stat(io) catch return;
+    file.writePositionalAll(io, key, st.size) catch return;
+    file.writePositionalAll(io, "\n", st.size + key.len) catch return;
+}
+
+/// Load the persisted merge-key set from `data_dir` and re-register each key via
+/// `registerMergeIndexKey`. MUST run before any graph is opened on reopen (the
+/// adapter calls this from `init`) so the exact-index rebuild indexes these
+/// keys. No-op when the sidecar is missing (fresh data dir) or `data_dir` is
+/// empty. Registration only takes effect in lean mode (`registerMergeIndexKey`
+/// is a no-op when lean indexing is off), which is exactly when it is needed —
+/// in non-lean mode every key is always indexed regardless. Scratch is
+/// allocated with `alloc` (the adapter passes its own allocator).
+pub fn loadPersistedMergeIndexKeys(alloc: std.mem.Allocator, data_dir: []const u8) void {
+    if (data_dir.len == 0) return;
+
+    const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ data_dir, merge_index_keys_filename }) catch return;
+    defer alloc.free(path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => {
+            log.warn("failed to open merge-key sidecar for load", &.{
+                Attr.string("path", path),
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        },
+    };
+    defer file.close(io);
+
+    // Bounded read: the registry is tiny (a handful of fixed merge keys). Cap at
+    // a generous size so a corrupt/huge file can never OOM startup.
+    const max_bytes: usize = lean_index_max_keys * (lean_index_key_cap + 1) * 4;
+    const st = file.stat(io) catch return;
+    const want: usize = @min(@as(usize, @intCast(st.size)), max_bytes);
+    if (want == 0) return;
+    const contents = alloc.alloc(u8, want) catch return;
+    defer alloc.free(contents);
+
+    var rbuf: [512]u8 = undefined;
+    var file_reader = file.reader(io, &rbuf);
+    const reader = &file_reader.interface;
+    reader.readSliceAll(contents) catch |err| {
+        log.warn("failed to read merge-key sidecar", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+
+    var it = std.mem.splitScalar(u8, contents, '\n');
+    while (it.next()) |line| {
+        const key = std.mem.trim(u8, line, " \r\t");
+        if (key.len == 0) continue;
+        registerMergeIndexKeyInner(key, false);
     }
 }
 

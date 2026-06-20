@@ -1556,6 +1556,18 @@ pub const StorageAdapter = struct {
             else => log.warn("failed to load graph registry {s}: {}", .{ self.registry_path, err }),
         };
 
+        // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
+        // BEFORE any graph is opened. Graphs open lazily (openGraphLocked) on
+        // first use, and that path rebuilds the exact node-property index from
+        // the durable pages, consulting `shouldIndexProperty`. In lean mode
+        // (`GEODE_INDEX_MERGE_KEYS_ONLY=1`) that predicate is true only for
+        // registered merge keys, so the keys MUST already be registered here or
+        // the rebuild skips them and the exact index is left INCOMPLETE for the
+        // merge keys after reopen — which would make a completeness-gated seek
+        // wrongly return empty for existing nodes. No-op when lean mode is off
+        // (everything is always indexed) or when the sidecar is absent.
+        graph_store.loadPersistedMergeIndexKeys(self.allocator, self.data_dir);
+
         return self;
     }
 

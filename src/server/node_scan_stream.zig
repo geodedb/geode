@@ -828,17 +828,23 @@ fn collectMatchingSlotIds(
     // SEEK SOUNDNESS (correctness-critical): the seek (whether it returns rows
     // or empty) is trustworthy ONLY when the exact node-property index is
     // guaranteed COMPLETE for the key — i.e. it contains an entry for EVERY live
-    // node carrying that key. That holds when lean indexing is OFF (the default
-    // server): every property is indexed on every write, and the reopen rebuild
-    // re-indexes every key. Under GEODE_INDEX_MERGE_KEYS_ONLY the exact index is
-    // rebuilt on reopen BEFORE any merge key is (re)registered, so a registered
-    // key's index can be INCOMPLETE for pre-reopen nodes; seeking it could drop
-    // live rows (an empty/partial result) — a wrong answer. Since correctness is
-    // paramount, the seek is gated to the lean-OFF case where completeness is
-    // guaranteed; lean mode falls through to the lock-safe full scan (correct,
-    // just not O(1)). A future change can persist + re-register merge keys
-    // before the reopen rebuild so the lean path is also seek-eligible.
-    if (pattern.labels.len > 0 and pattern.props != null and !graph_store.leanIndexingEnabled()) {
+    // node carrying that key. Completeness is enforced PER-KEY by
+    // `seekIndexedCandidates`, which only seeks a key for which
+    // `graph_store.shouldIndexProperty(key)` is true:
+    //   - lean OFF (default server): true for EVERY key — every property is
+    //     indexed on every write and re-indexed by the reopen rebuild.
+    //   - lean ON (GEODE_INDEX_MERGE_KEYS_ONLY=1): true only for REGISTERED merge
+    //     keys. The exact index is complete for those because (a) live writes
+    //     index them and (b) the LEAN-MERGE-KEY-SEEK fix persists the registered
+    //     merge-key set and re-registers it in StorageAdapter.init — BEFORE any
+    //     graph opens and thus before the reopen exact-index rebuild — so the
+    //     rebuild indexes the merge keys' values for ALL existing nodes.
+    // A key that is NOT seek-complete (a non-merge key in lean mode) is never
+    // seeked: `seekIndexedCandidates` skips it, and if NO inline key is seekable
+    // the call returns null and we fall through to the lock-safe full scan
+    // below (correct, just not O(1)). The earlier blanket "lean ⇒ no seek" gate
+    // is therefore no longer needed; completeness is now decided per-key.
+    if (pattern.labels.len > 0 and pattern.props != null) {
         if (try seekIndexedCandidates(allocator, adapter, graph_name, pattern, param_names, param_values, context)) |candidates| {
             defer allocator.free(candidates);
             for (candidates) |slot_id| {

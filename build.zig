@@ -1996,6 +1996,23 @@ pub fn build(b: *std.Build) void {
     );
     gap0900_reopen_remerge_step.dependOn(&run_gap0900_reopen_remerge_tests.step);
 
+    // LEAN-MERGE-KEY-SEEK: lean reopen → inline merge-key SEEK returns the
+    // correct row (read-path completeness regression). Opt-in via
+    // `zig build test-lean-merge-key-seek-reopen`.
+    const lean_merge_key_seek_reopen_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_lean_merge_key_seek_reopen.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    lean_merge_key_seek_reopen_tests.root_module.addImport("geode", root_mod);
+    const run_lean_merge_key_seek_reopen_tests = b.addRunArtifact(lean_merge_key_seek_reopen_tests);
+    const lean_merge_key_seek_reopen_step = b.step(
+        "test-lean-merge-key-seek-reopen",
+        "LEAN-MERGE-KEY-SEEK: lean reopen inline merge-key seek returns the correct row (index completeness)",
+    );
+    lean_merge_key_seek_reopen_step.dependOn(&run_lean_merge_key_seek_reopen_tests.step);
+
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST
     // cache via optional `ast_cache` fields + `setAstCache()` methods.
