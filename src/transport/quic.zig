@@ -1415,14 +1415,35 @@ pub const QuicConnection = struct {
 /// (cheapest, also covers stream 0 and already-written streams), then fall back
 /// to the writeStream FIN so a terminator is ALWAYS emitted on close.
 ///
+/// Fallback scope (hot-path hardening, 2026-06-20): the writeStream-FIN fallback
+/// is only ever EFFECTIVE for `error.InvalidStream` — the no-TX-state case where
+/// `closeStream` emitted nothing. `error.StreamStopped` means `canWrite()`
+/// already returned false: the stream was already FIN'd or RESET, so a
+/// terminator HAS already been delivered and the fallback would hit the identical
+/// `canWrite()` precondition inside `writeStream` and fail anyway — a guaranteed
+/// no-op (extra call + branch on every stream close). Skip it there. Any OTHER
+/// error (e.g. KeysNotReady, or a send-path failure after the canWrite checks
+/// where it's ambiguous whether the FIN frame left the wire) still takes the
+/// fallback, so the end-of-stream guarantee is never weakened — we only drop the
+/// provably redundant retry. This does NOT measurably change throughput (the
+/// close path is ~0.05% of server CPU; the ingest cap is engine WAL
+/// serialization) — it is correctness-neutral hot-path hygiene.
+///
 /// Generic over `conn` so the fallback policy is unit-testable with a fake
 /// connection that simulates the no-TX `error.InvalidStream` path.
 fn finalizeStreamSend(conn: anytype, stream_id: u64) void {
-    conn.closeStream(stream_id, 0) catch {
-        // No graceful FIN was emitted (e.g. InvalidStream: no TX state for a
-        // never-written accepted stream). Emit a FIN via the writeStream path,
-        // which lazily creates the server-side TX state. Still best-effort: if
-        // the stream was already FIN'd/aborted this is a harmless no-op.
+    conn.closeStream(stream_id, 0) catch |err| {
+        // Stream already FIN'd/aborted: a terminator was already emitted and
+        // writeStream's identical `canWrite()` precondition would fail too, so
+        // the fallback is a guaranteed no-op. Skip it. (Compared with `==`
+        // rather than a switch so the policy stays valid for callers whose
+        // inferred error set does not include StreamStopped.)
+        if (err == error.StreamStopped) return;
+        // No graceful FIN was emitted (InvalidStream: no TX state for a
+        // never-written accepted stream — the receive-path-deadlock case), or
+        // any other ambiguous error: emit a FIN via the writeStream path, which
+        // lazily creates the server-side TX state. Best-effort: if the stream is
+        // already terminated this is a harmless no-op.
         _ = conn.writeStream(stream_id, &.{}, true) catch {};
     };
 }
@@ -2317,9 +2338,13 @@ test "finalizeStreamSend: falls back to writeStream FIN when closeStream cannot 
     try std.testing.expect(fc.fin_written);
 }
 
-test "finalizeStreamSend: both terminators failing is a harmless no-op (already closed)" {
-    // When the stream is already FIN'd/aborted, both calls fail; finalizeStreamSend
-    // must swallow and not panic — the terminator was already delivered earlier.
+test "finalizeStreamSend: StreamStopped skips the redundant fallback (terminator already sent)" {
+    // 2026-06-20 hot-path hardening: `error.StreamStopped` means closeStream's
+    // canWrite() precondition already returned false — the stream was already
+    // FIN'd or RESET, so a terminator HAS already been delivered. The
+    // writeStream fallback hits the identical precondition and would fail too, so
+    // it is a guaranteed no-op. We must NOT make that redundant call. The FIN
+    // guarantee is preserved precisely because a terminator was emitted earlier.
     const FakeConn = struct {
         close_calls: u32 = 0,
         write_calls: u32 = 0,
@@ -2340,5 +2365,34 @@ test "finalizeStreamSend: both terminators failing is a harmless no-op (already 
     var fc = FakeConn{};
     finalizeStreamSend(&fc, 4); // must not panic
     try std.testing.expectEqual(@as(u32, 1), fc.close_calls);
+    // Tightened policy: no redundant fallback when a terminator was already sent.
+    try std.testing.expectEqual(@as(u32, 0), fc.write_calls);
+}
+
+test "finalizeStreamSend: non-StreamStopped errors still take the FIN fallback" {
+    // The end-of-stream guarantee must NOT be weakened for ambiguous errors. Any
+    // closeStream error other than StreamStopped (here a stand-in send-path
+    // error) still falls back to writeStream FIN so a terminator is emitted.
+    const FakeConn = struct {
+        close_calls: u32 = 0,
+        write_calls: u32 = 0,
+        fin_written: bool = false,
+        fn closeStream(self: *@This(), id: u64, code: u64) !void {
+            _ = id;
+            _ = code;
+            self.close_calls += 1;
+            return error.KeysNotReady;
+        }
+        fn writeStream(self: *@This(), id: u64, data: []const u8, fin: bool) !usize {
+            _ = id;
+            self.write_calls += 1;
+            if (fin and data.len == 0) self.fin_written = true;
+            return 0;
+        }
+    };
+    var fc = FakeConn{};
+    finalizeStreamSend(&fc, 8);
+    try std.testing.expectEqual(@as(u32, 1), fc.close_calls);
     try std.testing.expectEqual(@as(u32, 1), fc.write_calls);
+    try std.testing.expect(fc.fin_written);
 }
