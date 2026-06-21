@@ -33,17 +33,19 @@
 //      writer thread doing a tight insert loop via the SAME bulk apply path
 //      ingest uses (`bulkInsertNodeWithReservedId`, group-commit
 //      applyShardBatch's per-op helper), incrementing an atomic
-//      `ops_applied`. On the main thread run a batch of long label scans
-//      over :Probe; snapshot `ops_applied` at scan-batch start vs end.
-//      Assert `ops_during_scan > 100`. RED before the fix (~0 -- writers
-//      starved on the EXCLUSIVE shard lock), GREEN after.
+//      `ops_applied`. Measure the writer's UNSTARVED baseline throughput over
+//      a window, then its throughput over an equal window of back-to-back
+//      label scans over :Probe. Assert during-scan throughput is >= 5% of
+//      baseline. RED before the fix (~0 -- writers starved on the EXCLUSIVE
+//      shard lock -> ratio ~0), GREEN after (~15-20%).
 //   2. Scan result stays correct: every returned slot id is a real,
 //      non-deleted :Probe node; no duplicates; the population count is
 //      within the snapshot contract [collected, collected + writes_after].
 //
-// Deterministic in OUTCOME, wall-clock-bounded, CI-safe. The box is loaded;
-// the progress assertion uses a low absolute floor (100 ops) and relative
-// timing only -- it asserts "writers are NOT starved", not a throughput
+// Deterministic in OUTCOME, wall-clock-bounded, CI-safe. The progress
+// assertion is a RATIO (during-scan throughput vs the writer's own unstarved
+// baseline), not an absolute op count, so it does not flake on slow/contended
+// shared CI runners -- it asserts "writers are NOT starved", not a throughput
 // target.
 //
 // CANARY: REQ=REQ-CONCURRENCY-SCAN-WRITER-PROGRESS; FEATURE="ScanWriterProgress"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_scan_writer_progress.zig; OWNER=storage; UPDATED=2026-06-20
@@ -181,39 +183,57 @@ test "writers make progress during a long label scan (per-shard scan starvation)
     }
     try testing.expect(!sh.writer_err.load(.acquire));
 
-    // Run scans BACK-TO-BACK for a fixed wall-clock budget so TARGET_SHARD is
-    // held SHARED nearly continuously. Snapshot ops at the start and end of
-    // the budget. With the unchunked per-shard SHARED hold, the pinned writer
-    // is parked on the EXCLUSIVE shard lock for almost the whole window ->
-    // delta ~0. After chunking, the EXCLUSIVE apply interleaves between
-    // batches and many ops land.
+    // Phase A — BASELINE: the writer's UNSTARVED throughput over a fixed
+    // window with no scan running. This calibrates out CI CPU speed: a slow or
+    // contended runner lowers BOTH the baseline and the during-scan throughput
+    // together, so the relative comparison below stays valid where the former
+    // absolute `ops_during_scan > 100` threshold flaked (it dipped under 100 on
+    // loaded shared CI runners even though the writer was never starved). The
+    // main thread busy-waits (as it does while scanning), so the only
+    // difference between the two windows is the scan's shard-lock contention.
+    const window_ns: u64 = 1_000 * std.time.ns_per_ms;
+    const base_before = sh.ops_applied.load(.monotonic);
+    {
+        const base_deadline = nowNs() + window_ns;
+        while (nowNs() < base_deadline) std.atomic.spinLoopHint();
+    }
+    const baseline_ops = sh.ops_applied.load(.monotonic) - base_before;
+    try testing.expect(!sh.writer_err.load(.acquire));
+
+    // Phase B — DURING SCAN: run label scans BACK-TO-BACK for the SAME window
+    // so TARGET_SHARD is held SHARED nearly continuously, and count how many
+    // writer ops still land. With the unchunked per-shard SHARED hold the
+    // pinned writer parks on the EXCLUSIVE shard lock for the whole window ->
+    // ~0 ops. After chunking, the EXCLUSIVE apply interleaves between batches
+    // and a large fraction of the baseline lands.
     sh.scan_running.store(true, .release);
     const ops_before = sh.ops_applied.load(.monotonic);
-
-    const budget_ns: u64 = 1_500 * std.time.ns_per_ms;
-    const deadline = nowNs() + budget_ns;
+    const deadline = nowNs() + window_ns;
     var scans: usize = 0;
     while (nowNs() < deadline) : (scans += 1) {
         const slots = try adapter.getNodesByLabelCapped(GRAPH, LABEL, null, allocator);
         defer allocator.free(slots);
         try testing.expect(slots.len >= SEED_NODES);
     }
-
-    const ops_after = sh.ops_applied.load(.monotonic);
+    const ops_during_scan = sh.ops_applied.load(.monotonic) - ops_before;
     sh.scan_running.store(false, .release);
 
-    const ops_during_scan = ops_after - ops_before;
     std.debug.print(
-        "scan-writer-progress: ops_during_scan={d} over {d} back-to-back scans (before={d} after={d})\n",
-        .{ ops_during_scan, scans, ops_before, ops_after },
+        "scan-writer-progress: ops_during_scan={d} baseline_ops={d} over {d} back-to-back scans\n",
+        .{ ops_during_scan, baseline_ops, scans },
     );
     try testing.expect(!sh.writer_err.load(.acquire));
 
-    // The decisive assertion: the writer was NOT starved by the scan. Before
-    // the fix this is ~0 (the pinned writer parks on the EXCLUSIVE shard lock
-    // for the whole budget); after chunking the per-shard SHARED hold the
-    // EXCLUSIVE apply interleaves and hundreds of ops land.
-    try testing.expect(ops_during_scan > 100);
+    // Decisive assertion: the writer is NOT starved by the scan — its
+    // during-scan throughput is at least 5% (1/20) of its unstarved baseline.
+    // A ratio (not an absolute count) holds regardless of runner speed. The
+    // two regimes are far apart and stable: RED before the fix is ~0% (the
+    // pinned writer parks on the EXCLUSIVE shard lock); GREEN after the chunked
+    // hold is ~15-20% (measured 18-20% across runs), so a 5% floor leaves ~4x
+    // margin over noise while still rejecting full starvation. Guard a
+    // non-trivial baseline so the ratio is meaningful.
+    try testing.expect(baseline_ops >= 10);
+    try testing.expect(ops_during_scan * 20 >= baseline_ops);
 }
 
 test "scan result stays correct under concurrent ingest (chunked shard lock)" {
