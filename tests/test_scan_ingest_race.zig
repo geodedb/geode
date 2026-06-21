@@ -125,13 +125,13 @@ fn readerThread(sh: *Shared) void {
         if (prepared) |stream_const| {
             var stream = stream_const;
             defer stream.deinit();
-            // Materialize a page under the per-page read lock (as the handler does).
-            const page_lock = graph_store.acquireGraphReadLockTagged(GRAPH, .misc);
+            // Materialize a page. `buildNextPage` now acquires + releases the
+            // per-graph SHARED read lock INTERNALLY in chunked batches (the
+            // where-scan-writer-progress fix), so the handler — and this test —
+            // no longer wrap it in an outer lock.
             var page = stream.buildNextPage(aa, 10) catch {
-                graph_store.releaseGraphLock(page_lock);
                 continue;
             };
-            graph_store.releaseGraphLock(page_lock);
             page.result.deinit(aa);
         }
         _ = sh.reads_done.fetchAdd(1, .monotonic);

@@ -6787,12 +6787,15 @@ fn handleClientMessage(
                                     var page_final = false;
                                     if (state.inline_results_enabled) inline_blk: {
                                         const inline_max = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
-                                        // P1: Acquire per-graph read lock while materializing nodes to
-                                        // prevent data races with concurrent ingest holding the
-                                        // write lock (same protection as the PULL handler).
-                                        const inline_lock = graph_store.acquireGraphReadLockTagged(query_graph_name, .misc);
+                                        // P1: materialization runs under the per-graph SHARED read
+                                        // lock to prevent data races with concurrent ingest. The
+                                        // stream now acquires + releases that lock INTERNALLY in
+                                        // chunked batches (`buildNextPage`), so a writer-preferred
+                                        // EXCLUSIVE checkpoint/apply interleaves instead of starving
+                                        // for the whole O(scanned) WHERE scan (where-scan-writer-
+                                        // progress). No outer lock here — an outer hold would defeat
+                                        // the chunking.
                                         var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
-                                            graph_store.releaseGraphLock(inline_lock);
                                             // Inline page failed (e.g. concurrent ingest modified
                                             // nodes).  Reset the stream cursor so PULL starts from
                                             // the beginning and fall through to store the stream
@@ -6803,7 +6806,6 @@ fn handleClientMessage(
                                             active_stream.next_index = 0;
                                             break :inline_blk;
                                         };
-                                        graph_store.releaseGraphLock(inline_lock);
                                         defer page_result.result.deinit(gpa);
 
                                         var page_arena = std.heap.ArenaAllocator.init(gpa);
@@ -7033,12 +7035,14 @@ fn handleClientMessage(
             const pa = pull_arena.allocator();
 
             if (state.active_node_scan_stream) |*active_stream| {
-                // P1: Acquire per-graph read lock while materializing nodes to prevent
-                // data races with concurrent ingest holding the write lock.
-                const pull_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                const pull_lock = graph_store.acquireGraphReadLockTagged(pull_graph_name, .misc);
+                // P1: materialization runs under the per-graph SHARED read lock
+                // to prevent data races with concurrent ingest. The stream
+                // acquires + releases that lock INTERNALLY in chunked batches
+                // (`buildNextPage`), so a writer-preferred EXCLUSIVE
+                // checkpoint/apply interleaves instead of starving for the whole
+                // O(scanned) WHERE scan (where-scan-writer-progress). No outer
+                // lock here — an outer hold would defeat the chunking.
                 var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
-                    graph_store.releaseGraphLock(pull_lock);
                     // Node disappeared during concurrent ingest — send empty
                     // final page so the client sees what was collected so far.
                     log.warn("PULL page build failed, closing stream", &.{
@@ -7054,7 +7058,6 @@ fn handleClientMessage(
                     state.resetResult();
                     return;
                 };
-                graph_store.releaseGraphLock(pull_lock);
                 defer page_result.result.deinit(gpa);
 
                 const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});

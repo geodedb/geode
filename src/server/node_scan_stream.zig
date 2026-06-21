@@ -20,6 +20,35 @@ const Env = value_types.Env;
 pub const default_inline_rows: usize = 64;
 pub const default_page_rows: usize = 128;
 
+/// Number of nodes materialized+evaluated per per-graph SHARED read-lock hold
+/// in `buildNextPage`'s WHERE/projection scan loop.
+///
+/// CHUNKING (where-scan-writer-progress): the materialize/evaluate loop runs
+/// under the per-graph SHARED read lock (`graph_store.acquireGraphReadLock`,
+/// taken HERE per batch — previously held by the transport handler across the
+/// whole `buildNextPage`). A SPARSE non-indexed predicate (e.g. rank='species')
+/// must materialize+evaluate MANY nodes before finding LIMIT matches, so an
+/// unbroken SHARED hold spanned the whole O(scanned) scan. The periodic
+/// checkpoint takes `mg.rwlock` EXCLUSIVE via the writer-PREFERRED
+/// `lockUncancelable` (graph_storage_adapter.zig); once it is pending behind the
+/// long SHARED hold, writer-preference parks every new SHARED acquirer behind
+/// it — including the ingest apply's SHARED acquire — so ingest stalls to ~0
+/// ops/s for the scan's duration. Acquiring + releasing the SHARED lock per
+/// batch lets the pending EXCLUSIVE (and the writers parked behind it)
+/// interleave (it waits at most one batch).
+///
+/// Correctness (same contract as the slot-collection chunking, commit
+/// 1525e5e3): the `slot_ids` snapshot is IMMUTABLE and the `next_index` cursor
+/// is MONOTONIC, so releasing + reacquiring between batches never re-collects or
+/// duplicates. A node deleted across the gap simply fails `materializeNode` and
+/// is skipped by the existing catch-continue (it would be skipped anyway). We
+/// NEVER release mid-node: each node is fully materialized + evaluated + its row
+/// built under one contiguous SHARED hold, so no torn read is exposed. LIMIT
+/// early-termination is unchanged (the loop condition is unchanged). 512 bounds
+/// the hold to a few hundred microseconds of page reads while amortising the
+/// lock acquire/release across the batch.
+const materialize_batch_nodes: usize = 512;
+
 /// Test-observability counter: total nodes materialized by the streaming
 /// path (lazy per-page `materializeNode`). Bounded scans materialize
 /// O(result); count(label) materializes ZERO (served from the label index).
@@ -176,11 +205,38 @@ pub const NodeScanStream = struct {
         var owned_entities = try OwnedGraphEntities.init(allocator);
         errdefer owned_entities.deinit();
 
+        // Materialization reads node pages, so it runs under the per-graph
+        // SHARED read lock — but CHUNKED: acquire + release per
+        // `materialize_batch_nodes` slots so a writer-preferred EXCLUSIVE
+        // checkpoint (and the ingest writers parked behind it) can interleave
+        // between batches instead of starving for the whole O(scanned) scan.
+        // See `materialize_batch_nodes` for the correctness contract. The lock
+        // is the streaming counterpart of the per-shard SHARED hold the
+        // slot-collection scan already chunks; the transport handlers no longer
+        // wrap `buildNextPage` in an outer read lock.
+        var lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
+        var lock_held = true;
+        errdefer if (lock_held) graph_store.releaseGraphLock(lock);
+        var batch_count: usize = 0;
+
         // Fill the page up to `page_len` MATCHED rows. With a predicate this
         // may scan more slots than rows produced (O(scanned)); LIMIT still
         // bounds the matched rows via `slot_ids` when no predicate is present,
         // and via early-termination here when a predicate is.
         while (rows.items.len < page_len and self.next_index < self.slot_ids.len and self.rows_emitted < self.row_limit) {
+            // Batch boundary: drop and reacquire the SHARED lock so a pending
+            // EXCLUSIVE apply/checkpoint interleaves. Done BETWEEN nodes (never
+            // mid-node), so a node is always fully read under one contiguous
+            // hold — no torn read. The immutable slot_ids snapshot + monotonic
+            // cursor make the release/reacquire gap safe (no re-collect, no
+            // duplicate; a node deleted in the gap fails materializeNode below).
+            if (batch_count == materialize_batch_nodes) {
+                graph_store.releaseGraphLock(lock);
+                lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
+                batch_count = 0;
+            }
+            batch_count += 1;
+
             const slot_id = self.slot_ids[self.next_index];
             self.next_index += 1;
 
@@ -209,6 +265,8 @@ pub const NodeScanStream = struct {
             try rows.append(allocator, row);
             self.rows_emitted += 1;
         }
+        graph_store.releaseGraphLock(lock);
+        lock_held = false;
 
         const result = try self.finishResult(allocator, rows, owned_entities);
         return .{
@@ -344,13 +402,30 @@ pub const NodeScanStream = struct {
                 // materialize each node, evaluate the predicate, and tally
                 // matches. O(scanned), no clone. (Inline `{prop: val}` filters,
                 // if any, were already applied during slot collection.)
+                //
+                // Same CHUNKING as the row/projection scan: materialization runs
+                // under the per-graph SHARED read lock, acquired + released per
+                // `materialize_batch_nodes` slots so a writer-preferred EXCLUSIVE
+                // checkpoint/apply interleaves instead of starving for the whole
+                // O(scanned) tally. Released between nodes only (no torn read);
+                // the immutable slot_ids snapshot makes the gap safe.
                 var matched: usize = 0;
+                var lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
+                errdefer graph_store.releaseGraphLock(lock);
+                var batch_count: usize = 0;
                 for (self.slot_ids) |slot_id| {
+                    if (batch_count == materialize_batch_nodes) {
+                        graph_store.releaseGraphLock(lock);
+                        lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
+                        batch_count = 0;
+                    }
+                    batch_count += 1;
                     const node = materializeNode(allocator, self.graph_name, slot_id) catch continue;
                     defer destroyNode(allocator, node);
                     const passes = self.evalPredicate(allocator, where_expr, node) catch false;
                     if (passes) matched += 1;
                 }
+                graph_store.releaseGraphLock(lock);
                 break :blk matched;
             }
             // No WHERE predicate but no O(1) precompute either → inline

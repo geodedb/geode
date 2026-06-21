@@ -6907,6 +6907,20 @@ pub fn build(b: *std.Build) void {
     const scan_writer_progress_step = b.step("test-scan-writer-progress", "Run scan-writer-progress concurrency regression (long scan must not starve per-shard apply)");
     scan_writer_progress_step.dependOn(&run_scan_writer_progress_tests.step);
 
+    // Where-scan-writer-progress concurrency regression: a long WHERE-predicate
+    // scan over a NON-INDEXED property must NOT starve the per-shard EXCLUSIVE
+    // apply. The streaming materialize/evaluate loop chunks the per-graph SHARED
+    // read lock per batch of materialized nodes so concurrent ingest keeps
+    // making progress during the scan, while the scan still returns the correct
+    // LIMIT rows.
+    const where_scan_progress_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_where_scan_writer_progress.zig"), .target = target, .optimize = optimize });
+    where_scan_progress_test_mod.addImport("geode", root_mod);
+    const where_scan_progress_tests = b.addTest(.{ .root_module = where_scan_progress_test_mod });
+    const run_where_scan_progress_tests = b.addRunArtifact(where_scan_progress_tests);
+    shardDep(test_step, &run_where_scan_progress_tests.step, 5, test_shard_loads, test_shard_index);
+    const where_scan_progress_step = b.step("test-where-scan-writer-progress", "Run where-scan-writer-progress concurrency regression (sparse WHERE scan must not starve per-shard apply)");
+    where_scan_progress_step.dependOn(&run_where_scan_progress_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple
