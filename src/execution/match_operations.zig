@@ -31,6 +31,8 @@ pub fn getFullScanCount() u64 {
 const match_log = std.log.scoped(.match_ops);
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
+const property_value_codec = @import("../property_value_codec.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -2100,6 +2102,109 @@ pub fn executeMatchQueryImplWithScratch(
     return executeMatchQueryImpl(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
 }
 
+// CANARY: REQ=REQ-PERF-MULTI-PATTERN-INDEX-SEEK; FEATURE="MultiPatternIndexSeek"; ASPECT=EndpointSeek; STATUS=TESTED; TEST=tests/test_multi_pattern_index_seek.zig; OWNER=performance; UPDATED=2026-06-21
+// Index-seek a single comma-MATCH node pattern's endpoint by a UNIQUE indexed
+// literal-equality prop, resolving it through the GraphStore merge index.
+// `out_node_id` is set to the single GraphStore node id on a hit. Returns:
+//   * `.found`        — an authoritative unique-key hit; `out_node_id` is the
+//                       only node matching that key (caller uses it directly,
+//                       skipping the per-pattern label scan).
+//   * `.not_found`    — an authoritative unique-key MISS: the key is unique and
+//                       no node has that value, so the chain matches no rows
+//                       (caller skips the scan and yields an empty chain).
+//   * `.not_indexable`— the pattern is not authoritatively seekable (no single
+//                       label, no UNIQUE indexed literal-equality prop, etc.);
+//                       caller MUST fall back to the full label-posting scan.
+//
+// This is the multi-pattern analog of the single-pattern fix in
+// node_scan_stream (KNOWN BUG #1). Without it, the from-dump EDGE phase's
+// `MATCH (a:Taxon {source, source_id}), (b:Taxon {source, source_id})` scanned
+// the entire Taxon label posting list PER comma-pattern (O(graph) per pattern)
+// instead of seeking the unique {source_id} key — at 14.27M taxa the server
+// pinned CPU and created ~0 edges. The hit is resolved via the GraphStore merge
+// property index (same node-id space the caller's `store.nodes.getPtr` uses),
+// and is gated on the exact-property index reporting the key as UNIQUE
+// (posting length <= 1) so a low-selectivity prop like `source` (many nodes
+// share one value, of which the 1:1 merge index keeps only the last) can never
+// short-circuit a multi-row match. Every `.found` candidate is still re-verified
+// by the UNCHANGED per-node property / tenant / RLS / pushed-WHERE checks in the
+// caller, so WHICH rows match is byte-for-byte identical to the scan path.
+const MultiSeekResult = graph_store.GraphStore.MergeLookupResult;
+
+fn seekMultiNodeCandidate(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    node_pattern: ast.NodePattern,
+    filter_graph: []const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    out_node_id: *u64,
+) MultiSeekResult {
+    if (node_pattern.labels.len != 1) return .not_indexable;
+    const props = node_pattern.props orelse return .not_indexable;
+    if (props.len == 0) return .not_indexable;
+
+    const adapter = graph_store.getGlobalAdapter() orelse return .not_indexable;
+
+    const env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+
+    for (props) |prop| {
+        // A variable reference (e.g. `{k: a.x}`) is not a literal equality and
+        // is resolved later in the cartesian verify; never seek on it.
+        if (containsVariableReference(prop.value.*)) continue;
+        // Only equality on a key the exact index actually covers is seekable.
+        if (!graph_store.shouldIndexProperty(prop.key)) continue;
+
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
+        defer property_value_codec.freePropertyValue(allocator, pv);
+        if (pv == .Null) continue;
+
+        // Uniqueness gate: the merge index is 1:1, so a seek is authoritative
+        // ONLY when at most one node has this (label,key,value). The exact
+        // property index posting length is that count. >1 (non-unique) or an
+        // error means we cannot conclude "the" node from the merge index —
+        // skip this prop (another prop may be unique; else fall back to scan).
+        const posting_len = adapter.countCandidateNodesByLabelAndProperty(
+            filter_graph,
+            node_pattern.labels[0],
+            prop.key,
+            pv,
+        ) catch continue;
+        if (posting_len > 1) continue;
+
+        // posting_len is 0 or 1. Resolve through the GraphStore merge index so
+        // the returned id is in the SAME space as `store.nodes` (the engine /
+        // exact-index id space differs). Both `source` and `source_id` are
+        // registered merge keys for from-dump taxa, so this hits.
+        switch (store.lookupMergeCandidate(filter_graph, node_pattern.labels[0], prop.key, pv, out_node_id)) {
+            .found => return .found,
+            .not_found => {
+                // The merge index only carries nodes created via MERGE — NOT
+                // CREATE (GAP-0334). So a merge miss is an authoritative
+                // "no such node" ONLY when the exact index ALSO has zero
+                // postings (posting_len == 0). If posting_len == 1, a node with
+                // this value DOES exist but was CREATEd (not in the merge
+                // index); we must fall back to the label scan to find it —
+                // keep probing other props, ultimately returning .not_indexable.
+                if (posting_len == 0) return .not_found;
+                continue;
+            },
+            // Merge index can't key this value type even though the exact index
+            // could; let another prop / the scan decide. Keep probing.
+            .not_indexable => continue,
+        }
+    }
+
+    return .not_indexable;
+}
+
 // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
 // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="MultiGraphIsolation"; ASPECT=MultiNodeMatch; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Handle comma-separated node patterns by creating Cartesian product with graph isolation
@@ -2167,11 +2272,38 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         var matches = std.ArrayList(*graph_store.Node).empty;
 
         if (node_pattern.labels.len > 0) {
-            // Use label_index for O(1) lookup instead of full scan
-            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, storageTenantFilter(filter_tenant));
-            defer label_node_ids.deinit(allocator);
+            // PERF (KNOWN BUG #2): when the pattern carries a UNIQUE indexed
+            // literal-equality prop (e.g. the from-dump edge endpoints
+            // `{source, source_id}` keyed on the unique source_id), SEEK the
+            // merge index for the single candidate node — O(1) — instead of
+            // enumerating the ENTIRE label posting list and comparing props
+            // node-by-node (O(label) per comma-pattern). An authoritative miss
+            // yields an empty chain immediately. Falls back to the label scan
+            // when the pattern is not authoritatively seekable. Every candidate
+            // is still re-verified by the unchanged loop body below, so results
+            // are identical to the scan path.
+            var seek_id: u64 = undefined;
+            const seek = seekMultiNodeCandidate(allocator, store, node_pattern, filter_graph, param_names, param_values, &seek_id);
 
-            for (label_node_ids.items) |node_id| {
+            // `.not_indexable` -> scan; `.found` -> the one seeked id;
+            // `.not_found` -> empty candidate set (authoritative unique miss).
+            var seeked_buf = [1]u64{0};
+            var label_node_ids = if (seek == .not_indexable)
+                try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, storageTenantFilter(filter_tenant))
+            else
+                std.ArrayList(u64).empty;
+            defer if (seek == .not_indexable) label_node_ids.deinit(allocator);
+
+            const candidate_ids: []const u64 = switch (seek) {
+                .not_indexable => label_node_ids.items,
+                .found => blk: {
+                    seeked_buf[0] = seek_id;
+                    break :blk seeked_buf[0..1];
+                },
+                .not_found => seeked_buf[0..0],
+            };
+
+            for (candidate_ids) |node_id| {
                 const node = store.nodes.getPtr(node_id) orelse continue;
                 // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                 // scan under an active hierarchy; per-row hierarchy-aware check is the

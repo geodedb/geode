@@ -2323,6 +2323,16 @@ pub fn build(b: *std.Build) void {
     const gap0892_step = b.step("test-gap0892", "GAP-0892 regression: count-pushdown fast path bails on effectful preamble (SESSION SET ...; MATCH count(*))");
     gap0892_step.dependOn(&run_gap0892_tests.step);
 
+    // ----- MERGE-statement is-mutating classifier regression (edge phase) -----
+    // A MATCH...MERGE (q.merge_statement != null) must classify as mutating so
+    // the QUIC handler takes the write-lock path instead of the O(graph)
+    // QueryReadSession deep-clone snapshot. See test file header.
+    const merge_mutating_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_merge_query_is_mutating.zig"), .target = target, .optimize = optimize }) });
+    merge_mutating_tests.root_module.addImport("geode", root_mod);
+    const run_merge_mutating_tests = b.addRunArtifact(merge_mutating_tests);
+    const merge_mutating_step = b.step("test-merge-query-is-mutating", "Regression: MATCH...MERGE classifies as mutating (write-lock path, no deep-clone snapshot)");
+    merge_mutating_step.dependOn(&run_merge_mutating_tests.step);
+
     // ----- EVAL CALL-HANDLER UNIT TESTS (GAP-0888 review follow-up) -----
     // The inline unit tests in src/eval/ts_call_handlers.zig and
     // src/eval/quantifier_call_handlers.zig are not discovered by any other
@@ -6881,6 +6891,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_inline_seek_tests.step, 1, test_shard_loads, test_shard_index);
     const inline_seek_step = b.step("test-inline-key-index-seek", "Run inline-key index-seek regression (indexed inline-property reads seek the index, not a full scan)");
     inline_seek_step.dependOn(&run_inline_seek_tests.step);
+
+    // Multi-pattern index-seek regression (from-dump EDGE phase, KNOWN BUG #2):
+    // a comma-separated MATCH `(a:L {indexed}), (b:L {indexed})` resolves each
+    // endpoint via the exact-property index seek (O(matching)) instead of
+    // full-scanning the label posting list per pattern (O(graph) per pattern);
+    // results (and edge creation) are identical to the scan path.
+    const multi_seek_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_multi_pattern_index_seek.zig"), .target = target, .optimize = optimize });
+    multi_seek_test_mod.addImport("geode", root_mod);
+    const multi_seek_tests = b.addTest(.{ .root_module = multi_seek_test_mod });
+    const run_multi_seek_tests = b.addRunArtifact(multi_seek_tests);
+    shardDep(test_step, &run_multi_seek_tests.step, 1, test_shard_loads, test_shard_index);
+    const multi_seek_step = b.step("test-multi-pattern-index-seek", "Run multi-pattern index-seek regression (comma-MATCH endpoints seek the index, not a per-pattern full scan)");
+    multi_seek_step.dependOn(&run_multi_seek_tests.step);
+
+    // Wire the MERGE-is-mutating classifier regression (declared earlier, before
+    // test_step was in scope) into the aggregate `test` step here.
+    shardDep(test_step, &run_merge_mutating_tests.step, 1, test_shard_loads, test_shard_index);
 
     // Concurrent scan+ingest crash regression (read-stress): the streaming read
     // path holds the SHARED per-graph read lock across `prepare` so the

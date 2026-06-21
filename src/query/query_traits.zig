@@ -429,6 +429,7 @@ fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
 /// Check if a Query struct contains mutation clauses.
 pub fn isQueryMutating(q: *const ast.Query) bool {
     return q.create_pattern != null or
+        q.merge_statement != null or
         q.set_clauses.len > 0 or
         q.remove_clauses.len > 0 or
         q.delete_items.len > 0;
