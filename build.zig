@@ -1196,6 +1196,24 @@ pub fn build(b: *std.Build) void {
     const gap0872_step = b.step("test-gap0872", "Run GAP-0872 CDC Kinesis/PubSub fail-loud regression");
     gap0872_step.dependOn(&run_gap0872_tests.step);
 
+    // bound-node-mirror: BoundedNodeCache unit tests (isolated from graph_store).
+    const node_cache_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_bounded_node_cache.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const node_cache_mod_for_test = b.createModule(.{
+        .root_source_file = b.path("src/storage/node_cache.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    node_cache_mod_for_test.addImport("graph_storage", graph_storage_mod);
+    node_cache_test_mod.addImport("node_cache", node_cache_mod_for_test);
+    const node_cache_tests = b.addTest(.{ .root_module = node_cache_test_mod });
+    const run_node_cache_tests = b.addRunArtifact(node_cache_tests);
+    const node_cache_step = b.step("test-bounded-node-cache", "Run BoundedNodeCache unit tests");
+    node_cache_step.dependOn(&run_node_cache_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)

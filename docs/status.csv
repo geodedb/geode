@@ -3789,6 +3789,7 @@ REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,202
 REQ-NESTING-REFACTOR-025,NestingReduction,OrderByParsing,TESTED,,,refactor,2026-01-30,src/gql/parser.zig
 REQ-NETWORK-SECURITY-001,NetworkSecurity,TLSConnection,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-NETWORK-SECURITY-002,NetworkSecurity,CertValidation,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch2_security.zig
+REQ-NODE-CACHE-001,BoundedNodeMirror,Eviction,TESTED,,,storage,2026-06-22,src/storage/node_cache.zig
 REQ-NORET-CREATE-001,NoReturnClause,CreateNoReturn,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-NORET-DELETE-001,NoReturnClause,DeleteNoReturn,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-NORET-REMOVE-001,NoReturnClause,RemoveNoReturn,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
