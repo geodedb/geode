@@ -4,13 +4,15 @@ const geode = @import("geode");
 const graph_store = geode.graph_store;
 const sharded = geode.sharded_store;
 
-test "GraphStore.nodes is a ShardedStore" {
-    // Compile-time invariant: after the Task 2 refactor, `nodes` is
-    // a ShardedStore, not an AutoHashMap.  This test pins it so a
-    // future accidental revert is caught by the unit-test suite.
+test "GraphStore.nodes is a BoundedNodeCache backed by a ShardedStore" {
+    // bound-node-mirror: `nodes` is now a BoundedNodeCache (eviction +
+    // hydrate-on-miss) rather than a bare ShardedStore mirror — but it is still
+    // sharded underneath (the cache's `Store` is a ShardedStore), so per-shard
+    // locking and routing are preserved. This pins both facts so an accidental
+    // revert to a bare AutoHashMap (or loss of the bounded layer) is caught.
     const FieldType = @TypeOf(@as(graph_store.GraphStore, undefined).nodes);
-    const expected = sharded.ShardedStore(u64, graph_store.Node);
-    try testing.expectEqual(expected, FieldType);
+    try testing.expectEqual(graph_store.NodeCache, FieldType);
+    try testing.expectEqual(sharded.ShardedStore(u64, graph_store.Node), FieldType.Store);
 }
 
 test "GraphStore.edges is a ShardedStore" {

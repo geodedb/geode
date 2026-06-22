@@ -129,9 +129,9 @@ pub fn main() !void {
             adapter.checkpointAllLight() catch {};
             const r = rssBytes();
             const resident = store.nodes.residentCount();
-            var sb: [256]u8 = undefined;
-            out(std.fmt.bufPrint(&sb, "BNRSS sample i={d} resident={d} rss_delta={d}\n", .{
-                i + 1, resident, if (r > rss_before) r - rss_before else 0,
+            var sb: [320]u8 = undefined;
+            out(std.fmt.bufPrint(&sb, "BNRSS sample i={d} resident={d} retired={d} evicted={d} reclaimed={d} rss_delta={d}\n", .{
+                i + 1, resident, store.nodes.retiredCount(), store.nodes.evictions_total, store.nodes.reclaimed_total, if (r > rss_before) r - rss_before else 0,
             }) catch "BNRSS sample\n");
             if (i + 1 >= 2 * cap) {
                 if (rss_at_2x == 0) rss_at_2x = r;
