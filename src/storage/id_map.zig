@@ -236,6 +236,20 @@ pub const IdMap = struct {
         return self.node_uuid_to_slot.count();
     }
 
+    /// Iterator over every public node uuid in this graph's mapping. The IdMap
+    /// stays fully resident (~24 B/entry) independent of the bounded node cache,
+    /// so this enumerates ALL nodes of the graph even after node-cache eviction.
+    /// Used by full-graph "all node ids" paths so they don't miss evicted nodes.
+    pub const NodeUuidIterator = struct {
+        inner: @TypeOf(@as(IdMap, undefined).node_uuid_to_slot).KeyIterator,
+        pub fn next(it: *NodeUuidIterator) ?u128 {
+            if (it.inner.next()) |k| return k.* else return null;
+        }
+    };
+    pub fn nodeUuidIterator(self: *const IdMap) NodeUuidIterator {
+        return .{ .inner = self.node_uuid_to_slot.keyIterator() };
+    }
+
     pub fn edgeCount(self: *const IdMap) u32 {
         return self.edge_uuid_to_slot.count();
     }

@@ -1677,6 +1677,54 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Deep-copy one source node into this (snapshot) store, mirroring the
+    /// per-graph + tenant-keyed indexes so reads against the snapshot match the
+    /// live store. Extracted so both the unbounded (resident-iterator) and
+    /// bounded (IdMap-enumerated + engine-materialised) clone paths share it.
+    fn cloneOneNode(self: *GraphStore, src_node: *const Node) !void {
+        // GAP-0900 (scan-no-clone): count every node we deep-copy so a
+        // regression test can detect O(graph) clone cost on a read that
+        // should be O(result).
+        _ = g_clone_nodes_total.fetchAdd(1, .monotonic);
+        const labels_copy = try self.allocator.alloc([]const u8, src_node.labels.len);
+        for (src_node.labels, 0..) |label, i| {
+            labels_copy[i] = try self.allocator.dupe(u8, label);
+        }
+
+        var props = CompactPropertyMap.init(self.allocator);
+        var prop_it = src_node.properties.iterator();
+        while (prop_it.next()) |prop| {
+            const key = try self.allocator.dupe(u8, prop.key_ptr.*);
+            // Deep-copy property values so the snapshot owns all its string data
+            // independently (shared pointers would UAF when the arena frees).
+            try props.put(key, try copyPropertyValue(self, prop.value_ptr.*));
+        }
+
+        try self.nodes.put(src_node.id, .{
+            .id = src_node.id,
+            .labels = labels_copy,
+            .properties = props,
+            .graph_name = try self.allocator.dupe(u8, src_node.graph_name),
+            .tenant_id = try self.allocator.dupe(u8, src_node.tenant_id),
+        });
+
+        for (src_node.labels) |label| {
+            try self.addToLabelIndex(src_node.graph_name, label, src_node.id);
+        }
+        try self.addNodeToGraphIndex(src_node.graph_name, src_node.id);
+        for (src_node.labels) |label| {
+            try self.bumpLabelCount(src_node.tenant_id, label);
+        }
+        var prop_replay = src_node.properties.iterator();
+        while (prop_replay.next()) |p| {
+            const pkey = p.key_ptr.*;
+            if (isInternalPersistedPropertyKey(pkey)) continue;
+            for (src_node.labels) |label| {
+                try self.bumpLabelPropertyCount(src_node.tenant_id, label, pkey);
+            }
+        }
+    }
+
     /// Clone all nodes and edges from another store. Used by QueryReadSession
     /// to create a point-in-time snapshot without going through the adapter.
     fn cloneNodesFrom(self: *GraphStore, source: *const GraphStore) !void {
@@ -1698,56 +1746,35 @@ pub const GraphStore = struct {
         @constCast(&source.labels_rwlock).lockSharedUncancelable(io_clone);
         defer @constCast(&source.labels_rwlock).unlockShared(io_clone);
 
-        var node_it = source.nodes.iterator();
-        while (node_it.next()) |entry| {
-            // GAP-0900 (scan-no-clone): count every node we deep-copy so a
-            // regression test can detect O(graph) clone cost on a read that
-            // should be O(result).
-            _ = g_clone_nodes_total.fetchAdd(1, .monotonic);
-            const src_node = entry.value_ptr.*;
-            const labels_copy = try self.allocator.alloc([]const u8, src_node.labels.len);
-            for (src_node.labels, 0..) |label, i| {
-                labels_copy[i] = try self.allocator.dupe(u8, label);
+        if (source.nodes.effectiveCap() == 0) {
+            // Unbounded source: the resident map is the full set.
+            var node_it = source.nodes.iterator();
+            while (node_it.next()) |entry| {
+                try self.cloneOneNode(entry.value_ptr);
             }
-
-            var props = CompactPropertyMap.init(self.allocator);
-            var prop_it = src_node.properties.iterator();
-            while (prop_it.next()) |prop| {
-                const key = try self.allocator.dupe(u8, prop.key_ptr.*);
-                // Deep-copy property values so the snapshot owns all its
-                // string data independently.  Shallow copies share pointers
-                // with the writable store; when the snapshot arena is freed
-                // the allocator bookkeeping can corrupt those shared strings,
-                // producing use-after-free (0xAA fill pattern) on read.
-                try props.put(key, try copyPropertyValue(self, prop.value_ptr.*));
-            }
-
-            try self.nodes.put(entry.key_ptr.*, .{
-                .id = src_node.id,
-                .labels = labels_copy,
-                .properties = props,
-                .graph_name = try self.allocator.dupe(u8, src_node.graph_name),
-                .tenant_id = try self.allocator.dupe(u8, src_node.tenant_id),
-            });
-
-            for (src_node.labels) |label| {
-                try self.addToLabelIndex(src_node.graph_name, label, src_node.id);
-            }
-            // PERF-B/C (issues #811, #814): mirror the per-graph and
-            // tenant-keyed indexes into the snapshot store so reads against
-            // the snapshot match reads against the live store.
-            try self.addNodeToGraphIndex(src_node.graph_name, src_node.id);
-            for (src_node.labels) |label| {
-                try self.bumpLabelCount(src_node.tenant_id, label);
-            }
-            // Properties: replay PERF-C label-property counters for every
-            // non-internal key carried on the snapshotted node.
-            var prop_replay = src_node.properties.iterator();
-            while (prop_replay.next()) |p| {
-                const pkey = p.key_ptr.*;
-                if (isInternalPersistedPropertyKey(pkey)) continue;
-                for (src_node.labels) |label| {
-                    try self.bumpLabelPropertyCount(src_node.tenant_id, label, pkey);
+        } else {
+            // Bounded source: the resident map is INCOMPLETE. Enumerate every
+            // public id from the source's per-graph IdMaps (fully resident) and
+            // materialise each node — resident copy if present, else rebuilt from
+            // the engine — so the snapshot is complete. Materialised nodes are
+            // freed after copying (they are NOT inserted into the source cache,
+            // so a full snapshot never blows the source's resident bound).
+            const adapter = global_adapter;
+            var it = @constCast(source).id_maps.iterator();
+            while (it.next()) |im_entry| {
+                const graph_name = im_entry.key_ptr.*;
+                var nit = im_entry.value_ptr.nodeUuidIterator();
+                while (nit.next()) |nuuid| {
+                    const id = @as(u64, @truncate(nuuid));
+                    if (@constCast(source).nodes.get(id)) |resident| {
+                        var n = resident;
+                        try self.cloneOneNode(&n);
+                    } else if (adapter) |ad| {
+                        const slot = im_entry.value_ptr.nodeSlot(@as(u128, id)) orelse continue;
+                        var materialized = (try materializeNodeFromEngine(ad, self.allocator, graph_name, slot, id)) orelse continue;
+                        defer freeNodeValue(self.allocator, &materialized);
+                        try self.cloneOneNode(&materialized);
+                    }
                 }
             }
         }
@@ -1824,9 +1851,24 @@ pub const GraphStore = struct {
         const self: *GraphStore = @ptrCast(@alignCast(ctx));
         const adapter = global_adapter orelse return null;
         const gs = self.resolveNodeGraphSlot(node_id) orelse return null;
+        return materializeNodeFromEngine(adapter, allocator, gs.graph_name, gs.slot_id, node_id);
+    }
 
+    /// Rebuild a full `Node` (labels/properties/graph_name/tenant_id) from the
+    /// disk-backed engine for `public_id` at engine `slot_id` in `graph_name`.
+    /// Ownership matches `insertReservedNodeInMemory` exactly so `freeNodeValue`
+    /// frees the result. Returns null if the slot no longer exists. Reused by
+    /// hydrate-on-miss AND by the full-graph iterate paths (snapshot/serialize)
+    /// when the bounded cache is incomplete.
+    pub fn materializeNodeFromEngine(
+        adapter: *graph_storage_adapter.StorageAdapter,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        slot_id: u64,
+        public_id: u64,
+    ) anyerror!?Node {
         // Labels.
-        const labels = adapter.getNodeLabels(gs.graph_name, gs.slot_id, allocator) catch |err| switch (err) {
+        const labels = adapter.getNodeLabels(graph_name, slot_id, allocator) catch |err| switch (err) {
             error.NodeNotFound => return null,
             else => return err,
         };
@@ -1835,11 +1877,11 @@ pub const GraphStore = struct {
             allocator.free(labels);
         }
 
-        const graph_name_copy = try allocator.dupe(u8, gs.graph_name);
+        const graph_name_copy = try allocator.dupe(u8, graph_name);
         errdefer allocator.free(graph_name_copy);
 
         var node = Node{
-            .id = node_id,
+            .id = public_id,
             .labels = labels,
             .properties = CompactPropertyMap.init(allocator),
             .graph_name = graph_name_copy,
@@ -1849,7 +1891,7 @@ pub const GraphStore = struct {
 
         // Properties (all user-visible properties; internal keys are filtered by
         // the adapter's shouldExposePropertyKey).
-        var props = adapter.getAllNodeProperties(gs.graph_name, gs.slot_id, allocator) catch |err| switch (err) {
+        var props = adapter.getAllNodeProperties(graph_name, slot_id, allocator) catch |err| switch (err) {
             error.NodeNotFound => return null,
             else => return err,
         };
@@ -1882,7 +1924,7 @@ pub const GraphStore = struct {
 
         // Tenant id: persisted as an internal property; absent ⇒ default.
         // getNodeProperty returns the ENGINE storage PropertyValue (`.string`).
-        if (adapter.getNodeProperty(gs.graph_name, gs.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null) |tprop| {
+        if (adapter.getNodeProperty(graph_name, slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null) |tprop| {
             defer switch (tprop) {
                 .string => |s| allocator.free(s),
                 else => {},
@@ -4534,35 +4576,85 @@ pub const GraphStore = struct {
     }
 
     pub fn getAllNodes(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
-        var result = try allocator.alloc(u64, self.nodes.count());
-        var iter = self.nodes.iterator();
-        var i: usize = 0;
-        while (iter.next()) |entry| {
-            result[i] = entry.key_ptr.*;
-            i += 1;
+        // When the node cache is bounded (eviction active), the resident map is
+        // an INCOMPLETE view — enumerate every public id from the per-graph
+        // IdMaps instead, which stay fully resident (~24 B/entry) regardless of
+        // node-cache eviction. When unbounded, the resident map equals the full
+        // set, so use it directly (fast path, no behavior change).
+        if (self.nodes.effectiveCap() == 0) {
+            var result = try allocator.alloc(u64, self.nodes.count());
+            var iter = self.nodes.iterator();
+            var i: usize = 0;
+            while (iter.next()) |entry| {
+                result[i] = entry.key_ptr.*;
+                i += 1;
+            }
+            return result;
         }
-        return result;
+        var ids: std.ArrayList(u64) = .empty;
+        errdefer ids.deinit(allocator);
+        var it = @constCast(self).id_maps.iterator();
+        while (it.next()) |entry| {
+            var nit = entry.value_ptr.nodeUuidIterator();
+            while (nit.next()) |nuuid| try ids.append(allocator, @as(u64, @truncate(nuuid)));
+        }
+        return ids.toOwnedSlice(allocator);
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="PerTenantIsolation"; ASPECT=BulkNodeAccess; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Return only nodes belonging to the specified tenant (or all if tenant is null)
     pub fn getAllNodesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
         const tid = tenant orelse return self.getAllNodes(allocator);
-        var count: usize = 0;
-        var iter = self.nodes.iterator();
-        while (iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) count += 1;
+
+        // Unbounded cache: resident map is the full set (fast path, unchanged).
+        if (self.nodes.effectiveCap() == 0) {
+            var result: std.ArrayList(u64) = .empty;
+            errdefer result.deinit(allocator);
+            var iter = self.nodes.iterator();
+            while (iter.next()) |entry| {
+                if (std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) try result.append(allocator, entry.key_ptr.*);
+            }
+            return result.toOwnedSlice(allocator);
         }
-        var result = try allocator.alloc(u64, count);
-        iter = self.nodes.iterator();
-        var i: usize = 0;
-        while (iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) {
-                result[i] = entry.key_ptr.*;
-                i += 1;
+
+        // Bounded cache: enumerate ALL ids from the resident IdMaps and resolve
+        // each node's tenant from the cache if resident, else from the engine
+        // (without populating the cache, so a full scan doesn't blow the bound).
+        var result: std.ArrayList(u64) = .empty;
+        errdefer result.deinit(allocator);
+        var it = @constCast(self).id_maps.iterator();
+        while (it.next()) |entry| {
+            const graph_name = entry.key_ptr.*;
+            var nit = entry.value_ptr.nodeUuidIterator();
+            while (nit.next()) |nuuid| {
+                const id = @as(u64, @truncate(nuuid));
+                if (@constCast(self).nodeMatchesTenant(graph_name, entry.value_ptr, id, tid)) {
+                    try result.append(allocator, id);
+                }
             }
         }
-        return result;
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// Does node `node_id` belong to tenant `tid`, resolved WITHOUT inserting
+    /// into the node cache (so a full scan never blows the resident bound)?
+    /// Resident cache entry wins; otherwise read the persisted tenant property
+    /// directly from the engine (absent ⇒ DEFAULT_TENANT_ID). The comparison is
+    /// done inline so no tenant string needs to outlive the engine read.
+    fn nodeMatchesTenant(self: *GraphStore, graph_name: []const u8, id_map: *id_map_mod.IdMap, node_id: u64, tid: []const u8) bool {
+        if (self.nodes.get(node_id)) |n| return std.mem.eql(u8, n.tenant_id, tid);
+        const adapter = global_adapter orelse return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
+        const slot = id_map.nodeSlot(@as(u128, node_id)) orelse return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
+        const tprop = (adapter.getNodeProperty(graph_name, slot, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null) orelse
+            return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
+        defer switch (tprop) {
+            .string => |s| self.allocator.free(s),
+            else => {},
+        };
+        return switch (tprop) {
+            .string => |s| std.mem.eql(u8, s, tid),
+            else => std.mem.eql(u8, DEFAULT_TENANT_ID, tid),
+        };
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="PerTenantIsolation"; ASPECT=BulkEdgeAccess; STATUS=TESTED; TEST=tests/test_gap0847_tenant_drop_cascade.zig; OWNER=enterprise; UPDATED=2026-06-10
@@ -4607,6 +4699,22 @@ pub const GraphStore = struct {
     // bindings — strictly cheaper than the old iteration path which built a
     // MatchBinding per node then discarded them.
     pub fn countNodesForGraph(self: *const GraphStore, graph_name: []const u8, tenant: ?[]const u8) usize {
+        // Bounded cache: the resident map is incomplete — count from the
+        // per-graph IdMap (fully resident). With no tenant filter, the graph's
+        // IdMap node count IS the answer (O(1)). With a tenant filter, resolve
+        // each node's tenant without populating the cache.
+        if (self.nodes.effectiveCap() != 0) {
+            const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
+            if (tenant == null) return id_map.nodeCount();
+            const tid = tenant.?;
+            var count: usize = 0;
+            var nit = id_map.nodeUuidIterator();
+            while (nit.next()) |nuuid| {
+                const id = @as(u64, @truncate(nuuid));
+                if (@constCast(self).nodeMatchesTenant(graph_name, id_map, id, tid)) count += 1;
+            }
+            return count;
+        }
         var count: usize = 0;
         var iter = self.nodes.iterator();
         while (iter.next()) |entry| {
@@ -7365,12 +7473,39 @@ pub const GraphStore = struct {
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(allocator);
 
-        // Serialize nodes as JSON-lines
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
-            try appendNodeJson(&buf, allocator, entry.key_ptr.*, node);
-            try buf.append(allocator, '\n');
+        // Serialize nodes as JSON-lines.
+        if (self.nodes.effectiveCap() == 0) {
+            // Unbounded: resident map is the full set.
+            var node_iter = self.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                try appendNodeJson(&buf, allocator, entry.key_ptr.*, entry.value_ptr);
+                try buf.append(allocator, '\n');
+            }
+        } else {
+            // Bounded: resident map is incomplete — enumerate every id from the
+            // resident IdMaps and serialize the resident copy if present, else a
+            // node rebuilt from the engine (freed after serialize, so a full
+            // backup never blows the resident bound).
+            const adapter = global_adapter;
+            var it = self.id_maps.iterator();
+            while (it.next()) |im_entry| {
+                const graph_name = im_entry.key_ptr.*;
+                var nit = im_entry.value_ptr.nodeUuidIterator();
+                while (nit.next()) |nuuid| {
+                    const id = @as(u64, @truncate(nuuid));
+                    if (self.nodes.get(id)) |resident| {
+                        var n = resident;
+                        try appendNodeJson(&buf, allocator, id, &n);
+                        try buf.append(allocator, '\n');
+                    } else if (adapter) |ad| {
+                        const slot = im_entry.value_ptr.nodeSlot(@as(u128, id)) orelse continue;
+                        var materialized = (try materializeNodeFromEngine(ad, allocator, graph_name, slot, id)) orelse continue;
+                        defer freeNodeValue(allocator, &materialized);
+                        try appendNodeJson(&buf, allocator, id, &materialized);
+                        try buf.append(allocator, '\n');
+                    }
+                }
+            }
         }
 
         // Serialize edges as JSON-lines

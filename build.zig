@@ -1051,6 +1051,26 @@ pub fn build(b: *std.Build) void {
     );
     gap0900_mirror_bench_step.dependOn(&run_gap0900_mirror_bench.step);
 
+    // bound-node-mirror north-star: disk-backed bounded node-cache RSS plateau.
+    // Run via `zig build bench-bounded-node-rss` (env BNRSS_NODES / BNRSS_CAP /
+    // BNRSS_DIR). Installs the engine-backed adapter so the cap + hydrate-on-miss
+    // are active, ingests N >> cap nodes, and asserts RSS plateaus + hydrate is
+    // correct. Exits non-zero (PASS/FAIL token) so it doubles as a regression.
+    const bounded_node_rss_exe = b.addExecutable(.{ .name = "benchmark_bounded_node_rss", .root_module = b.createModule(.{
+        .root_source_file = b.path("benchmarks/benchmark_bounded_node_rss.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    bounded_node_rss_exe.root_module.addImport("geode", root_mod);
+    const run_bounded_node_rss = b.addRunArtifact(bounded_node_rss_exe);
+    if (b.args) |bench_args| run_bounded_node_rss.addArgs(bench_args);
+    const bounded_node_rss_step = b.step(
+        "bench-bounded-node-rss",
+        "bound-node-mirror: disk-backed node-cache RSS-plateau + hydrate correctness",
+    );
+    bounded_node_rss_step.dependOn(&run_bounded_node_rss.step);
+
     // File-level TDE encryption benchmark (GraphStore storage layer)
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
     const tde_file_encryption_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
