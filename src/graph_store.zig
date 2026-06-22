@@ -1790,6 +1790,140 @@ pub const GraphStore = struct {
         return id_map.nodeSlot(@as(u128, node_id)) orelse error.NodeSlotMappingMissing;
     }
 
+    /// Resolve which graph + engine slot a public node id belongs to, by
+    /// scanning the per-graph IdMaps. Public ids are globally unique, so the
+    /// first IdMap that maps the id wins. O(graphs); for the common single-graph
+    /// bulk-ingest case it is O(1). Returns null if no IdMap knows the id (the
+    /// node was never persisted to an engine — e.g. a pure in-memory deployment
+    /// with no adapter).
+    const GraphSlot = struct { graph_name: []const u8, slot_id: u64 };
+    fn resolveNodeGraphSlot(self: *GraphStore, node_id: u64) ?GraphSlot {
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.nodeSlot(@as(u128, node_id))) |slot| {
+                return .{ .graph_name = entry.key_ptr.*, .slot_id = slot };
+            }
+        }
+        return null;
+    }
+
+    /// Hydrate-on-miss callback for the BoundedNodeCache. Given a public node id
+    /// that is NOT resident in the cache, rebuild the full `Node` from the
+    /// disk-backed engine (the durable store of record). Returns null if the id
+    /// exists in neither the cache nor the engine.
+    ///
+    /// Ownership matches `insertReservedNodeInMemory` exactly so `freeNodeValue`
+    /// frees the result correctly: labels = owned slice of owned strings,
+    /// graph_name / tenant_id = owned dupes, properties = CompactPropertyMap
+    /// with owned keys/values.
+    ///
+    /// `ctx` is the `*GraphStore`. Invoked by the cache under whatever lock the
+    /// caller holds for the missing read; it only READS the engine and inserts
+    /// into the cache map.
+    fn hydrateNodeCb(ctx: *anyopaque, allocator: std.mem.Allocator, node_id: u64) anyerror!?Node {
+        const self: *GraphStore = @ptrCast(@alignCast(ctx));
+        const adapter = global_adapter orelse return null;
+        const gs = self.resolveNodeGraphSlot(node_id) orelse return null;
+
+        // Labels.
+        const labels = adapter.getNodeLabels(gs.graph_name, gs.slot_id, allocator) catch |err| switch (err) {
+            error.NodeNotFound => return null,
+            else => return err,
+        };
+        errdefer {
+            for (labels) |l| allocator.free(l);
+            allocator.free(labels);
+        }
+
+        const graph_name_copy = try allocator.dupe(u8, gs.graph_name);
+        errdefer allocator.free(graph_name_copy);
+
+        var node = Node{
+            .id = node_id,
+            .labels = labels,
+            .properties = CompactPropertyMap.init(allocator),
+            .graph_name = graph_name_copy,
+            .tenant_id = DEFAULT_TENANT_ID,
+        };
+        errdefer freeNodeValue(allocator, &node);
+
+        // Properties (all user-visible properties; internal keys are filtered by
+        // the adapter's shouldExposePropertyKey).
+        var props = adapter.getAllNodeProperties(gs.graph_name, gs.slot_id, allocator) catch |err| switch (err) {
+            error.NodeNotFound => return null,
+            else => return err,
+        };
+        defer {
+            var pit = props.iterator();
+            while (pit.next()) |e| {
+                allocator.free(e.key_ptr.*);
+                // Engine storage PropertyValue: only `.string` owns heap.
+                switch (e.value_ptr.*) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                }
+            }
+            props.deinit();
+        }
+        var pit = props.iterator();
+        while (pit.next()) |e| {
+            const key = try allocator.dupe(u8, e.key_ptr.*);
+            errdefer allocator.free(key);
+            const value = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
+            const gop = try node.properties.getOrPut(key);
+            if (gop.found_existing) {
+                // Duplicate key (shouldn't happen) — free the dup key, keep first.
+                allocator.free(key);
+            } else {
+                gop.key_ptr.* = key;
+            }
+            gop.value_ptr.* = value;
+        }
+
+        // Tenant id: persisted as an internal property; absent ⇒ default.
+        // getNodeProperty returns the ENGINE storage PropertyValue (`.string`).
+        if (adapter.getNodeProperty(gs.graph_name, gs.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null) |tprop| {
+            defer switch (tprop) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            switch (tprop) {
+                .string => |s| {
+                    if (!std.mem.eql(u8, s, DEFAULT_TENANT_ID)) {
+                        node.tenant_id = try allocator.dupe(u8, s);
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return node;
+    }
+
+    /// Install the hydrate-on-miss hook so the node cache can serve evicted ids
+    /// from the engine, and activate the configured resident cap. Call once the
+    /// global storage adapter is available.
+    pub fn installNodeCacheHydrate(self: *GraphStore) void {
+        self.nodes.setHydrate(hydrateNodeCb, @ptrCast(self));
+    }
+
+    /// Predicate: does this evicted/retired node belong to `graph_name` (passed
+    /// as ctx)? Used to scope grace-point reclamation to the checkpointed graph.
+    fn retiredNodeInGraph(ctx: *anyopaque, node: *const Node) bool {
+        const graph_name: *const []const u8 = @ptrCast(@alignCast(ctx));
+        return std.mem.eql(u8, node.graph_name, graph_name.*);
+    }
+
+    /// Reclaim (free) the node cache's retired entries that belong to
+    /// `graph_name`. MUST be called by the storage adapter while it holds that
+    /// graph's per-graph rwlock EXCLUSIVE (the checkpoint window), which drains
+    /// all readers of that graph's nodes — so freeing them cannot race a live
+    /// pointer. This is the grace boundary in the bound-node-mirror design.
+    pub fn reclaimNodeCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
+        var gn = graph_name;
+        self.nodes.reclaimRetiredWhere(@ptrCast(&gn), retiredNodeInGraph);
+    }
+
     fn requireEdgeSlot(self: *GraphStore, graph_name: []const u8, edge_id: u64) !u64 {
         const id_map = self.requireIdMap(graph_name) catch return error.EdgeSlotMappingMissing;
         return id_map.edgeSlot(@as(u128, edge_id)) orelse error.EdgeSlotMappingMissing;
@@ -9082,6 +9216,11 @@ pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*Gra
         return error.StorageAdapterMismatch;
     }
     store.data_dir = data_dir;
+    // The disk-backed engine is now available, so the node cache can serve
+    // evicted ids via hydrate-on-miss — install the hook and activate the
+    // configured resident cap (GEODE_NODE_CACHE_ENTRIES). Until this point the
+    // cache stays unbounded (eviction without rehydration would lose data).
+    store.installNodeCacheHydrate();
     return store;
 }
 

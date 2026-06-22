@@ -4532,6 +4532,14 @@ pub const StorageAdapter = struct {
             } else |err| {
                 log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
             }
+            // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,
+            // which has drained all readers of this graph's nodes. Free the node
+            // cache's retired (evicted/overwritten) entries for THIS graph now —
+            // no reader can hold a pointer to them. This bounds resident RSS to
+            // ~cache cap + retire backlog since the last checkpoint.
+            if (graph_store.getCurrentGlobalStore()) |store| {
+                store.reclaimNodeCacheRetiredForGraph(mg.name);
+            }
             mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 

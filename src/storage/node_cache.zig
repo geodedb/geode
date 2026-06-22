@@ -81,10 +81,26 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             hydrate_ctx: ?*anyopaque = null,
         };
 
+        /// Per-shard eviction state. The cache is partitioned by the SAME
+        /// `shardIndex(key)` as the backing `ShardedStore`, so a `put(key)`
+        /// evicts ONLY within `shardIndex(key)`'s shard. The consumer holds that
+        /// shard's lock EXCLUSIVE around the write (geode: ManagedGraph
+        /// `shard_locks[idx]`), so eviction's map mutation is serialised against
+        /// concurrent point reads of the same shard exactly like a normal insert
+        /// — eviction adds no new cross-shard race.
+        const Shard = struct {
+            /// FIFO insertion-order queue of this shard's keys. A key may appear
+            /// stale (already removed/re-inserted); eviction validates residence
+            /// before unlinking, so stale entries are skipped cheaply.
+            fifo: std.Deque(K) = .empty,
+            /// Values unlinked from the map but not yet freed (reclaim phase).
+            retired: std.ArrayList(V) = .empty,
+        };
+
         allocator: std.mem.Allocator,
         store: Store,
-        /// Effective cap currently in force (0 = unbounded). Forced to 0 while
-        /// no hydrate hook is installed (see init / setHydrate).
+        /// Effective TOTAL cap currently in force (0 = unbounded). Forced to 0
+        /// while no hydrate hook is installed (see init / setHydrate).
         cap: usize,
         /// Cap requested by config, applied once a hydrate hook is installed.
         requested_cap: usize,
@@ -92,13 +108,7 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         hydrate_fn: ?HydrateFn,
         hydrate_ctx: ?*anyopaque,
 
-        /// FIFO insertion-order queue of resident keys for eviction. A key may
-        /// appear stale here (already removed/re-inserted); eviction validates
-        /// residence before unlinking, so stale entries are skipped cheaply.
-        fifo: std.Deque(K),
-
-        /// Values unlinked from the map but not yet freed (see reclaim phase).
-        retired: std.ArrayList(V),
+        shards: [SHARD_COUNT]Shard,
 
         // Observability counters (monotonic; read for metrics/tests).
         evictions_total: u64 = 0,
@@ -120,9 +130,14 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 .free_fn = opts.free_fn,
                 .hydrate_fn = opts.hydrate_fn,
                 .hydrate_ctx = opts.hydrate_ctx,
-                .fifo = .empty,
-                .retired = std.ArrayList(V).empty,
+                .shards = [_]Shard{.{}} ** SHARD_COUNT,
             };
+        }
+
+        /// Per-shard resident cap (ceil(cap / SHARD_COUNT)). 0 = unbounded.
+        inline fn perShardCap(self: *const Self) usize {
+            if (self.cap == 0) return 0;
+            return (self.cap + SHARD_COUNT - 1) / SHARD_COUNT;
         }
 
         pub fn deinit(self: *Self) void {
@@ -133,8 +148,10 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 self.free_fn(self.allocator, entry.value_ptr);
             }
             self.store.deinit();
-            self.fifo.deinit(self.allocator);
-            self.retired.deinit(self.allocator);
+            for (&self.shards) |*sh| {
+                sh.fifo.deinit(self.allocator);
+                sh.retired.deinit(self.allocator);
+            }
         }
 
         /// Number of entries currently resident in the map.
@@ -149,7 +166,9 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         }
 
         pub fn retiredCount(self: *const Self) usize {
-            return self.retired.items.len;
+            var total: usize = 0;
+            for (&self.shards) |*sh| total += sh.retired.items.len;
+            return total;
         }
 
         /// Install the hydrate-on-miss hook and activate the configured cap.
@@ -227,11 +246,12 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         }
 
         /// Record that `key` was just inserted via `getOrPut` so it participates
-        /// in eviction, then evict down to cap if needed. Safe to call for an
-        /// existing key (it just refreshes FIFO position).
+        /// in eviction, then evict its shard down to cap if needed. Safe to call
+        /// for an existing key (it just refreshes FIFO position).
         pub fn noteInserted(self: *Self, key: K) !void {
-            try self.fifo.pushBack(self.allocator, key);
-            try self.evictToCap();
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            try self.shards[idx].fifo.pushBack(self.allocator, key);
+            try self.evictShardToCap(idx);
         }
 
         /// Remove `key`. The removed value is retired (freed at the next
@@ -239,7 +259,8 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// pointers.
         pub fn remove(self: *Self, key: K) void {
             if (self.store.fetchRemove(key)) |kv| {
-                self.retired.append(self.allocator, kv.value) catch {
+                const idx = sharded_store.shardIndex(@as(u64, key));
+                self.shards[idx].retired.append(self.allocator, kv.value) catch {
                     // OOM on the retire list: fall back to inline free. This is
                     // only reached under memory pressure; the caller holds the
                     // exclusive write path for `remove`, so no shared reader is
@@ -286,14 +307,16 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             try self.store.ensureUnusedCapacity(want);
         }
 
-        /// Clear all resident entries (freeing their values) and the retire
-        /// list. Used by snapshot-restore / reset paths.
+        /// Clear all resident entries (freeing their values) and every shard's
+        /// retire list + FIFO. Used by snapshot-restore / reset paths.
         pub fn clearRetainingCapacity(self: *Self) void {
             self.reclaimRetired();
             var it = self.store.iterator();
             while (it.next()) |entry| self.free_fn(self.allocator, entry.value_ptr);
             self.store.clearRetainingCapacity();
-            while (self.fifo.popFront()) |_| {}
+            for (&self.shards) |*sh| {
+                while (sh.fifo.popFront()) |_| {}
+            }
         }
 
         // ---- Iteration ------------------------------------------------------
@@ -311,25 +334,57 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
 
         // ---- Grace-point reclamation ----------------------------------------
 
-        /// Free every retired value. MUST be called only at a grace boundary
-        /// where no reader can hold a pointer to a retired value (geode: the
-        /// per-graph EXCLUSIVE checkpoint window, and deinit).
+        /// Free every retired value across all shards. MUST be called only at a
+        /// grace boundary where no reader can hold a pointer to ANY retired value
+        /// (geode: a GLOBAL exclusive window, or deinit). For the per-graph
+        /// checkpoint window use `reclaimRetiredWhere` so only the checkpointed
+        /// graph's nodes — whose readers the per-graph exclusive lock drained —
+        /// are freed.
         pub fn reclaimRetired(self: *Self) void {
-            if (self.retired.items.len == 0) return;
-            for (self.retired.items) |*v| self.free_fn(self.allocator, v);
-            self.reclaimed_total += self.retired.items.len;
-            self.retired.clearRetainingCapacity();
+            for (&self.shards) |*sh| {
+                if (sh.retired.items.len == 0) continue;
+                for (sh.retired.items) |*v| self.free_fn(self.allocator, v);
+                self.reclaimed_total += sh.retired.items.len;
+                sh.retired.clearRetainingCapacity();
+            }
+        }
+
+        pub const RetirePredicate = *const fn (ctx: *anyopaque, value: *const V) bool;
+
+        /// Free only the retired values for which `pred` returns true, compacting
+        /// each shard's retire list in place. Used at the per-graph EXCLUSIVE
+        /// checkpoint window: the predicate matches the checkpointed graph, so
+        /// only nodes whose readers that lock drained are freed; nodes of other
+        /// graphs stay retired until their own grace window. Safe: a non-matching
+        /// entry is neither freed nor moved out of the retire list.
+        pub fn reclaimRetiredWhere(self: *Self, ctx: *anyopaque, pred: RetirePredicate) void {
+            for (&self.shards) |*sh| {
+                if (sh.retired.items.len == 0) continue;
+                var w: usize = 0;
+                for (sh.retired.items) |*v| {
+                    if (pred(ctx, v)) {
+                        self.free_fn(self.allocator, v);
+                        self.reclaimed_total += 1;
+                    } else {
+                        // keep: compact toward the front
+                        sh.retired.items[w] = v.*;
+                        w += 1;
+                    }
+                }
+                sh.retired.shrinkRetainingCapacity(w);
+            }
         }
 
         // ---- Internals ------------------------------------------------------
 
         fn insertEvicting(self: *Self, key: K, value: V) !void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
             const gop = try self.store.getOrPut(key);
             if (gop.found_existing) {
                 // Overwrite: retire the OLD value (a reader may hold a pointer
                 // to it) and store the new one. Don't re-queue in FIFO — the key
                 // is already tracked.
-                try self.retired.append(self.allocator, gop.value_ptr.*);
+                try self.shards[idx].retired.append(self.allocator, gop.value_ptr.*);
                 gop.value_ptr.* = value;
                 return;
             }
@@ -337,28 +392,28 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             gop.value_ptr.* = value;
             // Record for eviction. If the FIFO append fails we must not leave an
             // untracked entry (it could never be evicted), so undo the insert.
-            self.fifo.pushBack(self.allocator, key) catch |err| {
+            self.shards[idx].fifo.pushBack(self.allocator, key) catch |err| {
                 if (self.store.fetchRemove(key)) |kv| {
                     var v = kv.value;
                     self.free_fn(self.allocator, &v);
                 }
                 return err;
             };
-            try self.evictToCap();
+            try self.evictShardToCap(idx);
         }
 
-        /// Evict (unlink + retire) cold entries until resident <= cap. cap==0
-        /// disables eviction.
-        fn evictToCap(self: *Self) !void {
-            if (self.cap == 0) return;
-            while (self.store.count() > self.cap) {
-                const victim_key = self.fifo.popFront() orelse {
-                    // FIFO empty but map over cap — should not happen; bail to
-                    // avoid an infinite loop.
-                    return;
-                };
+        /// Evict (unlink + retire) cold entries from shard `idx` until that
+        /// shard's resident count <= the per-shard cap. cap==0 disables
+        /// eviction. SAFETY: only mutates shard `idx`'s map partition, FIFO, and
+        /// retire list — the consumer holds shard `idx`'s lock EXCLUSIVE, so this
+        /// never touches a partition another thread could be reading.
+        fn evictShardToCap(self: *Self, idx: usize) !void {
+            const per_shard = self.perShardCap();
+            if (per_shard == 0) return;
+            while (self.store.shardLen(idx) > per_shard) {
+                const victim_key = self.shards[idx].fifo.popFront() orelse return;
                 if (self.store.fetchRemove(victim_key)) |kv| {
-                    try self.retired.append(self.allocator, kv.value);
+                    try self.shards[idx].retired.append(self.allocator, kv.value);
                     self.evictions_total += 1;
                 }
                 // else: stale FIFO entry (already removed/overwritten) — skip.

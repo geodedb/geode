@@ -58,6 +58,15 @@ const FakeEngine = struct {
 
 const Cache = node_cache.BoundedNodeCache(u64, FakeVal);
 
+/// The cache evicts PER SHARD (each shard capped at ceil(cap/SHARD_COUNT)), so
+/// the worst-case total resident is the per-shard cap times the shard count —
+/// i.e. the requested cap rounded UP to a multiple of SHARD_COUNT. Eviction
+/// being shard-local is what makes it safe under geode's per-shard locks.
+fn shardRoundedBound(cap: usize) usize {
+    const sc = node_cache.SHARD_COUNT;
+    return ((cap + sc - 1) / sc) * sc;
+}
+
 fn freeFakeVal(allocator: std.mem.Allocator, v: *FakeVal) void {
     v.free(allocator);
 }
@@ -109,10 +118,10 @@ test "BoundedNodeCache: resident count never exceeds the cap (self-bounding inse
         // also drain retired periodically (simulates a grace point) so the
         // testing allocator doesn't accumulate retired entries forever.
         if (i % 200 == 0) cache.reclaimRetired();
-        try testing.expect(cache.residentCount() <= 64);
+        try testing.expect(cache.residentCount() <= shardRoundedBound(64));
     }
     cache.reclaimRetired();
-    try testing.expect(cache.residentCount() <= 64);
+    try testing.expect(cache.residentCount() <= shardRoundedBound(64));
 }
 
 test "BoundedNodeCache: hydrate-on-miss rebuilds an evicted entry from the engine" {
@@ -141,7 +150,7 @@ test "BoundedNodeCache: hydrate-on-miss rebuilds an evicted entry from the engin
         if (k % 50 == 0) cache.reclaimRetired();
     }
     cache.reclaimRetired();
-    try testing.expect(cache.residentCount() <= 50);
+    try testing.expect(cache.residentCount() <= shardRoundedBound(50));
 
     // id 3 was certainly evicted. A plain cache get() misses it.
     // getOrHydrate() must rebuild it from the engine with the CORRECT value.
@@ -155,6 +164,58 @@ test "BoundedNodeCache: hydrate-on-miss rebuilds an evicted entry from the engin
     const before = eng.hydrate_calls;
     _ = (try cache.getOrHydrate(3)).?;
     try testing.expectEqual(before, eng.hydrate_calls);
+}
+
+test "BoundedNodeCache: bounded ingest then every id hydrates correctly (scaled)" {
+    const a = testing.allocator;
+    var eng = FakeEngine.init(a);
+    defer eng.deinit();
+
+    const N: u64 = 20_000;
+    const cap: usize = 1_024;
+
+    // Durable engine is the source of truth for all N ids.
+    var k: u64 = 0;
+    while (k < N) : (k += 1) {
+        var nbuf: [40]u8 = undefined;
+        try eng.put(k, try std.fmt.bufPrint(&nbuf, "row-{d}-payload", .{k}));
+    }
+
+    var cache = try Cache.init(a, .{
+        .cap = cap,
+        .free_fn = freeFakeVal,
+        .hydrate_fn = FakeEngine.hydrate,
+        .hydrate_ctx = &eng,
+    });
+    defer cache.deinit();
+
+    // Bulk-insert all N (simulates ingest). Resident set must stay bounded —
+    // this is the unit-level analogue of the bounded-RSS north-star.
+    k = 0;
+    while (k < N) : (k += 1) {
+        try cache.put(k, try makeVal(a, k, "ingest"));
+        if (k % 256 == 0) cache.reclaimRetired(); // periodic grace point
+        try testing.expect(cache.residentCount() <= shardRoundedBound(cap));
+    }
+    cache.reclaimRetired();
+    try testing.expect(cache.residentCount() <= shardRoundedBound(cap));
+
+    // Every id — including the many that were evicted — reads back correctly
+    // via hydrate-on-miss, with the engine's value (NOT the stale "ingest").
+    k = 0;
+    while (k < N) : (k += 1) {
+        const v = (try cache.getOrHydrate(k)) orelse {
+            std.debug.print("missing id {d}\n", .{k});
+            return error.MissingId;
+        };
+        var ebuf: [40]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&ebuf, "row-{d}-payload", .{k});
+        try testing.expectEqualStrings(expected, v.name);
+        // Keep the resident set bounded even as reads hydrate.
+        if (k % 256 == 0) cache.reclaimRetired();
+        try testing.expect(cache.residentCount() <= shardRoundedBound(cap));
+    }
+    cache.reclaimRetired();
 }
 
 test "BoundedNodeCache: getOrHydrate returns null for an id absent from the engine" {
