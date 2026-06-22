@@ -1880,12 +1880,21 @@ pub const GraphStore = struct {
         const graph_name_copy = try allocator.dupe(u8, graph_name);
         errdefer allocator.free(graph_name_copy);
 
+        // GAP-0901: own the tenant_id. `freeNodeValue` (the node-cache free_fn,
+        // run on grace-point reclaim of an evicted node) UNCONDITIONALLY frees
+        // `tenant_id` when len > 0. A hydrated node left pointing at the static
+        // `DEFAULT_TENANT_ID` constant would therefore free non-heap memory
+        // ("incorrect alignment" abort) the first time a hydrated default-tenant
+        // node is reclaimed. Dupe it so the free is always valid, matching every
+        // other node-construction path (createNode / loadOneGraphFromAdapter).
+        // The `freeNodeValue` errdefer below covers freeing `node.tenant_id` on
+        // any later error, so no separate errdefer for the copy is needed.
         var node = Node{
             .id = public_id,
             .labels = labels,
             .properties = CompactPropertyMap.init(allocator),
             .graph_name = graph_name_copy,
-            .tenant_id = DEFAULT_TENANT_ID,
+            .tenant_id = try allocator.dupe(u8, DEFAULT_TENANT_ID),
         };
         errdefer freeNodeValue(allocator, &node);
 
@@ -1932,7 +1941,11 @@ pub const GraphStore = struct {
             switch (tprop) {
                 .string => |s| {
                     if (!std.mem.eql(u8, s, DEFAULT_TENANT_ID)) {
-                        node.tenant_id = try allocator.dupe(u8, s);
+                        // Replace the owned default copy with the real tenant —
+                        // free the default first so it does not leak.
+                        const real_tenant = try allocator.dupe(u8, s);
+                        allocator.free(node.tenant_id);
+                        node.tenant_id = real_tenant;
                     }
                 },
                 else => {},

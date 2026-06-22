@@ -2251,6 +2251,8 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0812_topk_streaming_tests.root_module.addImport("geode", root_mod);
     const run_gap0812_topk_streaming_tests = b.addRunArtifact(gap0812_topk_streaming_tests);
+    const gap0812_topk_step = b.step("test-gap0812-topk", "Run GAP-0812 top-K ordered streaming fast-path tests");
+    gap0812_topk_step.dependOn(&run_gap0812_topk_streaming_tests.step);
 
     // GAP-0813 Task 4.1: projection-pruned materialize for multi-hop path
     // queries. When the RETURN clause references only a small set of
@@ -6931,6 +6933,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_scan_no_clone_tests.step, 1, test_shard_loads, test_shard_index);
     const scan_no_clone_step = b.step("test-gap0900-scan-no-clone", "Run GAP-0900 scan-no-clone regression (bounded scan is O(result), no whole-graph deep clone)");
     scan_no_clone_step.dependOn(&run_scan_no_clone_tests.step);
+
+    // GAP-0901 bounded-cache hydrate/reclaim regression: under a SMALL node
+    // cache cap (most nodes evicted to the engine), hydrating an evicted
+    // DEFAULT-tenant node from the engine and then reclaiming it must NOT free
+    // the static DEFAULT_TENANT_ID constant ("incorrect alignment" / GP-fault
+    // crash). Also characterizes the deferred O(N)-resident snapshot cost for
+    // genuinely-ineligible read shapes. Wall-clock-independent.
+    const bounded_snapshot_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0901_bounded_snapshot_no_materialize.zig"), .target = target, .optimize = optimize });
+    bounded_snapshot_test_mod.addImport("geode", root_mod);
+    const bounded_snapshot_tests = b.addTest(.{ .root_module = bounded_snapshot_test_mod });
+    const run_bounded_snapshot_tests = b.addRunArtifact(bounded_snapshot_tests);
+    shardDep(test_step, &run_bounded_snapshot_tests.step, 1, test_shard_loads, test_shard_index);
+    const bounded_snapshot_step = b.step("test-gap0901-bounded-snapshot", "Run GAP-0901 bounded-cache hydrate/reclaim regression (hydrated default-tenant node reclaim must not crash) + snapshot characterization");
+    bounded_snapshot_step.dependOn(&run_bounded_snapshot_tests.step);
 
     // Inline-key index-seek regression (read-stress KNOWN BUG #1): inline
     // `{indexed_prop: val}` equality reads seek the exact-property index
