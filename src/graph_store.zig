@@ -3214,14 +3214,30 @@ pub const GraphStore = struct {
         label: []const u8,
         prop_key: []const u8,
     ) !struct { key: []const u8, owned: ?[]u8 } {
-        const total = label.len + 1 + prop_key.len;
-        if (total <= scratch.len) {
+        // Bug #3 (read-path crash hardening): compose the key size with a
+        // CHECKED add. A corrupted/garbage length carried on a node at high RSS
+        // could overflow `label.len + 1 + prop_key.len`, and even a merely huge
+        // (non-overflowing) `total` makes `allocator.alloc` compute an
+        // alignment-padded size that overflows inside ArenaAllocator.alloc and
+        // PANICS the whole server — crashing every connection on a single bad
+        // read (e.g. `MATCH (n:Taxon) RETURN count(n)` during a snapshot clone).
+        // Surface it as an error instead so only THIS query fails; the snapshot
+        // path is all `try`, so the error propagates up to snapshotUnderReadLock
+        // and the read returns gracefully. A read must never crash the server.
+        const total = std.math.add(usize, label.len, 1) catch return error.LabelPropKeyTooLarge;
+        const total2 = std.math.add(usize, total, prop_key.len) catch return error.LabelPropKeyTooLarge;
+        // Reject implausibly large keys before touching the allocator. A real
+        // label+prop key is bytes-to-KB; anything past this cap is corruption,
+        // not data, and would only feed the allocator an overflow-prone size.
+        const max_label_prop_key_len: usize = 1 << 20; // 1 MiB — orders above any real key
+        if (total2 > max_label_prop_key_len) return error.LabelPropKeyTooLarge;
+        if (total2 <= scratch.len) {
             @memcpy(scratch[0..label.len], label);
             scratch[label.len] = 0;
             @memcpy(scratch[label.len + 1 ..][0..prop_key.len], prop_key);
-            return .{ .key = scratch[0..total], .owned = null };
+            return .{ .key = scratch[0..total2], .owned = null };
         }
-        const buf = try allocator.alloc(u8, total);
+        const buf = try allocator.alloc(u8, total2);
         @memcpy(buf[0..label.len], label);
         buf[label.len] = 0;
         @memcpy(buf[label.len + 1 ..][0..prop_key.len], prop_key);
