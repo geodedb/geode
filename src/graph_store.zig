@@ -23,6 +23,7 @@ const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
+const node_cache_mod = @import("storage/node_cache.zig");
 const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28
@@ -451,6 +452,41 @@ pub const Node = struct {
     // GAP-0279: Per-tenant data isolation — tenant_id tags each node for query-time filtering
     tenant_id: []const u8 = DEFAULT_TENANT_ID,
 };
+
+/// Bounded, evict-freely cache that backs `GraphStore.nodes`. See
+/// src/storage/node_cache.zig and docs/architecture/bound-node-mirror.md.
+/// API-compatible with the `ShardedStore(u64, Node)` it replaces for the
+/// read/iterate/put/remove surface used across graph_store.
+pub const NodeCache = node_cache_mod.BoundedNodeCache(u64, Node);
+
+/// Resident node-cache cap from `GEODE_NODE_CACHE_ENTRIES`.
+///   unset   -> NodeCache.DEFAULT_CAP (1_000_000)
+///   "0"     -> 0 (unbounded legacy mirror; for A/B + safety fallback)
+///   N       -> N
+fn nodeCacheCapFromEnv() usize {
+    if (std.c.getenv("GEODE_NODE_CACHE_ENTRIES")) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t\r\n"), 10) catch
+            node_cache_mod.DEFAULT_CAP;
+    }
+    return node_cache_mod.DEFAULT_CAP;
+}
+
+/// Per-`Node` heap free, matching the deinit/clearNodes free pattern exactly.
+/// Used as the cache's `free_fn` for both inline frees (overwrite) and
+/// grace-point reclamation of evicted entries.
+pub fn freeNodeValue(allocator: std.mem.Allocator, node: *Node) void {
+    for (node.labels) |label| allocator.free(label);
+    allocator.free(node.labels);
+    if (node.graph_name.len > 0) allocator.free(node.graph_name);
+    if (node.tenant_id.len > 0) allocator.free(node.tenant_id);
+    var prop_iter = node.properties.iterator();
+    while (prop_iter.next()) |prop_entry| {
+        allocator.free(prop_entry.key_ptr.*);
+        freePropertyValueWithAllocator(allocator, prop_entry.value_ptr.*);
+    }
+    node.properties.deinit();
+}
 
 pub const Edge = struct {
     id: u64,
@@ -1097,7 +1133,7 @@ pub const MergePropertyIndex = struct {
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
-    nodes: sharded_store.ShardedStore(u64, Node),
+    nodes: NodeCache,
     edges: sharded_store.ShardedStore(u64, Edge),
     next_node_id: u64,
     next_edge_id: u64,
@@ -1257,7 +1293,14 @@ pub const GraphStore = struct {
     pub fn initWithTenant(allocator: std.mem.Allocator, tenant_id: []const u8, schema_name: []const u8) error{OutOfMemory}!GraphStore {
         var store = GraphStore{
             .allocator = allocator,
-            .nodes = try sharded_store.ShardedStore(u64, Node).init(allocator),
+            .nodes = try NodeCache.init(allocator, .{
+                .cap = nodeCacheCapFromEnv(),
+                .free_fn = freeNodeValue,
+                // hydrate hook installed via store.nodes.setHydrate(...) once the
+                // storage adapter is available (see installNodeCacheHydrate).
+                .hydrate_fn = null,
+                .hydrate_ctx = null,
+            }),
             .edges = try sharded_store.ShardedStore(u64, Edge).init(allocator),
             .next_node_id = 1,
             .next_edge_id = 1,
@@ -1403,33 +1446,9 @@ pub const GraphStore = struct {
     }
 
     pub fn clearNodes(self: *GraphStore) void {
-        // Free and clear all nodes
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            // Free each label string
-            for (entry.value_ptr.labels) |label| {
-                self.allocator.free(label);
-            }
-            // Free the labels array itself
-            self.allocator.free(entry.value_ptr.labels);
-            // Free the graph_name (always allocated via create functions)
-            if (entry.value_ptr.graph_name.len > 0) {
-                self.allocator.free(entry.value_ptr.graph_name);
-            }
-            // GAP-0279: Free tenant_id (always allocated via create functions)
-            if (entry.value_ptr.tenant_id.len > 0) {
-                self.allocator.free(entry.value_ptr.tenant_id);
-            }
-            // Free the properties hashmap
-            var prop_iter = entry.value_ptr.properties.iterator();
-            while (prop_iter.next()) |prop_entry| {
-                // Free the key
-                self.allocator.free(prop_entry.key_ptr.*);
-                // Free property values (including ExtValue)
-                freePropertyValue(self, prop_entry.value_ptr.*);
-            }
-            entry.value_ptr.properties.deinit();
-        }
+        // Free and clear all nodes. The BoundedNodeCache frees every resident
+        // value via its free_fn (freeNodeValue) AND drains the retire list, so
+        // the manual per-node free loop is no longer needed here.
         self.nodes.clearRetainingCapacity();
 
         // Free and clear all edges
@@ -3083,7 +3102,7 @@ pub const GraphStore = struct {
     pub const NodesByGraphIterator = struct {
         // Empty iterator when the graph is absent.
         inner: ?std.AutoHashMap(u64, void).KeyIterator,
-        nodes: *const sharded_store.ShardedStore(u64, Node),
+        nodes: *const NodeCache,
 
         pub fn next(it: *NodesByGraphIterator) ?*Node {
             const inner = &(it.inner orelse return null);
@@ -7448,7 +7467,10 @@ pub const GraphStore = struct {
             freePropertyValue(self, prop_entry.value_ptr.*);
         }
         node_ptr.properties.deinit();
-        _ = self.nodes.remove(node_id);
+        // The node heap was freed inline above (exactly as the pre-cache mirror
+        // did on explicit delete). Use unlink (NOT remove) so the cache does not
+        // ALSO retire+reclaim this value — that would double-free.
+        _ = self.nodes.unlink(node_id);
 
         // Remove adjacency lists for this node
         if (self.outgoing_edges.fetchRemove(node_id)) |kv| {

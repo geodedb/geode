@@ -83,7 +83,11 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
 
         allocator: std.mem.Allocator,
         store: Store,
+        /// Effective cap currently in force (0 = unbounded). Forced to 0 while
+        /// no hydrate hook is installed (see init / setHydrate).
         cap: usize,
+        /// Cap requested by config, applied once a hydrate hook is installed.
+        requested_cap: usize,
         free_fn: FreeFn,
         hydrate_fn: ?HydrateFn,
         hydrate_ctx: ?*anyopaque,
@@ -102,10 +106,17 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         reclaimed_total: u64 = 0,
 
         pub fn init(allocator: std.mem.Allocator, opts: Options) !Self {
+            // SAFETY: eviction is only correct when evicted entries can be
+            // rebuilt. Without a hydrate callback an evicted node would be lost,
+            // so a cache with no hydrate_fn is forced UNBOUNDED regardless of
+            // the requested cap. The consumer enables bounding by installing the
+            // hydrate hook (setHydrate) once the durable engine is available.
+            const effective_cap: usize = if (opts.hydrate_fn == null) 0 else opts.cap;
             return .{
                 .allocator = allocator,
                 .store = try Store.init(allocator),
-                .cap = opts.cap,
+                .cap = effective_cap,
+                .requested_cap = opts.cap,
                 .free_fn = opts.free_fn,
                 .hydrate_fn = opts.hydrate_fn,
                 .hydrate_ctx = opts.hydrate_ctx,
@@ -139,6 +150,21 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
 
         pub fn retiredCount(self: *const Self) usize {
             return self.retired.items.len;
+        }
+
+        /// Install the hydrate-on-miss hook and activate the configured cap.
+        /// Called by the consumer once the durable engine (storage adapter) is
+        /// available, so eviction becomes safe (evicted entries can be rebuilt).
+        /// Idempotent.
+        pub fn setHydrate(self: *Self, hydrate_fn: HydrateFn, hydrate_ctx: *anyopaque) void {
+            self.hydrate_fn = hydrate_fn;
+            self.hydrate_ctx = hydrate_ctx;
+            self.cap = self.requested_cap;
+        }
+
+        /// Current effective cap (0 = unbounded). For diagnostics/metrics.
+        pub fn effectiveCap(self: *const Self) usize {
+            return self.cap;
         }
 
         // ---- Read API (pure cache; no hydration) ----------------------------
@@ -229,6 +255,17 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// then owns the value and must free it; it is NOT retired here.
         pub fn fetchRemove(self: *Self, key: K) ?KV {
             return self.store.fetchRemove(key);
+        }
+
+        /// Unlink `key` from the map WITHOUT retiring or freeing its value. For
+        /// callers that have ALREADY freed (or will free) the value's heap
+        /// themselves — e.g. the explicit delete path, which frees inline under
+        /// the exclusive write lock exactly as the pre-cache mirror did. Using
+        /// `remove` there would double-free (retire + caller free). Returns true
+        /// if an entry was present. A stale FIFO entry, if any, is skipped at
+        /// eviction time.
+        pub fn unlink(self: *Self, key: K) bool {
+            return self.store.remove(key) != null;
         }
 
         pub fn ensureTotalCapacity(self: *Self, total_capacity: u32) !void {
