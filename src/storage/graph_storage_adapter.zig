@@ -713,28 +713,42 @@ pub const ManagedGraph = struct {
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
 
-    /// GAP-0900 (bug #1, sustained-ingest checkpoint starvation): explicit
-    /// writer-preference flag for the checkpoint's EXCLUSIVE acquire.
+    /// Explicit writer-preference counter for ALL EXCLUSIVE acquirers of
+    /// `rwlock` (the periodic checkpoint AND the edge-phase schema/MERGE ops).
     ///
     /// `std.Io.RwLock` has NO writer preference: `tryLock` never sets the
     /// `writer` bit (see std/Io/RwLock.zig:28-40), so concurrent SHARED
     /// acquirers always take the lock-free fast CAS path and keep
-    /// `reader_mask` non-zero. Under 16 continuous bulk-ingest workers the
-    /// checkpoint's bounded `tryLock` spin (checkpointAllEx) therefore NEVER
-    /// observes a reader-free instant before its deadline and SKIPS every
-    /// cycle → `pending_bulk_ops` never resets → un-checkpointed dirty pages
-    /// grow without bound → OOM. We cannot fix this with the RwLock's own
-    /// writer-preferred `lockUncancelable` because that parks on the internal
-    /// semaphore (the lost-wakeup wedge fixed in 9bd9b81b).
+    /// `reader_mask` non-zero. An EXCLUSIVE `tryLock` therefore NEVER observes
+    /// a reader-free instant before its deadline whenever a reader recurs.
+    /// Two distinct failures result, both fixed by this mechanism:
+    ///   * GAP-0900: under 16 continuous bulk-ingest workers the checkpoint's
+    ///     bounded `tryLock` spin SKIPS every cycle → `pending_bulk_ops` never
+    ///     resets → un-checkpointed dirty pages grow without bound → OOM.
+    ///   * EDGE-PHASE 40001 (2026-06-22): the edge-phase exclusive op (CREATE
+    ///     INDEX ON :Taxon(source_id) / relationship MERGE) is starved by the
+    ///     recurring checkpoint-loop reader and the generic read path, burning
+    ///     its 2-minute deadline → `40001: Write lock acquisition timed out`.
+    /// We cannot fix this with the RwLock's own writer-preferred
+    /// `lockUncancelable` because that parks on the internal semaphore (the
+    /// lost-wakeup wedge fixed in 9bd9b81b).
     ///
-    /// Instead the checkpoint sets `checkpoint_waiting = true` before its
-    /// `tryLock` spin and the bulk-ingest SHARED apply paths consult it via
-    /// `checkpointWriterBackoff`: while set, a would-be reader briefly naps
-    /// instead of acquiring SHARED, draining the reader set so the
-    /// checkpoint's `tryLock` wins. No thread ever parks on the RwLock
-    /// semaphore, so the lost-wakeup immunity is preserved. The backoff is
-    /// bounded (safety valve) so a stuck checkpoint can never deadlock writers.
-    checkpoint_waiting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Instead an EXCLUSIVE acquirer `fetchAdd(1)`s this counter before its
+    /// `tryLock` spin (and `fetchSub(1)`s after via defer), and the SHARED
+    /// acquirers consult it via `exclusiveWaitingBackoff`: while > 0, a
+    /// would-be reader briefly naps instead of acquiring SHARED, draining the
+    /// reader set so the exclusive `tryLock` wins. No thread ever parks on the
+    /// RwLock semaphore, so the lost-wakeup immunity is preserved.
+    ///
+    /// A COUNTER (not a bool) is required so concurrent exclusive acquirers
+    /// (e.g. the checkpoint and a CREATE INDEX, or two relationship-MERGE
+    /// workers) compose: the flag stays "set" until the LAST pending exclusive
+    /// clears, so a reader can't sneak back in and re-starve a still-spinning
+    /// exclusive when an earlier one finishes. The backoff is bounded (safety
+    /// valve) so a pathologically-stuck exclusive can never deadlock readers,
+    /// and exclusive acquirers themselves NEVER consult the backoff, so two
+    /// exclusives never wedge each other — they just race `tryLock` normally.
+    exclusive_waiting: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Per-shard rwlocks covering the N partitions of
     /// `GraphStore.nodes` / `GraphStore.edges` / adjacency.  Writers
@@ -2126,7 +2140,7 @@ pub const StorageAdapter = struct {
         //      via the returned struct (or GraphLockHandle.hold_start_ns at
         //      higher layers).
         // All three measure: release_ts - acquire_ts, monotonic-ns, saturating.
-        checkpointWriterBackoff(mg); // GAP-0900 bug #1: yield to a waiting checkpoint.
+        exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
         const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -2347,7 +2361,7 @@ pub const StorageAdapter = struct {
         const src_shard = sharded_store.shardIndex(source_id);
         const dst_shard = sharded_store.shardIndex(target_id);
 
-        checkpointWriterBackoff(mg); // GAP-0900 bug #1: yield to a waiting checkpoint.
+        exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
         const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -2506,7 +2520,7 @@ pub const StorageAdapter = struct {
         // per-tuple lock (which serializes same-key writers) this is
         // sufficient — no graph-global exclusive needed.
         {
-            checkpointWriterBackoff(mg); // GAP-0900 bug #1: yield to a waiting checkpoint.
+            exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
             const _t_start = monoNanosNow();
             mg.rwlock.lockSharedUncancelable(io);
             _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -2642,7 +2656,7 @@ pub const StorageAdapter = struct {
         }
 
         const existing_id = existing_blk: {
-            checkpointWriterBackoff(mg); // GAP-0900 bug #1: yield to a waiting checkpoint.
+            exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
             const _t_start = monoNanosNow();
             mg.rwlock.lockSharedUncancelable(io);
             _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -4359,8 +4373,8 @@ pub const StorageAdapter = struct {
     /// * `light` — when true each graph runs the bounded `engine.checkpointLight()`
     ///   instead of the full `engine.checkpoint()`.
     /// * `set_writer_pref` — when true the checkpoint announces (per graph, via
-    ///   `mg.checkpoint_waiting`) that it is waiting for the EXCLUSIVE lock so the
-    ///   bulk-ingest SHARED apply paths back off (`checkpointWriterBackoff`) and
+    ///   `mg.exclusive_waiting`) that it is waiting for the EXCLUSIVE lock so the
+    ///   SHARED apply/read paths back off (`exclusiveWaitingBackoff`) and
     ///   drain the reader set, letting this checkpoint's bounded `tryLock` spin win
     ///   even under 16+ continuous writers. GAP-0900 bug #1: `std.Io.RwLock` has no
     ///   native writer preference, so without this the LIGHT checkpoint's bounded
@@ -4421,17 +4435,19 @@ pub const StorageAdapter = struct {
         for (graphs_buf[0..graph_count]) |mg| {
             const _t_start = monoNanosNow();
             // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
-            // lock so the bulk-ingest SHARED apply paths back off and drain the
-            // reader set (see `checkpointWriterBackoff` + `mg.checkpoint_waiting`).
+            // lock so the SHARED apply/read paths back off and drain the reader
+            // set (see `exclusiveWaitingBackoff` + `mg.exclusive_waiting`).
+            // `fetchAdd`/`fetchSub` (counter) so this composes with the
+            // edge-phase exclusive acquirers that announce on the same counter.
             // Cleared at iteration end (defer) regardless of whether we acquire
             // the lock or hit the LIGHT-path deadline and `continue` — a `defer`
             // in a `for` body runs at every iteration exit, so a slow/skipped
-            // checkpoint never leaves writers backing off forever (safety valve).
+            // checkpoint never leaves readers backing off forever (safety valve).
             if (set_writer_pref) {
-                mg.checkpoint_waiting.store(true, .release);
+                _ = mg.exclusive_waiting.fetchAdd(1, .release);
             }
             defer if (set_writer_pref) {
-                mg.checkpoint_waiting.store(false, .release);
+                _ = mg.exclusive_waiting.fetchSub(1, .release);
             };
             // HANG FIX (2026-06-21, sustained-ingest single-conn wedge): the
             // periodic GAP-0900 checkpoint reached this site via
@@ -4543,23 +4559,46 @@ pub const StorageAdapter = struct {
             mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
-        // Collect manifest counts under per-graph read lock (no mutex),
+        // Collect manifest counts LOCKLESSLY (no per-graph rwlock, no mutex),
         // then sync the registry under the adapter mutex (no rwlock).
-        // Holding mutex while acquiring rwlock caused ABBA deadlocks:
-        //   Thread A (MERGE): holds rwlock → wants mutex (adapter methods)
-        //   Thread B (checkpoint): holds mutex → wants rwlock (here)
+        //
+        // EDGE-PHASE 40001 FIX #1 (2026-06-22): this phase MUST NOT take the
+        // per-graph rwlock SHARED. At 14.27M scale `pending_bulk_ops` stays
+        // high post-NODE-ingest, so the persistence loop fires this checkpoint
+        // back-to-back; a recurring SHARED acquire here is a near-constant
+        // reader on the graph. `std.Io.RwLock.tryLock` (the edge phase's
+        // EXCLUSIVE acquire — CREATE INDEX ON :Taxon(source_id) and the
+        // relationship MERGE — at acquireGraphWriteLockCancelable) FAILS
+        // whenever `reader_mask != 0` (RwLock.zig:31), so under this recurring
+        // reader the exclusive `tryLock` never observed a reader-free instant
+        // within its 2-minute deadline -> `40001: Write lock acquisition timed
+        // out`. Captured live via gdb on PID 1703302: checkpoint thread parked
+        // in lockSharedUncancelable@here, edge exclusive spinning in
+        // tryLock@5686.
+        //
+        // SAFETY: `shard.manifest.node_count`/`edge_count` are plain `u64`
+        // monotone-ish metadata. They are mutated only inside per-shard engine
+        // txns (single-writer per shard) and the cross-shard edge delete path
+        // already mutates `manifest.edge_count` WITHOUT the per-graph rwlock
+        // (graph_storage_adapter.zig:1236), so the SHARED lock here never
+        // actually fenced all writers of these fields — it only fenced the
+        // EXCLUSIVE checkpoint section. We read them with `@atomicLoad(...,
+        // .monotonic)`, which is a well-defined, tear-free load of an aligned
+        // u64 (a plain `mov` on x86-64) — strictly safer than the prior plain
+        // read. A slightly-stale registry count is acceptable: this is
+        // introspection metadata persisted to the on-disk graph registry, not
+        // a correctness-critical value (the durable pages are the source of
+        // truth and the counts are recomputed from them on reopen). Removing
+        // the rwlock acquire eliminates the recurring reader entirely, which
+        // alone unblocks the edge phase; FIX #2 (exclusive_waiting writer
+        // preference) hardens the remaining SHARED read paths.
         var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
         for (graphs_buf[0..graph_count], 0..) |mg, i| {
-            const _t_start = monoNanosNow();
-            mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
-            const _hold_start = monoNanosNow();
             var nc: u64 = 0;
             var ec: u64 = 0;
             for (mg.engine.shards) |shard| {
-                nc += shard.manifest.node_count;
-                ec += shard.manifest.edge_count;
+                nc += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+                ec += @atomicLoad(u64, &shard.manifest.edge_count, .monotonic);
             }
             counts_buf[i] = .{
                 .name = mg.name,
@@ -4567,13 +4606,6 @@ pub const StorageAdapter = struct {
                 .node_count = nc,
                 .edge_count = ec,
             };
-            const _hold_ns = monoNanosNow() -| _hold_start;
-            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
-            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
-            if (_hold_ns > _cur_max) {
-                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
-            }
-            mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         }
         {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -5503,6 +5535,15 @@ pub const StorageAdapter = struct {
         };
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const _t_start = monoNanosNow();
+        // EDGE-PHASE 40001 FIX #2 (2026-06-22): yield to a pending EXCLUSIVE
+        // acquirer (checkpoint or edge schema/MERGE) before taking SHARED, so
+        // the reader set drains and the exclusive `tryLock` wins instead of
+        // being starved. This is the generic read path used by query MATCH
+        // (the edge phase's own MATCH→rel-create is MATCH=SHARED then
+        // create=EXCLUSIVE), so without this back-off 8 edge workers' MATCH
+        // readers would re-starve each other's rel-create exclusive. Bounded
+        // safety valve inside `exclusiveWaitingBackoff`; no semaphore park.
+        exclusiveWaitingBackoff(mg);
         mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
@@ -5633,6 +5674,32 @@ pub const StorageAdapter = struct {
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const _t_start = monoNanosNow();
+
+        // EDGE-PHASE 40001 FIX #2 (2026-06-22): announce a pending EXCLUSIVE
+        // acquire so SHARED acquirers (the generic read path
+        // `acquireGraphReadLock`, the bulk-apply/hydrate paths, and any other
+        // reader) back off via `exclusiveWaitingBackoff` and drain the reader
+        // set — letting this exclusive `tryLock` win instead of being starved
+        // by a recurring reader (the production 40001: CREATE INDEX ON
+        // :Taxon(source_id) / relationship MERGE timed out behind the
+        // continuous checkpoint loop at 14.27M scale). `std.Io.RwLock` has no
+        // native writer preference (`tryLock` never sets the `writer` bit), so
+        // this explicit counter is the writer-preference. It is the SAME
+        // counter the checkpoint announces on, so a checkpoint + a CREATE INDEX
+        // (or two relationship-MERGE workers) compose: readers stay backed off
+        // until the LAST pending exclusive clears.
+        //
+        // DEADLOCK-FREE: announced unconditionally (covers fast + slow path),
+        // cleared on EVERY return via `defer` (success, error.Deadline). The
+        // backoff is consulted ONLY by SHARED acquirers — never by exclusive
+        // acquirers — so two pending exclusives never wait on each other; they
+        // race `tryLock` and the std RwLock serialises the loser normally. The
+        // backoff is bounded (8s safety valve), so even a pathologically slow
+        // exclusive can never wedge readers forever. No thread parks on the
+        // RwLock semaphore, preserving the lost-wakeup immunity from 9bd9b81b.
+        _ = mg.exclusive_waiting.fetchAdd(1, .release);
+        defer _ = mg.exclusive_waiting.fetchSub(1, .release);
+
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -6373,17 +6440,21 @@ test "StorageAdapter: create and query graph" {
 // Per-shard lock helpers (Phase 2, graph-sharding plan)
 // ===========================================================================
 
-/// GAP-0900 (bug #1): writer-preference back-off for the bulk-ingest SHARED
-/// apply paths. When a checkpoint has announced it is waiting for the
-/// per-graph EXCLUSIVE lock (`mg.checkpoint_waiting`), a would-be SHARED
-/// acquirer naps briefly instead of taking the lock, so the in-flight reader
-/// set drains and the checkpoint's `tryLock` wins. Bounded by a hard deadline
-/// (safety valve): if the checkpoint is pathologically slow we proceed anyway
-/// rather than block writers forever (no deadlock — the std RwLock then
-/// serialises us normally once the checkpoint holds EXCLUSIVE). The light
-/// checkpoint is O(dirty) so in practice the wait is sub-millisecond.
-fn checkpointWriterBackoff(mg: *ManagedGraph) void {
-    if (!mg.checkpoint_waiting.load(.acquire)) return;
+/// Writer-preference back-off for the SHARED acquirers of `mg.rwlock`. When
+/// ANY exclusive acquirer (the checkpoint OR an edge-phase schema/MERGE op)
+/// has announced it is waiting for the per-graph EXCLUSIVE lock
+/// (`mg.exclusive_waiting > 0`), a would-be SHARED acquirer naps briefly
+/// instead of taking the lock, so the in-flight reader set drains and the
+/// exclusive `tryLock` wins. Bounded by a hard deadline (safety valve): if the
+/// exclusive holder is pathologically slow we proceed anyway rather than block
+/// readers forever (no deadlock — the std RwLock then serialises us normally
+/// once the exclusive op holds the lock). The light checkpoint is O(dirty) and
+/// the edge schema apply is brief, so in practice the wait is sub-millisecond.
+///
+/// Consulted ONLY by SHARED acquirers — exclusive acquirers never call this,
+/// so two pending exclusives never wedge each other (they race `tryLock`).
+fn exclusiveWaitingBackoff(mg: *ManagedGraph) void {
+    if (mg.exclusive_waiting.load(.acquire) == 0) return;
     const start_ns = monoNanosNow();
     // The safety-valve MUST outlast the checkpoint's own bounded acquire
     // deadline (checkpointAllEx LIGHT path: 5s). If it is shorter, backing-off
@@ -6392,15 +6463,16 @@ fn checkpointWriterBackoff(mg: *ManagedGraph) void {
     // checkpoint needs — the checkpoint skips every cycle, `pending_bulk_ops`
     // never resets, and RSS grows without bound (observed: state always pinned
     // at exactly one reader at the 5s deadline). Park past the checkpoint
-    // deadline (+margin) so the reader set genuinely drains; if the checkpoint
-    // is pathologically stuck the writer still proceeds eventually (no deadlock —
-    // it then serialises on the held EXCLUSIVE lock normally). The checkpoint
-    // clears `checkpoint_waiting` the instant it acquires or gives up, so in the
-    // common case writers unpark well before this cap.
+    // deadline (+margin) so the reader set genuinely drains; if the exclusive
+    // holder is pathologically stuck the reader still proceeds eventually (no
+    // deadlock — it then serialises on the held EXCLUSIVE lock normally). The
+    // exclusive acquirer clears its `exclusive_waiting` contribution the instant
+    // it acquires or gives up, so in the common case readers unpark well before
+    // this cap.
     const max_wait_ns: u64 = 8 * std.time.ns_per_s;
     var sleep_ns: u64 = 50 * std.time.ns_per_us;
     const max_sleep_ns: u64 = 1 * std.time.ns_per_ms;
-    while (mg.checkpoint_waiting.load(.acquire)) {
+    while (mg.exclusive_waiting.load(.acquire) > 0) {
         if (monoNanosNow() -| start_ns >= max_wait_ns) break;
         const req = std.os.linux.timespec{
             .sec = @intCast(sleep_ns / std.time.ns_per_s),
@@ -6494,6 +6566,15 @@ pub fn acquireShardWriteLockCancelable(
 pub fn acquireWholeGraphExclusive(mg: *ManagedGraph) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const _t_start = monoNanosNow();
+    // EDGE-PHASE 40001 FIX #2 (2026-06-22): announce a pending EXCLUSIVE
+    // acquire (RESTORE/BACKUP take this path) so SHARED acquirers back off via
+    // `exclusiveWaitingBackoff` and let this whole-graph exclusive win instead
+    // of being starved by a recurring reader (the checkpoint loop or query
+    // MATCH). Same counter + deadlock-free contract as
+    // `acquireGraphWriteLockCancelable`: cleared via defer; exclusive acquirers
+    // never consult the backoff, so two exclusives never wedge each other.
+    _ = mg.exclusive_waiting.fetchAdd(1, .release);
+    defer _ = mg.exclusive_waiting.fetchSub(1, .release);
     // HANG FIX (2026-05-22): re-probe via `tryLock` rather than parking
     // unboundedly on the RwLock's internal counting semaphore (which can be
     // wedged forever by a lost wakeup — see the rationale in

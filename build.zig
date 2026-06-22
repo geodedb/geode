@@ -6576,6 +6576,20 @@ pub fn build(b: *std.Build) void {
     const write_lock_no_hang_step = b.step("test-graph-write-lock-no-hang", "Regression: graph write lock never hangs against a churning shared reader");
     write_lock_no_hang_step.dependOn(&run_write_lock_no_hang_tests.step);
 
+    // 2026-06-22 EDGE-phase 40001 — the per-graph EXCLUSIVE acquire (CREATE
+    //     INDEX / relationship MERGE) must not be STARVED by the continuous
+    //     checkpoint-loop manifest-count SHARED reader
+    //     (graph_storage_adapter.zig:4554) at 14.27M scale. Captured live via
+    //     gdb on PID 1703302: checkpoint in lockSharedUncancelable@4554,
+    //     edge exclusive spinning in tryLock@5686 -> error.Deadline (40001).
+    const edge_starvation_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_phase_checkpoint_starvation.zig"), .target = target, .optimize = optimize });
+    edge_starvation_mod.addImport("geode", root_mod);
+    const edge_starvation_tests = b.addTest(.{ .root_module = edge_starvation_mod });
+    const run_edge_starvation_tests = b.addRunArtifact(edge_starvation_tests);
+    shardDep(test_step, &run_edge_starvation_tests.step, 1, test_shard_loads, test_shard_index);
+    const edge_starvation_step = b.step("test-edge-phase-checkpoint-starvation", "Regression: edge-phase exclusive acquire not starved by continuous shared reader (40001)");
+    edge_starvation_step.dependOn(&run_edge_starvation_tests.step);
+
     // R3 (src/server/server_state.zig:250-384;
     //     src/server/quic_connection_handler.zig:1696-1722, 2960-3036)
     //     — ServerState has no teardown; stream close with in-flight
