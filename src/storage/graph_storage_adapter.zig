@@ -4407,6 +4407,17 @@ pub const StorageAdapter = struct {
         // so writers pause for the checkpoint duration. Correctness over a
         // crash; a future optimisation can snapshot under the lock and write
         // outside it.
+        // GAP-0900 bug #2 (backpressure correctness): track whether ANY graph's
+        // LIGHT checkpoint was skipped because its rwlock stayed busy past the
+        // deadline. If so we must NOT reset `pending_bulk_ops` to 0 at the end —
+        // dirty pages for the skipped graph are still un-flushed, and zeroing the
+        // counter would tell the backpressure path "all drained", letting the
+        // dirty-page set grow without bound under sustained contention (the exact
+        // OOM this fix prevents). Leaving the counter high re-fires the inline
+        // trigger immediately and keeps writers backpressured until a checkpoint
+        // actually lands. With bug #1's writer-preference the skip should not
+        // happen, but this keeps the memory bound sound even if it ever does.
+        var any_skipped = false;
         for (graphs_buf[0..graph_count]) |mg| {
             const _t_start = monoNanosNow();
             // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
@@ -4483,6 +4494,7 @@ pub const StorageAdapter = struct {
                     // contention — skip THIS graph this cycle (no hang, no lock
                     // held). The next GAP-0900 load-driven trigger retries.
                     _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+                    any_skipped = true;
                     const busy_state = @atomicLoad(usize, &mg.rwlock.state, .seq_cst);
                     log.warn("light checkpoint skipped for graph '{s}': rwlock busy past deadline (will retry next cycle) rwlock_state=0x{x}", .{ mg.name, busy_state });
                     continue;
@@ -4569,8 +4581,18 @@ pub const StorageAdapter = struct {
         // GAP-0900: a checkpoint has landed — record the observable and reset
         // the cadence state so the next `maybeCheckpoint` decision starts from
         // a clean slate (pending ops drained, clock restarted).
+        //
+        // GAP-0900 bug #2: only zero `pending_bulk_ops` if EVERY graph was
+        // actually checkpointed. If any graph was skipped (rwlock busy past the
+        // LIGHT deadline) its dirty pages are still un-flushed, so we leave the
+        // counter where it is — the inline trigger re-fires immediately and the
+        // backpressure path keeps writers bounded until a checkpoint truly drains
+        // the dirty set. (`checkpoints_total` still advances so observability and
+        // the "a checkpoint cycle ran" signal remain truthful.)
         _ = self.checkpoints_total.fetchAdd(1, .monotonic);
-        self.pending_bulk_ops.store(0, .release);
+        if (!any_skipped) {
+            self.pending_bulk_ops.store(0, .release);
+        }
         self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
     }
 
