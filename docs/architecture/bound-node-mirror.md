@@ -89,31 +89,44 @@ arbitrary time is NOT safe — a concurrent reader may hold a `*Node` into that
 entry, and the evictor cannot take a lock that excludes all in-flight pointer
 users without also blocking the bulk writers (they share SHARED).
 
-### Resolution: unlink-now, free-at-grace (epoch reclamation)
+### Resolution: shard-local eviction + unlink-now, free-at-grace
 
-Eviction is split into two phases:
+The cache (`src/storage/node_cache.zig`) is partitioned by the SAME
+`shardIndex(key)` as the backing `ShardedStore`, and eviction has two phases:
 
-1. **Unlink** (cheap, frequent): remove the entry from the cache map under the
-   cache's own per-shard lock. Future lookups miss → hydrate-on-miss. The
-   `Node`'s heap is NOT freed yet; it is pushed onto a per-cache **retire list**
-   tagged with the current **reclaim epoch**.
-2. **Reclaim** (at a grace boundary): free retired nodes only when no reader
-   that could hold a pointer to them remains — i.e. when the **global
-   `g_store_rwlock` is held EXCLUSIVE**. That exclusive window already happens at
-   every checkpoint (`checkpointAll*` acquires whole-graph/global exclusive) and
-   at `deinit`. Taking `g_store_rwlock` EXCLUSIVE drains all SHARED holders
-   (readers and per-graph writers), so any pointer handed out before the window
-   is provably dead after it. We bump the reclaim epoch on entering the window
-   and free every retired node whose tag is < the new epoch.
+1. **Shard-local UNLINK** (cheap, frequent): `put(key)` evicts cold entries
+   ONLY within `shardIndex(key)`'s shard (FIFO order). The bulk-ingest write
+   path already holds that shard's lock EXCLUSIVE (`ManagedGraph.shard_locks[idx]`),
+   so eviction's map mutation is serialised against same-shard point reads
+   exactly like a normal insert — it introduces **no new cross-shard race**.
+   The evicted `Node`'s heap is NOT freed; it is moved to that shard's
+   **retire list**. Future lookups miss → hydrate-on-miss.
+2. **Grace-point RECLAIM** (`reclaimRetiredWhere(graph)`): the storage adapter
+   calls this from `checkpointAllEx` while holding the checkpointed graph's
+   **per-graph `mg.rwlock` EXCLUSIVE**. That exclusive window drains every
+   reader of that graph's nodes (readers hold `mg.rwlock` SHARED for the whole
+   query), so freeing those nodes cannot race a live pointer. Only retired nodes
+   whose `graph_name` matches the checkpointed graph are freed (other graphs
+   wait for their own checkpoint). `deinit` frees all.
+
+Hydrate-on-miss INSERTS are additionally serialised by a per-shard
+`hydrate_mutex` (a leaf `Io.Mutex`) so two readers hydrating the same shard
+cannot race on the backing `AutoHashMap`; resident hits stay lock-free.
 
 **INVARIANT (pointer safety):**
 > A `Node`'s heap (labels, property keys/values, graph_name, tenant_id) is freed
-> only inside a `g_store_rwlock` EXCLUSIVE window, after which no
+> only inside the EXCLUSIVE checkpoint window for ITS graph, after which no
 > previously-handed-out `*Node`/borrowed slice into it can be live, because every
-> reader and per-graph writer holds `g_store_rwlock` at least SHARED for the
-> whole span it uses such a pointer, and EXCLUSIVE excludes all SHARED holders.
-> Between windows, evicted entries are only *unlinked* (removed from lookup),
-> never freed, so outstanding pointers remain valid.
+> reader of that graph's nodes holds `mg.rwlock` at least SHARED for the whole
+> span it uses such a pointer, and the checkpoint's EXCLUSIVE acquire excludes
+> all SHARED holders. Between checkpoints, evicted entries are only *unlinked*
+> (removed from lookup), never freed, so outstanding pointers remain valid.
+
+Empirically (north-star bench, cap=40k): resident count PLATEAUS at the cap as
+node count climbs, and `evicted == reclaimed` every checkpoint with the retire
+backlog returning to 0 — no leak. (Process RSS may sit near its high-water mark
+because glibc retains freed pages for reuse rather than returning them to the
+OS; logical resident memory is strictly bounded.)
 
 This bounds RSS to `cap + retire_backlog`. The retire backlog is bounded by the
 checkpoint cadence (`GEODE_CHECKPOINT_OPS`, ~50K–200K nodes), not the total node
