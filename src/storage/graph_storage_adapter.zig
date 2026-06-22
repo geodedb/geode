@@ -4369,7 +4369,71 @@ pub const StorageAdapter = struct {
         // outside it.
         for (graphs_buf[0..graph_count]) |mg| {
             const _t_start = monoNanosNow();
-            mg.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            // HANG FIX (2026-06-21, sustained-ingest single-conn wedge): the
+            // periodic GAP-0900 checkpoint reached this site via
+            // walCheckpointHook → checkpointAllEx and parked unboundedly on the
+            // raw `mg.rwlock.lockUncancelable(io)`. That call's protocol
+            // (std/Io/RwLock.zig `lockUncancelable`) registers the writer, sets
+            // `is_writing`, then — if it observed ANY reader at that instant —
+            // parks FOREVER on the RwLock's internal counting semaphore waiting
+            // for the last reader's `unlockShared` to `post()`. A single missed
+            // `post()` (the same lost-wakeup already fixed for
+            // `acquireGraphWriteLockCancelable` @~5496 and
+            // `acquireWholeGraphExclusive` @~6310) wedges the writer
+            // permanently; it keeps the RwLock's internal mutex, so every
+            // subsequent shard-apply reader (`bulkMergeNodeWithReservedId*` →
+            // `rwlock.lockSharedUncancelable`) blocks behind it. The bulk MERGE
+            // apply never completes → its ApplyResult.done never fires → the
+            // submitter parks in `awaitOp` → the connection response is never
+            // written → the client wedges in ReceiveProto. Reproduced
+            // deterministically (single QUIC conn, ~26.6K MERGE ops) and
+            // captured live via gdb: checkpoint thread in
+            // `Io.Semaphore.waitUncancelable`, RwLock state reader=1/is_writing
+            // with ZERO reader threads on any stack.
+            //
+            // The fix mirrors the two existing exclusive acquirers: never park
+            // on the semaphore — re-probe via `tryLock`, which reads `rl.state`
+            // directly (no semaphore) and is immune to the lost wakeup. The
+            // periodic LIGHT path skips this graph after a bounded deadline (it
+            // retries next checkpoint cycle — the GAP-0900 load-driven trigger
+            // re-fires); the FULL path (clean shutdown / explicit checkpoint)
+            // spins unboundedly via `tryLock` so durability is never sacrificed.
+            const io_cp = std.Io.Threaded.global_single_threaded.io();
+            if (!mg.rwlock.tryLock(io_cp)) {
+                var sleep_ns: u64 = 100 * std.time.ns_per_us;
+                const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+                // Bounded deadline for the periodic LIGHT checkpoint; unbounded
+                // (null) for the durability-critical FULL checkpoint.
+                const cp_deadline_ns: ?u64 = if (light)
+                    _t_start + 5 * std.time.ns_per_s
+                else
+                    null;
+                var acquired = false;
+                while (true) {
+                    if (cp_deadline_ns) |dl| {
+                        if (monoNanosNow() >= dl) break;
+                    }
+                    const req = std.os.linux.timespec{
+                        .sec = @intCast(sleep_ns / std.time.ns_per_s),
+                        .nsec = @intCast(sleep_ns % std.time.ns_per_s),
+                    };
+                    var rem: std.os.linux.timespec = undefined;
+                    _ = std.os.linux.nanosleep(&req, &rem);
+                    if (mg.rwlock.tryLock(io_cp)) {
+                        acquired = true;
+                        break;
+                    }
+                    sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+                }
+                if (!acquired) {
+                    // LIGHT checkpoint deadline exhausted under sustained write
+                    // contention — skip THIS graph this cycle (no hang, no lock
+                    // held). The next GAP-0900 load-driven trigger retries.
+                    _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+                    log.warn("light checkpoint skipped for graph '{s}': rwlock busy past deadline (will retry next cycle)", .{mg.name});
+                    continue;
+                }
+            }
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
             // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
             // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
