@@ -3731,7 +3731,22 @@ pub const GraphStore = struct {
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
 
         const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
-        // Verify node still exists (index could be stale after a failed delete)
+        // Verify the node still exists (the index could be stale after a failed
+        // delete). The resident cache is a BOUNDED view: an evicted-but-live
+        // node misses `nodes.get`. Verifying via `nodes.get` alone would report
+        // .not_found for an evicted node and make a re-MERGE take the CREATE
+        // branch → DUPLICATE (breaks idempotent/resumable seeding and the
+        // from-dump EDGE phase that re-probes by {source,source_id} at scale).
+        // Confirm existence + graph via the eviction-INDEPENDENT IdMaps first;
+        // fall back to the resident cache when no adapter/IdMap is present
+        // (pure in-memory deployments).
+        if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            if (std.mem.eql(u8, gs.graph_name, graph_name)) {
+                out_node_id.* = node_id;
+                return .found;
+            }
+            return .not_found;
+        }
         if (self.nodes.get(node_id)) |node| {
             if (std.mem.eql(u8, node.graph_name, graph_name)) {
                 out_node_id.* = node_id;
@@ -4308,7 +4323,12 @@ pub const GraphStore = struct {
     }
 
     pub fn getNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) ?PropertyValue {
-        if (self.nodes.get(node_id)) |node| {
+        // Hydrate-on-miss: an evicted-but-live node is rebuilt from the engine
+        // so this read is transparent under the bounded cache. The returned
+        // String borrows the now-resident node's property storage; it stays
+        // valid until a grace-point reclaim, which the caller's per-graph rwlock
+        // excludes for the read's duration (same borrow lifetime as pre-cache).
+        if (self.nodes.getOrHydratePtr(node_id) catch null) |node| {
             const value = node.properties.get(key) orelse return null;
 
             // Fast path: skip FLE decryption when no encryption is configured.
@@ -4368,7 +4388,8 @@ pub const GraphStore = struct {
     /// Get a node property value (simplified version without FLE decryption).
     /// Returns the raw PropertyValue or error if node not found.
     pub fn getNodePropertyValue(self: *GraphStore, node_id: u64, key: []const u8) !PropertyValue {
-        if (self.nodes.get(node_id)) |node| {
+        // Hydrate-on-miss (bounded cache) so evicted-but-live nodes read back.
+        if (try self.nodes.getOrHydratePtr(node_id)) |node| {
             return node.properties.get(key) orelse return error.PropertyNotFound;
         }
         return error.NodeNotFound;

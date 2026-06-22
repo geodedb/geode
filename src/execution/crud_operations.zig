@@ -236,7 +236,7 @@ fn findFirstMatchingNodeId(
                         switch (read_store.lookupMergeCandidate(graph_name, label, evaluated_props[0].key, pv, &out_id)) {
                             .found => {
                                 // Verify the candidate matches ALL labels, ALL properties, and tenant
-                                if (read_store.nodes.getPtr(out_id)) |node| {
+                                if ((read_store.nodes.getOrHydratePtr(out_id) catch null)) |node| {
                                     if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
                                         return out_id;
                                     }
@@ -262,7 +262,7 @@ fn findFirstMatchingNodeId(
         // (non-indexable value type or key too long for the 1024-byte buffer).
         const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse return null;
         for (first_label_nodes) |node_id| {
-            if (read_store.nodes.getPtr(node_id)) |node| {
+            if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
                 if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
                     return node_id;
                 }
@@ -338,7 +338,7 @@ fn nodeIdMatchesPattern(
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
 ) bool {
-    const node = read_store.nodes.getPtr(node_id) orelse return false;
+    const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse return false;
     return nodeMatchesPattern(node, graph_name, tenant_id, labels, props);
 }
 
@@ -1487,7 +1487,7 @@ pub fn executeCreateQuery(
             if (item.expr == .Ident) {
                 const var_name = item.expr.Ident.orig;
                 if (created_nodes.get(var_name)) |node_id| {
-                    const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                    const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
                     row[i] = Value{ .Node = node };
                 } else {
                     row[i] = Value{ .Null = {} };
@@ -1501,7 +1501,7 @@ pub fn executeCreateQuery(
                 while (iter.next()) |entry| {
                     try names.append(allocator, entry.key_ptr.*);
                     const entry_node_id = entry.value_ptr.*;
-                    const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
+                    const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
                     try values.append(allocator, Value{ .Node = entry_node });
                 }
 
@@ -1562,7 +1562,7 @@ pub fn executeCreateQuery(
                         while (iter.next()) |entry| {
                             try names.append(allocator, entry.key_ptr.*);
                             const entry_node_id = entry.value_ptr.*;
-                            const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
+                            const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
                             try values.append(allocator, Value{ .Node = entry_node });
                         }
                     }
@@ -1576,7 +1576,7 @@ pub fn executeCreateQuery(
                     };
 
                     const value = try eval.evalExpr(allocator, prop.value, env);
-                    const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                    const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
                     try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node_id, prop.target.property, value);
                 }
             },
@@ -1605,7 +1605,7 @@ pub fn executeCreateQuery(
                         while (iter.next()) |entry| {
                             try names.append(allocator, entry.key_ptr.*);
                             const entry_node_id = entry.value_ptr.*;
-                            const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
+                            const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
                             try values.append(allocator, Value{ .Node = entry_node });
                         }
                     }
@@ -1622,7 +1622,7 @@ pub fn executeCreateQuery(
                     const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
                     // Clear all existing properties by getting node and manually clearing
-                    if (store.nodes.getPtr(node_id)) |node| {
+                    if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
                         try property_mutation.replaceNodeProperties(allocator, store, node, props_value);
                     }
                 }
@@ -1635,7 +1635,7 @@ pub fn executeCreateQuery(
         switch (remove_clause) {
             .Property => |prop| {
                 if (created_nodes.get(prop.object)) |node_id| {
-                    if (store.nodes.getPtr(node_id)) |node_ptr| {
+                    if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
                         property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                     }
                 }
@@ -1778,7 +1778,7 @@ pub fn executeReturnClauseWithNodes(
     while (node_iter.next()) |entry| {
         try names.append(allocator, entry.key_ptr.*);
         const node_id = entry.value_ptr.*;
-        const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
         try values.append(allocator, Value{ .Node = node });
     }
 
@@ -2488,7 +2488,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             names[idx] = entry.key_ptr.*;
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
-            const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
             values[idx] = Value{ .Node = node };
             idx += 1;
         }
@@ -2693,7 +2693,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             names[idx] = entry.key_ptr.*;
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
-            const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
             values[idx] = Value{ .Node = node };
             idx += 1;
         }
@@ -2979,7 +2979,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             node_pattern.labels,
             evaluated_props,
         )) |node_id| {
-            found_node = read_store.nodes.getPtr(node_id);
+            found_node = (read_store.nodes.getOrHydratePtr(node_id) catch null);
         }
 
         var node_id: u64 = undefined;
@@ -2995,7 +2995,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
                                 const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
-                                const node_ptr = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                                const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
                                 try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
                             }
                         }
@@ -3016,7 +3016,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
 
                                 // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                                if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
                                     try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
@@ -3048,7 +3048,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
                                 const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
-                                const node_ptr = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+                                const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
                                 try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
                             }
                         }
@@ -3069,7 +3069,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
 
                                 // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                                if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
                                     try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
@@ -3087,7 +3087,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             var row = try allocator.alloc(Value, ret.items.len);
 
             // Create environment with the merged node and 'created' flag
-            const node = store.nodes.getPtr(node_id).?;
+            const node = ((store.nodes.getOrHydratePtr(node_id) catch null).?);
             var env_names: [][]const u8 = &.{};
             var env_values: []Value = &.{};
 
@@ -3413,7 +3413,7 @@ fn clusterReplicateDelete(
         defer allocator.free(candidate_ids);
 
         for (candidate_ids) |node_id| {
-            const node = read_store.nodes.getPtr(node_id) orelse continue;
+            const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
             if (!nodeMatchesPattern(node, filter_graph, filter_tenant, match_labels, evaluated_match_props)) continue;
 
             if (d.where_clause) |where_expr| {
@@ -3651,7 +3651,7 @@ fn clusterReplicateMatchSet(
     }
 
     for (candidate_ids) |node_id| {
-        const node = read_store.nodes.getPtr(node_id) orelse continue;
+        const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
         if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_match_props)) continue;
 
         // Bind the matched node so SET expressions (`n.v + 1`, `n.k`) evaluate on
@@ -3870,7 +3870,7 @@ fn clusterReplicateMatchCreate(
 
         var resolved: ?u64 = null;
         for (candidate_ids) |node_id| {
-            const node = read_store.nodes.getPtr(node_id) orelse continue;
+            const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
             if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_props)) continue;
             // Ambiguous (>1 match) → a Cartesian-product CREATE is out of this
             // slice; fail closed BEFORE touching Raft.
@@ -3886,7 +3886,7 @@ fn clusterReplicateMatchCreate(
         // out of this slice, fail closed.
         if (var_ids.contains(match_var)) return error.ClusterWriteNotReplicable;
         try var_names.append(allocator, match_var);
-        try var_nodes.append(allocator, Value{ .Node = read_store.nodes.getPtr(rid).? });
+        try var_nodes.append(allocator, Value{ .Node = ((read_store.nodes.getOrHydratePtr(rid) catch null).?) });
         try var_ids.put(match_var, rid);
     }
 
@@ -4168,7 +4168,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             defer allocator.free(candidate_ids);
 
             for (candidate_ids) |node_id| {
-                const node = read_store.nodes.getPtr(node_id) orelse continue;
+                const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
                 if (!nodeMatchesPattern(node, filter_graph, filter_tenant, match_labels, evaluated_match_props)) continue;
 
                 var should_delete = true;
@@ -4230,7 +4230,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 // (executeDelete is never invoked from bulkMergeNode / worker
                 // threads — verified). Cheap-exits when no FTS index covers the
                 // labels. Graph passed explicitly from current_graph.
-                if (read_store.nodes.getPtr(node_id)) |node_ptr| {
+                if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
                     fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
                         log.warn("fts maintain (DELETE) failed", &.{
                             Attr.uint("node_id", node_id),

@@ -95,6 +95,13 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             fifo: std.Deque(K) = .empty,
             /// Values unlinked from the map but not yet freed (reclaim phase).
             retired: std.ArrayList(V) = .empty,
+            /// Serialises hydrate-on-miss INSERTS for this shard so two readers
+            /// missing the same (or same-shard) key cannot race on the backing
+            /// AutoHashMap. Hits do not take it (they rely, as before, on the
+            /// caller's per-graph rwlock excluding per-graph-exclusive evict/
+            /// reclaim). Leaf lock: held only across getOrPut+insert, never
+            /// across the engine read or another cache call.
+            hydrate_mutex: std.Io.Mutex = std.Io.Mutex.init,
         };
 
         allocator: std.mem.Allocator,
@@ -213,10 +220,27 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// guarantee; pure shared readers use `getPtr` and tolerate a null on a
         /// not-yet-hydrated id (then retry under the write path).
         pub fn getOrHydratePtr(self: *Self, key: K) !?*V {
+            // Fast path: resident hit (lock-free, like a bare ShardedStore get).
             if (self.store.getPtr(key)) |p| return p;
             const hydrate = self.hydrate_fn orelse return null;
             const ctx = self.hydrate_ctx orelse return null;
-            const value = (try hydrate(ctx, self.allocator, key)) orelse return null;
+
+            // Build the node from the engine OUTSIDE the shard lock (slow I/O,
+            // and the callback must not re-enter this cache).
+            var value = (try hydrate(ctx, self.allocator, key)) orelse return null;
+
+            // Insert under the shard's hydrate mutex so concurrent hydrations of
+            // the same shard cannot race on the backing AutoHashMap. Re-check
+            // residence under the lock (another thread may have hydrated the same
+            // key meanwhile) and, if so, drop our duplicate build.
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.shards[idx].hydrate_mutex.lockUncancelable(io);
+            defer self.shards[idx].hydrate_mutex.unlock(io);
+            if (self.store.getPtr(key)) |p| {
+                self.free_fn(self.allocator, &value);
+                return p;
+            }
             self.hydrations_total += 1;
             try self.insertEvicting(key, value);
             return self.store.getPtr(key);

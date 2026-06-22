@@ -240,13 +240,14 @@ fn countVariableLengthPathMatches(
                         if (next_node_id != tid) continue;
                     }
 
-                    if (store.nodes.get(next_node_id)) |target_node| {
+                    // Hydrate-on-miss so variable-length traversal crosses
+                    // evicted-but-live nodes correctly under the bounded cache.
+                    if (store.nodes.getOrHydratePtr(next_node_id) catch null) |target_node_ptr| {
                         // Check label constraints on target using helper
-                        if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
+                        if (!nodeHasAllLabels(target_node_ptr.labels, target_pattern.labels)) continue;
 
                         // Check WHERE filter if present
                         if (where_filter) |wf| {
-                            const target_node_ptr = store.nodes.getPtr(next_node_id) orelse continue;
                             if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
                                 count += 1;
                             }
@@ -291,8 +292,9 @@ fn countSingleHopMatches(
                 if (edge.to_id != tid) continue;
             }
 
-            // Check target node pattern (right side of the hop)
-            if (store.nodes.get(edge.to_id)) |target_node| {
+            // Check target node pattern (right side of the hop). Hydrate-on-miss
+            // so the hop crosses evicted-but-live nodes under the bounded cache.
+            if (store.nodes.getOrHydratePtr(edge.to_id) catch null) |target_node| {
                 // Check label constraints on target using helper
                 if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
 
@@ -303,8 +305,7 @@ fn countSingleHopMatches(
 
                 // Check WHERE filter if present
                 if (where_filter) |wf| {
-                    const target_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
-                    if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+                    if (evaluateWhereFilter(wf, env, target_pattern.name, target_node, allocator)) {
                         count += 1;
                     }
                 } else {
@@ -463,9 +464,12 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     continue;
                 }
 
-                // Get the nodes connected by this edge
-                const from_node = store.nodes.get(edge.from_id) orelse continue;
-                const to_node = store.nodes.get(edge.to_id) orelse continue;
+                // Get the nodes connected by this edge (hydrate-on-miss so the
+                // hop sees evicted-but-live endpoints under the bounded cache).
+                const from_node_ptr = (store.nodes.getOrHydratePtr(edge.from_id) catch null) orelse continue;
+                const to_node_ptr = (store.nodes.getOrHydratePtr(edge.to_id) catch null) orelse continue;
+                const from_node = from_node_ptr.*;
+                const to_node = to_node_ptr.*;
 
                 // Determine which node should match left/right based on direction
                 const matches_direction = blk: {
@@ -762,7 +766,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
 
             // Build path with actual nodes and edges
             for (node_ids.items, 0..) |node_id, idx| {
-                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
                     try path_nodes.append(allocator, node_ptr);
                 }
 
@@ -801,7 +805,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
 
         // Build path with actual nodes and edges
         for (node_ids.items, 0..) |node_id, idx| {
-            if (store.nodes.getPtr(node_id)) |node_ptr| {
+            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
                 try path_nodes.append(allocator, node_ptr);
             }
 
@@ -907,7 +911,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
                         const target_id = edge_ptr.to_id;
 
-                        const target_node_ptr = store.nodes.getPtr(target_id) orelse continue;
+                        const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
 
                         // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
@@ -946,7 +950,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
                         const target_id = edge_ptr.from_id;
 
-                        const target_node_ptr = store.nodes.getPtr(target_id) orelse continue;
+                        const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
 
                         // Check if target node matches the right pattern using helper
