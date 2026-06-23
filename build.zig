@@ -1376,10 +1376,15 @@ pub fn build(b: *std.Build) void {
     // symlinked files which are already part of the geode module tree.
     const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_math_functions.zig"), .target = target, .optimize = optimize }) });
     math_func_tests.root_module.addImport("uuid", uuid_ext_mod);
+    // Task 2 (FIPS seam): cryptographic.zig now imports crypto_backend; the
+    // symlinked types/ path pulls cryptographic.zig in via evaluator_functions.zig.
+    math_func_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_math_func_tests = b.addRunArtifact(math_func_tests);
 
     const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_string_functions.zig"), .target = target, .optimize = optimize }) });
     string_func_tests.root_module.addImport("uuid", uuid_ext_mod);
+    // Task 2 (FIPS seam): same reason as math_func_tests above.
+    string_func_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_string_func_tests = b.addRunArtifact(string_func_tests);
 
     // Distributed cluster CLI flag tests (Task A1 of 2026-05-25-geode-distributed-cluster-testing).
@@ -2387,6 +2392,10 @@ pub fn build(b: *std.Build) void {
     // Phase C1: graph_storage_adapter.zig / group_commit.zig (in this root module)
     // now `@import("runtime_metrics")` directly, so the root needs it too.
     graph_store_unit_tests.root_module.addImport("runtime_metrics", runtime_metrics_module);
+    // Task 2 (FIPS seam): cryptographic.zig now imports crypto_backend; the
+    // graph_store test root pulls it in transitively via advanced_types_index.zig
+    // (index_manager → advanced_types_index → cryptographic). Wire it here.
+    graph_store_unit_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
     // GAP-0514 Phase 6: named step so the graph_store.zig inline tests are

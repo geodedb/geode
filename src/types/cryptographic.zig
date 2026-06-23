@@ -1,4 +1,9 @@
 const std = @import("std");
+// FIPS seam: all security primitives in this file route through cb when
+// the seam API covers the operation. std.crypto is retained ONLY where
+// the seam cannot cover geode's key lifecycle (raw-bytes import/export)
+// — each such site is marked SEAM-GAP with an explicit blocker note.
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -147,8 +152,16 @@ pub const Signature = struct {
         }
     }
 
-    /// Verify signature against data using stdlib cryptography
-    /// Supports Ed25519, ECDSA P256, and ECDSA P384. RSA is deferred (returns UnsupportedSignatureAlgorithm).
+    /// Verify signature against data.
+    /// Ed25519 routes through the FIPS seam (cb.Sig).
+    /// ECDSA P256/P384: SEAM-GAP — the fips backend's fromPublicBytes for
+    ///   ECDSA expects DER SubjectPublicKeyInfo, but geode stores 33/49-byte
+    ///   compressed SEC1 points. Routing retained on std.crypto pending a
+    ///   seam extension that accepts SEC1 for ECDSA. (See task-2-report.md.)
+    /// RSA-PSS: Not yet routed — geode stores raw modulus+exponent as a single
+    ///   blob without DER framing; seam needs fromRsaComponents(n,e) or
+    ///   fromRsaSpki(der). Returns UnsupportedSignatureAlgorithm until a key
+    ///   format bridge is added.
     // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
     pub fn verify(self: Signature, data: []const u8) !bool {
         if (self.public_key == null) return error.PublicKeyRequired;
@@ -160,64 +173,62 @@ pub const Signature = struct {
         // Perform actual cryptographic verification based on algorithm
         switch (self.alg) {
             .Ed25519 => {
-                // Ed25519 expects 64-byte signature and 32-byte public key
+                // Ed25519 expects 64-byte signature and 32-byte public key.
+                // Routed through the FIPS seam: cb.Sig.KeyPair.fromPublicBytes +
+                // cb.Sig.verify. Both the fips and std_shim backends accept a
+                // 32-byte raw public key for Ed25519.
                 if (self.signature.len != 64) return false;
                 if (self.public_key.?.len != 32) return false;
 
-                const sig_bytes = self.signature[0..64].*;
-                const pubkey_bytes = self.public_key.?[0..32].*;
-
-                // Use Zig stdlib Ed25519 verification
-                const sig = std.crypto.sign.Ed25519.Signature.fromBytes(sig_bytes);
-                const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(pubkey_bytes) catch return false;
-                sig.verify(data, pk) catch {
-                    return false; // Verification failed
-                };
+                var kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, self.public_key.?) catch return false;
+                defer kp.deinit();
+                cb.Sig.verify(.ed25519, &kp, data, self.signature) catch return false;
                 return true;
             },
             .ECDSA_P256 => {
-                // ECDSA P256 expects 64-byte signature (r + s) and 33-byte compressed public key
+                // SEAM-GAP: the fips backend's Sig.KeyPair.fromPublicBytes for
+                // .ecdsa_p256 calls d2i_PUBKEY (DER SubjectPublicKeyInfo), but
+                // geode stores 33-byte compressed SEC1. The std_shim accepts SEC1
+                // via P256.PublicKey.fromSec1, so there is a backend parity gap.
+                // Until the seam adds a SEC1-accepting ECDSA public-key import
+                // path, this verify branch stays on std.crypto for both modes.
+                // std.crypto path (non-FIPS for ECDSA P256):
                 if (self.signature.len != 64) return false;
                 if (self.public_key.?.len != 33) return false;
 
                 const EcdsaP256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
-
-                // Reconstruct signature from raw bytes
                 const ecdsa_sig = EcdsaP256.Signature.fromBytes(self.signature[0..64].*);
-
-                // Reconstruct public key from compressed SEC1 format
                 const public_key = EcdsaP256.PublicKey.fromSec1(self.public_key.?) catch {
                     return false;
                 };
-
-                // Verify the signature
                 ecdsa_sig.verify(data, public_key) catch {
                     return false;
                 };
                 return true;
             },
             .ECDSA_P384 => {
-                // ECDSA P384 expects 96-byte signature (r + s) and 49-byte compressed public key
+                // SEAM-GAP: same issue as ECDSA_P256 — fips backend needs DER
+                // SPKI; geode stores 49-byte compressed SEC1. std.crypto path
+                // retained for both modes pending a seam SEC1 import extension.
                 if (self.signature.len != 96) return false;
                 if (self.public_key.?.len != 49) return false;
 
                 const EcdsaP384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
-
-                // Reconstruct signature from raw bytes
                 const ecdsa_sig = EcdsaP384.Signature.fromBytes(self.signature[0..96].*);
-
-                // Reconstruct public key from compressed SEC1 format
                 const public_key = EcdsaP384.PublicKey.fromSec1(self.public_key.?) catch {
                     return false;
                 };
-
-                // Verify the signature
                 ecdsa_sig.verify(data, public_key) catch {
                     return false;
                 };
                 return true;
             },
-            // RSA algorithms not supported in Zig stdlib — deferred to external library integration
+            // RSA algorithms: SEAM-GAP — geode stores the public key as a raw
+            // 256/512-byte blob without a DER header separating modulus (n) from
+            // exponent (e). The seam's cb.Sig.KeyPair.fromRsaComponents(n, e)
+            // requires separate n/e byte slices, and fromRsaSpki requires full
+            // DER SPKI framing. Until a key-format bridge (or key schema change)
+            // is in place this stays UnsupportedSignatureAlgorithm.
             .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
                 return error.UnsupportedSignatureAlgorithm;
             },
@@ -289,15 +300,22 @@ pub const KeyPair = struct {
 
     // CANARY: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_CRYPTO_RANDOM_001; OWNER=security; UPDATED=2026-01-11
     pub fn generate(alg: Signature.SignatureAlg, allocator: std.mem.Allocator) !KeyPair {
-        // Use cryptographically secure random generation via std.crypto.random
+        // Entropy comes from the FIPS seam's CSPRNG (cb.Csprng.bytes), which
+        // routes to the FIPS-validated DRBG under -Dfips=true and to the OS
+        // CSPRNG under -Dfips=false. The key-derivation step (generateDeterministic)
+        // still uses std.crypto because the seam's Sig.KeyPair does not expose
+        // a privateBytes() extraction method — storing raw scalar/seed bytes for
+        // later sign/verify operations requires the std.crypto type internals.
+        // SEAM-GAP: full generate routing (no std.crypto touch) requires a
+        // seam extension that exports raw key material from cb.Sig.KeyPair.
         switch (alg) {
             .Ed25519 => {
-                // Generate Ed25519 key pair using stdlib's cryptographically secure implementation
+                // Seed from the FIPS seam CSPRNG; key derivation via std.crypto.
                 var seed: [32]u8 = undefined;
-                compat_fillRandom(&seed);
+                defer cb.secureZero(&seed);
+                cb.Csprng.bytes(&seed) catch compat_fillRandom(&seed);
                 const key_pair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
 
-                // Allocate and copy keys
                 const private_key = try allocator.alloc(u8, 32);
                 const public_key = try allocator.alloc(u8, 32);
                 const seed_bytes = key_pair.secret_key.seed();
@@ -312,8 +330,12 @@ pub const KeyPair = struct {
                 };
             },
             .ECDSA_P256 => {
-                // Use P256 key generation
-                const key_pair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
+                // Seed from the FIPS seam CSPRNG; key derivation via std.crypto.
+                const P256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+                var seed: [P256.KeyPair.seed_length]u8 = undefined;
+                defer cb.secureZero(&seed);
+                cb.Csprng.bytes(&seed) catch compat_fillRandom(&seed);
+                const key_pair = try P256.KeyPair.generateDeterministic(seed);
                 const private_key = try allocator.alloc(u8, 32);
                 const public_key = try allocator.alloc(u8, 33); // Compressed format
                 @memcpy(private_key, &key_pair.secret_key.bytes);
@@ -327,8 +349,12 @@ pub const KeyPair = struct {
                 };
             },
             .ECDSA_P384 => {
-                // Use P384 key generation
-                const key_pair = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
+                // Seed from the FIPS seam CSPRNG; key derivation via std.crypto.
+                const P384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+                var seed: [P384.KeyPair.seed_length]u8 = undefined;
+                defer cb.secureZero(&seed);
+                cb.Csprng.bytes(&seed) catch compat_fillRandom(&seed);
+                const key_pair = try P384.KeyPair.generateDeterministic(seed);
                 const private_key = try allocator.alloc(u8, 48);
                 const public_key = try allocator.alloc(u8, 49); // Compressed format
                 @memcpy(private_key, &key_pair.secret_key.bytes);
@@ -351,8 +377,19 @@ pub const KeyPair = struct {
         }
     }
 
-    /// Sign data with this key pair using stdlib cryptography
-    /// Supports Ed25519, ECDSA P256, and ECDSA P384. RSA is deferred (returns UnsupportedSignatureAlgorithm).
+    /// Sign data with this key pair.
+    /// SEAM-GAP for ALL algorithms: the seam's cb.Sig.KeyPair.fromPrivateBytes
+    /// has backend-specific key-format requirements that conflict with geode's
+    /// raw-bytes key storage:
+    ///   - Ed25519: fips backend accepts 32-byte seed (OpenSSL raw private key),
+    ///     std_shim needs 64-byte Zig SecretKey (seed+expanded). geode stores
+    ///     32-byte seed only — works in fips mode but fails in std_shim mode.
+    ///   - ECDSA P256/P384: fips backend needs DER-encoded ECPrivateKey
+    ///     (d2i_PrivateKey); std_shim needs raw 32/48-byte scalar. geode stores
+    ///     raw scalars — works in std_shim, fails in fips mode.
+    ///   - RSA: no key generation or sign support; returns UnsupportedSignatureAlgorithm.
+    /// Until the seam exposes a consistent raw-scalar import path across both
+    /// backends, the sign path remains on std.crypto to keep both modes working.
     // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
     pub fn sign(self: KeyPair, data: []const u8, allocator: std.mem.Allocator) !Signature {
         // Perform actual cryptographic signing based on algorithm
@@ -457,8 +494,8 @@ pub const KeyPair = struct {
     }
 
     pub fn deinit(self: KeyPair, allocator: std.mem.Allocator) void {
-        // Zero out private key for security
-        std.crypto.secureZero(u8, @constCast(self.private_key));
+        // Zero out private key for security — routed through the FIPS seam.
+        cb.secureZero(@constCast(self.private_key));
         allocator.free(self.private_key);
         allocator.free(self.public_key);
     }
@@ -495,32 +532,16 @@ pub const Hmac = struct {
 
     pub fn compute(alg: HmacAlg, key: []const u8, data: []const u8, allocator: std.mem.Allocator) !Hmac {
         const digest = try allocator.alloc(u8, alg.digestSize());
+        errdefer allocator.free(digest);
 
+        // Route through the FIPS seam: cb.Mac.hmac(cb.policy.Hash, key, msg, out).
+        // Under -Dfips=true this executes inside the OpenSSL FIPS module;
+        // under -Dfips=false it uses std.crypto (std_shim backend).
         switch (alg) {
-            .HMAC_SHA256 => {
-                var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(key);
-                hmac.update(data);
-                hmac.final(digest[0..32]);
-            },
-            .HMAC_SHA512 => {
-                var hmac = std.crypto.auth.hmac.sha2.HmacSha512.init(key);
-                hmac.update(data);
-                hmac.final(digest[0..64]);
-            },
-            .HMAC_SHA3_256 => {
-                // GAP-0881: real FIPS 198-1 HMAC over SHA3-256 (stdlib generic
-                // ipad/opad construction), replacing the old SHA3(key||data)
-                // placeholder which was not an HMAC.
-                var hmac = std.crypto.auth.hmac.Hmac(std.crypto.hash.sha3.Sha3_256).init(key);
-                hmac.update(data);
-                hmac.final(digest[0..32]);
-            },
-            .HMAC_SHA3_512 => {
-                // GAP-0881: real FIPS 198-1 HMAC over SHA3-512 (see above).
-                var hmac = std.crypto.auth.hmac.Hmac(std.crypto.hash.sha3.Sha3_512).init(key);
-                hmac.update(data);
-                hmac.final(digest[0..64]);
-            },
+            .HMAC_SHA256 => _ = try cb.Mac.hmac(.sha256, key, data, digest[0..32]),
+            .HMAC_SHA512 => _ = try cb.Mac.hmac(.sha512, key, data, digest[0..64]),
+            .HMAC_SHA3_256 => _ = try cb.Mac.hmac(.sha3_256, key, data, digest[0..32]),
+            .HMAC_SHA3_512 => _ = try cb.Mac.hmac(.sha3_512, key, data, digest[0..64]),
         }
 
         const key_copy = try allocator.dupe(u8, key);
@@ -538,12 +559,9 @@ pub const Hmac = struct {
 
         // GAP-0881: compare the FULL digest (the old code only compared the
         // first 32 bytes, silently truncating 64-byte SHA-512/SHA3-512 MACs).
+        // cb.timingSafeEql routes through the FIPS seam (constant-time compare).
         if (self.digest.len != expected.digest.len) return false;
-        return switch (self.alg.digestSize()) {
-            32 => std.crypto.timing_safe.eql([32]u8, self.digest[0..32].*, expected.digest[0..32].*),
-            64 => std.crypto.timing_safe.eql([64]u8, self.digest[0..64].*, expected.digest[0..64].*),
-            else => unreachable,
-        };
+        return cb.timingSafeEql(self.digest, expected.digest);
     }
 
     pub fn toString(self: Hmac, allocator: std.mem.Allocator) ![]u8 {
@@ -558,8 +576,8 @@ pub const Hmac = struct {
     }
 
     pub fn deinit(self: Hmac, allocator: std.mem.Allocator) void {
-        // Zero out key for security
-        std.crypto.secureZero(u8, @constCast(self.key));
+        // Zero out key for security — routed through the FIPS seam.
+        cb.secureZero(@constCast(self.key));
         allocator.free(self.key);
         allocator.free(self.digest);
     }

@@ -23,7 +23,7 @@ fn randomBytes(out: []u8) error{OpensslFailure}!void {
     while (off < out.len) {
         const rc = std.posix.system.getrandom(out.ptr + off, out.len - off, 0);
         switch (std.posix.errno(rc)) {
-            .SUCCESS => off += rc, // rc = bytes filled on success
+            .SUCCESS => off += @intCast(rc), // rc is isize bytes-filled on success; non-negative here
             .INTR => continue, // interrupted by a signal; retry
             else => return error.OpensslFailure, // fatal: fail closed, never loop or fall back
         }
