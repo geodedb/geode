@@ -6948,6 +6948,30 @@ pub fn build(b: *std.Build) void {
     const bounded_snapshot_step = b.step("test-gap0901-bounded-snapshot", "Run GAP-0901 bounded-cache hydrate/reclaim regression (hydrated default-tenant node reclaim must not crash) + snapshot characterization");
     bounded_snapshot_step.dependOn(&run_bounded_snapshot_tests.step);
 
+    // GAP-0902 bounded-cache analytical reads: under a SMALL node cache cap,
+    // the analytical read shapes (string ORDER BY, DISTINCT, multi-aggregate,
+    // WHERE-count) must return correct rows AND must NOT deep-clone the whole
+    // graph (clone==0, resident stays near cap). Wall-clock-independent.
+    const bounded_analytical_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0902_bounded_analytical_reads.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    bounded_analytical_test_mod.addImport("geode", root_mod);
+    const bounded_analytical_tests = b.addTest(.{ .root_module = bounded_analytical_test_mod });
+    const run_bounded_analytical_tests = b.addRunArtifact(bounded_analytical_tests);
+    shardDep(test_step, &run_bounded_analytical_tests.step, 1, test_shard_loads, test_shard_index);
+    const bounded_analytical_step = b.step("test-gap0902-bounded-analytical", "Run GAP-0902 bounded-cache analytical reads regression (string ORDER BY correctness + no whole-graph clone for ORDER BY/DISTINCT/multi-aggregate/WHERE-count)");
+    bounded_analytical_step.dependOn(&run_bounded_analytical_tests.step);
+
+    // GAP-0902 concurrency regression: analytical reads (ORDER BY top-K,
+    // DISTINCT, multi-aggregate, WHERE-count) under a small node cache cap +
+    // concurrent ingest + concurrent grace-point reclaim must not crash or
+    // corrupt (engine-direct order-key reads never mutate the cache).
+    const conc_analytical_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0902_concurrent_analytical.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    conc_analytical_test_mod.addImport("geode", root_mod);
+    const conc_analytical_tests = b.addTest(.{ .root_module = conc_analytical_test_mod });
+    const run_conc_analytical_tests = b.addRunArtifact(conc_analytical_tests);
+    shardDep(test_step, &run_conc_analytical_tests.step, 1, test_shard_loads, test_shard_index);
+    const conc_analytical_step = b.step("test-gap0902-concurrent-analytical", "Run GAP-0902 concurrent analytical reads crash regression (bounded cache + ingest + reclaim, no crash/corruption)");
+    conc_analytical_step.dependOn(&run_conc_analytical_tests.step);
+
     // Inline-key index-seek regression (read-stress KNOWN BUG #1): inline
     // `{indexed_prop: val}` equality reads seek the exact-property index
     // (O(matching)) instead of full-scanning the label (O(graph)); results are

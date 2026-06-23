@@ -672,6 +672,7 @@ REQ-COMPILATION-FIXES-OCTOBER-2025-005,Compilation Fixes,AlgorithmIntegrity,TEST
 REQ-COMPILATION-FIXES-OCTOBER-2025-006,Compilation Fixes,EdgeCaseHandling,TESTED,,,build,2025-10-05,tests/test_compilation_fixes_october_2025.zig
 REQ-COMPILATION-FIXES-OCTOBER-2025-007,Compilation Fixes,PerformanceConsistency,TESTED,,,build,2025-10-05,tests/test_compilation_fixes_october_2025.zig
 REQ-COMPILATION-FIXES-OCTOBER-2025-008,Compilation Fixes,CompilationStability,TESTED,,,build,2025-10-05,tests/test_compilation_fixes_october_2025.zig
+REQ-CONCURRENCY-BOUNDED-ANALYTICAL-0902,BoundedAnalyticalReadSafety,Regression,TESTED,,,storage,2026-06-22,tests/test_gap0902_concurrent_analytical.zig
 REQ-CONCURRENCY-SCAN-INGEST-RACE,ScanIngestRaceSafety,Regression,TESTED,,,storage,2026-06-20,tests/test_scan_ingest_race.zig
 REQ-CONCURRENCY-SCAN-WRITER-PROGRESS,ScanWriterProgress,Regression,TESTED,,,storage,2026-06-20,tests/test_scan_writer_progress.zig
 REQ-CONCURRENCY-WHERE-SCAN-WRITER-PROGRESS,WhereScanWriterProgress,Regression,TESTED,,,storage,2026-06-20,tests/test_where_scan_writer_progress.zig
@@ -3890,6 +3891,7 @@ REQ-PERF-BENCH-002,HighDegreeExpansion,BenchmarkFixture,TESTED,,,engine,2026-04-
 REQ-PERF-BENCH-003,SortedPostingList,BenchmarkFixture,TESTED,,,engine,2026-04-09,src/graph_store.zig
 REQ-PERF-BENCH-004,PathIteratorStreaming,BenchmarkFixture,TESTED,,,engine,2026-04-09,src/execution.zig
 REQ-PERF-BENCH-BUILD-001,ThroughputBenchmark,BuildIntegration,BENCHED,,,build,2026-06-11,build.zig
+REQ-PERF-BOUNDED-ANALYTICAL-0902,BoundedAnalyticalReads,Regression,TESTED,,,storage,2026-06-22,tests/test_gap0902_bounded_analytical_reads.zig
 REQ-PERF-BOUNDED-HYDRATE-RECLAIM-0901,BoundedCacheHydrateReclaim,Regression,TESTED,,,storage,2026-06-22,tests/test_gap0901_bounded_snapshot_no_materialize.zig
 REQ-PERF-CACHE-001,Performance,CachePerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-CACHE-OPT-001,Performance,CacheOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig

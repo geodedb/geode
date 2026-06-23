@@ -33,6 +33,11 @@ const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+// Engine-storage PropertyValue (lower-case variants: .int/.float/.string/…),
+// the type `adapter.getNodeProperty` returns. Distinct from the in-memory cache
+// `graph_store.PropertyValue` (.Int/.Float/.String). Used by the GAP-0902
+// engine-direct fast-path reads.
+const gs = @import("graph_storage");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -138,10 +143,18 @@ inline fn hierarchyForFilter(filter_tenant: []const u8) ?*rls.HierarchyManager {
 //     consult `canAccessTenantSafe`: a parent (ancestor-or-self) tenant may read
 //     its descendants' rows; siblings/ancestors are still denied (fail-closed).
 inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
+    return passesTenantFilterSlice(node.tenant_id, filter_tenant);
+}
+
+// GAP-0902: tenant-filter variant taking the node's tenant id as a bare slice,
+// for engine-direct read paths (the bounded-cache top-K scan) that read the
+// tenant tag straight from the engine without materializing a `Node`.
+// Identical semantics to `passesTenantFilter`.
+inline fn passesTenantFilterSlice(node_tenant: []const u8, filter_tenant: ?[]const u8) bool {
     const tid = filter_tenant orelse return true;
-    if (std.mem.eql(u8, node.tenant_id, tid)) return true;
+    if (std.mem.eql(u8, node_tenant, tid)) return true;
     const hm = hierarchyForFilter(tid) orelse return false;
-    return hm.canAccessTenantSafe(tid, node.tenant_id);
+    return hm.canAccessTenantSafe(tid, node_tenant);
 }
 
 // GAP-0279 / GAP-0846: Check if an edge passes the tenant filter (hierarchy-aware).
@@ -836,6 +849,60 @@ fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
     };
 }
 
+// GAP-0902: storage-side (engine `gs.PropertyValue`) variants of the coercion +
+// comparison helpers above, for the engine-direct fast-path reads. The engine
+// PropertyValue uses lower-case variants (.int/.float/.string/.decimal); the
+// in-memory cache one uses .Int/.Float/.String. Semantics are identical.
+fn storagePropToF64(pv: gs.PropertyValue) ?f64 {
+    return switch (pv) {
+        .int => |i| @as(f64, @floatFromInt(i)),
+        .float => |f| f,
+        .decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => null,
+    };
+}
+
+fn storagePropToI64(pv: gs.PropertyValue) ?i64 {
+    return switch (pv) {
+        .int => |i| i,
+        else => null,
+    };
+}
+
+fn compareStoragePvLit(pv: gs.PropertyValue, op: Cmp, lit: LitValue) bool {
+    // Equality/inequality on strings (only eq/ne supported for strings).
+    if (pv == .string and lit == .Str) {
+        const eq = std.mem.eql(u8, pv.string, lit.Str);
+        return switch (op) {
+            .eq => eq,
+            .ne => !eq,
+            else => false,
+        };
+    }
+    if (pv == .bool and lit == .Bool) {
+        const eq = pv.bool == lit.Bool;
+        return switch (op) {
+            .eq => eq,
+            .ne => !eq,
+            else => false,
+        };
+    }
+    const left = storagePropToF64(pv) orelse return false;
+    const right: f64 = switch (lit) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Float => |f| f,
+        else => return false,
+    };
+    return switch (op) {
+        .eq => left == right,
+        .ne => left != right,
+        .lt => left < right,
+        .le => left <= right,
+        .gt => left > right,
+        .ge => left >= right,
+    };
+}
+
 // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="AggregateFastPath"; ASPECT=PropertyAggregate; STATUS=TESTED; TEST=tests/test_gap0811b_property_aggregate_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
 // GAP-0811 Task 2.2: fast path for `MATCH (p:<Label>) [WHERE p.<k> OP lit]?
 // RETURN <agg>(p.<key>)` where <agg> is sum/avg/min/max (case-insensitive).
@@ -930,12 +997,21 @@ pub fn propertyAggregateFastPath(
     // Mirror `countNodesFastPath`: prefer the handler-installed
     // `QueryReadSession` snapshot (via `getGlobalStore`) so concurrent
     // writers don't serialise behind the scan.
-    const writable_store = graph_store.getGlobalStore(allocator);
-    var read_view = graph_store.ReadView.init(allocator, writable_store);
-    defer read_view.deinit();
-    const read_store = read_view.getReadStore();
+    // GAP-0902: read the aggregated property (+ optional WHERE property and the
+    // tenant tag) ENGINE-DIRECT, NOT from the in-memory node cache. The prior
+    // `read_store.nodes.get` (resident-only) SILENTLY DROPPED every evicted node
+    // under the bounded cache — a wrong aggregate at scale (e.g. `min` over only
+    // the resident tail) — and `prop_store.getNodeProperty` MUTATED the cache
+    // (hydrate-on-miss), which crashes under concurrent lock-free readers.
+    // Engine-direct single-property reads see EVERY live node and never touch
+    // the cache map (same safe pattern as the top-K / node_scan_stream paths),
+    // so this aggregate is correct AND crash-safe when the handler serves it
+    // against the live store (no whole-graph snapshot clone needed).
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
 
-    const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+    const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
+    defer allocator.free(slots);
 
     // Accumulators. We keep both int and float paths so that pure-integer
     // inputs yield Int results for sum/min/max (matching the regular
@@ -949,58 +1025,73 @@ pub fn propertyAggregateFastPath(
     var min_float: ?f64 = null;
     var max_float: ?f64 = null;
 
-    if (posting) |slots| {
-        // Pointer to writable store because `getNodeProperty` is not const
-        // (it may lazily decrypt). The read_view keeps concurrent writers
-        // from deleting underneath us; here we only need the pointer type.
-        const prop_store: *graph_store.GraphStore = @constCast(read_store);
-        for (slots) |node_id| {
-            const node = read_store.nodes.get(node_id) orelse continue;
-            // Tenant filter (posting list is not partitioned by tenant).
-            // GAP-0846: hierarchy-aware — a parent tenant sees descendant rows.
-            if (!passesTenantFilter(node, filter_tenant)) continue;
-            // Optional WHERE filter — single property read.
-            if (where_pred) |p| {
-                const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
-                if (!comparePvLit(w_val, p.op, p.lit)) continue;
-            }
-            // Target property read.
-            const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
-
-            // Update accumulators based on the observed type.
-            const maybe_int = propToI64(t_val);
-            const maybe_f = propToF64(t_val) orelse continue; // skip non-numeric
-
-            count += 1;
-            if (maybe_int) |iv| {
-                // Overflow-safe integer accumulation for sum; fall through
-                // to float on overflow.
-                if (!has_float) {
-                    const r = @addWithOverflow(sum_int, iv);
-                    if (r[1] != 0) {
-                        has_float = true;
-                        sum_float = @as(f64, @floatFromInt(sum_int)) + @as(f64, @floatFromInt(iv));
-                    } else {
-                        sum_int = r[0];
-                    }
-                } else {
-                    sum_float += @as(f64, @floatFromInt(iv));
-                }
-                if (min_int == null or iv < min_int.?) min_int = iv;
-                if (max_int == null or iv > max_int.?) max_int = iv;
-            } else {
-                // Non-int numeric (Float/Decimal): promote sum to float.
-                if (!has_float) {
-                    has_float = true;
-                    sum_float = @as(f64, @floatFromInt(sum_int));
-                }
-                sum_float += maybe_f;
-            }
-            // Always maintain a float min/max alongside int min/max so we
-            // can return the correct type regardless of mix.
-            if (min_float == null or maybe_f < min_float.?) min_float = maybe_f;
-            if (max_float == null or maybe_f > max_float.?) max_float = maybe_f;
+    const tenant_active = filter_tenant != null;
+    for (slots) |slot_id| {
+        // Tenant filter, engine-direct. Absent internal tenant property ⇒
+        // DEFAULT tenant (matches `materializeNodeFromEngine`'s contract).
+        if (tenant_active) {
+            const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+            const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
+                .string => |s| s,
+                else => graph_store.DEFAULT_TENANT_ID,
+            } else graph_store.DEFAULT_TENANT_ID;
+            defer if (tprop) |tp| switch (tp) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
         }
+
+        // Optional WHERE filter — single engine-direct property read.
+        if (where_pred) |p| {
+            const w_val = (adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator) catch continue) orelse continue;
+            defer switch (w_val) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
+        }
+
+        // Target property read, engine-direct.
+        const t_val = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
+        defer switch (t_val) {
+            .string => |s| allocator.free(s),
+            else => {},
+        };
+
+        // Update accumulators based on the observed type.
+        const maybe_int = storagePropToI64(t_val);
+        const maybe_f = storagePropToF64(t_val) orelse continue; // skip non-numeric
+
+        count += 1;
+        if (maybe_int) |iv| {
+            // Overflow-safe integer accumulation for sum; fall through
+            // to float on overflow.
+            if (!has_float) {
+                const r = @addWithOverflow(sum_int, iv);
+                if (r[1] != 0) {
+                    has_float = true;
+                    sum_float = @as(f64, @floatFromInt(sum_int)) + @as(f64, @floatFromInt(iv));
+                } else {
+                    sum_int = r[0];
+                }
+            } else {
+                sum_float += @as(f64, @floatFromInt(iv));
+            }
+            if (min_int == null or iv < min_int.?) min_int = iv;
+            if (max_int == null or iv > max_int.?) max_int = iv;
+        } else {
+            // Non-int numeric (Float/Decimal): promote sum to float.
+            if (!has_float) {
+                has_float = true;
+                sum_float = @as(f64, @floatFromInt(sum_int));
+            }
+            sum_float += maybe_f;
+        }
+        // Always maintain a float min/max alongside int min/max so we
+        // can return the correct type regardless of mix.
+        if (min_float == null or maybe_f < min_float.?) min_float = maybe_f;
+        if (max_float == null or maybe_f > max_float.?) max_float = maybe_f;
     }
 
     // --- Build result value per aggregate kind ---
@@ -1056,24 +1147,45 @@ pub fn propertyAggregateFastPath(
 const OrderDir = enum { asc, desc };
 
 /// Scratch entry held in the K-bounded heap. We keep the property value in
-/// its native type (int XOR float) so we can re-emit it with the same `Value`
-/// tag the slow path would — preserving Int → Int / Double → Double round-
-/// tripping. `node_id` is retained for future extensions (e.g., returning
-/// the node itself); for now only `val_*` is written back.
+/// its native type (int XOR float XOR string) so we can re-emit it with the
+/// same `Value` tag the slow path would — preserving Int → Int / Double →
+/// Double / Str → Str round-tripping. `node_id` is retained for future
+/// extensions (e.g., returning the node itself); for now only the value is
+/// written back.
+///
+/// GAP-0902: `val_str` adds STRING order-key support (the live `source_id`
+/// shape). When `kind == .str`, `val_str` is an OWNED copy (the engine-direct
+/// property read returns memory freed per-iteration, and the heap keeps the
+/// entry across many iterations) allocated on the topK arena and freed when the
+/// arena drops at end-of-query.
+const TopKKind = enum { int, float, str };
 const TopKEntry = struct {
-    // Exactly one of val_int / val_float is meaningful, per `is_float`.
+    // Meaningful field is selected by `kind`.
     val_int: i64 = 0,
     val_float: f64 = 0,
-    is_float: bool = false,
+    val_str: []const u8 = "",
+    kind: TopKKind = .int,
     node_id: u64 = 0,
 };
 
-/// Numeric comparison that keeps same-type compares lossless. Returns
-/// `true` iff `a < b`.
+/// Total order over heap entries. Numeric entries compare numerically
+/// (same-type int compares stay lossless); string entries compare
+/// lexicographically. Mixed numeric/string never co-occur for one ORDER BY
+/// key (a property is one type across the scan in practice; if a stray
+/// off-type value appears it is skipped before insertion), so the cross-kind
+/// arm is a stable deterministic fallback (numeric < string) rather than a
+/// correctness path. Returns `true` iff `a < b`.
 fn entryLess(a: TopKEntry, b: TopKEntry) bool {
-    if (!a.is_float and !b.is_float) return a.val_int < b.val_int;
-    const af: f64 = if (a.is_float) a.val_float else @as(f64, @floatFromInt(a.val_int));
-    const bf: f64 = if (b.is_float) b.val_float else @as(f64, @floatFromInt(b.val_int));
+    if (a.kind == .str and b.kind == .str) {
+        return std.mem.order(u8, a.val_str, b.val_str) == .lt;
+    }
+    if (a.kind == .str or b.kind == .str) {
+        // Deterministic cross-kind fallback: numerics sort before strings.
+        return b.kind == .str;
+    }
+    if (a.kind == .int and b.kind == .int) return a.val_int < b.val_int;
+    const af: f64 = if (a.kind == .float) a.val_float else @as(f64, @floatFromInt(a.val_int));
+    const bf: f64 = if (b.kind == .float) b.val_float else @as(f64, @floatFromInt(b.val_int));
     return af < bf;
 }
 
@@ -1210,61 +1322,99 @@ pub fn topKOrderedFastPath(
     // --- RLS bypass for correctness ---
     if (!countFastPathRlsAllowed()) return null;
 
-    // --- Iterate the label posting list + bounded heap ---
-    const writable_store = graph_store.getGlobalStore(allocator);
-    var read_view = graph_store.ReadView.init(allocator, writable_store);
-    defer read_view.deinit();
-    const read_store = read_view.getReadStore();
-    const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+    // GAP-0902: the order key + tenant are read ENGINE-DIRECT (the disk-backed
+    // store of record), NOT from the in-memory node cache. Under the bounded
+    // node cache the previous `read_store.nodes.get(node_id)` (resident-only)
+    // SILENTLY DROPPED every evicted node (returned only the resident top-K, a
+    // wrong answer at scale), and `prop_store.getNodeProperty` MUTATED the cache
+    // (hydrate-on-miss insert+evict) which crashed under concurrent lock-free
+    // readers. Engine-direct single-property reads (`adapter.getNodeProperty`)
+    // see EVERY live node, never touch the cache map, and each acquires the
+    // per-graph engine lock only for its own brief read — the same safe,
+    // chunked-lock pattern `node_scan_stream` / `planned_read_runtime` use. No
+    // outer per-graph read lock is held across the scan, so a writer-preferred
+    // EXCLUSIVE checkpoint/apply is never starved.
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+
+    // Collect the label's live ENGINE slot ids (complete; lock-safe per-shard
+    // collection inside the adapter). cap=null: ORDER BY needs ALL candidates
+    // to pick the true top-K, so we must not bound collection.
+    const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
+    defer allocator.free(slots);
+
+    // Arena owns the per-entry STRING copies the heap holds across iterations
+    // (the engine property read returns memory freed each loop turn). Dropped
+    // wholesale at function return — after the final result strings are duped
+    // onto `allocator` below.
+    var key_arena = std.heap.ArenaAllocator.init(allocator);
+    defer key_arena.deinit();
+    const ka = key_arena.allocator();
 
     // Heap buffer capacity K (never grows beyond K).
     var heap = try std.ArrayList(TopKEntry).initCapacity(allocator, k);
     defer heap.deinit(allocator);
 
     const is_desc = (dir == .desc);
+    const tenant_active = filter_tenant != null;
 
-    if (posting) |slots| {
-        const prop_store: *graph_store.GraphStore = @constCast(read_store);
-        for (slots) |node_id| {
-            const node = read_store.nodes.get(node_id) orelse continue;
-            // GAP-0846 follow-up: hierarchy-aware tenant filter (was exact-match
-            // only, which under-fetched a parent's descendant rows). passesTenantFilter
-            // keeps the exact-match fast path and adds ancestor-or-self, fail-closed.
-            if (!passesTenantFilter(node, filter_tenant)) continue;
-            const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
+    for (slots) |slot_id| {
+        // Tenant filter, engine-direct. Absent internal tenant property ⇒
+        // DEFAULT tenant (matches `materializeNodeFromEngine`'s contract).
+        if (tenant_active) {
+            const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+            const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
+                .string => |s| s,
+                else => graph_store.DEFAULT_TENANT_ID,
+            } else graph_store.DEFAULT_TENANT_ID;
+            defer if (tprop) |tp| switch (tp) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
+        }
 
-            // Build entry in native type. Skip non-numeric (parity with
-            // slow-path ordering which coerces via value comparators).
-            var entry: TopKEntry = .{ .node_id = node_id };
-            switch (pv) {
-                .Int => |iv| {
-                    entry.val_int = iv;
-                    entry.is_float = false;
-                },
-                .Float => |fv| {
-                    entry.val_float = fv;
-                    entry.is_float = true;
-                },
-                .Decimal => |d| {
-                    entry.val_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
-                    entry.is_float = true;
-                },
-                else => continue,
-            }
+        const pv = (adapter.getNodeProperty(filter_graph, slot_id, ret_key, allocator) catch continue) orelse continue;
+        defer switch (pv) {
+            .string => |s| allocator.free(s),
+            else => {},
+        };
 
-            if (heap.items.len < k) {
-                heap.appendAssumeCapacity(entry);
-                heapSiftUp(heap.items, heap.items.len - 1, is_desc);
-            } else {
-                // Compare against heap root (the "worst" in our K-window).
-                // DESC → min-heap; a new entry must be GREATER than root to
-                // enter. ASC → max-heap; a new entry must be LESS than root.
-                const root = heap.items[0];
-                const should_insert = if (is_desc) entryLess(root, entry) else entryLess(entry, root);
-                if (!should_insert) continue;
-                heap.items[0] = entry;
-                heapSiftDown(heap.items, 0, is_desc);
-            }
+        // Build entry in native type. Skip off-type values (parity with the
+        // slow path, which coerces via value comparators and drops mismatches).
+        var entry: TopKEntry = .{ .node_id = slot_id };
+        switch (pv) {
+            .int => |iv| {
+                entry.val_int = iv;
+                entry.kind = .int;
+            },
+            .float => |fv| {
+                entry.val_float = fv;
+                entry.kind = .float;
+            },
+            .decimal => |d| {
+                entry.val_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                entry.kind = .float;
+            },
+            .string => |s| {
+                entry.val_str = try ka.dupe(u8, s); // owned across heap lifetime
+                entry.kind = .str;
+            },
+            else => continue,
+        }
+
+        if (heap.items.len < k) {
+            heap.appendAssumeCapacity(entry);
+            heapSiftUp(heap.items, heap.items.len - 1, is_desc);
+        } else {
+            // Compare against heap root (the "worst" in our K-window).
+            // DESC → min-heap; a new entry must be GREATER than root to
+            // enter. ASC → max-heap; a new entry must be LESS than root.
+            const root = heap.items[0];
+            const should_insert = if (is_desc) entryLess(root, entry) else entryLess(entry, root);
+            if (!should_insert) continue;
+            heap.items[0] = entry;
+            heapSiftDown(heap.items, 0, is_desc);
         }
     }
 
@@ -1292,10 +1442,14 @@ pub fn topKOrderedFastPath(
     var rows = try allocator.alloc([]Value, heap.items.len);
     for (heap.items, 0..) |entry, i| {
         const row = try allocator.alloc(Value, 1);
-        row[0] = if (entry.is_float)
-            Value{ .Double = entry.val_float }
-        else
-            Value{ .Int = entry.val_int };
+        row[0] = switch (entry.kind) {
+            .float => Value{ .Double = entry.val_float },
+            .int => Value{ .Int = entry.val_int },
+            // Dupe onto `allocator` so the value outlives `key_arena`. The
+            // result is `owns_value_memory`-free at the same boundary the
+            // executor frees other Str values (handled by the result deinit).
+            .str => Value{ .Str = try allocator.dupe(u8, entry.val_str) },
+        };
         rows[i] = row;
     }
 
@@ -1303,6 +1457,9 @@ pub fn topKOrderedFastPath(
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        // Str rows own their duped bytes; freeValue frees them on deinit.
+        // Int/Double rows are scalars (freeValue no-op). No node refs escape.
+        .owns_value_memory = true,
     };
 }
 
