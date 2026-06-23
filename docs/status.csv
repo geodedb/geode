@@ -673,6 +673,7 @@ REQ-COMPILATION-FIXES-OCTOBER-2025-006,Compilation Fixes,EdgeCaseHandling,TESTED
 REQ-COMPILATION-FIXES-OCTOBER-2025-007,Compilation Fixes,PerformanceConsistency,TESTED,,,build,2025-10-05,tests/test_compilation_fixes_october_2025.zig
 REQ-COMPILATION-FIXES-OCTOBER-2025-008,Compilation Fixes,CompilationStability,TESTED,,,build,2025-10-05,tests/test_compilation_fixes_october_2025.zig
 REQ-CONCURRENCY-BOUNDED-ANALYTICAL-0902,BoundedAnalyticalReadSafety,Regression,TESTED,,,storage,2026-06-22,tests/test_gap0902_concurrent_analytical.zig
+REQ-CONCURRENCY-SCAN-CANCELLATION,ScanCancellation,Regression,TESTED,,,transport,2026-06-23,tests/test_scan_cancellation.zig
 REQ-CONCURRENCY-SCAN-INGEST-RACE,ScanIngestRaceSafety,Regression,TESTED,,,storage,2026-06-20,tests/test_scan_ingest_race.zig
 REQ-CONCURRENCY-SCAN-WRITER-PROGRESS,ScanWriterProgress,Regression,TESTED,,,storage,2026-06-20,tests/test_scan_writer_progress.zig
 REQ-CONCURRENCY-WHERE-SCAN-WRITER-PROGRESS,WhereScanWriterProgress,Regression,TESTED,,,storage,2026-06-20,tests/test_where_scan_writer_progress.zig

@@ -62,6 +62,13 @@ pub fn getNodesMaterializedTotal() u64 {
     return g_nodes_materialized_total.load(.monotonic);
 }
 
+/// FIX #1 (scan cancellation): absolute CLOCK_MONOTONIC now (ns), exposed so
+/// transports without their own mono clock (e.g. the gRPC server) can anchor a
+/// scan's `deadline_mono_ns`.
+pub fn monoNanosNowForDeadline() u64 {
+    return graph_store.monoNanosNowPub();
+}
+
 /// What the stream projects per matched node.
 ///   - .node     → a single bare-variable column (`RETURN n`)
 ///   - .projection→ one or more projected expressions (`RETURN n.a, n.b AS x`)
@@ -134,6 +141,20 @@ pub const NodeScanStream = struct {
     env_names: [1][]const u8 = .{""},
     env_value: [1]Value = .{.{ .Null = {} }},
 
+    /// FIX #1 (scan cancellation): optional pointer to a per-connection cancel
+    /// flag, set by the transport layer when the driving client's stream /
+    /// connection closes. The scan loop checks it at every batch boundary and
+    /// short-circuits (releases the per-graph SHARED read lock, returns a FINAL
+    /// page) so a scan whose client has gone away stops burning CPU + lock churn
+    /// instead of running the whole O(N) scan to completion. `null` means "not
+    /// bound to a stream" (standalone / legacy callers) and disables the check.
+    cancel_token: ?*std.atomic.Value(bool) = null,
+
+    /// FIX #1 (scan cancellation): optional absolute CLOCK_MONOTONIC deadline in
+    /// ns. When non-zero and exceeded, the scan short-circuits at the next batch
+    /// boundary exactly like a set `cancel_token`. `0` means "no deadline".
+    deadline_mono_ns: u64 = 0,
+
     pub fn deinit(self: *NodeScanStream) void {
         self.allocator.free(self.slot_ids);
         for (self.flags) |flag| {
@@ -148,6 +169,21 @@ pub const NodeScanStream = struct {
     pub fn hasRemaining(self: *const NodeScanStream) bool {
         if (self.mode == .count) return !self.count_emitted;
         return self.next_index < self.slot_ids.len and self.rows_emitted < self.row_limit;
+    }
+
+    /// FIX #1 (scan cancellation): true when the driving client's stream has
+    /// closed (`cancel_token` set) OR the query deadline has passed. The scan
+    /// loops consult this at batch boundaries and short-circuit when it returns
+    /// true, releasing the per-graph SHARED read lock and ending the stream so a
+    /// lingering scan stops consuming CPU + lock churn after its client is gone.
+    pub fn isCanceled(self: *const NodeScanStream) bool {
+        if (self.cancel_token) |tok| {
+            if (tok.load(.acquire)) return true;
+        }
+        if (self.deadline_mono_ns != 0) {
+            if (graph_store.monoNanosNowPub() >= self.deadline_mono_ns) return true;
+        }
+        return false;
     }
 
     pub fn buildSchema(self: *const NodeScanStream, allocator: std.mem.Allocator) !schema.SchemaDefinition {
@@ -233,6 +269,13 @@ pub const NodeScanStream = struct {
         // may scan more slots than rows produced (O(scanned)); LIMIT still
         // bounds the matched rows via `slot_ids` when no predicate is present,
         // and via early-termination here when a predicate is.
+        // FIX #1: a client that has already gone away before the first batch —
+        // short-circuit before touching any node.
+        if (self.isCanceled()) {
+            graph_store.releaseGraphLock(lock);
+            lock_held = false;
+            return self.cancelledPage(allocator, rows, owned_entities);
+        }
         while (rows.items.len < page_len and self.next_index < self.slot_ids.len and self.rows_emitted < self.row_limit) {
             // Batch boundary: drop and reacquire the SHARED lock so a pending
             // EXCLUSIVE apply/checkpoint interleaves. Done BETWEEN nodes (never
@@ -242,6 +285,18 @@ pub const NodeScanStream = struct {
             // duplicate; a node deleted in the gap fails materializeNode below).
             if (batch_count == materialize_batch_nodes) {
                 graph_store.releaseGraphLock(lock);
+                // FIX #1 (scan cancellation): the batch boundary is the natural
+                // cancellation point — the lock is already dropped and the
+                // cursor is at a node boundary. If the client's stream has
+                // closed (or the deadline passed), STOP here instead of
+                // reacquiring and scanning the rest of the O(N) slot list. We
+                // return whatever rows we already built with final=true so the
+                // handler tears the stream down; the client is gone, so a short
+                // page is harmless and a lingering scan is avoided.
+                if (self.isCanceled()) {
+                    lock_held = false;
+                    return self.cancelledPage(allocator, rows, owned_entities);
+                }
                 lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
                 batch_count = 0;
             }
@@ -373,6 +428,24 @@ pub const NodeScanStream = struct {
         };
     }
 
+    /// FIX #1 (scan cancellation): build a FINAL page from whatever rows were
+    /// collected before cancellation, and advance the cursor to the end so
+    /// `hasRemaining()` is false (any further PULL gets a clean empty final
+    /// page). The caller MUST have already released the per-graph SHARED read
+    /// lock. The client's stream has closed (or the deadline passed), so a
+    /// short/partial page is harmless — what matters is that we STOP scanning.
+    fn cancelledPage(
+        self: *NodeScanStream,
+        allocator: std.mem.Allocator,
+        rows: std.ArrayList([]Value),
+        owned_entities: *OwnedGraphEntities,
+    ) !Page {
+        self.next_index = self.slot_ids.len;
+        self.rows_emitted = self.row_limit;
+        const result = try self.finishResult(allocator, rows, owned_entities);
+        return .{ .result = result, .final = true };
+    }
+
     fn buildColumns(self: *NodeScanStream, allocator: std.mem.Allocator) ![][]const u8 {
         switch (self.mode) {
             .node, .count => {
@@ -427,11 +500,21 @@ pub const NodeScanStream = struct {
                 // the immutable slot_ids snapshot makes the gap safe.
                 var matched: usize = 0;
                 var lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
-                errdefer graph_store.releaseGraphLock(lock);
+                var count_lock_held = true;
+                errdefer if (count_lock_held) graph_store.releaseGraphLock(lock);
                 var batch_count: usize = 0;
                 for (self.slot_ids) |slot_id| {
                     if (batch_count == materialize_batch_nodes) {
                         graph_store.releaseGraphLock(lock);
+                        // FIX #1 (scan cancellation): same batch-boundary bail as
+                        // buildNextPage. If the client's stream has closed (or
+                        // the deadline passed), STOP tallying and return the
+                        // partial count — the client is gone, so completeness is
+                        // moot; what matters is not lingering on the O(N) tally.
+                        if (self.isCanceled()) {
+                            count_lock_held = false;
+                            break;
+                        }
                         lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
                         batch_count = 0;
                     }
@@ -446,7 +529,8 @@ pub const NodeScanStream = struct {
                     const passes = self.evalPredicate(allocator, where_expr, node) catch false;
                     if (passes) matched += 1;
                 }
-                graph_store.releaseGraphLock(lock);
+                // Released already if we bailed at a batch boundary on cancel.
+                if (count_lock_held) graph_store.releaseGraphLock(lock);
                 break :blk matched;
             }
             // No WHERE predicate but no O(1) precompute either → inline

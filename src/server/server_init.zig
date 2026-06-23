@@ -78,6 +78,15 @@ pub const EnvironmentConfig = struct {
     // GEODE_QUIC_HELLO_READ_TIMEOUT_MS when slower clients require a wider
     // post-handshake application-auth window.
     quic_hello_read_timeout_ms: u64 = 1_000,
+    // FIX #1 (scan cancellation): per-query wall-clock budget for a streaming
+    // node scan (`NodeScanStream`). When non-zero, a scan whose total wall-clock
+    // exceeds this is canceled at the next batch boundary (releases its per-graph
+    // SHARED read lock and ends the stream) — a backstop against lingering scans
+    // that keep burning CPU + lock churn after their client has disconnected but
+    // the close was not (yet) observed. Generous by default so legitimate large
+    // analytical scans complete; 0 disables the deadline. Override via
+    // GEODE_SCAN_QUERY_TIMEOUT_MS.
+    scan_query_timeout_ms: u64 = 300_000,
 };
 
 /// Server initialization context containing all initialized resources
@@ -248,6 +257,9 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
     }
     if (getenvSlice("GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS")) |val| {
         config.graph_write_lock_timeout_ms = std.fmt.parseInt(u64, val, 10) catch config.graph_write_lock_timeout_ms;
+    }
+    if (getenvSlice("GEODE_SCAN_QUERY_TIMEOUT_MS")) |val| {
+        config.scan_query_timeout_ms = std.fmt.parseInt(u64, val, 10) catch config.scan_query_timeout_ms;
     }
     if (getenvSlice("GEODE_QUIC_HELLO_READ_TIMEOUT_MS")) |val| {
         config.quic_hello_read_timeout_ms = @max(

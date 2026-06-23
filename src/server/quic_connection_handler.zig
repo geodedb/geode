@@ -5281,6 +5281,40 @@ fn mutationWriteLockTimeoutNs(state: *const ServerState) u64 {
     return default_mutation_write_lock_timeout_ms * std.time.ns_per_ms;
 }
 
+/// FIX #1 (scan cancellation): absolute CLOCK_MONOTONIC deadline (ns) for a
+/// streaming node scan, or 0 for "no deadline". The budget is the session's
+/// `scan_query_timeout_ms` env config (default 300 s); 0 disables it. This is
+/// the wall-clock backstop that bounds a scan even if the client-close cancel
+/// signal is missed, so a lingering scan can never hold a read lock / burn CPU
+/// indefinitely. Anchored at call time (stream prepare) so it spans all PULL
+/// pages of the same stream.
+fn scanQueryDeadlineNs(state: *const ServerState) u64 {
+    if (state.shared_conn) |shared_ptr| {
+        const shared: *SharedConnState = @ptrCast(@alignCast(shared_ptr));
+        if (shared.env_config) |ec| {
+            if (ec.scan_query_timeout_ms == 0) return 0;
+            return monoNanosNow() + ec.scan_query_timeout_ms * std.time.ns_per_ms;
+        }
+    }
+    // No env config (legacy/test path): default to the same generous budget.
+    return monoNanosNow() + 300_000 * std.time.ns_per_ms;
+}
+
+/// FIX #1 (scan cancellation): point the scan's `cancel_token` at the driving
+/// QUIC stream's connection-level shutdown flag. `QuicStream.shutdown_requested`
+/// points at `Connection.shutdown_requested`, which the transport sets the
+/// instant the client connection is closed / reset / idle-reaped. So when the
+/// client disconnects, the scan sees it at the next batch boundary and stops —
+/// releasing the per-graph SHARED read lock and ending the stream instead of
+/// running the whole O(N) scan to completion (the lingering-scan pathology). The
+/// flag is connection-scoped (shared by that connection's multiplexed streams),
+/// which is correct: a disconnected client's in-flight scans should ALL cancel,
+/// and scans on OTHER connections are unaffected. Per-stream RST without
+/// connection close is covered by the wall-clock `deadline_mono_ns` backstop.
+fn bindScanStreamCancel(stream: *quic_transport.QuicStream, scan: *node_scan_stream.NodeScanStream) void {
+    scan.cancel_token = stream.shutdown_requested;
+}
+
 /// GAP-0900 (live-routing): policy-aware "does a REAL RLS policy exist?" gate
 /// used by the node-scan streaming routing. Returns true only when an
 /// authenticated session is present AND at least one RLS policy is installed in
@@ -6807,6 +6841,18 @@ fn handleClientMessage(
                                     var active_stream = prepared_stream;
                                     errdefer active_stream.deinit();
 
+                                    // FIX #1 (scan cancellation): anchor the
+                                    // per-query wall-clock deadline NOW so it
+                                    // bounds this scan across every PULL page —
+                                    // a backstop that prevents a scan from
+                                    // lingering (holding the SHARED read lock,
+                                    // burning CPU) indefinitely if its client
+                                    // goes away. The cancel-token (client-close)
+                                    // signal is wired below where the stream is
+                                    // bound to its connection.
+                                    active_stream.deadline_mono_ns = scanQueryDeadlineNs(state);
+                                    bindScanStreamCancel(stream, &active_stream);
+
                                     if (needs_store_lock) {
                                         if (graph_lock_handle) |h| {
                                             // GAP-0511: Release lock before index rebuild
@@ -7080,6 +7126,13 @@ fn handleClientMessage(
             const pa = pull_arena.allocator();
 
             if (state.active_node_scan_stream) |*active_stream| {
+                // FIX #1 (scan cancellation): (re)bind the cancel token to the
+                // stream now serving this PULL. The deadline anchored at prepare
+                // already rides on the stream across pages; rebinding the
+                // client-close token keeps it pointed at a live connection's
+                // shutdown flag even when the scan was transferred to a new
+                // handler/stream of the same connection (pending-transfer path).
+                bindScanStreamCancel(stream, active_stream);
                 // P1: materialization runs under the per-graph SHARED read lock
                 // to prevent data races with concurrent ingest. The stream
                 // acquires + releases that lock INTERNALLY in chunked batches

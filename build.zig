@@ -7040,6 +7040,19 @@ pub fn build(b: *std.Build) void {
     const where_scan_progress_step = b.step("test-where-scan-writer-progress", "Run where-scan-writer-progress concurrency regression (sparse WHERE scan must not starve per-shard apply)");
     where_scan_progress_step.dependOn(&run_where_scan_progress_tests.step);
 
+    // Scan-cancellation regression (FIX #1): a server-side node scan must STOP
+    // iterating and RELEASE its per-graph SHARED read lock when the driving
+    // client's stream closes (cancel token) OR a query deadline passes —
+    // instead of running the whole O(N) scan to completion (the lingering-scan
+    // / high-CPU pathology that starves the edge phase under concurrent reads).
+    const scan_cancel_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_scan_cancellation.zig"), .target = target, .optimize = optimize });
+    scan_cancel_test_mod.addImport("geode", root_mod);
+    const scan_cancel_tests = b.addTest(.{ .root_module = scan_cancel_test_mod });
+    const run_scan_cancel_tests = b.addRunArtifact(scan_cancel_tests);
+    shardDep(test_step, &run_scan_cancel_tests.step, 5, test_shard_loads, test_shard_index);
+    const scan_cancel_step = b.step("test-scan-cancellation", "Run scan-cancellation regression (scan stops + releases read lock on client-close / deadline)");
+    scan_cancel_step.dependOn(&run_scan_cancel_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple

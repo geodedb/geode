@@ -2439,6 +2439,14 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     var active_stream = prepared_stream;
                                     errdefer active_stream.deinit();
 
+                                    // FIX #1 (scan cancellation): wall-clock
+                                    // deadline backstop so a gRPC node scan can
+                                    // never linger unboundedly (holding the
+                                    // SHARED read lock / burning CPU) if its
+                                    // client goes away. 300 s default mirrors the
+                                    // QUIC path's scan_query_timeout_ms default.
+                                    active_stream.deadline_mono_ns = node_scan_stream.monoNanosNowForDeadline() + 300_000 * std.time.ns_per_ms;
+
                                     if (needs_store_lock) {
                                         if (graph_lock_handle) |h| {
                                             // GAP-0511: Release lock before index rebuild
