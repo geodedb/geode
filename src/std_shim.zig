@@ -391,6 +391,37 @@ pub const Sig = struct {
             };
         }
 
+        /// Export the COMPRESSED SEC1 public point for an EC keypair.
+        /// Only `.ecdsa_p256` (33 bytes) and `.ecdsa_p384` (49 bytes) are
+        /// supported; other algorithms return `error.Unsupported`. `out`
+        /// must be at least the compressed size; shorter buffers return
+        /// `error.OpensslFailure`. A key whose inner type does not match
+        /// the requested `alg` (e.g. an Ed25519 or RSA inner on an EC alg)
+        /// returns `error.Unsupported`, matching the FIPS backend's EC-type
+        /// guard. Mirrors the FIPS backend surface exactly so consumers can
+        /// call `ecPublicPoint` under both -Dfips paths.
+        pub fn ecPublicPoint(self: *KeyPair, alg: policy.SigAlg, out: []u8) Error!usize {
+            switch (alg) {
+                .ecdsa_p256 => {
+                    const compressed: [P256.PublicKey.compressed_sec1_encoded_length]u8 = switch (self.inner) {
+                        .p256 => |kp| kp.public_key.toCompressedSec1(),
+                        .p256_pub => |pk| pk.toCompressedSec1(),
+                        else => return error.Unsupported,
+                    };
+                    return copyOut(out, &compressed);
+                },
+                .ecdsa_p384 => {
+                    const compressed: [P384.PublicKey.compressed_sec1_encoded_length]u8 = switch (self.inner) {
+                        .p384 => |kp| kp.public_key.toCompressedSec1(),
+                        .p384_pub => |pk| pk.toCompressedSec1(),
+                        else => return error.Unsupported,
+                    };
+                    return copyOut(out, &compressed);
+                },
+                else => return error.Unsupported,
+            }
+        }
+
         /// RSA SPKI import is fips-only (std has no RSA). Present for API
         /// parity with the fips backend; consumers needing RSA in non-fips
         /// mode swap in their own backend (see SEAM_CONTRACT.md).

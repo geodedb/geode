@@ -293,27 +293,14 @@ pub const KeyPair = struct {
         // All three algorithms generate keys INSIDE the FIPS module via
         // cb.Sig.generate(alg), which calls EVP_PKEY_keygen under the
         // "fips=yes" lib context under -Dfips=true. Under -Dfips=false the
-        // same call uses std.crypto via the std_shim backend.
+        // same call uses the std_shim backend.
         //
-        // Key-material extraction:
+        // Key-material extraction (fully routed through the seam):
         //   Ed25519 : cb.Sig.KeyPair.privateSeed (32B) + publicBytes (32B)
-        //   ECDSA   : cb.Sig.KeyPair.privateScalar (32B/48B) + publicBytes
-        //             via a reconstructed keypair.
-        //
-        // publicBytes encoding for ECDSA (compressed vs. uncompressed):
-        //   The std_shim backend's publicBytes returns the 33/49-byte
-        //   COMPRESSED SEC1 point (toCompressedSec1). The FIPS backend's
-        //   publicBytes uses EVP_PKEY_get_raw_public_key, which is not
-        //   supported for EC key types (only Ed25519/PQC raw-key families)
-        //   and returns error.OpensslFailure for ECDSA. When that error
-        //   occurs (FIPS mode only), we fall back to std.crypto's EC
-        //   arithmetic to derive the compressed public point from the
-        //   FIPS-module-generated private scalar. The fallback does NOT
-        //   generate a new key: it only computes the curve's public point
-        //   from an already-generated scalar, preserving the 33/49-byte
-        //   compressed format that the sign/verify paths and on-disk format
-        //   expect. This is the minimal remaining std.crypto touch after
-        //   routing key generation itself into the FIPS module.
+        //   ECDSA   : cb.Sig.KeyPair.privateScalar (32B/48B) +
+        //             ecPublicPoint (33B P-256 / 49B P-384 compressed SEC1).
+        //             ecPublicPoint exports the point from the same EVP_PKEY
+        //             object as the scalar; no std.crypto fallback needed.
         switch (alg) {
             .Ed25519 => {
                 // Fully routed through the FIPS seam: generate, seed export,
@@ -343,8 +330,13 @@ pub const KeyPair = struct {
                 };
             },
             .ECDSA_P256 => {
-                // Key generation routed through the FIPS seam; raw scalar
-                // and compressed public point extracted and stored.
+                // Key generation, scalar export, AND public-point export all
+                // execute inside the FIPS module via cb.Sig. ecPublicPoint
+                // routes through the seam on both -Dfips paths: under
+                // -Dfips=true it calls EVP_PKEY_get1_EC_KEY + EC_POINT_point2oct
+                // (compressed form) inside the OpenSSL FIPS module; under
+                // -Dfips=false the std_shim backend uses toCompressedSec1().
+                // No std.crypto.ecc fallback is needed.
                 var kp = try cb.Sig.generate(.ecdsa_p256);
                 defer kp.deinit();
 
@@ -353,28 +345,10 @@ pub const KeyPair = struct {
                 defer cb.secureZero(&scalar_buf);
                 _ = try kp.privateScalar(.ecdsa_p256, &scalar_buf);
 
-                // Export the compressed public point (33 bytes). In the
-                // std_shim backend publicBytes returns toCompressedSec1
-                // directly. In the FIPS backend EVP_PKEY_get_raw_public_key
-                // is unsupported for EC keys; fall back to std.crypto EC
-                // arithmetic (scalar → compressed point only, no keygen).
+                // Export the compressed public point (33 bytes) from the same
+                // FIPS-generated key — scalar and point are a matching pair.
                 var pub_buf: [33]u8 = undefined;
-                var recon_kp = try cb.Sig.KeyPair.fromEcPrivateScalar(.ecdsa_p256, &scalar_buf);
-                defer recon_kp.deinit();
-                const pub_len = recon_kp.publicBytes(&pub_buf) catch blk: {
-                    // FIPS backend: EVP_PKEY_get_raw_public_key is unsupported
-                    // for EC key types (only Ed25519/PQC raw-key families).
-                    // Derive the compressed public point via EC arithmetic:
-                    // std.crypto.ecc.P256 computes basePoint * scalar and
-                    // serialises to the 33-byte compressed SEC1 encoding.
-                    // The private scalar itself was generated inside the FIPS
-                    // module; only the public-point derivation uses std.crypto.
-                    const P256c = std.crypto.ecc.P256;
-                    const pub_point = try P256c.basePoint.mul(scalar_buf, .big);
-                    const compressed = pub_point.toCompressedSec1();
-                    @memcpy(&pub_buf, &compressed);
-                    break :blk @as(usize, 33);
-                };
+                const pub_len = try kp.ecPublicPoint(.ecdsa_p256, &pub_buf);
                 if (pub_len != 33) return error.SigningFailed;
 
                 const private_key = try allocator.alloc(u8, 32);
@@ -391,8 +365,13 @@ pub const KeyPair = struct {
                 };
             },
             .ECDSA_P384 => {
-                // Key generation routed through the FIPS seam; raw scalar
-                // and compressed public point extracted and stored.
+                // Key generation, scalar export, AND public-point export all
+                // execute inside the FIPS module via cb.Sig. ecPublicPoint
+                // routes through the seam on both -Dfips paths: under
+                // -Dfips=true it calls EVP_PKEY_get1_EC_KEY + EC_POINT_point2oct
+                // (compressed form) inside the OpenSSL FIPS module; under
+                // -Dfips=false the std_shim backend uses toCompressedSec1().
+                // No std.crypto.ecc fallback is needed.
                 var kp = try cb.Sig.generate(.ecdsa_p384);
                 defer kp.deinit();
 
@@ -401,23 +380,10 @@ pub const KeyPair = struct {
                 defer cb.secureZero(&scalar_buf);
                 _ = try kp.privateScalar(.ecdsa_p384, &scalar_buf);
 
-                // Export the compressed public point (49 bytes). Same
-                // fallback as P-256 when in FIPS mode.
+                // Export the compressed public point (49 bytes) from the same
+                // FIPS-generated key — scalar and point are a matching pair.
                 var pub_buf: [49]u8 = undefined;
-                var recon_kp = try cb.Sig.KeyPair.fromEcPrivateScalar(.ecdsa_p384, &scalar_buf);
-                defer recon_kp.deinit();
-                const pub_len = recon_kp.publicBytes(&pub_buf) catch blk: {
-                    // FIPS backend: same fallback as P-256. EVP_PKEY_get_raw_public_key
-                    // is unsupported for EC key types; std.crypto.ecc.P384
-                    // derives the compressed 49-byte public point from the
-                    // scalar (basePoint * scalar). The scalar came from the
-                    // FIPS module; only public-point derivation uses std.
-                    const P384c = std.crypto.ecc.P384;
-                    const pub_point = try P384c.basePoint.mul(scalar_buf, .big);
-                    const compressed = pub_point.toCompressedSec1();
-                    @memcpy(&pub_buf, &compressed);
-                    break :blk @as(usize, 49);
-                };
+                const pub_len = try kp.ecPublicPoint(.ecdsa_p384, &pub_buf);
                 if (pub_len != 49) return error.SigningFailed;
 
                 const private_key = try allocator.alloc(u8, 48);
