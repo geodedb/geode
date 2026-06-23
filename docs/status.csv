@@ -674,6 +674,7 @@ REQ-COMPILATION-FIXES-OCTOBER-2025-007,Compilation Fixes,PerformanceConsistency,
 REQ-COMPILATION-FIXES-OCTOBER-2025-008,Compilation Fixes,CompilationStability,TESTED,,,build,2025-10-05,tests/test_compilation_fixes_october_2025.zig
 REQ-CONCURRENCY-BOUNDED-ANALYTICAL-0902,BoundedAnalyticalReadSafety,Regression,TESTED,,,storage,2026-06-22,tests/test_gap0902_concurrent_analytical.zig
 REQ-CONCURRENCY-EDGE-MERGE-SHARD-LOCKED,EdgeMergeShardLocked,Regression,TESTED,,,storage,2026-06-23,tests/test_edge_merge_shard_locked.zig
+REQ-CONCURRENCY-MERGE-EDGE-FASTPATH-DETECT,MergeEdgeFastPathDetect,Regression,TESTED,,,storage,2026-06-23,tests/test_merge_edge_fastpath_detect.zig
 REQ-CONCURRENCY-SCAN-CANCELLATION,ScanCancellation,Regression,TESTED,,,transport,2026-06-23,tests/test_scan_cancellation.zig
 REQ-CONCURRENCY-SCAN-EXCLUSIVE-YIELD,ScanExclusiveYield,Regression,TESTED,,,storage,2026-06-23,tests/test_scan_exclusive_yield.zig
 REQ-CONCURRENCY-SCAN-INGEST-RACE,ScanIngestRaceSafety,Regression,TESTED,,,storage,2026-06-20,tests/test_scan_ingest_race.zig

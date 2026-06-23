@@ -7078,6 +7078,18 @@ pub fn build(b: *std.Build) void {
     const edge_merge_sl_step = b.step("test-edge-merge-shard-locked", "Run edge-merge-shard-locked regression (rel MERGE: per-shard locks + dedup, coexists with readers)");
     edge_merge_sl_step.dependOn(&run_edge_merge_sl_tests.step);
 
+    // Merge-edge fast-path detection (FIX #3 routing): the from-dump edge query
+    // (MATCH composite-key endpoints + MERGE rel + post-SET) must be classified
+    // as .match_merge_edge so it routes to the shard-locked path, and
+    // non-eligible MERGE shapes must NOT be mis-detected.
+    const merge_edge_detect_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_merge_edge_fastpath_detect.zig"), .target = target, .optimize = optimize });
+    merge_edge_detect_test_mod.addImport("geode", root_mod);
+    const merge_edge_detect_tests = b.addTest(.{ .root_module = merge_edge_detect_test_mod });
+    const run_merge_edge_detect_tests = b.addRunArtifact(merge_edge_detect_tests);
+    shardDep(test_step, &run_merge_edge_detect_tests.step, 5, test_shard_loads, test_shard_index);
+    const merge_edge_detect_step = b.step("test-merge-edge-fastpath-detect", "Run merge-edge fast-path detection regression (FIX #3 routing decision)");
+    merge_edge_detect_step.dependOn(&run_merge_edge_detect_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple

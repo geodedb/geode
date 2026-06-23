@@ -4042,6 +4042,68 @@ pub const StorageAdapter = struct {
         return try result.toOwnedSlice(allocator);
     }
 
+    /// FIX #3: resolve a node id matching a label and ALL the given property
+    /// filters (a composite key, e.g. `{source, source_id}`). Picks the most
+    /// selective indexed filter as the candidate seed, then verifies the
+    /// remaining filters against each candidate's stored properties. Returns the
+    /// first match, or `missing_err` when none. Caller resolves endpoints with
+    /// this under a brief read lock before the shard-locked apply.
+    ///
+    /// MERGE/MATCH endpoint semantics: a node matches when, for every filter,
+    /// its stored property equals the filter value. Mirrors the slow path's
+    /// nodeMatchesEvaluatedProps; uses the exact-property index for the seed so
+    /// it is O(posting) not O(label).
+    pub fn lookupNodeIdByLabelAndAllProps(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        filters: []const PropKV,
+        missing_err: anyerror,
+    ) !u64 {
+        if (filters.len == 0) return missing_err;
+
+        // Seed with the most selective indexed filter (smallest posting). Fall
+        // back to the first filter if none is indexed (posting len 0/absent).
+        var seed_idx: usize = 0;
+        var best_len: usize = std.math.maxInt(usize);
+        for (filters, 0..) |f, i| {
+            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            if (len > 0 and len < best_len) {
+                best_len = len;
+                seed_idx = i;
+            }
+        }
+
+        const candidates = try self.getCandidateNodesByLabelAndProperty(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator);
+        defer self.allocator.free(candidates);
+
+        for (candidates) |node_id| {
+            var all_match = true;
+            for (filters, 0..) |f, i| {
+                if (i == seed_idx) continue; // seed already matched via the index
+                // getNodeProperty returns a STORAGE-domain PropertyValue (owns
+                // .string/.ext bytes); convert to the high-level domain to
+                // compare with the filter (a graph_store.PropertyValue).
+                const stored = (self.getNodeProperty(graph_name, node_id, f.key, self.allocator) catch null) orelse {
+                    all_match = false;
+                    break;
+                };
+                defer freeOwnedStorageProperty(self.allocator, stored);
+                const actual = fromStorageProperty(self.allocator, stored) catch {
+                    all_match = false;
+                    break;
+                };
+                defer property_codec.freePropertyValue(self.allocator, actual);
+                if (!propertyValuesEqual(actual, f.value)) {
+                    all_match = false;
+                    break;
+                }
+            }
+            if (all_match) return node_id;
+        }
+        return missing_err;
+    }
+
     /// Cheap selectivity probe for an exact `(label, property = value)` posting.
     /// Returns the raw posting-list length (including any stale entries) without
     /// copying the list or touching the engine — used by the read fast path to

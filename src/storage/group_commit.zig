@@ -180,6 +180,21 @@ pub const ApplyOp = union(enum) {
         /// GAP-0891 (RC-1): see bulk_insert_node.tenant.
         tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
     },
+    /// FIX #3 (edge-phase 40001): relationship-MERGE variant. Endpoints are
+    /// pre-resolved by the dispatcher (composite-key MATCH); the apply DEDUPS
+    /// the (source→target,type,scope) edge under the endpoint shard locks
+    /// (MERGE semantics) before creating it. Coexists with graph-SHARED readers
+    /// (shard locks) instead of the whole-graph EXCLUSIVE the regular executor
+    /// took. Orphan-edge semantics match bulk_match_create_edge: a missing
+    /// endpoint silently succeeds with `result.node_or_edge_id = 0`.
+    bulk_merge_edge: struct {
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        result: ApplyResult,
+        tenant: []const u8 = graph_store.DEFAULT_TENANT_ID,
+    },
     /// MATCH+CREATE edge variant — the coordinator resolves endpoints
     /// under its already-held EXCLUSIVE write lock, eliminating the
     /// reader/writer contention that forced msft-graph to serial-
@@ -251,6 +266,7 @@ pub const ApplyOp = union(enum) {
         return switch (self.*) {
             .bulk_insert_node => |*p| &p.result,
             .bulk_insert_edge => |*p| &p.result,
+            .bulk_merge_edge => |*p| &p.result,
             .bulk_match_create_edge => |*p| &p.result,
             .bulk_merge_node => |*p| &p.result,
             .bulk_merge_node_props => |*p| &p.result,
@@ -267,6 +283,7 @@ pub const ApplyOp = union(enum) {
         return switch (self.*) {
             .bulk_insert_node => |p| p.assigned_id,
             .bulk_insert_edge => |p| p.source_id,
+            .bulk_merge_edge => |p| p.source_id,
             .bulk_match_create_edge => |p| p.source_id,
             .bulk_merge_node => |p| p.assigned_id,
             .bulk_merge_node_props => |p| p.assigned_id,
@@ -455,6 +472,7 @@ pub const ShardedCoordinator = struct {
         switch (op.*) {
             .bulk_insert_node => |*p| p.tenant = request_tenant,
             .bulk_insert_edge => |*p| p.tenant = request_tenant,
+            .bulk_merge_edge => |*p| p.tenant = request_tenant,
             .bulk_match_create_edge => |*p| p.tenant = request_tenant,
             .bulk_merge_node => |*p| p.tenant = request_tenant,
             .bulk_merge_node_props => |*p| p.tenant = request_tenant,
@@ -471,6 +489,9 @@ pub const ShardedCoordinator = struct {
                 p.assigned_id = reserveNodeIdForActiveWriteShard();
             },
             .bulk_insert_edge => {},
+            // FIX #3: endpoints pre-resolved by the dispatcher (composite-key
+            // MATCH), like bulk_insert_edge — nothing to resolve at submit.
+            .bulk_merge_edge => {},
             .bulk_match_create_edge => |*p| {
                 if (self.adapter.lookupNodeByMergeKey(
                     self.graph_name,
@@ -722,6 +743,24 @@ pub const ShardedCoordinator = struct {
                         res.node_or_edge_id = id;
                     } else |e| {
                         res.err = e;
+                    }
+                },
+                .bulk_merge_edge => |p| {
+                    // FIX #3: shard-locked relationship MERGE (dedup under the
+                    // endpoint shard locks). Orphan endpoints silently skip
+                    // (id stays 0), matching bulk_match_create_edge.
+                    if (self.adapter.bulkMergeEdgeWithIdsShardLockedForTenant(
+                        self.graph_name,
+                        p.source_id,
+                        p.target_id,
+                        p.rel_type,
+                        p.props,
+                        p.tenant,
+                    )) |id| {
+                        res.node_or_edge_id = id;
+                    } else |e| switch (e) {
+                        error.SourceNodeNotFound, error.TargetNodeNotFound => {},
+                        else => res.err = e,
                     }
                 },
                 .bulk_match_create_edge => |p| {

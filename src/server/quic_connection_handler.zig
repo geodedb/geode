@@ -857,6 +857,163 @@ fn executeBulkMatchCreateEdge(
     updateTxnStateFromProgram(state, program);
 }
 
+/// FIX #3 (edge-phase 40001): fast-path dispatcher for the relationship-MERGE
+/// shape detected by `bulk_ingest.matchMergeEdgeSpec`:
+///
+///     MATCH (a:L {k1: ?, k2: ?}), (b:L {k1: ?, k2: ?})
+///     MERGE (a)-[r:R]->(b) [SET r.p = ?]
+///
+/// the from-dump taxonomy edge phase. The regular executor runs this under the
+/// whole-graph EXCLUSIVE write lock — starved by concurrent analytical readers
+/// (which hold the graph SHARED) → 40001. This path instead resolves both
+/// composite-key endpoints under a brief SHARED read lock, then applies the
+/// relationship via the SHARD-LOCKED deduped MERGE (graph SHARED + endpoint
+/// shards EXCLUSIVE) so it COEXISTS with readers. Orphan endpoints (a MATCH that
+/// yields no node) silently succeed with 0 rows, matching the slow path.
+fn executeBulkMatchMergeEdge(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    program: *const gql_ast.Program,
+    spec: geode.bulk_ingest.MatchMergeEdgeSpec,
+    query_graph_name: []const u8,
+    ctx: execution.ExecutionContext,
+) !void {
+    const geode_eval = geode.eval;
+    const property_codec = geode.property_value_codec;
+    const PropKV = geode.graph_storage_adapter.StorageAdapter.PropKV;
+
+    var eval_arena = std.heap.ArenaAllocator.init(gpa);
+    defer eval_arena.deinit();
+    const ea = eval_arena.allocator();
+
+    const env = geode.makeEnv(ea, &.{}, &.{}, .{ .names = ctx.query_param_names, .values = ctx.query_param_values });
+
+    // Evaluate a composite-key endpoint's filters into PropKV.
+    const evalFilters = struct {
+        fn run(a: std.mem.Allocator, e: anytype, filters: []const geode.gql.ast.Property) ![]PropKV {
+            const out = try a.alloc(PropKV, filters.len);
+            for (filters, 0..) |f, i| {
+                const v = try geode_eval.evalExpr(a, f.value.*, e);
+                out[i] = .{ .key = f.key, .value = try property_codec.valueToPropertyValue(a, v) };
+            }
+            return out;
+        }
+    }.run;
+
+    const src_filters = try evalFilters(ea, env, spec.source.filters);
+    const dst_filters = try evalFilters(ea, env, spec.target.filters);
+
+    // Edge properties: inline rel props + post-MERGE SET on the rel var.
+    var props_list = std.ArrayList(PropKV).empty;
+    defer props_list.deinit(ea);
+    for (spec.inline_props) |p| {
+        const v = try geode_eval.evalExpr(ea, p.value.*, env);
+        try props_list.append(ea, .{ .key = p.key, .value = try property_codec.valueToPropertyValue(ea, v) });
+    }
+    if (spec.rel_var) |rv| {
+        for (spec.set_clauses) |sc| {
+            switch (sc) {
+                .Property => |pp| {
+                    if (!std.mem.eql(u8, pp.target.object, rv)) continue;
+                    const v = try geode_eval.evalExpr(ea, pp.value, env);
+                    try props_list.append(ea, .{ .key = pp.target.property, .value = try property_codec.valueToPropertyValue(ea, v) });
+                },
+                else => {},
+            }
+        }
+    }
+    const kvs = props_list.items;
+
+    var mut_sample = mutation_timing.begin();
+
+    const adapter = graph_store.getGlobalAdapter() orelse {
+        try sendExecuteError(gpa, stream, "XX000", "bulk merge-edge fast-path: no adapter registered", &.{}, &.{});
+        return;
+    };
+
+    // Phase 1: resolve BOTH endpoints by composite key under a brief SHARED
+    // read lock. A missing endpoint is an orphan skip (0-row success), matching
+    // the regular MATCH+MERGE executor (the MATCH simply yields no row).
+    const resolved = blk: {
+        const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_edge);
+        defer graph_store.releaseGraphLock(read_handle);
+        const s = adapter.lookupNodeIdByLabelAndAllProps(query_graph_name, spec.source.label, src_filters, error.SourceNodeNotFound) catch |err| switch (err) {
+            error.SourceNodeNotFound => break :blk null,
+            else => return err,
+        };
+        const t = adapter.lookupNodeIdByLabelAndAllProps(query_graph_name, spec.target.label, dst_filters, error.TargetNodeNotFound) catch |err| switch (err) {
+            error.TargetNodeNotFound => break :blk null,
+            else => return err,
+        };
+        break :blk @as(?struct { src: u64, dst: u64 }, .{ .src = s, .dst = t });
+    };
+
+    if (resolved == null) {
+        try sendBulkEdgeSuccessResponse(gpa, stream);
+        mut_sample.record("bulk_match_merge_edge_skipped");
+        auditQueryExecution(state, "bulk_match_merge_edge_skipped", true);
+        syncGraphFromSession(state);
+        updateTxnStateFromProgram(state, program);
+        return;
+    }
+    const source_id = resolved.?.src;
+    const target_id = resolved.?.dst;
+
+    // Phase 2: apply the deduped MERGE under the endpoint shard locks.
+    if (group_commit.isEnabled()) {
+        const coord = group_commit.getOrStartCoordinator(graph_store.global_allocator(), adapter, query_graph_name) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        mut_sample.markLockAcquired();
+        var op = group_commit.ApplyOp{ .bulk_merge_edge = .{
+            .source_id = source_id,
+            .target_id = target_id,
+            .rel_type = spec.rel_type,
+            .props = kvs,
+            .result = .{},
+        } };
+        _ = coord.submit(&op) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        mut_sample.markExecuteDone();
+        mut_sample.markLockReleased();
+    } else {
+        // Non-coordinator path: call the shard-locked merge directly. No
+        // whole-graph EXCLUSIVE — the primitive takes graph SHARED + the
+        // endpoint shards EXCLUSIVE itself.
+        mut_sample.markLockAcquired();
+        _ = adapter.bulkMergeEdgeWithIdsShardLocked(query_graph_name, source_id, target_id, spec.rel_type, kvs) catch |err| switch (err) {
+            error.SourceNodeNotFound, error.TargetNodeNotFound => {
+                try sendBulkEdgeSuccessResponse(gpa, stream);
+                mut_sample.record("bulk_match_merge_edge_skipped_race");
+                auditQueryExecution(state, "bulk_match_merge_edge_skipped_race", true);
+                syncGraphFromSession(state);
+                updateTxnStateFromProgram(state, program);
+                return;
+            },
+            else => {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            },
+        };
+        mut_sample.markExecuteDone();
+        mut_sample.markLockReleased();
+    }
+
+    try sendBulkEdgeSuccessResponse(gpa, stream);
+    mut_sample.record("bulk_match_merge_edge");
+    auditQueryExecution(state, "bulk_match_merge_edge", true);
+    execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
+    syncGraphFromSession(state);
+    updateTxnStateFromProgram(state, program);
+}
+
 /// Fast-path dispatcher for the simple-MERGE pattern detected by
 /// `bulk_ingest.matchSimpleNodeMergeSpec`:
 ///
@@ -6371,6 +6528,15 @@ fn handleClientMessage(
                     // fall through to the regular executor (programming error
                     // — noise not worth a dedicated error code).
                 }
+                if (bulk_shape == .match_merge_edge) {
+                    // FIX #3: the from-dump edge-phase shape — route to the
+                    // shard-locked deduped edge MERGE so it coexists with
+                    // readers instead of the whole-graph EXCLUSIVE (40001).
+                    if (geode.bulk_ingest.matchMergeEdgeSpec(&parse_result.program)) |merge_edge_spec| {
+                        try executeBulkMatchMergeEdge(gpa, stream, state, &parse_result.program, merge_edge_spec, query_graph_name, exec_context);
+                        return;
+                    }
+                }
                 if (bulk_shape == .simple_node_merge) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
@@ -6416,6 +6582,14 @@ fn handleClientMessage(
                     }
                     // Spec/detector disagreement — fall through to the
                     // general executor as the original block does.
+                }
+                if (bulk_shape == .match_merge_edge) {
+                    // FIX #3: shard-locked deduped edge MERGE (see the
+                    // GEODE_BULK_INGEST block above).
+                    if (geode.bulk_ingest.matchMergeEdgeSpec(&parse_result.program)) |merge_edge_spec| {
+                        try executeBulkMatchMergeEdge(gpa, stream, state, &parse_result.program, merge_edge_spec, query_graph_name, exec_context);
+                        return;
+                    }
                 }
                 if (bulk_shape == .simple_node_merge) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {

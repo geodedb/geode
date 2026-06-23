@@ -92,6 +92,21 @@ pub const BulkPattern = enum {
     /// `graph_storage_adapter.bulkMergeNode`.
     simple_node_merge,
 
+    /// FIX #3 (edge-phase 40001):
+    ///
+    ///     MATCH (a:L {k1: v1, k2: v2, ...}), (b:L {k1: v1, ...})
+    ///     MERGE (a)-[r:R]->(b) [SET r.p = lit_or_param, ...]
+    ///
+    /// the from-dump taxonomy edge phase shape — endpoints matched by a
+    /// COMPOSITE key, the relationship MERGEd (dedup, idempotent), with an
+    /// optional post-MERGE SET on the rel variable (e.g. `SET r.run_id = ?`).
+    /// Rejected by `match_create_edge` (it is MERGE not CREATE, has a SET, and
+    /// composite endpoint keys), it fell through to the whole-graph EXCLUSIVE
+    /// executor → 40001 under concurrent reads. Matched by
+    /// `matchSingleStatement`; dispatchers call `matchMergeEdgeSpec`. Routed to
+    /// the shard-locked deduped edge merge (coexists with readers).
+    match_merge_edge,
+
     /// Not a bulk-ingest shape; use the regular executor.
     none,
 };
@@ -124,6 +139,36 @@ pub const MatchCreateEdgeSpec = struct {
     /// has already been screened via `isScalarPropExpr` — caller just
     /// needs to eval + encode each.
     props: []const ast.Property,
+};
+
+/// FIX #3: a matched endpoint for a relationship MERGE. Like
+/// `EdgeEndpointSpec` but carries the FULL (composite) property filter list,
+/// each value screened scalar. The dispatcher resolves a node id matching ALL
+/// these props under the endpoint label.
+pub const MergeEdgeEndpointSpec = struct {
+    var_name: []const u8,
+    label: []const u8,
+    /// All property filters from the node pattern (e.g. {source, source_id}).
+    /// At least one; each value is a literal or bound parameter.
+    filters: []const ast.Property,
+};
+
+/// FIX #3: spec for the `MATCH (a {k}),(b {k}) MERGE (a)-[r:R]->(b) SET r.p=…`
+/// shape discovered by `matchMergeEdgeSpec`. Pointer fields alias into the AST;
+/// the caller keeps the ParseResult alive for the duration of the dispatcher.
+pub const MatchMergeEdgeSpec = struct {
+    source: MergeEdgeEndpointSpec,
+    target: MergeEdgeEndpointSpec,
+    rel_type: []const u8,
+    /// Relationship variable name (e.g. `r`), or null if the rel is anonymous.
+    /// Used to map the SET clauses below to edge properties.
+    rel_var: ?[]const u8,
+    /// Inline relationship properties (`[r:R {k: v}]`), each screened scalar.
+    inline_props: []const ast.Property,
+    /// Post-MERGE SET clauses (e.g. `SET r.run_id = ?`). The dispatcher
+    /// evaluates the entries whose target object == `rel_var` into edge
+    /// properties. Screened to scalar-valued `r.prop = …` Property forms only.
+    set_clauses: []const ast.SetClause,
 };
 
 /// A (key, value) property pair that unifies MERGE-pattern node properties
@@ -214,6 +259,7 @@ pub fn matchSingleStatement(program: *const ast.Program) BulkPattern {
         .Create => |create_stmt| return classifyCreate(create_stmt),
         .Query => |query| {
             if (matchEdgeSpecFromQuery(query) != null) return .match_create_edge;
+            if (matchMergeEdgeSpecFromQuery(query) != null) return .match_merge_edge;
             return .none;
         },
         .Merge => |merge_stmt| {
@@ -238,6 +284,149 @@ pub fn matchEdgeSpec(program: *const ast.Program) ?MatchCreateEdgeSpec {
     return switch (stmt.*) {
         .Query => |query| matchEdgeSpecFromQuery(query),
         else => null,
+    };
+}
+
+/// FIX #3: when `matchSingleStatement(program) == .match_merge_edge`, return
+/// the relationship-MERGE spec; otherwise null. Pointer fields alias the AST.
+pub fn matchMergeEdgeSpec(program: *const ast.Program) ?MatchMergeEdgeSpec {
+    if (program.statements.len != 1) return null;
+    const stmt = &program.statements[0];
+    return switch (stmt.*) {
+        .Query => |query| matchMergeEdgeSpecFromQuery(query),
+        else => null,
+    };
+}
+
+/// FIX #3: a relationship-MERGE endpoint — bound var, one label, ≥1 scalar
+/// property filters (composite key). All filters must be scalar literals/params.
+fn extractMergeEndpoint(np: ast.NodePattern) ?MergeEdgeEndpointSpec {
+    const vname = np.name orelse return null;
+    if (np.labels.len != 1) return null;
+    const props = np.props orelse return null;
+    if (props.len == 0) return null;
+    for (props) |p| {
+        if (!isScalarPropExpr(p.value.*)) return null;
+    }
+    return .{ .var_name = vname, .label = np.labels[0], .filters = props };
+}
+
+/// True when every SET clause is a scalar `<rel_var>.<key> = <scalar>` Property
+/// assignment (the only edge-prop SET form the fast path handles). Anything
+/// else (label SET, `SET r = {...}`, a non-rel target, non-scalar value) makes
+/// the query ineligible so it falls back to the full executor.
+fn setClausesAreScalarRelProps(set_clauses: []const ast.SetClause, rel_var: ?[]const u8) bool {
+    const rv = rel_var orelse return set_clauses.len == 0;
+    for (set_clauses) |sc| {
+        switch (sc) {
+            .Property => |pp| {
+                if (!std.mem.eql(u8, pp.target.object, rv)) return false;
+                if (!isScalarPropExpr(pp.value)) return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
+}
+
+fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
+    // Must be a MATCH + MERGE(relationship) shape with nothing else attached.
+    const merge_stmt = q.merge_statement orelse return null;
+
+    // Disqualify every clause the full executor might mutate/materialize.
+    if (q.create_pattern != null) return null;
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.unwind_clause != null) return null;
+    if (q.remove_clauses.len != 0) return null;
+    if (q.delete_items.len != 0) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.limit != null or q.offset != null) return null;
+    if (q.call_clause != null) return null;
+    if (q.next_query != null) return null;
+    if (q.for_statement != null) return null;
+    if (q.initial_call_subquery != null) return null;
+    if (q.path_variable != null) return null;
+    if (q.optional_match) return null;
+    if (q.let_bindings.len != 0 or q.inline_let_bindings.len != 0) return null;
+    if (q.cte_list != null) return null;
+    if (q.ret.items.len != 0) return null;
+    if (q.ret.distinct) return null;
+    // The MERGE itself must not RETURN.
+    if (merge_stmt.return_clause != null) return null;
+
+    // MATCH: exactly two simple node-pattern chains (the two endpoints).
+    const match_chains = q.match.chains;
+    if (match_chains.len != 2) return null;
+    const left_chain = match_chains[0];
+    const right_chain = match_chains[1];
+    if (left_chain.hops.len != 0 or right_chain.hops.len != 0) return null;
+    if (left_chain.is_optional or right_chain.is_optional) return null;
+    if (left_chain.is_shortest or right_chain.is_shortest) return null;
+    const src_np = left_chain.head orelse return null;
+    const dst_np = right_chain.head orelse return null;
+    const src_spec = extractMergeEndpoint(src_np) orelse return null;
+    const dst_spec = extractMergeEndpoint(dst_np) orelse return null;
+
+    // MERGE pattern: exactly one chain, one hop, directed right, one rel type.
+    if (merge_stmt.pattern.chains.len != 1) return null;
+    const c_chain = merge_stmt.pattern.chains[0];
+    if (c_chain.hops.len != 1) return null;
+    if (c_chain.is_optional or c_chain.is_shortest) return null;
+    const hop = c_chain.hops[0];
+    if (hop.rel.dir != .right) return null;
+    if (hop.rel.types.len != 1) return null;
+    if (hop.rel.min_len != null or hop.rel.max_len != null) return null;
+    if (hop.rel.props) |eprops| {
+        for (eprops) |ep| {
+            if (!isScalarPropExpr(ep.value.*)) return null;
+        }
+    }
+
+    // MERGE endpoints must be bare refs to the matched vars.
+    if (!isBareVarRef(hop.left, src_spec.var_name) and
+        !isBareVarRef(hop.left, dst_spec.var_name)) return null;
+    if (!isBareVarRef(hop.right, src_spec.var_name) and
+        !isBareVarRef(hop.right, dst_spec.var_name)) return null;
+    const left_name = hop.left.name orelse return null;
+    const right_name = hop.right.name orelse return null;
+    const edge_src = if (std.mem.eql(u8, left_name, src_spec.var_name))
+        src_spec
+    else if (std.mem.eql(u8, left_name, dst_spec.var_name))
+        dst_spec
+    else
+        return null;
+    const edge_dst = if (std.mem.eql(u8, right_name, src_spec.var_name))
+        src_spec
+    else if (std.mem.eql(u8, right_name, dst_spec.var_name))
+        dst_spec
+    else
+        return null;
+    if (std.mem.eql(u8, edge_src.var_name, edge_dst.var_name)) return null;
+
+    // Post-MERGE SET: only scalar `r.prop = …` on the rel var. A bare `SET`
+    // duplicates clauses into on_create AND on_match (set_is_bare), so dedup by
+    // using on_create as the authoritative set (it covers both branches for our
+    // purposes: we apply props idempotently on create AND on the dedup hit).
+    const rel_var = hop.rel.name;
+    const set_clauses = merge_stmt.on_create;
+    // Reject ON MATCH SET that differs from ON CREATE (we only carry one set).
+    // For bare SET, set_is_bare guarantees on_create == on_match. For classic
+    // ON CREATE SET, on_match is empty. An asymmetric ON MATCH-only SET is not
+    // supported here.
+    if (!merge_stmt.set_is_bare and merge_stmt.on_match.len != 0) return null;
+    if (!setClausesAreScalarRelProps(set_clauses, rel_var)) return null;
+
+    return .{
+        .source = edge_src,
+        .target = edge_dst,
+        .rel_type = hop.rel.types[0],
+        .rel_var = rel_var,
+        .inline_props = if (hop.rel.props) |p| p else &.{},
+        .set_clauses = set_clauses,
     };
 }
 
