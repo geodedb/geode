@@ -114,6 +114,16 @@ pub const NodeScanStream = struct {
     param_values: []Value = &.{},
     exec_context: ExecutionContext,
 
+    /// GAP-0902 (selective scan): the exact set of node property keys the
+    /// predicate + projection reference. When non-null, the per-node read
+    /// materializes ONLY these keys (engine-direct per-key `getNodeProperty`,
+    /// which uses a per-page directory-hash lookup — far cheaper than decoding +
+    /// duping EVERY persisted property via `getAllNodeProperties`). null means
+    /// "materialize the full node" — required when the bare node value escapes
+    /// (`RETURN n`, or a projection that returns `n` itself), where downstream
+    /// code may read any property. Owned on the stream arena.
+    needed_keys: ?[][]const u8 = null,
+
     /// count mode: O(1) precomputed cardinality (unfiltered count).  When a
     /// predicate is present this is unused and the count is streamed.
     count_precomputed: ?usize = null,
@@ -242,8 +252,14 @@ pub const NodeScanStream = struct {
 
             // Skip nodes that vanished due to concurrent modification (e.g.
             // active ingest adding/removing nodes). This avoids failing the
-            // entire page when a single slot becomes stale.
-            const node = materializeNode(allocator, self.graph_name, slot_id) catch continue;
+            // entire page when a single slot becomes stale. GAP-0902: when the
+            // query references only specific keys (no bare-node escape), read
+            // ONLY those keys (cheap per-key directory lookup) instead of
+            // decoding+duping every persisted property.
+            const node = if (self.needed_keys) |keys|
+                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+            else
+                materializeNode(allocator, self.graph_name, slot_id) catch continue;
             var node_tracked = false;
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
@@ -420,7 +436,12 @@ pub const NodeScanStream = struct {
                         batch_count = 0;
                     }
                     batch_count += 1;
-                    const node = materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                    // GAP-0902: a filtered count needs ONLY the predicate's keys
+                    // (no projection, no node escape), so read just those keys.
+                    const node = if (self.needed_keys) |keys|
+                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                    else
+                        materializeNode(allocator, self.graph_name, slot_id) catch continue;
                     defer destroyNode(allocator, node);
                     const passes = self.evalPredicate(allocator, where_expr, node) catch false;
                     if (passes) matched += 1;
@@ -623,6 +644,42 @@ pub fn prepare(
         owned_flags[i] = try allocator.dupe(u8, flag);
     }
 
+    // GAP-0902 (selective scan): compute the exact node property keys the
+    // predicate + projection read, so the per-node materialize fetches ONLY
+    // those (cheap per-key directory lookup) instead of decoding+duping EVERY
+    // persisted property. null ⇒ materialize the full node (required when the
+    // bare node value escapes — `.node` mode, or a projection that returns `n`
+    // itself — because downstream may read any property). Built on the stream
+    // arena so it lives for the stream's PULL lifetime.
+    const needed_keys: ?[][]const u8 = blk: {
+        switch (eligibility.mode) {
+            // Bare `RETURN n` / `RETURN n LIMIT k`: the node escapes — full.
+            .node => break :blk null,
+            // count: only the WHERE predicate's keys are read (no projection,
+            // no escape). Unfiltered count never materializes (precomputed or
+            // slot tally), so an empty set is fine there too.
+            .count => {
+                var keys = std.ArrayList([]const u8).empty;
+                errdefer keys.deinit(aa);
+                if (where_expr) |w| try collectExprPropertyKeys(aa, w, var_name, &keys);
+                break :blk try keys.toOwnedSlice(aa);
+            },
+            // projection: keys from every projected expr + the WHERE predicate.
+            // If any projected item is the bare node (or otherwise needs the
+            // whole node), fall back to full materialize.
+            .projection => {
+                for (ret_items) |item| {
+                    if (returnItemNeedsWholeNode(item.expr, var_name)) break :blk null;
+                }
+                var keys = std.ArrayList([]const u8).empty;
+                errdefer keys.deinit(aa);
+                for (ret_items) |item| try collectExprPropertyKeys(aa, item.expr, var_name, &keys);
+                if (where_expr) |w| try collectExprPropertyKeys(aa, w, var_name, &keys);
+                break :blk try keys.toOwnedSlice(aa);
+            },
+        }
+    };
+
     return NodeScanStream{
         .allocator = allocator,
         .arena = arena,
@@ -641,9 +698,71 @@ pub fn prepare(
         .param_names = owned_param_names,
         .param_values = owned_param_values,
         .exec_context = context,
+        .needed_keys = needed_keys,
         .count_precomputed = count_precomputed,
         .env_names = .{var_name},
     };
+}
+
+/// GAP-0902: true if a RETURN item needs the WHOLE node materialized (so the
+/// selective per-key read must be disabled). This is the bare scanned variable
+/// (`RETURN n`) or any shape that yields the node value itself. Property
+/// accesses (`n.k`) and member access (`n.k`) do NOT need the whole node.
+fn returnItemNeedsWholeNode(expr: ast.Expr, variable_name: []const u8) bool {
+    return switch (expr) {
+        .Ident => |id| std.ascii.eqlIgnoreCase(id.orig, variable_name) or std.ascii.eqlIgnoreCase(id.cnf, variable_name),
+        // PropertyAccess / Member read a single key — handled by collectExprPropertyKeys.
+        .PropertyAccess, .Member => false,
+        // Any other expression kind: be conservative and materialize fully.
+        // (eligibleQuery already restricts projections to property/ident shapes,
+        // so this arm is effectively unreachable, but it keeps us safe if the
+        // eligibility set is ever broadened.)
+        else => true,
+    };
+}
+
+/// GAP-0902: collect every property key referenced on `variable_name` inside
+/// `expr` (e.g. `n.rank`, `n.taxon_id`) into `out` (deduplicated, arena-owned
+/// dupes). Mirrors the streamable predicate/projection grammar
+/// (`isStreamablePredicateExpr` / `isStreamableProjectionExpr`); any unexpected
+/// shape is simply skipped (the caller only reaches here for streamable exprs).
+fn collectExprPropertyKeys(
+    arena: std.mem.Allocator,
+    expr: ast.Expr,
+    variable_name: []const u8,
+    out: *std.ArrayList([]const u8),
+) !void {
+    switch (expr) {
+        .PropertyAccess => |pa| {
+            if (std.ascii.eqlIgnoreCase(pa.object, variable_name)) try addKeyUnique(arena, pa.property, out);
+        },
+        .Member => |m| {
+            if (m.target.* == .Ident and
+                (std.ascii.eqlIgnoreCase(m.target.Ident.orig, variable_name) or std.ascii.eqlIgnoreCase(m.target.Ident.cnf, variable_name)))
+            {
+                try addKeyUnique(arena, m.field, out);
+            } else {
+                try collectExprPropertyKeys(arena, m.target.*, variable_name, out);
+            }
+        },
+        .Unary => |u| try collectExprPropertyKeys(arena, u.expr.*, variable_name, out),
+        .Binary => |b| {
+            try collectExprPropertyKeys(arena, b.left.*, variable_name, out);
+            try collectExprPropertyKeys(arena, b.right.*, variable_name, out);
+        },
+        .IsNull => |n| try collectExprPropertyKeys(arena, n.target.*, variable_name, out),
+        .Call => |c| {
+            for (c.args) |arg| try collectExprPropertyKeys(arena, arg.*, variable_name, out);
+        },
+        else => {},
+    }
+}
+
+fn addKeyUnique(arena: std.mem.Allocator, key: []const u8, out: *std.ArrayList([]const u8)) !void {
+    for (out.items) |existing| {
+        if (std.mem.eql(u8, existing, key)) return;
+    }
+    try out.append(arena, try arena.dupe(u8, key));
 }
 
 /// GAP-0900 (scan-no-clone): pure-AST predicate — true iff `prepare` would
@@ -1134,6 +1253,66 @@ fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id
         const key = try allocator.dupe(u8, entry.key_ptr.*);
         const value = try graph_storage_adapter.fromStorageProperty(allocator, entry.value_ptr.*);
         try node.properties.put(key, value);
+    }
+
+    return node;
+}
+
+/// GAP-0902 (selective scan): materialize a node reading ONLY `needed_keys` —
+/// the keys the predicate + projection reference. Per-key `adapter.getNodeProperty`
+/// uses a per-page directory-hash lookup (graph_storage PERF-0023), so for the
+/// 1-2 keys typical of a filtered/projected scan this is far cheaper than
+/// `getAllNodeProperties` (no full property-chain decode, no dupe of every
+/// persisted key) — turning an O(N) full-node-hydration scan into O(N) cheap
+/// per-key reads. Labels are still read (cheap; some projections/predicates
+/// reference labels indirectly and the row builder expects them). Returned node
+/// is owned by `allocator` and freed by `destroyNode`, identical to
+/// `materializeNode`. Engine-direct: never touches the node cache.
+fn materializeNodeProjected(
+    allocator: std.mem.Allocator,
+    graph_name: []const u8,
+    slot_id: u64,
+    needed_keys: []const []const u8,
+) !*graph_store.Node {
+    _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    const store = graph_store.getGlobalStore(allocator);
+    const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
+
+    const labels = try adapter.getNodeLabels(graph_name, slot_id, allocator);
+    errdefer {
+        for (labels) |label| allocator.free(label);
+        allocator.free(labels);
+    }
+
+    const node = try allocator.create(graph_store.Node);
+    errdefer allocator.destroy(node);
+    node.* = .{
+        .id = external_id,
+        .labels = labels,
+        .properties = graph_store.CompactPropertyMap.init(allocator),
+        .graph_name = try allocator.dupe(u8, graph_name),
+    };
+    errdefer {
+        node.properties.deinit();
+        allocator.free(node.graph_name);
+    }
+
+    for (needed_keys) |key| {
+        const maybe_val = adapter.getNodeProperty(graph_name, slot_id, key, allocator) catch |err| switch (err) {
+            error.NodeNotFound => return error.NodeNotFound,
+            else => return err,
+        };
+        const val = maybe_val orelse continue;
+        defer switch (val) {
+            .string => |s| allocator.free(s),
+            else => {},
+        };
+        const decoded = try graph_storage_adapter.fromStorageProperty(allocator, val);
+        const owned_key = try allocator.dupe(u8, key);
+        // `needed_keys` is deduplicated by `addKeyUnique`, so no key repeats —
+        // a plain put is correct (no duplicate to reconcile).
+        try node.properties.put(owned_key, decoded);
     }
 
     return node;

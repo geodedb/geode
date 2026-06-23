@@ -32,6 +32,7 @@ const geode = @import("geode");
 
 const graph_store = geode.graph_store;
 const execution = geode.execution;
+const node_scan_stream = geode.node_scan_stream;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -348,4 +349,98 @@ test "GAP-0902: analytical shapes are recognized as engine-direct (skip snapshot
     try testing.expect(!try isEngineDirectShape(aa, "MATCH (n:Taxon), (m:Taxon) RETURN n.source_id"));
     //   - OPTIONAL MATCH → planned-read declines
     try testing.expect(!try isEngineDirectShape(aa, "OPTIONAL MATCH (n:Taxon) RETURN n.source_id"));
+}
+
+// ===================================================================
+// Limitation 3 — selective per-key reads. A filtered/projected scan over
+// WIDE nodes must read ONLY the referenced keys (correct results), not
+// every persisted property. Validated via the node_scan_stream path.
+// ===================================================================
+
+// Seed WIDE Taxon nodes (8 string properties each) so a full materialize is
+// markedly more work than a 1-2 key selective read.
+fn seedWide(h: *BoundedHarness, n: usize) !void {
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const aa = h.arena.allocator();
+        const q = try std.fmt.allocPrint(
+            aa,
+            "CREATE (:Wide {{ordinal: {d}, rank: 'species', " ++
+                "p1: 'aaaaaaaaaaaaaaaaaaaa{d}', p2: 'bbbbbbbbbbbbbbbbbbbb{d}', " ++
+                "p3: 'cccccccccccccccccccc{d}', p4: 'dddddddddddddddddddd{d}', " ++
+                "p5: 'eeeeeeeeeeeeeeeeeeee{d}', p6: 'ffffffffffffffffffff{d}'}})",
+            .{ i, i, i, i, i, i, i },
+        );
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+        if (i % 512 == 0) h.store.nodes.reclaimRetired();
+    }
+    h.store.nodes.reclaimRetired();
+}
+
+fn parseQueryAst(arena: *std.heap.ArenaAllocator, src: []const u8) !*const geode.gql.ast.Query {
+    var lx = geode.gql.lexer.Lexer{ .src = src };
+    var p = geode.gql.parser.Parser{ .lx = &lx, .arena = arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    return &program.statements[0].Query;
+}
+
+test "GAP-0902: selective per-key read — WHERE+projection on wide nodes is correct" {
+    var h = try BoundedHarness.init(testing.allocator);
+    defer h.deinit();
+    try seedWide(&h, N_NODES);
+    const aa = h.arena.allocator();
+
+    // WHERE on `ordinal`, project `p3` — only {ordinal, p3} are referenced.
+    // The selective read must fetch just those keys and still return correct
+    // values for the matched (engine-direct, incl. evicted) nodes.
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const q = try parseQueryAst(&qa, "MATCH (n:Wide) WHERE n.ordinal < 5 RETURN n.p3, n.ordinal");
+    try testing.expect(node_scan_stream.isEligible(q));
+
+    var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse return error.NotEligible;
+    defer stream.deinit();
+    var page = try stream.buildNextPage(aa, 64);
+    defer page.result.deinit(aa);
+
+    // 5 matches (ordinal 0..4), each with the correct p3 + ordinal values.
+    try testing.expectEqual(@as(usize, 5), page.result.rows.len);
+    var seen = std.AutoHashMap(i64, void).init(testing.allocator);
+    defer seen.deinit();
+    for (page.result.rows) |row| {
+        try testing.expectEqual(@as(usize, 2), row.len);
+        const ord = row[1].Int;
+        try testing.expect(ord >= 0 and ord < 5);
+        const expect_p3 = try std.fmt.allocPrint(aa, "cccccccccccccccccccc{d}", .{ord});
+        const got_p3 = switch (row[0]) {
+            .Str => |s| s,
+            .Text => |s| s,
+            else => return error.WrongType,
+        };
+        try testing.expectEqualStrings(expect_p3, got_p3);
+        try seen.put(ord, {});
+    }
+    try testing.expectEqual(@as(usize, 5), seen.count());
+
+    // Equivalence with the snapshot executor over the same filter+projection.
+    var res = try h.runQuery("MATCH (n:Wide) WHERE n.ordinal < 5 RETURN n.p3, n.ordinal");
+    defer res.deinit(aa);
+    try testing.expectEqual(@as(usize, 5), res.rows.len);
+}
+
+test "GAP-0902: selective per-key read — filtered count on wide nodes is correct" {
+    var h = try BoundedHarness.init(testing.allocator);
+    defer h.deinit();
+    try seedWide(&h, N_NODES);
+    const aa = h.arena.allocator();
+
+    // count with a WHERE on `rank` — only {rank} is referenced. Engine-direct
+    // selective read; correct tally over ALL nodes (incl. evicted).
+    graph_store.resetCloneNodesTotal();
+    var res = try h.runQuery("MATCH (n:Wide) WHERE n.rank = 'species' RETURN count(n) AS c");
+    defer res.deinit(aa);
+    try testing.expectEqual(@as(i64, @intCast(N_NODES)), res.rows[0][0].Int);
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+    try testing.expect(h.store.nodes.residentCount() <= CACHE_CAP);
 }
