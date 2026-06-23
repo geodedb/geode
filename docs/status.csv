@@ -4274,6 +4274,7 @@ REQ-QUIC-HC-088,QUIC High-Concurrency Requests,ConfigurableInitialCwnd,TESTED,,,
 REQ-QUIC-HC-089,QUIC High-Concurrency Requests,BatchedEmptyMutationSuccess,TESTED,,,transport,2026-06-10,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-091,QUIC High-Concurrency Requests,AuthSingleFlightLaneCollapse,IMPL,,,security,2026-05-27,src/security/user_management.zig
 REQ-QUIC-HC-099,QUIC High-Concurrency Requests,InWorkloadMutationVerifier,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig
+REQ-QUIC-HC-100,QUIC High-Concurrency Requests,CooperativeSchedulerMissedWakeSweep,TESTED,,,transport,2026-06-23,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-100,QUIC High-Concurrency Requests,CooperativeSchedulerMissedWakeSweep,TESTED,,,transport,2026-06-10,src/server/quic_connection_handler.zig
 REQ-QUIC-HC-101,QUIC High-Concurrency Setup,BoundedHelloRetryWindow,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig
 REQ-QUIC-HC-103,QUIC High-Concurrency Requests,RetryTailRegressionCounters,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig
