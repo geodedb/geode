@@ -490,6 +490,10 @@
             .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=v0.1.8#b7412e6e4012dffc09c13f8fb40c91bbfc8e08e8",
             .hash = "auth-0.1.7-W76ZZwvqAQBOWG8Obcp7uO5At1c1HRynUYtKWpBGqMxr",
         },
+
+        // FIPS crypto seam — OpenSSL FIPS 140-3 backend (used when -Dfips=true).
+        // outage interim — repin to git+https#v0.1.1 when GitLab is restored.
+        .fips = .{ .path = "../../../zig/fips" },
     },
 
     .paths = .{

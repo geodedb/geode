@@ -667,7 +667,44 @@ pub fn build(b: *std.Build) void {
         "Allow the legacy raw-string RLS interpreter path (SECURITY: default OFF; set ONLY for compatibility tests)",
     ) orelse false;
     build_opts.addOption(bool, "allow_rls_raw_interp", allow_rls_raw_interp);
+    // FIPS crypto seam: route security-critical crypto through the OpenSSL
+    // FIPS 140-3 provider when -Dfips=true; uses the local std_shim when false.
+    const fips = b.option(bool, "fips", "Route security crypto through the OpenSSL FIPS provider") orelse false;
+    const openssl_path = b.option([]const u8, "openssl_path", "OpenSSL FIPS prefix (e.g. /usr/local/ssl)");
+    build_opts.addOption(bool, "fips", fips);
     const build_options_mod = build_opts.createModule();
+
+    // -------------------------------------------------------------------------
+    // FIPS crypto seam modules: std_shim (non-fips path) + crypto_backend
+    // (dispatches to std_shim or the OpenSSL FIPS backend based on -Dfips).
+    // Both modules are vendored verbatim from the fips repo (Task 1).
+    // -------------------------------------------------------------------------
+    const link = @import("src/link.zig"); // build-time helper only; no runtime dep
+    const std_shim_mod = b.createModule(.{
+        .root_source_file = b.path("src/std_shim.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const crypto_backend_mod = b.createModule(.{
+        .root_source_file = b.path("src/crypto_backend.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    crypto_backend_mod.addImport("build_options", build_options_mod);
+    crypto_backend_mod.addImport("std_shim", std_shim_mod);
+
+    if (fips) {
+        const fips_dep = b.dependency("fips", .{ .target = target, .optimize = optimize });
+        crypto_backend_mod.addImport("fips", fips_dep.module("fips"));
+        // Link the FIPS-prefix OpenSSL onto the crypto_backend module using the
+        // canonical linkOpenssl helper from the vendored link.zig. Force dynamic
+        // linking so the FIPS provider's fips.so is resolved at runtime, not
+        // statically embedded (would void the FIPS 140-3 validation boundary).
+        link.linkOpenssl(b, crypto_backend_mod, openssl_path);
+    }
+    // Wire crypto_backend into root_mod (helps later routing tasks) and into
+    // the executable (smoke test and future call-site routing).
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -696,6 +733,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     root_mod.addImport("runtime_metrics", runtime_metrics_module);
+    // FIPS seam: make crypto_backend importable from root_mod for later routing tasks.
+    root_mod.addImport("crypto_backend", crypto_backend_mod);
 
     // GAP-0810: `server/query_ast_cache.zig` must be reachable from both the
     // public `geode` module (for `parseGqlCached`/`SharedAstCache` re-exports)
@@ -788,6 +827,8 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode", root_mod);
+    // FIPS seam: wire crypto_backend into the executable for later routing tasks.
+    geode_exe.root_module.addImport("crypto_backend", crypto_backend_mod);
     // GAP-0810: named-module form to keep a single owning module for
     // server/query_ast_cache.zig across lib.zig and server files.
     geode_exe.root_module.addImport("query_ast_cache", query_ast_cache_mod);
@@ -8096,4 +8137,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_distributed_wire_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_distributed_wire_step = b.step("test-gps-distributed-wire", "Run GPS distributed Principal envelope wire integration tests (Phase 7 Task 7-6)");
     gps_distributed_wire_step.dependOn(&run_gps_distributed_wire_tests.step);
+
+    // -------------------------------------------------------------------------
+    // Task 1: crypto_backend smoke test — proves the seam is wired correctly
+    // in both -Dfips=false (std_shim) and -Dfips=true (OpenSSL FIPS) modes.
+    // -------------------------------------------------------------------------
+    const crypto_backend_smoke_mod = b.createModule(.{
+        .root_source_file = b.path("src/crypto_backend_smoke_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    crypto_backend_smoke_mod.addImport("crypto_backend", crypto_backend_mod);
+    const crypto_backend_smoke_tests = b.addTest(.{ .root_module = crypto_backend_smoke_mod });
+    const run_crypto_backend_smoke = b.addRunArtifact(crypto_backend_smoke_tests);
+    const crypto_backend_smoke_step = b.step("test-crypto-backend-smoke", "Smoke test: crypto_backend seam wired + SHA-256 KAT + HMAC-SHA1 KAT");
+    crypto_backend_smoke_step.dependOn(&run_crypto_backend_smoke.step);
+    // Also wire into the main test step so `zig build test` includes it.
+    shardDep(test_step, &run_crypto_backend_smoke.step, 1, test_shard_loads, test_shard_index);
 }
