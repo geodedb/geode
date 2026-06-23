@@ -399,9 +399,11 @@
         // (recovery rebuilds those from pages). Cherry-picked onto v0.2.2 so sibling
         // dep pins are unchanged. Bounds deferred-mode checkpoint cost to O(dirty) so
         // the periodic checkpoint keeps pace with sustained bulk ingest.
+        // Bumped 2026-06-23 to v0.2.6 (63de1c4) — buffer-pool dirty-eviction race
+        // + pin mutex-leak fix (aborts under concurrent reads+writes with eviction).
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.5#f7bccb8ad0c0e6968615c8c2a33a9fb405837d35",
-            .hash = "graph_storage-0.2.5-9UyJS0VMEgCp1qcdzNvuDhKsHMZVjzSmWCa8d6UkIPHd",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.6#63de1c4c22aeca11d84d692cc1d31589625befb7",
+            .hash = "graph_storage-0.2.6-9UyJSw94EgAUHKZyK7aFVEhTPP2MZSOgzN5QI9WfvIwZ",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
