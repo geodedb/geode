@@ -1594,35 +1594,6 @@ pub fn build(b: *std.Build) void {
     const idle_cpu_step = b.step("test-quic-idle-cpu", "Run idle-server poll-loop CPU regression (2026-06-08 idle-spin fix)");
     idle_cpu_step.dependOn(&run_idle_cpu_tests.step);
 
-    // Idle-WITH-connections CPU regression: a geode holding lingering idle
-    // connections must not spin the 512-worker FirstStreamScheduler cooperative
-    // pool (was ~50%+ on a quiet box; the per-worker 10ms missed-wake sweep fired
-    // on every one of 512 workers whenever any context existed). Opens a pool of
-    // idle QUIC connections via proto_test_util and asserts server CPU stays low.
-    // SKIPs if ./zig-out/bin/geode is not built. See
-    // docs/bugs/2026-06-23-idle-with-connections-firststream-busypoll.md.
-    const idle_cpu_ctx_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_quic_idle_cpu_with_contexts.zig"),
-        .target = target,
-        .optimize = optimize,
-    }) });
-    idle_cpu_ctx_tests.root_module.addImport("geode", root_mod);
-    idle_cpu_ctx_tests.root_module.addImport("protobuf", protobuf_mod);
-    idle_cpu_ctx_tests.root_module.addImport("schema", schema_mod);
-    idle_cpu_ctx_tests.root_module.addImport("transport/quic", transport_quic_mod);
-    idle_cpu_ctx_tests.root_module.link_libc = true;
-    if (enable_openssl) {
-        idle_cpu_ctx_tests.root_module.linkSystemLibrary("ssl", .{});
-        idle_cpu_ctx_tests.root_module.linkSystemLibrary("crypto", .{});
-    }
-    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
-        idle_cpu_ctx_tests.root_module.linkSystemLibrary("dl", .{});
-    }
-    const run_idle_cpu_ctx_tests = b.addRunArtifact(idle_cpu_ctx_tests);
-    run_idle_cpu_ctx_tests.step.dependOn(&install_geode_exe.step);
-    const idle_cpu_ctx_step = b.step("test-quic-idle-cpu-with-connections", "Run idle-with-connections FirstStreamScheduler busy-poll regression (2026-06-23 fix)");
-    idle_cpu_ctx_step.dependOn(&run_idle_cpu_ctx_tests.step);
-
     // In-process 3-node propose-and-apply smoke test (Task A3d of the
     // 2026-05-25 distributed cluster testing plan).  Builds on the A5
     // election driver to confirm the new public ClusterCoordinator

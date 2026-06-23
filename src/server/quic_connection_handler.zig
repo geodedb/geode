@@ -3391,18 +3391,6 @@ pub const FirstStreamScheduler = struct {
     workers: []std.Thread = &.{},
     next_index: usize = 0,
     last_idle_sweep_ns: u64 = 0,
-    // CANARY: REQ=REQ-QUIC-HC-100; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeSchedulerMissedWakeSweep; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-23
-    //
-    // 2026-06-23 idle-with-connections CPU fix: the missed-RX-wakeup sweep below
-    // only needs ONE worker polling at the 10ms `idle_sweep_ns` cadence,
-    // regardless of pool size. Before, EVERY idle worker used the 10ms timeout
-    // whenever any context existed, so a handful of lingering connections made all
-    // 512 cooperative workers wake 100x/s for a no-op scan (~51k futex/s ≈ ~10
-    // idle cores stolen from real work). This flag designates exactly one idle
-    // worker as the periodic sweeper; the rest park `idle_park_ns` and are woken
-    // promptly by `enqueueReady`'s futexWake when real work arrives. See
-    // docs/bugs/2026-06-23-idle-with-connections-firststream-busypoll.md.
-    sweeper_claimed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(
         self: *FirstStreamScheduler,
@@ -3448,7 +3436,6 @@ pub const FirstStreamScheduler = struct {
             .workers = worker_threads,
             .next_index = 0,
             .last_idle_sweep_ns = 0,
-            .sweeper_claimed = std.atomic.Value(bool).init(false),
         };
         offload_pool_owned = false;
 
@@ -3918,28 +3905,12 @@ pub const FirstStreamScheduler = struct {
             // 2026-06-08 idle-CPU fix: read the context count while still holding
             // the lock so the timeout choice is consistent. With no contexts the
             // 10ms sweep is a no-op, so park long (see
-            // first_stream_scheduler_idle_park_ns); with contexts present the
-            // missed-wake recovery path above still needs a 10ms cadence — but
-            // only ONE worker has to run it.
+            // first_stream_scheduler_idle_park_ns); with contexts present keep the
+            // 10ms sweep cadence for the missed-wake recovery path above.
             const has_contexts = self.contexts.items.len != 0;
             self.mutex.unlock(io);
 
-            // 2026-06-23 idle-with-connections CPU fix: when contexts exist, elect
-            // exactly one idle worker (the first to win this CAS) to poll at the
-            // 10ms `idle_sweep_ns` cadence for missed RX wakeups. Every other idle
-            // worker parks `idle_park_ns` and is woken immediately by
-            // `enqueueReady`'s futexWake(1) the instant real work arrives, so new
-            // work latency is unchanged while the idle pool stops spinning. The
-            // claim is released after the wait so the sweeper role rotates and is
-            // never stranded on a worker that left to process a request. With no
-            // contexts, nobody sweeps and all workers park long (the 2026-06-08
-            // path). Worst-case missed-wake recovery stays bounded: 10ms while any
-            // worker is idle-waiting (a sweeper is elected), else <= idle_park_ns.
-            const is_sweeper = has_contexts and
-                self.sweeper_claimed.cmpxchgStrong(false, true, .acq_rel, .acquire) == null;
-            defer if (is_sweeper) self.sweeper_claimed.store(false, .release);
-
-            const wait_ns: u64 = if (is_sweeper)
+            const wait_ns: u64 = if (has_contexts)
                 first_stream_scheduler_idle_sweep_ns
             else
                 first_stream_scheduler_idle_park_ns;
