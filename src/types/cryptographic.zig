@@ -153,15 +153,12 @@ pub const Signature = struct {
     }
 
     /// Verify signature against data.
-    /// Ed25519 routes through the FIPS seam (cb.Sig).
-    /// ECDSA P256/P384: SEAM-GAP — the fips backend's fromPublicBytes for
-    ///   ECDSA expects DER SubjectPublicKeyInfo, but geode stores 33/49-byte
-    ///   compressed SEC1 points. Routing retained on std.crypto pending a
-    ///   seam extension that accepts SEC1 for ECDSA. (See task-2-report.md.)
-    /// RSA-PSS: Not yet routed — geode stores raw modulus+exponent as a single
-    ///   blob without DER framing; seam needs fromRsaComponents(n,e) or
-    ///   fromRsaSpki(der). Returns UnsupportedSignatureAlgorithm until a key
-    ///   format bridge is added.
+    /// Ed25519 and ECDSA P256/P384 route through the FIPS seam (cb.Sig).
+    /// RSA-PSS: Not routed — geode stores the public key as a raw
+    ///   256/512-byte blob without a DER header separating modulus (n) from
+    ///   exponent (e). The seam's cb.Sig.KeyPair.fromRsaComponents(n, e)
+    ///   requires separate n/e byte slices. Returns UnsupportedSignatureAlgorithm
+    ///   until a key-format bridge (or key schema change) is in place.
     // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
     pub fn verify(self: Signature, data: []const u8) !bool {
         if (self.public_key == null) return error.PublicKeyRequired;
@@ -174,7 +171,7 @@ pub const Signature = struct {
         switch (self.alg) {
             .Ed25519 => {
                 // Ed25519 expects 64-byte signature and 32-byte public key.
-                // Routed through the FIPS seam: cb.Sig.KeyPair.fromPublicBytes +
+                // Routes through the FIPS seam: cb.Sig.KeyPair.fromPublicBytes +
                 // cb.Sig.verify. Both the fips and std_shim backends accept a
                 // 32-byte raw public key for Ed25519.
                 if (self.signature.len != 64) return false;
@@ -186,49 +183,42 @@ pub const Signature = struct {
                 return true;
             },
             .ECDSA_P256 => {
-                // SEAM-GAP: the fips backend's Sig.KeyPair.fromPublicBytes for
-                // .ecdsa_p256 calls d2i_PUBKEY (DER SubjectPublicKeyInfo), but
-                // geode stores 33-byte compressed SEC1. The std_shim accepts SEC1
-                // via P256.PublicKey.fromSec1, so there is a backend parity gap.
-                // Until the seam adds a SEC1-accepting ECDSA public-key import
-                // path, this verify branch stays on std.crypto for both modes.
-                // std.crypto path (non-FIPS for ECDSA P256):
+                // Routes through the FIPS seam: cb.Sig.KeyPair.fromEcPublicPoint
+                // accepts geode's 33-byte compressed SEC1 point directly. The seam
+                // uses DER-encoded ECDSA signatures internally (OpenSSL EVP); geode
+                // stores raw r‖s (64 bytes), so we convert before calling the seam.
                 if (self.signature.len != 64) return false;
                 if (self.public_key.?.len != 33) return false;
 
-                const EcdsaP256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
-                const ecdsa_sig = EcdsaP256.Signature.fromBytes(self.signature[0..64].*);
-                const public_key = EcdsaP256.PublicKey.fromSec1(self.public_key.?) catch {
-                    return false;
-                };
-                ecdsa_sig.verify(data, public_key) catch {
-                    return false;
-                };
+                var kp = cb.Sig.KeyPair.fromEcPublicPoint(.ecdsa_p256, self.public_key.?) catch return false;
+                defer kp.deinit();
+                // Convert raw r‖s (64 bytes) to DER for the seam's verify call.
+                var der_buf: [72]u8 = undefined;
+                const der_len = rawEcSigToDer(self.signature[0..64], &der_buf) catch return false;
+                cb.Sig.verify(.ecdsa_p256, &kp, data, der_buf[0..der_len]) catch return false;
                 return true;
             },
             .ECDSA_P384 => {
-                // SEAM-GAP: same issue as ECDSA_P256 — fips backend needs DER
-                // SPKI; geode stores 49-byte compressed SEC1. std.crypto path
-                // retained for both modes pending a seam SEC1 import extension.
+                // Routes through the FIPS seam: cb.Sig.KeyPair.fromEcPublicPoint
+                // accepts geode's 49-byte compressed SEC1 point directly. The seam
+                // uses DER-encoded ECDSA signatures internally; geode stores raw
+                // r‖s (96 bytes), so we convert before calling the seam.
                 if (self.signature.len != 96) return false;
                 if (self.public_key.?.len != 49) return false;
 
-                const EcdsaP384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
-                const ecdsa_sig = EcdsaP384.Signature.fromBytes(self.signature[0..96].*);
-                const public_key = EcdsaP384.PublicKey.fromSec1(self.public_key.?) catch {
-                    return false;
-                };
-                ecdsa_sig.verify(data, public_key) catch {
-                    return false;
-                };
+                var kp = cb.Sig.KeyPair.fromEcPublicPoint(.ecdsa_p384, self.public_key.?) catch return false;
+                defer kp.deinit();
+                // Convert raw r‖s (96 bytes) to DER for the seam's verify call.
+                var der_buf: [104]u8 = undefined;
+                const der_len = rawEcSigToDer(self.signature[0..96], &der_buf) catch return false;
+                cb.Sig.verify(.ecdsa_p384, &kp, data, der_buf[0..der_len]) catch return false;
                 return true;
             },
-            // RSA algorithms: SEAM-GAP — geode stores the public key as a raw
-            // 256/512-byte blob without a DER header separating modulus (n) from
-            // exponent (e). The seam's cb.Sig.KeyPair.fromRsaComponents(n, e)
-            // requires separate n/e byte slices, and fromRsaSpki requires full
-            // DER SPKI framing. Until a key-format bridge (or key schema change)
-            // is in place this stays UnsupportedSignatureAlgorithm.
+            // RSA algorithms: geode stores the public key as a raw 256/512-byte
+            // blob without a DER header separating modulus (n) from exponent (e).
+            // The seam's cb.Sig.KeyPair.fromRsaComponents(n, e) requires separate
+            // n/e byte slices. Until a key-format bridge is in place this stays
+            // UnsupportedSignatureAlgorithm.
             .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
                 return error.UnsupportedSignatureAlgorithm;
             },
@@ -377,41 +367,35 @@ pub const KeyPair = struct {
         }
     }
 
-    /// Sign data with this key pair.
-    /// SEAM-GAP for ALL algorithms: the seam's cb.Sig.KeyPair.fromPrivateBytes
-    /// has backend-specific key-format requirements that conflict with geode's
-    /// raw-bytes key storage:
-    ///   - Ed25519: fips backend accepts 32-byte seed (OpenSSL raw private key),
-    ///     std_shim needs 64-byte Zig SecretKey (seed+expanded). geode stores
-    ///     32-byte seed only — works in fips mode but fails in std_shim mode.
-    ///   - ECDSA P256/P384: fips backend needs DER-encoded ECPrivateKey
-    ///     (d2i_PrivateKey); std_shim needs raw 32/48-byte scalar. geode stores
-    ///     raw scalars — works in std_shim, fails in fips mode.
+    /// Sign data with this key pair. All algorithms route through the FIPS
+    /// seam (cb.Sig), which executes in the OpenSSL FIPS module under -Dfips=true.
+    ///   - Ed25519: cb.Sig.KeyPair.fromPrivateBytes(.ed25519, 32-byte seed).
+    ///   - ECDSA P256/P384: cb.Sig.KeyPair.fromEcPrivateScalar(alg, 32/48-byte scalar);
+    ///     the seam produces a DER-encoded ECDSA signature, which is converted to
+    ///     geode's raw r‖s storage format (64/96 bytes) before returning.
     ///   - RSA: no key generation or sign support; returns UnsupportedSignatureAlgorithm.
-    /// Until the seam exposes a consistent raw-scalar import path across both
-    /// backends, the sign path remains on std.crypto to keep both modes working.
     // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
     pub fn sign(self: KeyPair, data: []const u8, allocator: std.mem.Allocator) !Signature {
         // Perform actual cryptographic signing based on algorithm
         switch (self.alg) {
             .Ed25519 => {
-                // Ed25519 requires 32-byte private key and produces 64-byte signature
+                // Ed25519 requires 32-byte private key (seed) and produces 64-byte signature.
+                // Routes through the FIPS seam: cb.Sig.KeyPair.fromPrivateBytes(.ed25519, seed)
+                // accepts a 32-byte seed in both fips and std_shim backends.
                 if (self.private_key.len != 32) return error.InvalidPrivateKeySize;
                 if (self.public_key.len != 32) return error.InvalidPublicKeySize;
 
-                const secret_bytes = self.private_key[0..32].*;
+                var kp = cb.Sig.KeyPair.fromPrivateBytes(.ed25519, self.private_key) catch
+                    return error.InvalidPrivateKeySize;
+                defer kp.deinit();
 
-                // Create Ed25519 key pair from existing keys
-                const key_pair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(secret_bytes);
+                var sig_buf: [64]u8 = undefined;
+                const sig_len = cb.Sig.sign(.ed25519, &kp, data, &sig_buf) catch
+                    return error.SigningFailed;
+                if (sig_len != 64) return error.SigningFailed;
 
-                // Sign the data
-                const sig_bytes = try key_pair.sign(data, null);
-
-                // Allocate and copy signature
                 const signature_bytes = try allocator.alloc(u8, 64);
-                const sig_bytes_array = sig_bytes.toBytes();
-                @memcpy(signature_bytes, &sig_bytes_array);
-
+                @memcpy(signature_bytes, sig_buf[0..64]);
                 const public_key_copy = try allocator.dupe(u8, self.public_key);
 
                 return Signature{
@@ -421,30 +405,24 @@ pub const KeyPair = struct {
                 };
             },
             .ECDSA_P256 => {
-                // ECDSA P256 requires 32-byte private key and 33-byte compressed public key
+                // ECDSA P256 requires 32-byte scalar private key; produces 64-byte raw r‖s.
+                // Routes through the FIPS seam: cb.Sig.KeyPair.fromEcPrivateScalar(.ecdsa_p256,
+                // scalar). The seam's sign returns a DER ECDSA signature; convert to raw r‖s.
                 if (self.private_key.len != 32) return error.InvalidPrivateKeySize;
                 if (self.public_key.len != 33) return error.InvalidPublicKeySize;
 
-                const EcdsaP256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
-
-                // Reconstruct secret key from raw bytes
-                const secret_key = EcdsaP256.SecretKey{ .bytes = self.private_key[0..32].* };
-
-                // Reconstruct key pair from secret key
-                const key_pair = EcdsaP256.KeyPair.fromSecretKey(secret_key) catch {
+                var kp = cb.Sig.KeyPair.fromEcPrivateScalar(.ecdsa_p256, self.private_key) catch
                     return error.InvalidPrivateKeySize;
-                };
+                defer kp.deinit();
 
-                // Sign the data (deterministic: noise = null)
-                const ecdsa_sig = key_pair.sign(data, null) catch {
+                var der_buf: [72]u8 = undefined;
+                const der_len = cb.Sig.sign(.ecdsa_p256, &kp, data, &der_buf) catch
                     return error.SigningFailed;
-                };
+                var raw_sig: [64]u8 = undefined;
+                derEcSigToRaw(der_buf[0..der_len], &raw_sig, 32) catch return error.SigningFailed;
 
-                // Convert signature to raw bytes (r || s, 64 bytes)
-                const sig_raw = ecdsa_sig.toBytes();
                 const signature_bytes = try allocator.alloc(u8, 64);
-                @memcpy(signature_bytes, &sig_raw);
-
+                @memcpy(signature_bytes, &raw_sig);
                 const public_key_copy = try allocator.dupe(u8, self.public_key);
 
                 return Signature{
@@ -454,30 +432,24 @@ pub const KeyPair = struct {
                 };
             },
             .ECDSA_P384 => {
-                // ECDSA P384 requires 48-byte private key and 49-byte compressed public key
+                // ECDSA P384 requires 48-byte scalar private key; produces 96-byte raw r‖s.
+                // Routes through the FIPS seam: cb.Sig.KeyPair.fromEcPrivateScalar(.ecdsa_p384,
+                // scalar). The seam's sign returns a DER ECDSA signature; convert to raw r‖s.
                 if (self.private_key.len != 48) return error.InvalidPrivateKeySize;
                 if (self.public_key.len != 49) return error.InvalidPublicKeySize;
 
-                const EcdsaP384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
-
-                // Reconstruct secret key from raw bytes
-                const secret_key = EcdsaP384.SecretKey{ .bytes = self.private_key[0..48].* };
-
-                // Reconstruct key pair from secret key
-                const key_pair = EcdsaP384.KeyPair.fromSecretKey(secret_key) catch {
+                var kp = cb.Sig.KeyPair.fromEcPrivateScalar(.ecdsa_p384, self.private_key) catch
                     return error.InvalidPrivateKeySize;
-                };
+                defer kp.deinit();
 
-                // Sign the data (deterministic: noise = null)
-                const ecdsa_sig = key_pair.sign(data, null) catch {
+                var der_buf: [104]u8 = undefined;
+                const der_len = cb.Sig.sign(.ecdsa_p384, &kp, data, &der_buf) catch
                     return error.SigningFailed;
-                };
+                var raw_sig: [96]u8 = undefined;
+                derEcSigToRaw(der_buf[0..der_len], &raw_sig, 48) catch return error.SigningFailed;
 
-                // Convert signature to raw bytes (r || s, 96 bytes)
-                const sig_raw = ecdsa_sig.toBytes();
                 const signature_bytes = try allocator.alloc(u8, 96);
-                @memcpy(signature_bytes, &sig_raw);
-
+                @memcpy(signature_bytes, &raw_sig);
                 const public_key_copy = try allocator.dupe(u8, self.public_key);
 
                 return Signature{
@@ -486,7 +458,7 @@ pub const KeyPair = struct {
                     .public_key = public_key_copy,
                 };
             },
-            // RSA algorithms not supported in Zig stdlib — deferred to external library integration
+            // RSA algorithms not supported — deferred to external library integration.
             .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
                 return error.UnsupportedSignatureAlgorithm;
             },
@@ -582,6 +554,108 @@ pub const Hmac = struct {
         allocator.free(self.digest);
     }
 };
+
+// ---------------------------------------------------------------------------
+// ECDSA signature format helpers: DER (OpenSSL/FIPS seam) ↔ raw r‖s (geode)
+//
+// OpenSSL's EVP_DigestSign/Verify for ECDSA uses DER-encoded signatures:
+//   SEQUENCE { INTEGER r, INTEGER s }
+// Geode stores and exposes raw r‖s (P-256: 64 bytes; P-384: 96 bytes) for
+// interoperability (JWS, W3C, JOSE). These two helpers bridge the formats.
+//
+// Both helpers treat r and s as FIXED-WIDTH big-endian scalars (coord_len
+// bytes each). DER INTEGERs are sign-extended (leading 0x00 if high bit set)
+// and may be shorter than coord_len if the high-order bytes are zero. The
+// helpers pad/trim on both conversion directions to maintain fixed width.
+// ---------------------------------------------------------------------------
+
+/// Convert a raw r‖s ECDSA signature (64 or 96 bytes) to DER encoding.
+/// `raw_sig.len` must be even; coord_len is inferred as `raw_sig.len / 2`.
+/// `out` must hold at least `raw_sig.len + 8` bytes (the maximum DER expansion).
+/// Returns the number of bytes written into `out`.
+fn rawEcSigToDer(raw_sig: []const u8, out: []u8) error{ BadSigLen, OutputTooSmall }!usize {
+    if (raw_sig.len == 0 or raw_sig.len % 2 != 0) return error.BadSigLen;
+    const coord_len = raw_sig.len / 2;
+    const r = raw_sig[0..coord_len];
+    const s = raw_sig[coord_len .. coord_len * 2];
+
+    // DER INTEGER: strip leading zeros; prepend 0x00 if high bit set.
+    var r_start: usize = 0;
+    while (r_start + 1 < coord_len and r[r_start] == 0) : (r_start += 1) {}
+    var s_start: usize = 0;
+    while (s_start + 1 < coord_len and s[s_start] == 0) : (s_start += 1) {}
+    const r_needs_pad: usize = if (r[r_start] & 0x80 != 0) 1 else 0;
+    const s_needs_pad: usize = if (s[s_start] & 0x80 != 0) 1 else 0;
+    const r_len = coord_len - r_start + r_needs_pad;
+    const s_len = coord_len - s_start + s_needs_pad;
+    const inner_len = 2 + r_len + 2 + s_len; // tag+len for each INTEGER
+    const total_len = 2 + inner_len; // outer SEQUENCE tag+len
+    if (out.len < total_len) return error.OutputTooSmall;
+
+    var i: usize = 0;
+    out[i] = 0x30;
+    i += 1; // SEQUENCE
+    out[i] = @intCast(inner_len);
+    i += 1;
+    out[i] = 0x02;
+    i += 1; // INTEGER r
+    out[i] = @intCast(r_len);
+    i += 1;
+    if (r_needs_pad != 0) {
+        out[i] = 0x00;
+        i += 1;
+    }
+    @memcpy(out[i .. i + (coord_len - r_start)], r[r_start..]);
+    i += coord_len - r_start;
+    out[i] = 0x02;
+    i += 1; // INTEGER s
+    out[i] = @intCast(s_len);
+    i += 1;
+    if (s_needs_pad != 0) {
+        out[i] = 0x00;
+        i += 1;
+    }
+    @memcpy(out[i .. i + (coord_len - s_start)], s[s_start..]);
+    i += coord_len - s_start;
+    return i;
+}
+
+/// Convert a DER-encoded ECDSA signature to raw r‖s (2×coord_len bytes).
+/// `der` is the DER input (as produced by OpenSSL/the FIPS seam). `out`
+/// must be exactly 2×coord_len bytes. Each DER INTEGER is zero-padded to
+/// exactly coord_len bytes on the left, or truncated of the leading 0x00
+/// sign byte if present. Returns `error.BadSigLen` on any parse failure.
+fn derEcSigToRaw(der: []const u8, out: []u8, coord_len: usize) error{BadSigLen}!void {
+    if (out.len != coord_len * 2) return error.BadSigLen;
+    var pos: usize = 0;
+    // Outer SEQUENCE
+    if (pos + 2 > der.len or der[pos] != 0x30) return error.BadSigLen;
+    pos += 1;
+    const seq_end = pos + 1 + der[pos]; // byte after the SEQUENCE content
+    pos += 1;
+    if (seq_end > der.len) return error.BadSigLen;
+    // Parse r then s from DER INTEGERs.
+    inline for ([_]usize{ 0, coord_len }) |out_off| {
+        if (pos + 2 > der.len or der[pos] != 0x02) return error.BadSigLen;
+        pos += 1;
+        const int_len = der[pos];
+        pos += 1;
+        if (int_len == 0 or pos + int_len > der.len) return error.BadSigLen;
+        var int_start: usize = 0;
+        // Skip a leading 0x00 sign byte if present (DER sign extension).
+        if (int_len > coord_len and der[pos] == 0x00) int_start += 1;
+        const data_len = int_len - int_start;
+        if (data_len > coord_len) return error.BadSigLen;
+        // Zero-pad on the left to coord_len bytes.
+        const pad = coord_len - data_len;
+        @memset(out[out_off .. out_off + pad], 0);
+        @memcpy(out[out_off + pad .. out_off + coord_len], der[pos + int_start .. pos + int_start + data_len]);
+        pos += int_len;
+    }
+    if (pos > seq_end) return error.BadSigLen; // overflow guard
+}
+
+// ---------------------------------------------------------------------------
 
 // Utility functions for cryptographic operations
 pub fn hashString(alg: HashAlg, data: []const u8, allocator: std.mem.Allocator) !Hash {
