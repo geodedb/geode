@@ -7065,6 +7065,19 @@ pub fn build(b: *std.Build) void {
     const scan_excl_yield_step = b.step("test-scan-exclusive-yield", "Run scan-exclusive-yield regression (CREATE INDEX wins during a long live scan; no 40001)");
     scan_excl_yield_step.dependOn(&run_scan_excl_yield_tests.step);
 
+    // Edge-merge-shard-locked regression (FIX #3): the relationship MERGE must
+    // create the edge under per-shard locks (graph SHARED + endpoint shards
+    // EXCLUSIVE) so it coexists with concurrent graph-SHARED readers instead of
+    // taking the whole-graph EXCLUSIVE (the 40001), AND preserve MERGE dedup
+    // semantics (no duplicate edge, even under concurrent same-edge races).
+    const edge_merge_sl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_merge_shard_locked.zig"), .target = target, .optimize = optimize });
+    edge_merge_sl_test_mod.addImport("geode", root_mod);
+    const edge_merge_sl_tests = b.addTest(.{ .root_module = edge_merge_sl_test_mod });
+    const run_edge_merge_sl_tests = b.addRunArtifact(edge_merge_sl_tests);
+    shardDep(test_step, &run_edge_merge_sl_tests.step, 5, test_shard_loads, test_shard_index);
+    const edge_merge_sl_step = b.step("test-edge-merge-shard-locked", "Run edge-merge-shard-locked regression (rel MERGE: per-shard locks + dedup, coexists with readers)");
+    edge_merge_sl_step.dependOn(&run_edge_merge_sl_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple

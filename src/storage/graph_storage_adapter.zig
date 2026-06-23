@@ -2438,6 +2438,164 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
+    /// FIX #3 (edge-phase 40001): shard-locked relationship MERGE.
+    ///
+    /// The GQL `MATCH (a {k}),(b {k}) MERGE (a)-[:R]->(b)` the from-dump edge
+    /// phase emits previously fell through to the regular executor's WHOLE-GRAPH
+    /// EXCLUSIVE write lock (it is a MERGE with a post-SET and composite-key
+    /// endpoints, so it is rejected by the CREATE-edge fast path detector). At
+    /// 14.27M scale under concurrent analytical reads (which hold the graph
+    /// rwlock SHARED) that exclusive acquire is starved → `40001`.
+    ///
+    /// This is the MERGE counterpart of `bulkInsertEdgeWithIdsShardLocked`: it
+    /// takes the graph rwlock SHARED + the two endpoint shards' EXCLUSIVE locks
+    /// (ascending index, single lock when co-resident) — so it COEXISTS with
+    /// readers instead of being starved by them — and, under those locks, DEDUPS
+    /// the relationship (MERGE semantics) before creating it. Endpoints are
+    /// resolved-by-id by the caller (the fast path resolves them by index under
+    /// a brief read lock first).
+    ///
+    /// Returns the existing edge id when an (source→target, type, scope) edge
+    /// already exists, else the newly-created edge id. `SourceNodeNotFound` /
+    /// `TargetNodeNotFound` if either endpoint vanished (orphan skip, same as
+    /// the insert path).
+    pub fn bulkMergeEdgeWithIdsShardLocked(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+    ) !u64 {
+        return self.bulkMergeEdgeWithIdsShardLockedForTenant(
+            graph_name,
+            source_id,
+            target_id,
+            rel_type,
+            props,
+            fle_integration.tenantPreferringActiveContext(),
+        );
+    }
+
+    pub fn bulkMergeEdgeWithIdsShardLockedForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        request_tenant: []const u8,
+    ) !u64 {
+        const mg = try self.getOrCreateGraph(graph_name);
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        const src_shard = sharded_store.shardIndex(source_id);
+        const dst_shard = sharded_store.shardIndex(target_id);
+
+        // Same lock protocol as bulkInsertEdgeWithIdsShardLockedForTenant: yield
+        // to a pending exclusive (checkpoint / CREATE INDEX), take graph rwlock
+        // SHARED, then the endpoint shards EXCLUSIVE in ascending order (single
+        // lock when co-resident, to avoid double-locking the same mutex).
+        exclusiveWaitingBackoff(mg);
+        const _t_start = monoNanosNow();
+        mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+        defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            _ = mg.rwlock_shared_hold_bulk_edge_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+            }
+        }
+
+        if (src_shard == dst_shard) {
+            mg.shard_locks[src_shard].lockUncancelable(io);
+            defer mg.shard_locks[src_shard].unlock(io);
+            return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
+        } else {
+            const first = @min(src_shard, dst_shard);
+            const second = @max(src_shard, dst_shard);
+            mg.shard_locks[first].lockUncancelable(io);
+            mg.shard_locks[second].lockUncancelable(io);
+            defer {
+                mg.shard_locks[second].unlock(io);
+                mg.shard_locks[first].unlock(io);
+            }
+            return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
+        }
+    }
+
+    fn bulkMergeEdgeInnerShardLocked(
+        self: *StorageAdapter,
+        mg: *ManagedGraph,
+        store: *graph_store.GraphStore,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        request_tenant: []const u8,
+    ) !u64 {
+        // Re-check endpoint existence under the shard locks (orphan skip if a
+        // prior batch deleted one — same as the insert inner).
+        if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
+        if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
+
+        // MERGE dedup probe UNDER the shard locks: the outgoing-adjacency list
+        // for `source_id` lives in the source shard (held EXCLUSIVE here), so a
+        // concurrent same-source MERGE cannot insert between this probe and the
+        // create below — two racing MERGEs of the same (src,dst,type) cannot
+        // both miss-then-create (no duplicate edge). Mirrors the executor's
+        // findExistingEdgeId scope/type semantics. Tenant scoping matches the
+        // create's request-tenant tag.
+        if (store.getOutgoingEdgeIds(source_id)) |outgoing| {
+            for (outgoing) |edge_id| {
+                const edge = store.edges.getPtr(edge_id) orelse continue;
+                if (edge.to_id != target_id) continue;
+                if (!std.mem.eql(u8, edge.graph_name, graph_name)) continue;
+                if (!std.mem.eql(u8, edge.label, rel_type)) continue;
+                if (request_tenant.len != 0 and !std.mem.eql(u8, edge.tenant_id, request_tenant)) continue;
+                // Already present — MERGE is a no-op create. Apply any props
+                // (idempotent upsert), matching the executor's create-path prop
+                // set so a re-MERGE with edge props converges.
+                if (props.len > 0) try self.applyEdgePropsLocked(store, edge_id, props);
+                return edge_id;
+            }
+        }
+
+        // Not found — create exactly like the insert inner.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mg.string_indexes_mutex.lockUncancelable(io);
+        const create_result = store.createEdgeForRequestTenant(source_id, target_id, rel_type, graph_name, request_tenant);
+        mg.string_indexes_mutex.unlock(io);
+        const edge_id = try create_result;
+
+        if (props.len > 0) try self.applyEdgePropsLocked(store, edge_id, props);
+        _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+        return edge_id;
+    }
+
+    /// Apply edge properties via the batch helper (shared by the merge inner's
+    /// create + dedup-upsert branches). Caller holds the endpoint shard locks.
+    fn applyEdgePropsLocked(self: *StorageAdapter, store: *graph_store.GraphStore, edge_id: u64, props: []const PropKV) !void {
+        var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+        const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+            entries_buf[0..props.len]
+        else
+            try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+        defer if (props.len > entries_buf.len) self.allocator.free(entries);
+        for (props, 0..) |kv, i| {
+            entries[i] = .{ .key = kv.key, .value = kv.value };
+        }
+        try store.setEdgePropertiesBatch(edge_id, entries);
+    }
+
     /// Phase 2 shard-locked MERGE variant.  Serialize only same-tuple
     /// writers on the striped `merge_tuple_locks` table (GAP-0894),
     /// probe under `rwlock` SHARED, and on miss delegate the insert to
