@@ -7053,6 +7053,18 @@ pub fn build(b: *std.Build) void {
     const scan_cancel_step = b.step("test-scan-cancellation", "Run scan-cancellation regression (scan stops + releases read lock on client-close / deadline)");
     scan_cancel_step.dependOn(&run_scan_cancel_tests.step);
 
+    // Scan-exclusive-yield regression (FIX #2): a long analytical scan over the
+    // REAL streaming path must yield the per-graph SHARED lock between batches so
+    // a CREATE-INDEX-like EXCLUSIVE acquirer (the edge phase's DDL / rel-MERGE
+    // schema apply) wins mid-scan instead of timing out (the 40001).
+    const scan_excl_yield_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_scan_exclusive_yield.zig"), .target = target, .optimize = optimize });
+    scan_excl_yield_test_mod.addImport("geode", root_mod);
+    const scan_excl_yield_tests = b.addTest(.{ .root_module = scan_excl_yield_test_mod });
+    const run_scan_excl_yield_tests = b.addRunArtifact(scan_excl_yield_tests);
+    shardDep(test_step, &run_scan_excl_yield_tests.step, 5, test_shard_loads, test_shard_index);
+    const scan_excl_yield_step = b.step("test-scan-exclusive-yield", "Run scan-exclusive-yield regression (CREATE INDEX wins during a long live scan; no 40001)");
+    scan_excl_yield_step.dependOn(&run_scan_excl_yield_tests.step);
+
     // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
     // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
     // node-file CREATE shapes — asserts that we only fast-path the simple
