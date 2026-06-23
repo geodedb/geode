@@ -2443,6 +2443,21 @@ fn appendLegacyPlanOps(
     try ops.append(allocator, .{ .kind = .LegacyExecute });
 }
 
+/// GAP-0902: pure-AST predicate — true iff this read is served ENGINE-DIRECT by
+/// the storage-native planned-read path (single-chain MATCH reads incl. ORDER
+/// BY / DISTINCT / aggregates, no mutations / RLS-needing shapes / multi-chain
+/// traversal). When true, `executeIfSupported` builds the plan in storage_native
+/// mode and NEVER falls back to the legacy resident-only executor (see
+/// buildPlanIfSupported: execution_mode = storage_native ⇔ this predicate), so
+/// the read reads every live node straight from the engine with NO whole-graph
+/// snapshot clone. The transport handler uses this (with its own RLS / preamble
+/// gates) to skip the O(all-nodes) `snapshotUnderReadLock` deep-clone for these
+/// analytical shapes under the bounded node cache — the RAM-balloon source.
+/// Does no I/O; safe to call before acquiring any lock.
+pub fn isStorageNativeReadShape(q: *const ast.Query) bool {
+    return isStorageNativeQuery(q);
+}
+
 fn isStorageNativeQuery(q: *const ast.Query) bool {
     if (q.next_query != null or q.optional_match) return false;
     if (q.unwind_clause != null or q.create_pattern != null) return false;

@@ -310,3 +310,42 @@ test "GAP-0902: ORDER BY full population correctness (covers evicted nodes)" {
         try testing.expectEqual(@as(i64, @intCast(idx)), row[0].Int);
     }
 }
+
+// ===================================================================
+// Limitation 2 — the transport handler skip predicate. The analytical
+// shapes must be recognized as "served engine-direct" so the handler
+// skips the O(all-nodes) snapshot clone; shapes that need the snapshot
+// (RLS / traversal / multi-chain) must NOT be.
+// ===================================================================
+
+fn isEngineDirectShape(aa: std.mem.Allocator, src: []const u8) !bool {
+    var parsed = try geode.parse(aa, src, .{});
+    defer parsed.deinit();
+    return geode.planned_read_runtime.isStorageNativeReadShape(&parsed.program.statements[0].Query);
+}
+
+test "GAP-0902: analytical shapes are recognized as engine-direct (skip snapshot)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // Engine-direct (single-chain reads — handler skips the snapshot clone):
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon) RETURN n.source_id ORDER BY n.source_id LIMIT 20"));
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon) RETURN DISTINCT n.source_id"));
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon) RETURN min(n.ordinal), max(n.ordinal)"));
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon) RETURN sum(n.ordinal)"));
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon) WHERE n.ordinal < 100 RETURN count(n)"));
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon) RETURN n.source_id"));
+
+    // A single-chain traversal IS storage-native (planned-read materializes
+    // path rows engine-direct), so it is ALSO engine-direct — no clone.
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon)-[:CHILD_OF]->(m:Taxon) RETURN n.source_id"));
+
+    // NOT engine-direct (must KEEP the snapshot clone / full executor):
+    //   - mutation embedded in the read program (SET) → not a pure read shape
+    try testing.expect(!try isEngineDirectShape(aa, "MATCH (n:Taxon) SET n.x = 1 RETURN n.source_id"));
+    //   - multi-chain (comma-separated patterns) → planned-read declines
+    try testing.expect(!try isEngineDirectShape(aa, "MATCH (n:Taxon), (m:Taxon) RETURN n.source_id"));
+    //   - OPTIONAL MATCH → planned-read declines
+    try testing.expect(!try isEngineDirectShape(aa, "OPTIONAL MATCH (n:Taxon) RETURN n.source_id"));
+}

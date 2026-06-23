@@ -1745,6 +1745,26 @@ fn readWillStreamEngineSide(state: *const server_state.ServerState, analysis: *c
     return node_scan_stream.isEligible(&target.Query);
 }
 
+/// GAP-0902: true iff this read is served ENGINE-DIRECT (no whole-graph snapshot
+/// clone) by EITHER `node_scan_stream` OR the storage-native planned-read path
+/// (single-chain ORDER BY / DISTINCT / aggregate / WHERE-count). Mirrors the
+/// QUIC handler's `readServedEngineDirect`: skipping the snapshot lets the
+/// `.rows` arm read the live store engine-direct via the fast paths /
+/// planned_read instead of materializing an O(all-nodes)-resident snapshot
+/// (the RSS balloon under the bounded node cache). Same RLS / preamble / adapter
+/// gates as the streaming predicate; RLS reads stay on the snapshot path.
+fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
+    if (graph_store.getGlobalAdapter() == null) return false;
+    if (analysis.kind != .rows) return false;
+    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
+    if (rls_active) return false;
+    if (analysis.has_effectful_preamble) return false;
+    const target = analysis.target orelse return false;
+    if (target.* != .Query) return false;
+    return node_scan_stream.isEligible(&target.Query) or
+        planned_read_runtime.isStorageNativeReadShape(&target.Query);
+}
+
 fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch |err| {
@@ -2167,15 +2187,21 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                             graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
-                } else if (readWillStreamEngineSide(state, &analysis)) {
-                    // GAP-0900 (scan-no-clone): a bounded label/all-node scan is
-                    // served engine-side by `node_scan_stream` in the `.rows`
-                    // arm below (O(result) with LIMIT pushdown, never consuming
-                    // the active read store). Skip the O(graph) QueryReadSession
-                    // deep-clone — see the same fix + rationale in
+                } else if (readServedEngineDirect(state, &analysis)) {
+                    // GAP-0900 / GAP-0902 (scan/analytical no-clone): the read is
+                    // served ENGINE-DIRECT in the `.rows` arm below — by
+                    // `node_scan_stream` (bounded scan / projection / WHERE /
+                    // count) OR, for single-chain ORDER BY / DISTINCT / aggregate
+                    // / WHERE-count, by the storage-native planned-read + fast
+                    // paths. All read only the needed properties straight from the
+                    // storage adapter (never the cache map) and never consume the
+                    // active read store. Skip the O(all-nodes) QueryReadSession
+                    // deep-clone — under the bounded node cache it materialized
+                    // every evicted node into an O(N)-resident snapshot (the RSS
+                    // balloon). See the same fix + rationale in
                     // src/server/quic_connection_handler.zig. Snapshot isolation,
-                    // FLE decrypt-on-read, and tenant/RLS filtering are all
-                    // preserved (RLS reads are excluded by the predicate).
+                    // FLE decrypt-on-read, and tenant filtering are preserved; RLS
+                    // reads stay on the snapshot path (excluded by the predicate).
                 } else {
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-

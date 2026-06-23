@@ -5357,6 +5357,38 @@ fn readWillStreamEngineSide(
     return node_scan_stream.isEligible(&target.Query);
 }
 
+/// GAP-0902: true iff this read will be served ENGINE-DIRECT (no whole-graph
+/// snapshot clone) by EITHER the `node_scan_stream` fast path OR the
+/// storage-native planned-read path (single-chain ORDER BY / DISTINCT /
+/// aggregate / WHERE-count reads). When true the handler skips
+/// `snapshotUnderReadLock` and lets `executeProgramWithContext` read the live
+/// store engine-direct via the fast paths / `planned_read_runtime` — which read
+/// every live node straight from the engine (O(result)/O(scanned) cheap-property
+/// reads, NEVER the cache map) instead of materializing an O(all-nodes)-resident
+/// snapshot (81 GB at 14.27M, the RSS-balloon source under the bounded cache).
+///
+/// SAFETY: gated by the SAME RLS / preamble / adapter checks as the streaming
+/// path. RLS-evaluating reads, multi-chain traversal, and any shape that is NOT
+/// storage-native keep the snapshot (so per-candidate RLS / the legacy executor
+/// still see a consistent clone). `isStorageNativeReadShape` is exactly the
+/// predicate that makes `executeIfSupported` run storage_native (engine-direct)
+/// and NEVER fall back to the legacy resident-only executor, so a skipped
+/// snapshot can never strand such a read on the resident-only path.
+fn readServedEngineDirect(
+    state: *const ServerState,
+    analysis: *const query_traits.ProgramAnalysis,
+    query_graph_name: []const u8,
+) bool {
+    if (graph_store.getGlobalAdapter() == null) return false;
+    if (analysis.kind != .rows) return false;
+    if (authenticatedReadNeedsRlsSnapshot(state)) return false;
+    if (!preamblePermitsStreaming(analysis, query_graph_name)) return false;
+    const target = analysis.target orelse return false;
+    if (target.* != .Query) return false;
+    return node_scan_stream.isEligible(&target.Query) or
+        planned_read_runtime.isStorageNativeReadShape(&target.Query);
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -6467,28 +6499,36 @@ fn handleClientMessage(
                             graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
-                } else if (readWillStreamEngineSide(state, &analysis, query_graph_name)) {
-                    // GAP-0900 (scan-no-clone): a bounded label/all-node scan
-                    // (`MATCH (n:Label) RETURN n [LIMIT k]`, no WHERE / ORDER /
-                    // aggregation / traversal, no RLS, no effectful preamble)
-                    // is served by the engine-backed `node_scan_stream` path in
-                    // the `.rows` arm below. That path reads slot ids + node
-                    // bytes straight from the storage adapter (O(result) with
-                    // LIMIT pushdown) and never consumes the active read store,
-                    // so the O(graph) `QueryReadSession` deep-clone here was
-                    // pure wasted work — it made every such scan cost O(total
-                    // graph) and added write contention during the clone.
+                } else if (readServedEngineDirect(state, &analysis, query_graph_name)) {
+                    // GAP-0900 / GAP-0902 (scan/analytical no-clone): the read is
+                    // served ENGINE-DIRECT in the `.rows` arm below — either by
+                    // the `node_scan_stream` fast path (bounded `MATCH (n:Label)
+                    // RETURN n [LIMIT k]`, projection, simple WHERE, count) OR,
+                    // for the analytical shapes (single-chain ORDER BY / DISTINCT
+                    // / multi-aggregate / WHERE-count), by the storage-native
+                    // planned-read + fast paths (top-K, property-aggregate). All
+                    // read slot ids + the needed properties straight from the
+                    // storage adapter (O(result)/O(scanned) cheap-property reads,
+                    // never the cache map) and never consume the active read
+                    // store, so the O(all-nodes) `QueryReadSession` deep-clone
+                    // here was pure wasted work AND — under the bounded node cache
+                    // — materialized EVERY evicted node into an O(N)-resident
+                    // snapshot (81 GB at 14.27M, the RSS balloon).
                     //
                     // Skip the snapshot entirely: leave the active read store
-                    // unpushed so the streaming path's `getGlobalStore` resolves
-                    // to the live store (whose IdMap is the authoritative source
-                    // the clone copied anyway). The streaming path takes its own
-                    // brief per-page read lock while materializing nodes, so
-                    // snapshot isolation against concurrent ingest is preserved
-                    // exactly as it already is for this shape today. FLE
-                    // decrypt-on-read and tenant/RLS filtering are unaffected:
-                    // FLE applies inside `materializeNode`, and RLS-evaluating
-                    // reads are excluded by `readWillStreamEngineSide`.
+                    // unpushed so the executor's `getGlobalStore` resolves to the
+                    // live store (whose IdMap + label index are the authoritative
+                    // source the clone copied anyway). The engine-direct paths
+                    // take their own brief per-graph/per-shard read locks while
+                    // reading, so isolation against concurrent ingest is the same
+                    // fuzzy-live semantics they already have for the scan shape.
+                    // FLE decrypt-on-read and tenant filtering are unaffected;
+                    // RLS-evaluating reads are excluded by `readServedEngineDirect`
+                    // (kept on the snapshot path so per-candidate RLS runs), and
+                    // `isStorageNativeReadShape` guarantees these analytical reads
+                    // run engine-direct (never the legacy resident-only executor),
+                    // so a skipped snapshot can never strand them on a partial
+                    // (resident-only) view.
                 } else {
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-
@@ -6739,8 +6779,8 @@ fn handleClientMessage(
                 },
                 .rows => {
                     // GAP-0900 (live-routing fix): this gate MUST agree with
-                    // `readWillStreamEngineSide` (which decides whether the
-                    // O(graph) snapshot clone was skipped above). Use the same
+                    // `readServedEngineDirect` (which decides whether the
+                    // O(all-nodes) snapshot clone was skipped above). Use the same
                     // POLICY-AWARE RLS test: an empty default-allow engine no
                     // longer disables streaming for authenticated sessions. Only
                     // a real installed policy forces the snapshot path so RLS is
@@ -6751,9 +6791,14 @@ fn handleClientMessage(
                     // is solely a same-graph selector (a no-op re-selection of the
                     // graph the target already scans — see `preamblePermitsStreaming`).
                     // Any other effectful preamble (different graph, SET, DDL, txn
-                    // body) must run through the full executor. This MUST agree with
-                    // `readWillStreamEngineSide` so the snapshot-skip decision and
-                    // the execute decision never diverge.
+                    // body) must run through the full executor. GAP-0902: when the
+                    // snapshot was skipped for a storage-native ANALYTICAL shape
+                    // (ORDER BY / DISTINCT / aggregate — not node_scan-eligible),
+                    // `node_scan_stream.prepare` below returns null and the arm
+                    // falls through to `executeProgramWithContext`, which reads the
+                    // live store engine-direct via the fast paths / planned_read.
+                    // The snapshot-skip decision and execute decision stay in sync
+                    // because both are gated on the SAME RLS + preamble checks.
                     if (!rls_active and preamblePermitsStreaming(&analysis, query_graph_name)) {
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
