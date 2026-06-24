@@ -64,7 +64,7 @@ pub fn findEdgeBetween(store: *graph_store.GraphStore, from_id: u64, to_id: u64)
     // Check outgoing edges from from_id
     if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            if (store.edges.getPtr(edge_id)) |edge_ptr| {
+            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
                 if (edge_ptr.to_id == to_id) return edge_ptr;
             }
         }
@@ -72,7 +72,7 @@ pub fn findEdgeBetween(store: *graph_store.GraphStore, from_id: u64, to_id: u64)
     // Check outgoing edges from to_id (reverse direction)
     if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            if (store.edges.getPtr(edge_id)) |edge_ptr| {
+            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
                 if (edge_ptr.to_id == from_id) return edge_ptr;
             }
         }
@@ -214,7 +214,7 @@ fn countVariableLengthPathMatches(
         // Find outgoing edges from current node using adjacency index (O(degree) instead of O(E))
         if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
-                const edge = store.edges.get(edge_id) orelse continue;
+                const edge = store.getEdgeHydrated(edge_id) orelse continue;
 
                 // Filter by relationship type if specified
                 if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
@@ -282,7 +282,7 @@ fn countSingleHopMatches(
     // Use adjacency index for O(degree) lookup instead of full edge scan O(E)
     if (store.getOutgoingEdgeIds(bound_node.id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            const edge = store.edges.get(edge_id) orelse continue;
+            const edge = store.getEdgeHydrated(edge_id) orelse continue;
 
             // Filter by relationship type if specified
             if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
@@ -454,10 +454,15 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
             const hop = chain.hops[0];
             const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
 
-            // Optimized path: iterate edges directly instead of N×N×E nested loops
-            var edge_iter = store.edges.iterator();
-            while (edge_iter.next()) |edge_entry| {
-                const edge = edge_entry.value_ptr.*;
+            // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
+            // (bounded-cache-safe) and hydrate each body on miss, instead of
+            // iterating the resident `store.edges` map (which under a bounded
+            // edge cache would undercount by skipping evicted edges).
+            const all_edge_ids = try store.allEdgeIds(allocator);
+            defer allocator.free(all_edge_ids);
+            for (all_edge_ids) |__eid| {
+                const edge_ptr = store.getEdgePtrHydrated(__eid) orelse continue;
+                const edge = edge_ptr.*;
 
                 // Filter by relationship type if specified
                 if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
@@ -711,7 +716,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         // Always check outgoing edges
         if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
-                const edge = store.edges.get(edge_id) orelse continue;
+                const edge = store.getEdgeHydrated(edge_id) orelse continue;
                 const neighbor_id = edge.to_id;
                 if (!visited.contains(neighbor_id)) {
                     const neighbor_node = try allocator.create(PathNode);
@@ -726,7 +731,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         if (hop.rel.dir == .undirected) {
             if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
-                    const edge = store.edges.get(edge_id) orelse continue;
+                    const edge = store.getEdgeHydrated(edge_id) orelse continue;
                     const neighbor_id = edge.from_id;
                     if (!visited.contains(neighbor_id)) {
                         const neighbor_node = try allocator.create(PathNode);
@@ -908,7 +913,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             if (hop.rel.dir == .right or hop.rel.dir == .undirected) {
                 if (store.getOutgoingEdgeIds(source_node.id)) |out_edge_ids| {
                     for (out_edge_ids) |edge_id| {
-                        const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
+                        const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                         const target_id = edge_ptr.to_id;
 
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
@@ -947,7 +952,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             if (hop.rel.dir == .left or hop.rel.dir == .undirected) {
                 if (store.getIncomingEdgeIds(source_node.id)) |in_edge_ids| {
                     for (in_edge_ids) |edge_id| {
-                        const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
+                        const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                         const target_id = edge_ptr.from_id;
 
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;

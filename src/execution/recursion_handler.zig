@@ -81,29 +81,29 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
             continue;
         }
 
-        // Get neighbors of current node
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr.*;
-            var neighbor_id: ?u64 = null;
-
-            if (edge.from_id == current_id) {
-                neighbor_id = edge.to_id;
-            } else if (edge.to_id == current_id) {
-                neighbor_id = edge.from_id;
+        // Get neighbors of current node. PHASE 1 (edge-engine-direct): expand the
+        // current node's OUTGOING + INCOMING adjacency (engine-backed,
+        // hydrate-on-miss) — treating the BFS as undirected — instead of scanning
+        // the whole `store.edges` map (O(all edges) AND incorrect under a bounded
+        // edge cache, which would miss evicted edges).
+        const ExpandBFS = struct {
+            fn pushNeighbor(a: std.mem.Allocator, q: anytype, cur_path: []const u64, nid: u64, depth: u32) !void {
+                const new_path = try a.alloc(u64, cur_path.len + 1);
+                @memcpy(new_path[0..cur_path.len], cur_path);
+                new_path[cur_path.len] = nid;
+                try q.append(a, .{ .node_id = nid, .path = new_path, .depth = depth });
             }
-
-            if (neighbor_id) |nid| {
-                // Create new path with this neighbor
-                const new_path = try allocator.alloc(u64, current_path.len + 1);
-                @memcpy(new_path[0..current_path.len], current_path);
-                new_path[current_path.len] = nid;
-
-                try queue.append(allocator, .{
-                    .node_id = nid,
-                    .path = new_path,
-                    .depth = current_depth + 1,
-                });
+        };
+        if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+            for (out_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.to_id, current_depth + 1);
+            }
+        }
+        if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+            for (in_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.from_id, current_depth + 1);
             }
         }
 
@@ -168,29 +168,28 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
             continue;
         }
 
-        // Get neighbors of current node
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr.*;
-            var neighbor_id: ?u64 = null;
-
-            if (edge.from_id == current_id) {
-                neighbor_id = edge.to_id;
-            } else if (edge.to_id == current_id) {
-                neighbor_id = edge.from_id;
+        // Get neighbors of current node. PHASE 1 (edge-engine-direct): expand via
+        // OUTGOING + INCOMING adjacency (engine-backed, hydrate-on-miss), treating
+        // the walk as undirected, instead of a full `store.edges` scan
+        // (O(all edges) AND incorrect under a bounded edge cache).
+        const PushDfs = struct {
+            fn push(a: std.mem.Allocator, stk: anytype, cur_path: []const u64, nid: u64, depth: u32) !void {
+                const new_path = try a.alloc(u64, cur_path.len + 1);
+                @memcpy(new_path[0..cur_path.len], cur_path);
+                new_path[cur_path.len] = nid;
+                try stk.append(a, .{ .node_id = nid, .path = new_path, .depth = depth });
             }
-
-            if (neighbor_id) |nid| {
-                // Create new path with this neighbor
-                const new_path = try allocator.alloc(u64, current_path.len + 1);
-                @memcpy(new_path[0..current_path.len], current_path);
-                new_path[current_path.len] = nid;
-
-                try stack.append(allocator, .{
-                    .node_id = nid,
-                    .path = new_path,
-                    .depth = current_depth + 1,
-                });
+        };
+        if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+            for (out_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                try PushDfs.push(allocator, &stack, current_path, edge.to_id, current_depth + 1);
+            }
+        }
+        if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+            for (in_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                try PushDfs.push(allocator, &stack, current_path, edge.from_id, current_depth + 1);
             }
         }
 
@@ -305,19 +304,27 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             }
         }
 
-        // Explore neighbors
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |edge_entry| {
-            const edge = edge_entry.value_ptr.*;
-            var neighbor_id: ?u64 = null;
-
-            if (edge.from_id == current_id) {
-                neighbor_id = edge.to_id;
-            } else if (edge.to_id == current_id) {
-                neighbor_id = edge.from_id;
+        // Explore neighbors. PHASE 1 (edge-engine-direct): expand via OUTGOING +
+        // INCOMING adjacency (engine-backed, hydrate-on-miss), treating the graph
+        // as undirected, instead of a full `store.edges` scan (O(all edges) AND
+        // incorrect under a bounded edge cache).
+        {
+            var nbrs: std.ArrayList(u64) = .empty;
+            defer nbrs.deinit(allocator);
+            if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+                for (out_ids) |eid| {
+                    const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                    try nbrs.append(allocator, edge.to_id);
+                }
+            }
+            if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+                for (in_ids) |eid| {
+                    const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                    try nbrs.append(allocator, edge.from_id);
+                }
             }
 
-            if (neighbor_id) |nid| {
+            for (nbrs.items) |nid| {
                 // Get edge weight
                 const weight = getEdgeWeight(store, current_id, nid, weight_property);
                 const new_distance = current_distance + weight;
@@ -381,14 +388,20 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         var best_path: [3]u64 = undefined;
         var best_len: usize = 0;
 
-        // Helper to check if an edge exists
+        // Helper to check if an edge exists (PHASE 1: via adjacency, not a full
+        // `store.edges` scan — bounded-cache-correct + O(degree)).
         const maybeEdgeCost = struct {
             fn get(gs: *graph_store.GraphStore, a: u64, b: u64, weight_prop: []const u8) ?f64 {
-                var iter = gs.edges.iterator();
-                while (iter.next()) |entry| {
-                    const e = entry.value_ptr.*;
-                    if ((e.from_id == a and e.to_id == b) or (e.from_id == b and e.to_id == a)) {
-                        return getEdgeWeight(gs, a, b, weight_prop);
+                if (gs.getOutgoingEdgeIds(a)) |out_ids| {
+                    for (out_ids) |eid| {
+                        const e = gs.getEdgePtrHydrated(eid) orelse continue;
+                        if (e.to_id == b) return getEdgeWeight(gs, a, b, weight_prop);
+                    }
+                }
+                if (gs.getIncomingEdgeIds(a)) |in_ids| {
+                    for (in_ids) |eid| {
+                        const e = gs.getEdgePtrHydrated(eid) orelse continue;
+                        if (e.from_id == b) return getEdgeWeight(gs, a, b, weight_prop);
                     }
                 }
                 return null;
@@ -401,24 +414,31 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             best_len = 2;
         }
 
-        var outer = store.edges.iterator();
-        while (outer.next()) |entry| {
-            const edge = entry.value_ptr.*;
-            var mid: ?u64 = null;
-            if (edge.from_id == start_id) {
-                mid = edge.to_id;
-            } else if (edge.to_id == start_id) {
-                mid = edge.from_id;
+        // PHASE 1 (edge-engine-direct): enumerate the midpoints via start_id's
+        // OUTGOING + INCOMING adjacency (engine-backed, hydrate-on-miss) instead
+        // of a full `store.edges` scan (bounded-cache-correct + O(degree)).
+        var mids: std.ArrayList(u64) = .empty;
+        defer mids.deinit(allocator);
+        if (store.getOutgoingEdgeIds(start_id)) |out_ids| {
+            for (out_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                try mids.append(allocator, edge.to_id);
             }
-            if (mid) |m| {
-                if (maybeEdgeCost(store, m, end_id, weight_property)) |tail_cost| {
-                    const head_cost = getEdgeWeight(store, start_id, m, weight_property);
-                    const total = head_cost + tail_cost;
-                    if (best_cost == null or total < best_cost.?) {
-                        best_cost = total;
-                        best_path = .{ start_id, m, end_id };
-                        best_len = 3;
-                    }
+        }
+        if (store.getIncomingEdgeIds(start_id)) |in_ids| {
+            for (in_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                try mids.append(allocator, edge.from_id);
+            }
+        }
+        for (mids.items) |m| {
+            if (maybeEdgeCost(store, m, end_id, weight_property)) |tail_cost| {
+                const head_cost = getEdgeWeight(store, start_id, m, weight_property);
+                const total = head_cost + tail_cost;
+                if (best_cost == null or total < best_cost.?) {
+                    best_cost = total;
+                    best_path = .{ start_id, m, end_id };
+                    best_len = 3;
                 }
             }
         }
@@ -463,24 +483,32 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 /// Extracts the weight property from an edge, defaulting to 1.0 if not present.
 /// Supports both Int and Float property types.
 pub fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weight_prop: []const u8) f64 {
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |entry| {
-        const edge = entry.value_ptr.*;
-        // Check both directions since getNeighbors returns bidirectional neighbors
-        if ((edge.from_id == from_id and edge.to_id == to_id) or
-            (edge.from_id == to_id and edge.to_id == from_id))
-        {
-            // Try to extract weight from edge properties
-            if (edge.properties.get(weight_prop)) |prop_value| {
-                // Extract numeric value from property
-                const weight: f64 = switch (prop_value) {
+    // PHASE 1 (edge-engine-direct): resolve the edge via from_id's ADJACENCY
+    // (engine-backed, hydrate-on-miss) instead of a full `store.edges` scan
+    // (O(all edges) AND incorrect under a bounded edge cache). Bidirectional:
+    // an outgoing edge to `to_id` OR an incoming edge from `to_id`.
+    const matchWeight = struct {
+        fn f(edge: *const graph_store.Edge, weight_prop_: []const u8) f64 {
+            if (edge.properties.get(weight_prop_)) |prop_value| {
+                return switch (prop_value) {
                     .Int => |i| @floatFromInt(i),
-                    .Float => |f| f,
+                    .Float => |fl| fl,
                     else => 1.0,
                 };
-                return weight;
             }
             return 1.0;
+        }
+    }.f;
+    if (store.getOutgoingEdgeIds(from_id)) |out_ids| {
+        for (out_ids) |eid| {
+            const edge = store.getEdgePtrHydrated(eid) orelse continue;
+            if (edge.to_id == to_id) return matchWeight(edge, weight_prop);
+        }
+    }
+    if (store.getIncomingEdgeIds(from_id)) |in_ids| {
+        for (in_ids) |eid| {
+            const edge = store.getEdgePtrHydrated(eid) orelse continue;
+            if (edge.from_id == to_id) return matchWeight(edge, weight_prop);
         }
     }
     return 1.0;

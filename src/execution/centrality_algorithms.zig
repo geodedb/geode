@@ -97,14 +97,14 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
     // Use adjacency indexes for O(degree) lookup instead of full edge scan
     if (store.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            if (store.edges.get(edge_id)) |edge| {
+            if (store.getEdgeHydrated(edge_id)) |edge| {
                 try neighbors.append(allocator, edge.to_id);
             }
         }
     }
     if (store.getIncomingEdgeIds(node_id)) |in_edge_ids| {
         for (in_edge_ids) |edge_id| {
-            if (store.edges.get(edge_id)) |edge| {
+            if (store.getEdgeHydrated(edge_id)) |edge| {
                 try neighbors.append(allocator, edge.from_id);
             }
         }
@@ -152,14 +152,14 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
         var set = NeighborSet.init(allocator);
         if (store.getOutgoingEdgeIds(node)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
-                if (store.edges.get(edge_id)) |edge| {
+                if (store.getEdgeHydrated(edge_id)) |edge| {
                     try set.put(edge.to_id, {});
                 }
             }
         }
         if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
             for (in_edge_ids) |edge_id| {
-                if (store.edges.get(edge_id)) |edge| {
+                if (store.getEdgeHydrated(edge_id)) |edge| {
                     try set.put(edge.from_id, {});
                 }
             }
@@ -566,7 +566,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             // Use incoming_edges adjacency index to find predecessors in O(in_degree)
             if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
-                    if (store.edges.get(edge_id)) |edge| {
+                    if (store.getEdgeHydrated(edge_id)) |edge| {
                         const linking_node = edge.from_id;
                         const li = node_id_to_index.get(linking_node) orelse continue;
                         const out_degree = out_degrees[li];
@@ -902,9 +902,15 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
         }
     }.f;
 
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |entry| {
-        const edge = entry.value_ptr.*;
+    // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
+    // (bounded-cache-safe) and hydrate each body, instead of iterating the
+    // resident `store.edges` map (which under a bounded edge cache would skip
+    // evicted edges and produce wrong connected components).
+    const uf_edge_ids = try store.allEdgeIds(allocator);
+    defer allocator.free(uf_edge_ids);
+    for (uf_edge_ids) |__eid| {
+        const edge_ptr = store.getEdgePtrHydrated(__eid) orelse continue;
+        const edge = edge_ptr.*;
 
         // Ensure edge endpoints exist in parent map
         if (!parent.contains(edge.from_id)) {
@@ -2166,7 +2172,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         out_tmp.clearRetainingCapacity();
         if (store.getOutgoingEdgeIds(node)) |edge_ids| {
             for (edge_ids) |eid| {
-                if (store.edges.get(eid)) |edge| {
+                if (store.getEdgeHydrated(eid)) |edge| {
                     try out_tmp.append(allocator, edge.to_id);
                 }
             }
@@ -2176,7 +2182,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         in_tmp.clearRetainingCapacity();
         if (store.getIncomingEdgeIds(node)) |edge_ids| {
             for (edge_ids) |eid| {
-                if (store.edges.get(eid)) |edge| {
+                if (store.getEdgeHydrated(eid)) |edge| {
                     try in_tmp.append(allocator, edge.from_id);
                 }
             }

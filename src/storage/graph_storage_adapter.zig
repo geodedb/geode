@@ -2573,7 +2573,12 @@ pub const StorageAdapter = struct {
         // create's request-tenant tag.
         if (store.getOutgoingEdgeIds(source_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                const edge = store.edges.getPtr(edge_id) orelse continue;
+                // PHASE 1 (edge-engine-direct): hydrate-on-miss so the MERGE
+                // dedup probe still sees an EVICTED edge's body — otherwise a
+                // bounded edge cache would miss an existing edge and create a
+                // duplicate. Dedup LOGIC/locking is unchanged (Phase 3/4); only
+                // the body resolution hydrates.
+                const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                 if (edge.to_id != target_id) continue;
                 if (!std.mem.eql(u8, edge.graph_name, graph_name)) continue;
                 if (!std.mem.eql(u8, edge.label, rel_type)) continue;
@@ -4522,6 +4527,50 @@ pub const StorageAdapter = struct {
         return mg.engine.getEdgeProperty(from_id, edge_id, key, allocator);
     }
 
+    /// PHASE 1 (edge-engine-direct): the engine-side record for an edge,
+    /// addressed by its ENGINE edge slot. Resolves the full edge-index entry
+    /// (endpoints + rel-type + prop_head) and the rel-type's label string from
+    /// the per-graph label dictionary, so geode's bounded-edge-cache hydrate can
+    /// rebuild an evicted `Edge` body without a resident mirror. `label` is a
+    /// caller-OWNED dupe (free with `allocator`); the slots are ENGINE slots
+    /// (geode maps them back to public ids via its IdMap). Returns null if the
+    /// edge slot is unknown to the engine (e.g. concurrently removed).
+    pub const EdgeRecord = struct {
+        from_slot: u64,
+        to_slot: u64,
+        rel_type: u32,
+        prop_head: u32,
+        label: []u8,
+    };
+
+    pub fn getEdgeRecordBySlot(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        edge_slot: u64,
+        allocator: Allocator,
+    ) !?EdgeRecord {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        // Edges live on the source-node's shard: the edge slot is shard-striped
+        // by allocNode on the source shard, so shardOfNode(edge_slot) == source
+        // shard (same addressing setEdgePropertiesBatch / getAllEdgeProperties
+        // rely on).
+        const from_shard = mg.shardEngineForNode(edge_slot);
+        const idx_entry = from_shard.edge_index.get(edge_slot) orelse return null;
+        const label_str = mg.label_dict.getString(idx_entry.rel_type) orelse "UNKNOWN";
+        const label_copy = try allocator.dupe(u8, label_str);
+        return EdgeRecord{
+            .from_slot = idx_entry.from,
+            .to_slot = idx_entry.neighbor,
+            .rel_type = idx_entry.rel_type,
+            .prop_head = idx_entry.prop_head,
+            .label = label_copy,
+        };
+    }
+
     // ------------------------------------------------------------------
     // Full node scanning
     // ------------------------------------------------------------------
@@ -4952,6 +5001,13 @@ pub const StorageAdapter = struct {
                 // in-flight reader of THIS graph is no longer live — free this
                 // graph's retired (evicted/removed) adjacency lists now.
                 store.reclaimAdjCacheRetiredForGraph(mg.name);
+                // PHASE 1: same grace boundary for the bounded edge-body cache.
+                // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
+                // graph drained), any `*Edge` handed to an in-flight reader of
+                // this graph is no longer live — free this graph's retired
+                // (evicted/removed) edge bodies now. One consistent grace window
+                // covers nodes + adjacency + edges.
+                store.reclaimEdgeCacheRetiredForGraph(mg.name);
             }
             mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }

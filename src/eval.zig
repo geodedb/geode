@@ -2044,6 +2044,13 @@ fn scanVectorKnn(
         }
     }
 
+    // PHASE 1 note (edge-engine-direct): this brute-force vector scan over edge
+    // property vectors visits only RESIDENT edges under a bounded edge cache —
+    // SYMMETRIC with the node brute-force scan above (which likewise visits only
+    // resident nodes under the bounded node cache). Vector KNN is an approximate
+    // best-effort operation; making it scan the full edge set via the engine is
+    // a future enhancement tracked alongside the node-side scan, not a Phase-1
+    // regression (the node side already had this behavior).
     var edge_iter = store.edges.iterator();
     while (edge_iter.next()) |entry| {
         const prop = entry.value_ptr.properties.get(property_name) orelse continue;
@@ -2420,30 +2427,21 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     if (std.ascii.eqlIgnoreCase(function_name, "indegree")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
+        // PHASE 1 (edge-engine-direct): the in-degree IS the length of the node's
+        // INCOMING adjacency (engine-backed, hydrate-on-miss). The old full
+        // `store.edges.iterator()` scan was both O(all edges) AND incorrect under
+        // a bounded edge cache (it counted only resident edges). Adjacency is the
+        // authoritative, bounded-correct, O(degree) source.
         switch (arg) {
             .Node => |n| {
-                // Count edges where to_id equals this node's id
                 const store = graph_store.getGlobalStore(allocator);
-                var count: i64 = 0;
-                var edge_iter = store.edges.iterator();
-                while (edge_iter.next()) |entry| {
-                    if (entry.value_ptr.to_id == n.id) {
-                        count += 1;
-                    }
-                }
-                return Value{ .Int = count };
+                const ids = store.getIncomingEdgeIds(n.id) orelse return Value{ .Int = 0 };
+                return Value{ .Int = @intCast(ids.len) };
             },
             .Int => |node_id| {
-                // Also accept integer node IDs directly
                 const store = graph_store.getGlobalStore(allocator);
-                var count: i64 = 0;
-                var edge_iter = store.edges.iterator();
-                while (edge_iter.next()) |entry| {
-                    if (entry.value_ptr.to_id == @as(u64, @intCast(node_id))) {
-                        count += 1;
-                    }
-                }
-                return Value{ .Int = count };
+                const ids = store.getIncomingEdgeIds(@as(u64, @intCast(node_id))) orelse return Value{ .Int = 0 };
+                return Value{ .Int = @intCast(ids.len) };
             },
             else => return Value{ .Int = 0 },
         }
@@ -2454,30 +2452,17 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     if (std.ascii.eqlIgnoreCase(function_name, "outdegree")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
+        // PHASE 1: out-degree IS the length of the node's OUTGOING adjacency
+        // (engine-backed). See indegree above — replaces an O(all edges),
+        // bounded-incorrect full edge scan with the O(degree) adjacency length.
         switch (arg) {
             .Node => |n| {
-                // Count edges where from_id equals this node's id
                 const store = graph_store.getGlobalStore(allocator);
-                var count: i64 = 0;
-                var edge_iter = store.edges.iterator();
-                while (edge_iter.next()) |entry| {
-                    if (entry.value_ptr.from_id == n.id) {
-                        count += 1;
-                    }
-                }
-                return Value{ .Int = count };
+                return Value{ .Int = @intCast(store.getOutDegree(n.id)) };
             },
             .Int => |node_id| {
-                // Also accept integer node IDs directly
                 const store = graph_store.getGlobalStore(allocator);
-                var count: i64 = 0;
-                var edge_iter = store.edges.iterator();
-                while (edge_iter.next()) |entry| {
-                    if (entry.value_ptr.from_id == @as(u64, @intCast(node_id))) {
-                        count += 1;
-                    }
-                }
-                return Value{ .Int = count };
+                return Value{ .Int = @intCast(store.getOutDegree(@as(u64, @intCast(node_id)))) };
             },
             else => return Value{ .Int = 0 },
         }

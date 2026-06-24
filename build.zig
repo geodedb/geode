@@ -3220,6 +3220,8 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_acceptor_watchdog_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_transport_quic_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
+    const graph_algo_step = b.step("test-graph-algo", "Run graph algorithm tests (graph_algorithms.zig / centrality / recursion paths)");
+    graph_algo_step.dependOn(&run_graph_algo_tests.step);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_mutation_tests.step, 1, test_shard_loads, test_shard_index);
@@ -5442,6 +5444,8 @@ pub fn build(b: *std.Build) void {
     const graph_isolation_tests = b.addTest(.{ .root_module = graph_isolation_test_mod });
     const run_graph_isolation_tests = b.addRunArtifact(graph_isolation_tests);
     shardDep(test_step, &run_graph_isolation_tests.step, 1, test_shard_loads, test_shard_index);
+    const graph_isolation_step = b.step("test-graph-isolation-edge-iteration", "Run GAP-0512 graph-isolation edge-iteration regression (getEdgesByType per-graph scoping)");
+    graph_isolation_step.dependOn(&run_graph_isolation_tests.step);
 
     // GAP-0509 regression: tenant isolation for node queries and SHOW TABLES
     const gap0509_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0509_tenant_isolation.zig"), .target = target, .optimize = optimize });
@@ -6984,6 +6988,28 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_adj_engine_direct_tests.step, 1, test_shard_loads, test_shard_index);
     const adj_engine_direct_step = b.step("test-adj-engine-direct", "Run Phase-0 bounded engine-direct adjacency cache regression (bounded residency + hydrate-on-miss correctness + edge-create-on-evicted consistency)");
     adj_engine_direct_step.dependOn(&run_adj_engine_direct_tests.step);
+
+    // PHASE 1 (edge-engine-direct): bounded edge-body mirror (`edges`) +
+    // engine-served edge-type queries. Headline bounded-RSS-at-scale proof
+    // (edges.residentCount plateau + correct count(r)/traversal hydrated from
+    // the engine) + evicted-edge hydration idempotency + type-query correctness.
+    const edge_engine_direct_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_engine_direct_bounded.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    edge_engine_direct_test_mod.addImport("geode", root_mod);
+    const edge_engine_direct_tests = b.addTest(.{ .root_module = edge_engine_direct_test_mod });
+    const run_edge_engine_direct_tests = b.addRunArtifact(edge_engine_direct_tests);
+    shardDep(test_step, &run_edge_engine_direct_tests.step, 1, test_shard_loads, test_shard_index);
+    const edge_engine_direct_step = b.step("test-edge-engine-direct", "Run Phase-1 bounded engine-direct edge-body mirror regression (bounded edge residency + hydrate-on-miss correctness + engine-served edge-type queries)");
+    edge_engine_direct_step.dependOn(&run_edge_engine_direct_tests.step);
+
+    // PHASE 1 bounded-RSS plateau PROBE (standalone exe): ingest K edges with a
+    // tiny edge+adj cap and print resident counts + MaxRSS. Run at two K values
+    // to prove residency + RSS do not scale with K.
+    const edge_rss_probe_mod = b.createModule(.{ .root_source_file = b.path("tests/edge_rss_plateau_probe.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    edge_rss_probe_mod.addImport("geode", root_mod);
+    const edge_rss_probe = b.addExecutable(.{ .name = "edge_rss_plateau_probe", .root_module = edge_rss_probe_mod });
+    const edge_rss_probe_install = b.addInstallArtifact(edge_rss_probe, .{});
+    const edge_rss_probe_step = b.step("edge-rss-plateau-probe", "Build the Phase-1 bounded-RSS plateau probe binary");
+    edge_rss_probe_step.dependOn(&edge_rss_probe_install.step);
 
     // Inline-key index-seek regression (read-stress KNOWN BUG #1): inline
     // `{indexed_prop: val}` equality reads seek the exact-property index

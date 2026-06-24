@@ -254,6 +254,22 @@ pub const IdMap = struct {
         return self.edge_uuid_to_slot.count();
     }
 
+    /// Iterator over every public edge uuid in this graph's mapping. Like
+    /// `NodeUuidIterator`, the IdMap edge map stays fully resident (~24 B/entry)
+    /// independent of the bounded EDGE cache, so this enumerates ALL edges of
+    /// the graph even after edge-cache eviction. Used by full-graph "all edge
+    /// ids" paths (tenant-drop cascade, edge-type derivation, index rebuild) so
+    /// they don't miss evicted edges. (PHASE 1: edge-engine-direct.)
+    pub const EdgeUuidIterator = struct {
+        inner: @TypeOf(@as(IdMap, undefined).edge_uuid_to_slot).KeyIterator,
+        pub fn next(it: *EdgeUuidIterator) ?u128 {
+            if (it.inner.next()) |k| return k.* else return null;
+        }
+    };
+    pub fn edgeUuidIterator(self: *const IdMap) EdgeUuidIterator {
+        return .{ .inner = self.edge_uuid_to_slot.keyIterator() };
+    }
+
     /// Deep-copy the mapping tables into a new IdMap owned by `allocator`.
     pub fn clone(self: *const IdMap, allocator: Allocator) !IdMap {
         var copy = IdMap.init(allocator);

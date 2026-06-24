@@ -567,6 +567,74 @@ pub const Edge = struct {
     tenant_id: []const u8 = DEFAULT_TENANT_ID,
 };
 
+// ============================================================================
+// PHASE 1 (edge-engine-direct): bounded, evict-freely EDGE-BODY cache.
+//
+// `edges` used to be an UNBOUNDED, fully-resident `ShardedStore(u64, Edge)`
+// mirror — one `Edge` struct (id/from/to/label/props/graph_name/tenant_id)
+// pinned in RAM for EVERY edge forever. For an edge-heavy graph (taxonomy
+// ~14.27M edges) that is the real RSS floor, and Phase 0's adjacency readers
+// DEPEND on it: each hydrated edge id is dereferenced via `self.edges.get(id)`
+// for the body. The edge body is ALREADY durable + reconstructible from the
+// graph-storage engine (endpoints + rel-type via the engine edge index,
+// properties via getAllEdgeProperties), so the resident map is a redundant
+// mirror. This bounds it: at most `cap` resident `Edge`s, with HYDRATE-ON-MISS
+// rebuilding an evicted edge's body from the engine. Correctness never depends
+// on residency.
+//
+// EVICTION-SAFETY (grace-point, NOT copy-out): many read sites borrow a
+// `*Edge`/`*const Edge` into the resident value for the duration of a query
+// (all under the per-graph / global SHARED store lock). Eviction must not free
+// an `Edge`'s heap (label/props/graph_name/tenant_id byte slices) while a reader
+// holds a pointer into it. We reuse the BoundedNodeCache retire/reclaim
+// discipline exactly as `nodes` does: eviction only UNLINKs + RETIREs (never
+// frees inline); retired edges are freed at the per-graph EXCLUSIVE checkpoint
+// grace window (`reclaimEdgeCacheRetiredForGraph`), which has drained all SHARED
+// readers of that graph. Unlike `AdjList`, an `Edge` ALREADY carries its owning
+// `graph_name`, so the per-graph reclaim predicate scopes directly off it.
+//
+// dedup (Phase 3) / endpoint-resolution de-hydration (Phase 2) / coordinator
+// locking (Phase 4) are UNCHANGED.
+
+/// Per-`Edge` heap free: label + graph_name + tenant_id byte slices and the
+/// property map (keys + String/Ext values). Used as the edge cache's `free_fn`
+/// for inline frees (overwrite) and grace-point reclamation of evicted edges.
+/// Mirrors the per-edge free loop the legacy `clearNodes` mirror walk performed.
+/// Every stored/hydrated Edge OWNS these bytes (create/load/hydrate all dupe
+/// them), so the frees are unconditional beyond the empty-slice guard.
+pub fn freeEdgeValue(allocator: std.mem.Allocator, value: *Edge) void {
+    if (value.label.len > 0) allocator.free(value.label);
+    if (value.graph_name.len > 0) allocator.free(value.graph_name);
+    if (value.tenant_id.len > 0) allocator.free(value.tenant_id);
+    var prop_iter = value.properties.iterator();
+    while (prop_iter.next()) |prop_entry| {
+        allocator.free(prop_entry.key_ptr.*);
+        freePropertyValueWithAllocator(allocator, prop_entry.value_ptr.*);
+    }
+    value.properties.deinit();
+}
+
+/// Bounded, evict-freely cache backing `GraphStore.edges`. See the block
+/// comment above and src/storage/node_cache.zig.
+pub const EdgeCache = node_cache_mod.BoundedNodeCache(u64, Edge);
+
+/// Resident edge-cache cap from `GEODE_EDGE_CACHE_ENTRIES`.
+///   unset   -> node_cache DEFAULT_CAP (1_000_000) — BOUNDED by default
+///   "0"     -> 0 (unbounded legacy mirror; A/B + safety fallback)
+///   N       -> N
+/// NOTE: like the node + adjacency caches, the cap only becomes ACTIVE once the
+/// hydrate hook is installed (engine available); until then eviction is disabled
+/// so an in-memory-only edge body (one not yet flushed to the engine) is never
+/// lost.
+fn edgeCacheCapFromEnv() usize {
+    if (std.c.getenv("GEODE_EDGE_CACHE_ENTRIES")) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t\r\n"), 10) catch
+            node_cache_mod.DEFAULT_CAP;
+    }
+    return node_cache_mod.DEFAULT_CAP;
+}
+
 pub const PropertyValue = union(enum) {
     String: []const u8,
     Int: i64,
@@ -1199,7 +1267,9 @@ pub const MergePropertyIndex = struct {
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
     nodes: NodeCache,
-    edges: sharded_store.ShardedStore(u64, Edge),
+    // PHASE 1 (edge-engine-direct): BOUNDED, evict-freely edge-body cache over
+    // the engine (hydrate-on-miss). See EdgeCache / freeEdgeValue above.
+    edges: EdgeCache, // public edge_id -> Edge body (bounded)
     next_node_id: u64,
     next_edge_id: u64,
     // DEPRECATED (GAP-0279): Process-wide tenant_id races under concurrent access.
@@ -1368,7 +1438,16 @@ pub const GraphStore = struct {
                 .hydrate_fn = null,
                 .hydrate_ctx = null,
             }),
-            .edges = try sharded_store.ShardedStore(u64, Edge).init(allocator),
+            // PHASE 1: bounded edge-body cache. Like the node + adjacency caches,
+            // the cap is forced UNBOUNDED until the hydrate hook is installed
+            // (engine available) via installEdgeCacheHydrate — eviction without
+            // rehydration would lose an in-memory-only edge body.
+            .edges = try EdgeCache.init(allocator, .{
+                .cap = edgeCacheCapFromEnv(),
+                .free_fn = freeEdgeValue,
+                .hydrate_fn = null,
+                .hydrate_ctx = null,
+            }),
             .next_node_id = 1,
             .next_edge_id = 1,
             .tenant_id = tenant_id,
@@ -1525,29 +1604,11 @@ pub const GraphStore = struct {
         // the manual per-node free loop is no longer needed here.
         self.nodes.clearRetainingCapacity();
 
-        // Free and clear all edges
-        var edge_iter = self.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            // Free the label string
-            self.allocator.free(entry.value_ptr.label);
-            // Free the graph_name (always allocated via create functions)
-            if (entry.value_ptr.graph_name.len > 0) {
-                self.allocator.free(entry.value_ptr.graph_name);
-            }
-            // GAP-0279: Free tenant_id (always allocated via create functions)
-            if (entry.value_ptr.tenant_id.len > 0) {
-                self.allocator.free(entry.value_ptr.tenant_id);
-            }
-            // Free the properties hashmap
-            var prop_iter = entry.value_ptr.properties.iterator();
-            while (prop_iter.next()) |prop_entry| {
-                // Free the key
-                self.allocator.free(prop_entry.key_ptr.*);
-                // Free property values (including ExtValue)
-                freePropertyValue(self, prop_entry.value_ptr.*);
-            }
-            entry.value_ptr.properties.deinit();
-        }
+        // Free and clear all edges. PHASE 1: EdgeCache.clearRetainingCapacity
+        // frees every resident AND retired Edge via freeEdgeValue (label +
+        // graph_name + tenant_id + property map) and clears each shard's FIFO, so
+        // the manual per-edge free loop is gone (and a walk would MISS the
+        // retired backlog and double-free the resident ones).
         self.edges.clearRetainingCapacity();
 
         self.next_node_id = 1;
@@ -2152,6 +2213,159 @@ pub const GraphStore = struct {
         var gn = graph_name;
         self.outgoing_edges.reclaimRetiredWhere(@ptrCast(&gn), retiredAdjInGraph);
         self.incoming_edges.reclaimRetiredWhere(@ptrCast(&gn), retiredAdjInGraph);
+    }
+
+    // ========================================================================
+    // PHASE 1: bounded EDGE-BODY cache hydrate-on-miss + grace-point reclaim.
+    // Mirrors the node-cache + Phase-0 adjacency-cache machinery above.
+    // ========================================================================
+
+    const EdgeGraphSlot = struct { graph_name: []const u8, edge_slot: u64 };
+
+    /// Resolve a PUBLIC edge id to its owning graph + ENGINE edge slot by
+    /// scanning the per-graph IdMaps (fully resident, independent of the bounded
+    /// edge cache). Mirrors `resolveNodeGraphSlot`. Null if no IdMap maps it.
+    fn resolveEdgeGraphSlot(self: *GraphStore, edge_id: u64) ?EdgeGraphSlot {
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.edgeSlot(@as(u128, edge_id))) |slot| {
+                return .{ .graph_name = entry.key_ptr.*, .edge_slot = slot };
+            }
+        }
+        return null;
+    }
+
+    /// Rebuild an evicted edge's full `Edge` body from the durable engine. The
+    /// returned Edge OWNS its label/graph_name/tenant_id byte slices + property
+    /// map (freed by freeEdgeValue on eviction/reclaim), exactly like the load
+    /// path (loadOneGraphFromAdapter) and like materializeNodeFromEngine for the
+    /// node side. Endpoints + rel-type come from the engine edge index (O(1)),
+    /// properties from getAllEdgeProperties. Returns null if the edge is unknown
+    /// to any IdMap or to the engine (e.g. concurrently removed) — callers then
+    /// see the same null a true miss would have produced.
+    fn hydrateEdgeCb(ctx: *anyopaque, allocator: std.mem.Allocator, edge_id: u64) anyerror!?Edge {
+        const self: *GraphStore = @ptrCast(@alignCast(ctx));
+        const adapter = global_adapter orelse return null;
+        const egs = self.resolveEdgeGraphSlot(edge_id) orelse return null;
+
+        const rec = (adapter.getEdgeRecordBySlot(egs.graph_name, egs.edge_slot, allocator) catch |err| switch (err) {
+            error.GraphNotFound, error.NodeNotFound => return null,
+            else => return err,
+        }) orelse return null;
+        // `rec.label` is owned by us from here; free it on any error path.
+        errdefer allocator.free(rec.label);
+
+        const id_map = self.requireIdMap(egs.graph_name) catch return null;
+        // Map engine endpoint slots back to PUBLIC node ids. A missing mapping
+        // (mid-load / mid-delete) means the edge isn't safely reconstructable.
+        const from_id = @as(u64, @truncate(id_map.nodeUuid(rec.from_slot) orelse return null));
+        const to_id = @as(u64, @truncate(id_map.nodeUuid(rec.to_slot) orelse return null));
+
+        const graph_copy = try allocator.dupe(u8, egs.graph_name);
+        errdefer allocator.free(graph_copy);
+
+        // Recover the persisted edge tenant tag (absent/corrupt -> default),
+        // mirroring the load path (graph_store.zig edge-load tenant recovery).
+        const tenant_copy = blk: {
+            const maybe_t = adapter.getEdgeProperty(egs.graph_name, rec.from_slot, egs.edge_slot, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+            if (maybe_t) |stored| {
+                defer graph_storage_adapter.freeOwnedStorageProperty(allocator, stored);
+                switch (stored) {
+                    .string => |text| break :blk try allocator.dupe(u8, text),
+                    else => {},
+                }
+            }
+            break :blk try allocator.dupe(u8, DEFAULT_TENANT_ID);
+        };
+        errdefer allocator.free(tenant_copy);
+
+        var edge = Edge{
+            .id = edge_id,
+            .from_id = from_id,
+            .to_id = to_id,
+            .label = rec.label,
+            .properties = CompactPropertyMap.init(allocator),
+            .graph_name = graph_copy,
+            .tenant_id = tenant_copy,
+        };
+        errdefer freeEdgeValue(allocator, &edge);
+
+        if (rec.prop_head != 0) {
+            // Route via the source-node SLOT (shard-striped) so
+            // getAllEdgeProperties reaches the correct per-shard engine.
+            var sp = try adapter.getAllEdgeProperties(egs.graph_name, rec.from_slot, rec.prop_head, allocator);
+            defer {
+                var sp_it = sp.iterator();
+                while (sp_it.next()) |e| {
+                    allocator.free(e.key_ptr.*);
+                    graph_storage_adapter.freeOwnedStorageProperty(allocator, e.value_ptr.*);
+                }
+                sp.deinit();
+            }
+            var sp_it = sp.iterator();
+            while (sp_it.next()) |e| {
+                const key_copy = try allocator.dupe(u8, e.key_ptr.*);
+                const pv = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
+                try edge.properties.put(key_copy, pv);
+            }
+        }
+
+        return edge;
+    }
+
+    /// Install the hydrate-on-miss hook for the bounded edge-body cache and
+    /// activate the configured cap (GEODE_EDGE_CACHE_ENTRIES). Call once the
+    /// global storage adapter is available (engine durable). Until this point the
+    /// cache stays UNBOUNDED — eviction without rehydration would lose an
+    /// in-memory-only edge body.
+    pub fn installEdgeCacheHydrate(self: *GraphStore) void {
+        self.edges.setHydrate(hydrateEdgeCb, @ptrCast(self));
+    }
+
+    /// Borrowed-pointer edge-body read with HYDRATE-ON-MISS. Returns the
+    /// resident `*Edge` (a hit) or rebuilds the edge from the engine, inserts it
+    /// into the bounded cache (evicting cold entries), and returns the
+    /// freshly-resident pointer. Null only if the edge exists in neither the
+    /// cache nor the engine (pure in-memory deployment with no adapter, or a
+    /// genuinely-missing id).
+    ///
+    /// Lifetime: the returned `*Edge` stays valid for the caller's read span
+    /// under the per-graph SHARED lock — eviction (triggered here or by a
+    /// concurrent insert) only UNLINKs+RETIREs, never frees inline; retired
+    /// edges are freed only at the per-graph EXCLUSIVE checkpoint grace window
+    /// (which drained all SHARED readers). `getOrHydratePtr` mutates the cache on
+    /// a miss under the shard's hydrate mutex, so we `@constCast`: callers
+    /// already hold the store/graph read lock that serializes this against the
+    /// per-graph-exclusive evict/reclaim, matching the node cache's contract.
+    pub fn getEdgePtrHydrated(self: *const GraphStore, edge_id: u64) ?*Edge {
+        const cache: *EdgeCache = @constCast(&self.edges);
+        return (cache.getOrHydratePtr(edge_id) catch return null) orelse return null;
+    }
+
+    /// By-value variant of `getEdgePtrHydrated`. Returns a COPY of the edge body
+    /// (its byte slices still point into the cache-owned heap, valid for the
+    /// caller's read span under the shared lock).
+    pub fn getEdgeHydrated(self: *const GraphStore, edge_id: u64) ?Edge {
+        if (self.getEdgePtrHydrated(edge_id)) |p| return p.* else return null;
+    }
+
+    /// Predicate: does this retired/evicted edge belong to `graph_name`? An Edge
+    /// already carries its owning graph_name (unlike AdjList), so the per-graph
+    /// grace reclaim scopes directly off it.
+    fn retiredEdgeInGraph(ctx: *anyopaque, value: *const Edge) bool {
+        const graph_name: *const []const u8 = @ptrCast(@alignCast(ctx));
+        return std.mem.eql(u8, value.graph_name, graph_name.*);
+    }
+
+    /// Reclaim (free) the edge cache's retired entries belonging to `graph_name`.
+    /// MUST be called by the storage adapter while it holds that graph's
+    /// per-graph rwlock EXCLUSIVE (the checkpoint window), which drains all
+    /// SHARED readers of that graph — so freeing an Edge cannot race a live
+    /// `*Edge` a reader still holds. This is the edge-body grace boundary,
+    /// joining the SAME per-graph window as the node + adjacency reclaim.
+    pub fn reclaimEdgeCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
+        var gn = graph_name;
+        self.edges.reclaimRetiredWhere(@ptrCast(&gn), retiredEdgeInGraph);
     }
 
     fn requireEdgeSlot(self: *GraphStore, graph_name: []const u8, edge_id: u64) !u64 {
@@ -4864,25 +5078,41 @@ pub const GraphStore = struct {
     // cascade to collect a tenant's edges for referential-consistency deletion
     // (edges deleted before their endpoint nodes).
     pub fn getAllEdgesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
-        var count: usize = 0;
-        var iter = self.edges.iterator();
-        while (iter.next()) |entry| {
-            if (tenant) |tid| {
-                if (!std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) continue;
+        // Unbounded cache: the resident map is the full set (fast path).
+        if (self.edges.effectiveCap() == 0) {
+            var result: std.ArrayList(u64) = .empty;
+            errdefer result.deinit(allocator);
+            var iter = self.edges.iterator();
+            while (iter.next()) |entry| {
+                if (tenant) |tid| {
+                    if (!std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) continue;
+                }
+                try result.append(allocator, entry.key_ptr.*);
             }
-            count += 1;
+            return result.toOwnedSlice(allocator);
         }
-        var result = try allocator.alloc(u64, count);
-        iter = self.edges.iterator();
-        var i: usize = 0;
-        while (iter.next()) |entry| {
-            if (tenant) |tid| {
-                if (!std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) continue;
+
+        // PHASE 1: BOUNDED cache — the resident map is incomplete. Enumerate ALL
+        // edge ids from the per-graph IdMaps (fully resident, independent of the
+        // edge cache) so the tenant-drop cascade never misses an evicted edge.
+        // Resolve each edge's tenant via hydrate-on-miss (residency stays
+        // bounded — the cache evicts as it hydrates). Mirrors
+        // getAllNodesForTenant's bounded-cache branch.
+        var result: std.ArrayList(u64) = .empty;
+        errdefer result.deinit(allocator);
+        var it = @constCast(self).id_maps.iterator();
+        while (it.next()) |entry| {
+            var eit = entry.value_ptr.edgeUuidIterator();
+            while (eit.next()) |euuid| {
+                const eid = @as(u64, @truncate(euuid));
+                if (tenant) |tid| {
+                    const edge = self.getEdgeHydrated(eid) orelse continue;
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+                }
+                try result.append(allocator, eid);
             }
-            result[i] = entry.key_ptr.*;
-            i += 1;
         }
-        return result;
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn getNodeCount(self: *GraphStore) usize {
@@ -5017,7 +5247,45 @@ pub const GraphStore = struct {
     }
 
     pub fn getEdgeCount(self: *GraphStore) usize {
-        return self.edges.count();
+        // PHASE 1: with a BOUNDED edge cache the resident map is incomplete, so
+        // count from the per-graph IdMaps (fully resident, ~24 B/edge — the same
+        // authoritative source `getEdgeCount`'s node analog `countNodesForGraph`
+        // uses for nodes). Unbounded cache: the resident count IS the total.
+        if (self.edges.effectiveCap() == 0) {
+            return self.edges.count();
+        }
+        var total: usize = 0;
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            total += entry.value_ptr.edgeCount();
+        }
+        return total;
+    }
+
+    /// PHASE 1 (edge-engine-direct): a COMPLETE, bounded-cache-safe list of every
+    /// public edge id (caller owns the returned slice). Full-edge-scan paths
+    /// (algorithms, introspection, index build, DELETE collection) must use this
+    /// instead of `edges.iterator()` — with a bounded edge cache the resident map
+    /// is incomplete, so iterating it would silently miss evicted edges. When
+    /// UNBOUNDED the resident keys ARE the full set (fast path); when BOUNDED the
+    /// ids come from the per-graph IdMaps (fully resident, independent of the
+    /// edge cache). Callers resolve each id's body via `getEdgePtrHydrated`
+    /// (residency stays bounded — the cache evicts as it hydrates). Mirrors
+    /// `getAllNodes` for the node side.
+    pub fn allEdgeIds(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
+        var result: std.ArrayList(u64) = .empty;
+        errdefer result.deinit(allocator);
+        if (self.edges.effectiveCap() == 0) {
+            var it = @constCast(self).edges.iterator();
+            while (it.next()) |entry| try result.append(allocator, entry.key_ptr.*);
+        } else {
+            var im_it = @constCast(self).id_maps.iterator();
+            while (im_it.next()) |entry| {
+                var eit = entry.value_ptr.edgeUuidIterator();
+                while (eit.next()) |euuid| try result.append(allocator, @as(u64, @truncate(euuid)));
+            }
+        }
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn isDirty(self: *const GraphStore) bool {
@@ -5029,7 +5297,8 @@ pub const GraphStore = struct {
     }
 
     pub fn getEdgePtr(self: *const GraphStore, edge_id: u64) ?*const Edge {
-        return self.edges.getPtr(edge_id);
+        // PHASE 1: hydrate-on-miss so an evicted edge body still resolves.
+        return self.getEdgePtrHydrated(edge_id);
     }
 
     // PHASE 0: borrowed-slice adjacency read with HYDRATE-ON-MISS. Returns the
@@ -5072,7 +5341,8 @@ pub const GraphStore = struct {
         var result: std.ArrayList(Edge) = .empty;
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                // PHASE 1: hydrate-on-miss so an evicted edge body still resolves.
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     try result.append(allocator, edge.*);
                 }
             }
@@ -5084,7 +5354,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(Edge) = .empty;
         if (self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     try result.append(allocator, edge.*);
                 }
             }
@@ -5097,7 +5367,7 @@ pub const GraphStore = struct {
         errdefer result.deinit(allocator);
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     try result.append(allocator, edge.to_id);
                 }
             }
@@ -5109,7 +5379,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(u64) = .empty;
         if (self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     try result.append(allocator, edge.from_id);
                 }
             }
@@ -5121,7 +5391,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(u64) = .empty;
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     try result.append(allocator, edge.to_id);
                 }
             }
@@ -5136,7 +5406,7 @@ pub const GraphStore = struct {
     pub fn hasEdge(self: *const GraphStore, source: u64, target: u64) bool {
         if (self.outAdjItems(source)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     if (edge.to_id == target) return true;
                 }
             }
@@ -5230,7 +5500,7 @@ pub const GraphStore = struct {
 
             if (self.outAdjItems(current)) |outgoing| {
                 for (outgoing) |edge_id| {
-                    if (self.edges.get(edge_id)) |edge| {
+                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
                         const next = edge.to_id;
                         if (visited.contains(next)) continue;
                         try visited.put(next, {});
@@ -5299,7 +5569,7 @@ pub const GraphStore = struct {
             const current_dist = distance.get(current) orelse 0;
             if (self.outAdjItems(current)) |outgoing| {
                 for (outgoing) |edge_id| {
-                    if (self.edges.get(edge_id)) |edge| {
+                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
                         const next = edge.to_id;
                         const next_dist = current_dist + 1;
                         if (distance.get(next)) |existing| {
@@ -5388,7 +5658,7 @@ pub const GraphStore = struct {
 
             if (self.outAdjItems(current.node)) |outgoing| {
                 for (outgoing) |edge_id| {
-                    if (self.edges.get(edge_id)) |edge| {
+                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
                         const next = edge.to_id;
                         if (visited.contains(next)) continue;
                         try visited.put(next, {});
@@ -5446,7 +5716,7 @@ pub const GraphStore = struct {
 
         if (self.outAdjItems(current)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.edges.getPtr(edge_id)) |edge| {
+                if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     const next = edge.to_id;
                     if (visit(path_nodes.items, next, end)) continue;
                     if (filter) |flt| {
@@ -5472,7 +5742,7 @@ pub const GraphStore = struct {
         if (bidirectional) {
             if (self.inAdjItems(current)) |incoming| {
                 for (incoming) |edge_id| {
-                    if (self.edges.getPtr(edge_id)) |edge| {
+                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
                         const next = edge.from_id;
                         if (visit(path_nodes.items, next, end)) continue;
                         if (filter) |flt| {
@@ -5924,6 +6194,17 @@ pub const GraphStore = struct {
     // PERF-P0-001: Add edge to edge-type index (composite key "graph_name:edge_type")
     // Uses stack-allocated bufPrint to probe for existing key before heap alloc (same pattern as addToLabelIndex).
     fn addToEdgeTypeIndex(self: *GraphStore, graph_name: []const u8, edge_type: []const u8, edge_id: u64) !void {
+        // PHASE 1 (edge-engine-direct): when the edge cache is BOUNDED+engine-
+        // backed, do NOT build the resident posting list — it is the
+        // ~14M-entry-per-type RSS offender, and `getEdgesByType` now derives
+        // type membership from the engine-backed adjacency + edge caches
+        // (collectEdgesByTypeFromEngine). The small per-tenant `edge_type_count`
+        // counters (bumpEdgeTypeCount, used for LSP introspection) are
+        // maintained SEPARATELY by the create/delete callers and are unaffected.
+        // The posting list is still maintained when UNBOUNDED (no engine / A/B
+        // fallback), where it is the complete source of truth.
+        if (self.edges.effectiveCap() != 0) return;
+
         var buf: [512]u8 = undefined;
         const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, edge_type }) catch {
             // Key too long for stack buffer — fall back to heap alloc
@@ -6040,7 +6321,7 @@ pub const GraphStore = struct {
         const effective_value = switch (value) {
             .String => |s| blk: {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
-                    const maybe_edge = self.edges.get(edge_id);
+                    const maybe_edge = self.getEdgeHydrated(edge_id);
                     const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
@@ -6079,7 +6360,7 @@ pub const GraphStore = struct {
         blk_adapter: {
             const vt = global_vtable orelse break :blk_adapter;
             const f = vt.setEdgePropertyFn orelse break :blk_adapter;
-            const edge = self.edges.get(edge_id) orelse break :blk_adapter;
+            const edge = self.getEdgeHydrated(edge_id) orelse break :blk_adapter;
             const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
                 log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
                     Attr.string("error", @errorName(err)),
@@ -6104,7 +6385,7 @@ pub const GraphStore = struct {
                 });
             };
         }
-        if (self.edges.getPtr(edge_id)) |edge| {
+        if (self.getEdgePtrHydrated(edge_id)) |edge| {
             const value_copy = try copyPropertyValue(self, effective_value);
             errdefer freePropertyValue(self, value_copy);
 
@@ -6147,7 +6428,7 @@ pub const GraphStore = struct {
     /// Intended for internal bulk-ingest callers; regular per-property
     /// callers keep using `setEdgeProperty`.
     pub fn setEdgePropertiesBatch(self: *GraphStore, edge_id: u64, entries: []const BatchPropertyEntry) !void {
-        const edge = self.edges.get(edge_id) orelse return error.EdgeNotFound;
+        const edge = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
 
         // --- Adapter path: single lock acquisition for all properties ---
         if (global_adapter) |adapter| {
@@ -6185,7 +6466,7 @@ pub const GraphStore = struct {
         }
 
         // --- In-memory store update (always, regardless of adapter) ---
-        if (self.edges.getPtr(edge_id)) |edge_ptr| {
+        if (self.getEdgePtrHydrated(edge_id)) |edge_ptr| {
             for (entries) |entry| {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
@@ -6229,7 +6510,7 @@ pub const GraphStore = struct {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
-                    const maybe_edge = self.edges.get(edge_id);
+                    const maybe_edge = self.getEdgeHydrated(edge_id);
                     const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
@@ -6269,7 +6550,7 @@ pub const GraphStore = struct {
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
-                if (self.edges.get(edge_id)) |edge_info| {
+                if (self.getEdgeHydrated(edge_id)) |edge_info| {
                     const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
                         log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
                             Attr.string("error", @errorName(err)),
@@ -6305,7 +6586,7 @@ pub const GraphStore = struct {
                 }
             }
         }
-        if (self.edges.getPtr(edge_id)) |edge| {
+        if (self.getEdgePtrHydrated(edge_id)) |edge| {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
@@ -6343,9 +6624,70 @@ pub const GraphStore = struct {
         tenant_id: ?[]const u8,
         graph_name: ?[]const u8,
     ) []u64 {
-        // Collect matching edge IDs from the edge-type index. When
-        // graph_name is set, do a single keyed lookup; when it is null,
-        // iterate every graph (legacy admin path).
+        // PHASE 1 (edge-engine-direct): with a BOUNDED edge cache the resident
+        // `edge_type_index` posting list is no longer maintained at full size
+        // (it was the ~14M-entry-per-type RSS offender). DERIVE type membership
+        // from the engine-backed adjacency + edge caches instead: for each node
+        // in the graph, expand its OUTGOING adjacency (engine hydrate-on-miss)
+        // and keep the edge ids whose hydrated body matches `edge_type` (and
+        // tenant). Each edge appears exactly once as some node's outgoing edge,
+        // so no dedup is needed. Bounded residency throughout (the caches evict
+        // as they hydrate). When the edge cache is UNBOUNDED (legacy A/B mode)
+        // the resident posting list IS complete, so use the O(result) fast path.
+        if (self.edges.effectiveCap() == 0) {
+            return self.getEdgesByTypeFromPostings(allocator, edge_type, tenant_id, graph_name);
+        }
+
+        var id_list = std.ArrayList(u64).empty;
+        defer id_list.deinit(allocator);
+
+        if (graph_name) |gn| {
+            self.collectEdgesByTypeFromEngine(allocator, &id_list, gn, edge_type, tenant_id) catch return &.{};
+        } else {
+            var graph_iter = self.graphs.keyIterator();
+            while (graph_iter.next()) |graph_key| {
+                self.collectEdgesByTypeFromEngine(allocator, &id_list, graph_key.*, edge_type, tenant_id) catch continue;
+            }
+        }
+        return id_list.toOwnedSlice(allocator) catch &.{};
+    }
+
+    /// Engine-derived `getEdgesByType` body for the bounded edge cache: iterate
+    /// every node of `gn` and collect its outgoing edges of `edge_type` (with
+    /// optional tenant filter). `iterateNodesInGraph` enumerates the graph's
+    /// nodes; `getOutgoingEdgeIds` + `getEdgePtrHydrated` resolve the (bounded)
+    /// adjacency + edge bodies from the engine. Appends into `id_list`.
+    fn collectEdgesByTypeFromEngine(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        id_list: *std.ArrayList(u64),
+        gn: []const u8,
+        edge_type: []const u8,
+        tenant_id: ?[]const u8,
+    ) !void {
+        var node_iter = self.iterateNodesInGraph(gn);
+        while (node_iter.next()) |node_ptr| {
+            const out_ids = self.getOutgoingEdgeIds(node_ptr.id) orelse continue;
+            for (out_ids) |eid| {
+                const edge = self.getEdgePtrHydrated(eid) orelse continue;
+                if (!std.mem.eql(u8, edge.label, edge_type)) continue;
+                if (tenant_id) |tid| {
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+                }
+                try id_list.append(allocator, eid);
+            }
+        }
+    }
+
+    /// Legacy resident-posting-list `getEdgesByType` (UNBOUNDED edge cache A/B
+    /// fallback only). O(result) keyed lookup against `edge_type_index`.
+    fn getEdgesByTypeFromPostings(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        edge_type: []const u8,
+        tenant_id: ?[]const u8,
+        graph_name: ?[]const u8,
+    ) []u64 {
         var id_list = std.ArrayList(u64).empty;
         defer id_list.deinit(allocator);
 
@@ -6366,7 +6708,6 @@ pub const GraphStore = struct {
             }
         }
 
-        // Filter by tenant and return IDs directly (zero-copy for edge data).
         if (tenant_id == null) {
             return id_list.toOwnedSlice(allocator) catch return &.{};
         }
@@ -6398,7 +6739,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(Edge) = .empty;
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgeHydrated(edge_id)) |edge| {
                     result.append(allocator, edge) catch continue;
                 }
             }
@@ -6411,7 +6752,7 @@ pub const GraphStore = struct {
         var result = std.ArrayList(Edge){};
         if (self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
-                if (self.edges.get(edge_id)) |edge| {
+                if (self.getEdgeHydrated(edge_id)) |edge| {
                     result.append(allocator, edge) catch continue;
                 }
             }
@@ -7772,12 +8113,31 @@ pub const GraphStore = struct {
             }
         }
 
-        // Serialize edges as JSON-lines
-        var edge_iter = self.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr;
-            try appendEdgeJson(&buf, allocator, entry.key_ptr.*, edge);
-            try buf.append(allocator, '\n');
+        // Serialize edges as JSON-lines.
+        if (self.edges.effectiveCap() == 0) {
+            // Unbounded: resident map is the full set.
+            var edge_iter = self.edges.iterator();
+            while (edge_iter.next()) |entry| {
+                try appendEdgeJson(&buf, allocator, entry.key_ptr.*, entry.value_ptr);
+                try buf.append(allocator, '\n');
+            }
+        } else {
+            // PHASE 1: bounded — resident map is incomplete. Enumerate every
+            // edge id from the resident IdMaps and serialize the resident copy
+            // if present, else an edge rebuilt from the engine via
+            // hydrate-on-miss (residency stays bounded). Mirrors the node branch
+            // above so a snapshot/backup never misses an evicted edge.
+            var it = self.id_maps.iterator();
+            while (it.next()) |im_entry| {
+                var eit = im_entry.value_ptr.edgeUuidIterator();
+                while (eit.next()) |euuid| {
+                    const id = @as(u64, @truncate(euuid));
+                    if (self.getEdgePtrHydrated(id)) |edge| {
+                        try appendEdgeJson(&buf, allocator, id, edge);
+                        try buf.append(allocator, '\n');
+                    }
+                }
+            }
         }
 
         return try buf.toOwnedSlice(allocator);
@@ -8019,6 +8379,16 @@ pub const GraphStore = struct {
 
     /// Delete an edge without saving (used during rollback)
     pub fn deleteEdgeNoSave(self: *GraphStore, edge_id: u64) void {
+        // PHASE 1: if the edge body was EVICTED, hydrate it back into the cache
+        // first so fetchRemove below recovers the body — otherwise the
+        // adjacency + edge-type index cleanup (keyed off from/to/label) would be
+        // skipped, leaving the edge id dangling in those indexes. fetchRemove
+        // takes ownership of the value; the inline free here mirrors the
+        // pre-cache delete (delete runs under the exclusive write path, so no
+        // SHARED reader holds this specific entry).
+        if (!self.edges.contains(edge_id)) {
+            _ = self.getEdgePtrHydrated(edge_id);
+        }
         if (self.edges.fetchRemove(edge_id)) |kv| {
             var edge = kv.value;
 
@@ -8088,11 +8458,13 @@ pub const GraphStore = struct {
 
     /// Delete an edge and mark store dirty
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
-        // Capture graph_name before deletion for WAL notification and handle routing
-        const gn = if (self.edges.get(edge_id)) |e| e.graph_name else "";
+        // Capture graph_name before deletion for WAL notification and handle
+        // routing. PHASE 1: hydrate-on-miss so an EVICTED edge can still be
+        // deleted (its endpoints/graph resolved from the engine).
+        const gn = if (self.getEdgePtrHydrated(edge_id)) |e| e.graph_name else "";
 
         if (global_vtable) |vt| {
-            if (self.edges.get(edge_id)) |edge| {
+            if (self.getEdgePtrHydrated(edge_id)) |edge| {
                 const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
                     log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
                         Attr.string("error", @errorName(err)),
@@ -8185,7 +8557,7 @@ pub const GraphStore = struct {
 
     /// Set an edge property without saving (used during rollback)
     pub fn setEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
-        if (self.edges.getPtr(edge_id)) |edge| {
+        if (self.getEdgePtrHydrated(edge_id)) |edge| {
             const value_copy = try copyPropertyValue(self, value);
             errdefer freePropertyValue(self, value_copy);
 
@@ -8201,7 +8573,7 @@ pub const GraphStore = struct {
 
     /// Remove an edge property without saving (used during rollback)
     pub fn removeEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8) void {
-        if (self.edges.getPtr(edge_id)) |edge| {
+        if (self.getEdgePtrHydrated(edge_id)) |edge| {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
@@ -9625,6 +9997,11 @@ pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*Gra
     // an evicted node's edge-id list via hydrate-on-miss, so activate the
     // configured cap (GEODE_ADJ_CACHE_ENTRIES). Until here they stay unbounded.
     store.installAdjCacheHydrate();
+    // PHASE 1: same for the bounded edge-body cache — the engine can now
+    // rebuild an evicted edge's body (endpoints/rel-type/props) via
+    // hydrate-on-miss, so activate the configured cap (GEODE_EDGE_CACHE_ENTRIES).
+    // Until here it stays unbounded.
+    store.installEdgeCacheHydrate();
     return store;
 }
 

@@ -1467,9 +1467,14 @@ pub const IndexManager = struct {
             try self.insertAdvancedPropertyValue(meta, node.id, prop);
         }
 
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr;
+        // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
+        // (bounded-cache-safe) and hydrate each body, instead of iterating the
+        // resident `store.edges` map (which under a bounded edge cache would miss
+        // evicted edges when building the index).
+        const adv_edge_ids = try store.allEdgeIds(self.allocator);
+        defer self.allocator.free(adv_edge_ids);
+        for (adv_edge_ids) |__eid| {
+            const edge = store.getEdgePtrHydrated(__eid) orelse continue;
             if (!std.mem.eql(u8, edge.label, meta.label)) continue;
             const prop = edge.properties.get(meta.property) orelse continue;
             try self.insertAdvancedPropertyValue(meta, edge.id, prop);

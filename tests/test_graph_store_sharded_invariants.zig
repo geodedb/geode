@@ -15,10 +15,16 @@ test "GraphStore.nodes is a BoundedNodeCache backed by a ShardedStore" {
     try testing.expectEqual(sharded.ShardedStore(u64, graph_store.Node), FieldType.Store);
 }
 
-test "GraphStore.edges is a ShardedStore" {
+test "GraphStore.edges is a BoundedNodeCache backed by a ShardedStore" {
+    // PHASE 1 (edge-engine-direct): the edge-body mirror is now a bounded,
+    // evict-freely EdgeCache (eviction + hydrate-on-miss from the engine) rather
+    // than a bare unbounded ShardedStore mirror — but it is still sharded
+    // underneath, so per-shard locking/routing is preserved. Pins both facts so
+    // an accidental revert to a bare ShardedStore (loss of the bounded layer) is
+    // caught.
     const FieldType = @TypeOf(@as(graph_store.GraphStore, undefined).edges);
-    const expected = sharded.ShardedStore(u64, graph_store.Edge);
-    try testing.expectEqual(expected, FieldType);
+    try testing.expectEqual(graph_store.EdgeCache, FieldType);
+    try testing.expectEqual(sharded.ShardedStore(u64, graph_store.Edge), FieldType.Store);
 }
 
 test "GraphStore.outgoing_edges is a BoundedNodeCache backed by a ShardedStore" {

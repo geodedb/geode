@@ -249,10 +249,15 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     }
 
     // --- Edge property keys: label_properties_by_tenant covers nodes only.
-    // Filter store.edges by tenant_id to avoid cross-tenant leakage.
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |entry| {
-        const edge = entry.value_ptr;
+    // Filter edges by tenant_id to avoid cross-tenant leakage. PHASE 1
+    // (edge-engine-direct): enumerate the COMPLETE edge id set
+    // (bounded-cache-safe) and hydrate each body, instead of iterating the
+    // resident `store.edges` map (which under a bounded edge cache would miss
+    // evicted edges' property keys).
+    const edge_ids_for_keys = try store.allEdgeIds(allocator);
+    defer allocator.free(edge_ids_for_keys);
+    for (edge_ids_for_keys) |__eid| {
+        const edge = store.getEdgePtrHydrated(__eid) orelse continue;
         // Honour tenant filter; null means admin sees everything.
         if (filter_tenant) |tid| {
             if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;

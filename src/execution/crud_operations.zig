@@ -125,7 +125,7 @@ fn applySetClausesToEdge(
             .AllProperties => |all_props| {
                 if (!std.mem.eql(u8, all_props.node, var_name)) continue;
                 const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
-                if (store.edges.getPtr(edge_id)) |edge_ptr| {
+                if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
                     try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
                 }
             },
@@ -352,7 +352,7 @@ fn findExistingEdgeId(
 ) ?u64 {
     const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return null;
     for (outgoing_ids) |edge_id| {
-        const edge = read_store.edges.getPtr(edge_id) orelse continue;
+        const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
         if (edge.to_id != target_id) continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
         return edge_id;
@@ -385,7 +385,7 @@ fn collectMatchingEdgeIds(
             if (!nodeIdMatchesPattern(read_store, source_id, graph_name, tenant_id, left_labels, left_props)) continue;
             const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse continue;
             for (outgoing_ids) |edge_id| {
-                const edge = read_store.edges.getPtr(edge_id) orelse continue;
+                const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
                 if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
                 if (edge.from_id != source_id) continue;
                 if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
@@ -404,7 +404,7 @@ fn collectMatchingEdgeIds(
             if (!nodeIdMatchesPattern(read_store, target_id, graph_name, tenant_id, right_labels, right_props)) continue;
             const incoming_ids = read_store.getIncomingEdgeIds(target_id) orelse continue;
             for (incoming_ids) |edge_id| {
-                const edge = read_store.edges.getPtr(edge_id) orelse continue;
+                const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
                 if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
                 if (edge.to_id != target_id) continue;
                 if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
@@ -415,13 +415,18 @@ fn collectMatchingEdgeIds(
         return try matches.toOwnedSlice(allocator);
     }
 
-    var edge_iter = read_store.edges.iterator();
-    while (edge_iter.next()) |edge_entry| {
-        const edge = edge_entry.value_ptr;
+    // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
+    // (bounded-cache-safe) and resolve each body via hydrate-on-miss. The old
+    // `read_store.edges.iterator()` saw only resident edges under a bounded
+    // cache, so a DELETE could silently miss evicted edges.
+    const all_ids = try read_store.allEdgeIds(allocator);
+    defer allocator.free(all_ids);
+    for (all_ids) |eid| {
+        const edge = read_store.getEdgePtrHydrated(eid) orelse continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
         if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
         if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
-        try matches.append(allocator, edge_entry.key_ptr.*);
+        try matches.append(allocator, eid);
     }
 
     return try matches.toOwnedSlice(allocator);
@@ -1016,7 +1021,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Track created relationship by variable name
             if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
+                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
                 const edge_value = Value{ .Edge = edge_ptr };
                 try created_relationships.put(rel_var_name, edge_value);
             }
@@ -1466,7 +1471,7 @@ pub fn executeCreateQuery(
             // Track created relationship by variable name
             if (hop.rel.name) |rel_var_name| {
                 // Get edge from store to create Edge value
-                const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
+                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
 
                 // Create Edge value for the relationship
                 const edge_value = Value{ .Edge = edge_ptr };
@@ -2438,7 +2443,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
             // Track created relationship by variable name
             if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
+                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
                 const edge_value = Value{ .Edge = edge_ptr };
                 try created_relationships.put(rel_var_name, edge_value);
             }
