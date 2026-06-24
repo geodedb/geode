@@ -4036,9 +4036,15 @@ pub fn build(b: *std.Build) void {
 
     // MFA risk sensitivity & step-up tests
     const mfa_risk_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa_risk.zig"), .target = target, .optimize = optimize });
+    // Task 6 (FIPS seam): mfa_risk.zig routes TOTP HMAC-SHA1 through crypto_backend.
+    mfa_risk_mod.addImport("crypto_backend", crypto_backend_mod);
     const mfa_risk_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_risk_stepup.zig"), .target = target, .optimize = optimize }) });
     mfa_risk_tests.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
     shardDep(test_step, &mfa_risk_tests.step, 1, test_shard_loads, test_shard_index);
+    // Dedicated step: zig build test-mfa-totp — RFC 6238 vector + seam routing check, both -Dfips modes.
+    const run_mfa_risk_tests = b.addRunArtifact(mfa_risk_tests);
+    const mfa_totp_step = b.step("test-mfa-totp", "Task 6: MFA TOTP HMAC-SHA1 seam routing — RFC 6238 KAT + step-up logic");
+    mfa_totp_step.dependOn(&run_mfa_risk_tests.step);
     // Recovery code contention test
     const mfa_recovery_contention_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
     shardDep(test_step, &mfa_recovery_contention_tests.step, 1, test_shard_loads, test_shard_index);
