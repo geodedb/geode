@@ -335,3 +335,148 @@ test "public edge endpoint seek: CREATE-seeded node found via public fallback" {
     try testing.expect(pub_id != 0);
     try testing.expect(store.nodes.getPtr(pub_id) != null);
 }
+
+// ===================================================================
+// PHASE 2 (edge-engine-direct): the public endpoint resolver must NOT
+// full-materialize a candidate node to verify a remaining composite-key
+// filter. The from-dump edge phase resolves each endpoint by
+// {source, source_id}; `source_id` is the UNIQUE indexed merge key, so the
+// seed resolves O(1) via the merge index (no hydration). The remaining
+// `source` filter was verified with `store.getNodeProperty` (the HYDRATING
+// path: getOrHydratePtr -> materializeNodeFromEngine, reads ALL props), so at
+// cache << dataset EVERY endpoint resolution hydrated the whole candidate node
+// — the gdb hot path (materializeNodeFromEngine -> PropertyChain.hasKey). The
+// fix reads that ONE property directly from the engine by slot
+// (adapter.getNodeProperty(graph_name, slot, key)), which does NOT insert the
+// node into the bounded cache.
+// ===================================================================
+
+// Zig 0.16 removed std.posix.setenv; use the libc shims (same pattern as
+// tests/test_gap0902_bounded_analytical_reads.zig).
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+const HYDRATION_HARNESS_CAP = "64";
+
+// A harness variant that forces a SMALL bounded node cache (eviction) and
+// installs the hydrate-on-miss hook so the cap is actually in force — the
+// at-scale condition where Problem #1 (per-edge full-node materialize) bites.
+// The cap is read from GEODE_NODE_CACHE_ENTRIES at GraphStore.init, so the env
+// var must be set BEFORE Harness.init creates the store.
+const BoundedHarness = struct {
+    inner: Harness,
+
+    pub fn init(allocator: std.mem.Allocator) !BoundedHarness {
+        _ = setenv("GEODE_NODE_CACHE_ENTRIES", HYDRATION_HARNESS_CAP, 1);
+        const inner = try Harness.init(allocator);
+        // The plain Harness path (getGlobalStore) does NOT install the node-cache
+        // hydrate hook, so the cap stays inert. Install it here so eviction is
+        // safe (evicted-but-live nodes rebuild from the engine) and the cap
+        // activates — exactly what initGlobalStore does on the server.
+        const store = graph_store.getGlobalStore(allocator);
+        store.installNodeCacheHydrate();
+        return .{ .inner = inner };
+    }
+
+    pub fn deinit(self: *BoundedHarness) void {
+        self.inner.deinit();
+        _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
+    }
+};
+
+// Test 8 — HEADLINE: endpoint resolution does NOT hydrate per edge.
+//
+// Seed N_SEED >> cap nodes so the bounded node cache is heavily evicted, then
+// resolve K endpoints by the from-dump composite key {source, source_id}.
+// Snapshot `node_cache.hydrations_total` around the resolves only (seeding's
+// hydrations are excluded). BEFORE the fix every resolve verified `source` via
+// the hydrating `store.getNodeProperty`, so hydrations grew ~1 per resolve
+// (each verify materialized an evicted candidate). AFTER the fix the seed is an
+// O(1) merge-index probe and the `source` verify is a property-only engine read
+// by slot — neither inserts into the cache, so hydrations stay FLAT.
+test "public edge endpoint seek: resolution does not hydrate per edge (bounded cache)" {
+    var bh = try BoundedHarness.init(testing.allocator);
+    defer bh.deinit();
+    const h = &bh.inner;
+
+    const N_SEED: usize = 800; // >> cap (64) -> heavy eviction
+    try h.seed(N_SEED);
+
+    const adapter = graph_store.getGlobalAdapter().?;
+    const store = graph_store.getGlobalStore(h.allocator);
+
+    // Cap must be active (hydrate hook installed) — otherwise the test is moot.
+    try testing.expect(store.nodes.effectiveCap() != 0);
+    // And the cache must actually be a bounded view of the dataset (evicted).
+    try testing.expect(store.nodes.residentCount() < N_SEED);
+
+    const K: usize = 400; // number of endpoint resolutions to measure
+    const before = store.nodes.hydrations_total;
+
+    var resolved: usize = 0;
+    var i: usize = 0;
+    while (i < K) : (i += 1) {
+        const aa = h.arena.allocator();
+        const sid = try std.fmt.allocPrint(aa, "sid{d}", .{i});
+        const filters = [_]PropKV{ strKV("source", "col"), strKV("source_id", sid) };
+        const pub_id = try adapter.lookupPublicNodeIdByLabelAndAllProps(
+            graph_store.DEFAULT_GRAPH_NAME,
+            "Taxon",
+            &filters,
+            error.SourceNodeNotFound,
+        );
+        // Correctness: every resolved id is valid in the PUBLIC node-id space
+        // (the apply's existence check operates on public ids). Use the
+        // eviction-INDEPENDENT IdMap so an evicted-but-live node still counts as
+        // resolved (the public-id contract, not cache residency — under a small
+        // cache `store.nodes.getPtr` would miss a live-but-evicted node).
+        try testing.expect(pub_id != 0);
+        const slot = store.getIdMap(graph_store.DEFAULT_GRAPH_NAME).?.nodeSlot(@as(u128, pub_id));
+        try testing.expect(slot != null);
+        resolved += 1;
+    }
+    try testing.expectEqual(K, resolved);
+
+    const after = store.nodes.hydrations_total;
+    const delta = after - before;
+
+    // THE FIX: hydrations are NOT proportional to the number of resolutions.
+    // Before the fix `delta` was ~K (one full-node materialize per resolve);
+    // it is bounded by the cache cap, not by K. Assert it is far below K — a
+    // generous bound that still fails loudly on the per-edge-hydrate regression
+    // (K=400 vs cap=64; a per-edge hydrate would push delta >= ~K-cap).
+    try testing.expect(delta < K / 4);
+}
+
+// Test 9 — Phase 2 must PRESERVE the dangling-endpoint authoritative-miss
+// fast-negative under the SAME bounded-cache condition (the 830c0c45 behavior).
+// A dangling unique key returns missing_err and scans ZERO candidates — and
+// crucially does NOT hydrate (the property-only verify is never even reached
+// because the authoritative zero-posting short-circuits first).
+test "public edge endpoint seek: dangling endpoint stays O(1) and hydration-free (bounded cache)" {
+    var bh = try BoundedHarness.init(testing.allocator);
+    defer bh.deinit();
+    const h = &bh.inner;
+
+    try h.seed(800);
+
+    const adapter = graph_store.getGlobalAdapter().?;
+    const store = graph_store.getGlobalStore(h.allocator);
+
+    graph_storage_adapter.resetLookupCounters();
+    const before = store.nodes.hydrations_total;
+
+    const filters = [_]PropKV{ strKV("source", "col"), strKV("source_id", "sid-does-not-exist") };
+    const res = adapter.lookupPublicNodeIdByLabelAndAllProps(
+        graph_store.DEFAULT_GRAPH_NAME,
+        "Taxon",
+        &filters,
+        error.SourceNodeNotFound,
+    );
+    try testing.expectError(error.SourceNodeNotFound, res);
+
+    // Authoritative miss: ZERO candidates scanned (830c0c45 preserved).
+    try testing.expectEqual(@as(u64, 0), graph_storage_adapter.getLookupAllPropsCandidatesScanned());
+    // And no node hydrated on the miss path.
+    try testing.expectEqual(before, store.nodes.hydrations_total);
+}

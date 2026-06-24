@@ -4246,11 +4246,9 @@ pub const StorageAdapter = struct {
         for (label_nodes) |node_id| {
             var all_match = true;
             for (filters) |f| {
-                const actual = store.getNodeProperty(node_id, f.key) orelse {
-                    all_match = false;
-                    break;
-                };
-                if (!propertyValuesEqual(actual, f.value)) {
+                // Engine-direct single-property verify by slot — NO full-node
+                // hydration (Phase 2). Same de-hydration as the merge-seek verify.
+                if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) {
                     all_match = false;
                     break;
                 }
@@ -4260,8 +4258,54 @@ pub const StorageAdapter = struct {
         return missing_err;
     }
 
+    /// Verify a single `(f.key == f.value)` filter against the PUBLIC node id's
+    /// stored property WITHOUT full-materializing the node into the bounded
+    /// node cache (Phase 2: de-hydrate endpoint resolution — the gdb hot path).
+    ///
+    /// `store.getNodeProperty(node_id, key)` reads the property via
+    /// `getOrHydratePtr` → `materializeNodeFromEngine`, which rebuilds the ENTIRE
+    /// candidate node (labels + ALL properties via the PropertyChain) and INSERTS
+    /// it into the bounded cache. At cache << dataset that is one full-node
+    /// materialize per endpoint resolution (`hydrations_total` grew ~1 per edge),
+    /// the dominant cost that made edge ingest glacial.
+    ///
+    /// Instead resolve the public id → engine slot via the eviction-INDEPENDENT
+    /// IdMap and read exactly THAT ONE property by slot via the adapter's
+    /// engine-direct `getNodeProperty(graph_name, slot, key)` — it reads a single
+    /// PropertyChain key and does NOT insert the node into the bounded cache.
+    /// Mirrors the slot-id sibling `lookupNodeIdByLabelAndAllProps`'s verify.
+    ///
+    /// Fallback: a pure in-memory deployment with no adapter/IdMap (engine
+    /// absent) keeps the resident `store.getNodeProperty` — there the node cache
+    /// is never bounded (no hydrate hook without an engine), so the resident read
+    /// is itself hydration-free and correct.
+    fn publicNodeFilterMatchesNoHydrate(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        store: *graph_store.GraphStore,
+        node_id: u64,
+        f: PropKV,
+    ) bool {
+        if (store.getIdMap(graph_name)) |id_map| {
+            if (id_map.nodeSlot(@as(u128, node_id))) |slot| {
+                // Engine-direct single-property read (no cache insert).
+                // getNodeProperty returns a STORAGE-domain PropertyValue (owns
+                // .string/.ext bytes); convert + compare like the slot sibling.
+                const stored = (self.getNodeProperty(graph_name, slot, f.key, self.allocator) catch null) orelse return false;
+                defer freeOwnedStorageProperty(self.allocator, stored);
+                const actual = fromStorageProperty(self.allocator, stored) catch return false;
+                defer property_codec.freePropertyValue(self.allocator, actual);
+                return propertyValuesEqual(actual, f.value);
+            }
+        }
+        // No engine/IdMap: resident read (unbounded cache in this mode).
+        const actual = store.getNodeProperty(node_id, f.key) orelse return false;
+        return propertyValuesEqual(actual, f.value);
+    }
+
     /// Verify every filter EXCEPT `seed_idx` against the public-id node's stored
-    /// properties (the seed already matched via the index/merge probe).
+    /// properties (the seed already matched via the index/merge probe). Reads
+    /// each property engine-direct by slot — NO full-node hydration (Phase 2).
     fn publicNodeMatchesRemaining(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -4270,12 +4314,9 @@ pub const StorageAdapter = struct {
         filters: []const PropKV,
         seed_idx: usize,
     ) !bool {
-        _ = self;
-        _ = graph_name;
         for (filters, 0..) |f, i| {
             if (i == seed_idx) continue;
-            const actual = store.getNodeProperty(node_id, f.key) orelse return false;
-            if (!propertyValuesEqual(actual, f.value)) return false;
+            if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
         }
         return true;
     }
