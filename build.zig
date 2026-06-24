@@ -933,6 +933,8 @@ pub fn build(b: *std.Build) void {
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     storage_backup_mod.addImport("logging", logging_mod);
     storage_backup_mod.addImport("geode", root_mod);
+    // Task 5 (FIPS seam): backup.zig routes AES-256-GCM through crypto_backend.
+    storage_backup_mod.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
     root_mod.addImport("storage/backup", storage_backup_mod);
 
@@ -1020,6 +1022,8 @@ pub fn build(b: *std.Build) void {
     fle_key_manager_mod.addImport("fle_hkdf", fle_hkdf_mod);
     fle_key_manager_mod.addImport("fle_key_types", fle_key_types_mod);
     fle_key_manager_mod.addImport("fle_aead", fle_aead_mod);
+    // Task 5 (FIPS seam): keys/manager.zig routes SHA-256 + secureZero through crypto_backend.
+    fle_key_manager_mod.addImport("crypto_backend", crypto_backend_mod);
     fle_blind_index_mod.addImport("fle_hmac", fle_hmac_mod);
     fle_catalog_mod.addImport("annotations", fle_annotations_mod);
 
@@ -1116,6 +1120,8 @@ pub fn build(b: *std.Build) void {
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
     const tde_file_encryption_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
     tde_file_encryption_mod.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    tde_file_encryption_mod.addImport("crypto_backend", crypto_backend_mod);
     tde_encrypt_pages_exe.root_module.addImport("tde_file_encryption", tde_file_encryption_mod);
     const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
     bench_step.dependOn(&run_tde_encrypt_pages.step);
@@ -3907,6 +3913,8 @@ pub fn build(b: *std.Build) void {
         // TDE module for file-level encryption (REQ-TDE-FILELEVEL-001)
         const tde_fuzz_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
         tde_fuzz_mod.addImport("logging", logging_mod);
+        // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+        tde_fuzz_mod.addImport("crypto_backend", crypto_backend_mod);
         hnsw_persist_mod.addImport("hnsw", hnsw_ext_mod);
         hnsw_persist_mod.addImport("tde", tde_fuzz_mod);
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
@@ -5014,6 +5022,8 @@ pub fn build(b: *std.Build) void {
     });
     const key_rotate_tde_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
     key_rotate_tde_mod.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    key_rotate_tde_mod.addImport("crypto_backend", crypto_backend_mod);
     key_rotate_exe.root_module.addImport("tde_file_encryption", key_rotate_tde_mod);
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
@@ -5090,6 +5100,8 @@ pub fn build(b: *std.Build) void {
     });
     tde_file_encryption_test.root_module.link_libc = true;
     tde_file_encryption_test.root_module.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    tde_file_encryption_test.root_module.addImport("crypto_backend", crypto_backend_mod);
     shardDep(test_step, &tde_file_encryption_test.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
@@ -5296,6 +5308,8 @@ pub fn build(b: *std.Build) void {
     });
     tde_file_mod.link_libc = true;
     tde_file_mod.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    tde_file_mod.addImport("crypto_backend", crypto_backend_mod);
     const tde_enforcement_test_mod = b.createModule(.{
         .root_source_file = b.path("src/security/test_tde_enforcement.zig"),
         .target = target,

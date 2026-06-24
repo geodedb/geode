@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -397,13 +398,12 @@ pub const UserStorage = struct {
         try file.writeAll(encrypted_data);
     }
 
-    // AES-256-GCM encryption constants
-    const AesGcm = std.crypto.aead.aes_gcm.Aes256Gcm;
-    const nonce_len = AesGcm.nonce_length; // 12 bytes
-    const tag_len = AesGcm.tag_length; // 16 bytes
+    // AES-256-GCM encryption constants (sizes defined by FIPS-approved AES-256-GCM)
+    const nonce_len: usize = 12; // AES-GCM nonce: 96 bits
+    const tag_len: usize = 16; // AES-GCM tag: 128 bits
 
     fn encryptData(self: *Self, data: []const u8) ![]u8 {
-        // AES-256-GCM authenticated encryption
+        // AES-256-GCM authenticated encryption via FIPS seam
         // Output format: [nonce (12 bytes)] [auth_tag (16 bytes)] [ciphertext]
         const total_len = nonce_len + tag_len + data.len;
         var result = try self.allocator.alloc(u8, total_len);
@@ -415,10 +415,10 @@ pub const UserStorage = struct {
         @memcpy(result[0..nonce_len], &nonce);
 
         // Encrypt with authentication
-        var ciphertext = result[nonce_len + tag_len ..];
+        const ciphertext = result[nonce_len + tag_len ..];
         var tag: [tag_len]u8 = undefined;
 
-        AesGcm.encrypt(ciphertext, &tag, data, "", nonce, self.encryption_key);
+        try cb.Aead.seal(.aes_256_gcm, &self.encryption_key, &nonce, "", data, ciphertext, &tag);
 
         // Copy tag after nonce
         @memcpy(result[nonce_len .. nonce_len + tag_len], &tag);
@@ -427,7 +427,7 @@ pub const UserStorage = struct {
     }
 
     fn decryptData(self: *Self, encrypted: []const u8) ![]u8 {
-        // AES-256-GCM authenticated decryption
+        // AES-256-GCM authenticated decryption via FIPS seam
         // Input format: [nonce (12 bytes)] [auth_tag (16 bytes)] [ciphertext]
         const min_len = nonce_len + tag_len;
         if (encrypted.len < min_len) return error.InvalidData;
@@ -436,11 +436,11 @@ pub const UserStorage = struct {
         const tag = encrypted[nonce_len .. nonce_len + tag_len].*;
         const ciphertext = encrypted[nonce_len + tag_len ..];
 
-        var plaintext = try self.allocator.alloc(u8, ciphertext.len);
+        const plaintext = try self.allocator.alloc(u8, ciphertext.len);
         errdefer self.allocator.free(plaintext);
 
         // Decrypt and verify authentication tag
-        AesGcm.decrypt(plaintext, ciphertext, tag, "", nonce, self.encryption_key) catch {
+        cb.Aead.open(.aes_256_gcm, &self.encryption_key, &nonce, "", ciphertext, &tag, plaintext) catch {
             self.allocator.free(plaintext);
             return error.AuthenticationFailed;
         };

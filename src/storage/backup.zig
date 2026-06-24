@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -788,7 +789,7 @@ fn encryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
     const ciphertext = try allocator.alloc(u8, data.len);
     errdefer allocator.free(ciphertext);
 
-    std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(ciphertext, &tag, data, "", nonce, key);
+    try cb.Aead.seal(.aes_256_gcm, &key, &nonce, "", data, ciphertext, &tag);
 
     const result = try allocator.alloc(u8, NonceSize + TagSize + data.len);
     @memcpy(result[0..NonceSize], &nonce);
@@ -817,7 +818,7 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
     const plaintext = try allocator.alloc(u8, ciphertext.len);
     errdefer allocator.free(plaintext);
 
-    std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ciphertext, tag, "", nonce, key) catch {
+    cb.Aead.open(.aes_256_gcm, &key, &nonce, "", ciphertext, &tag, plaintext) catch {
         allocator.free(plaintext);
         return error.DecryptionFailed;
     };

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -2450,7 +2451,7 @@ fn deinitQuicServerState(gpa: std.mem.Allocator, state: *ServerState, context: [
         state.authenticated_user = null;
     }
     if (state.authenticated_password) |p| {
-        std.crypto.secureZero(u8, @constCast(p));
+        cb.secureZero(@constCast(p));
         gpa.free(p);
         state.authenticated_password = null;
     }
@@ -5367,7 +5368,7 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
         state.authenticated_user = null;
     }
     if (state.authenticated_password) |password| {
-        std.crypto.secureZero(u8, @constCast(password));
+        cb.secureZero(@constCast(password));
         gpa.free(password);
         state.authenticated_password = null;
     }
@@ -5624,7 +5625,7 @@ fn handleClientMessage(
                 // Grant federation-level session: store identity, grant ReadWrite role
                 if (state.authenticated_user) |u| gpa.free(u);
                 if (state.authenticated_password) |p| {
-                    std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
+                    cb.secureZero(@constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
                     gpa.free(p);
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
@@ -5670,7 +5671,7 @@ fn handleClientMessage(
 
                 if (state.authenticated_user) |u| gpa.free(u);
                 if (state.authenticated_password) |p| {
-                    std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
+                    cb.secureZero(@constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
                     gpa.free(p);
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);

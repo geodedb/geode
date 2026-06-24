@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -31,15 +32,13 @@ pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
     var master_key: [32]u8 = undefined;
     if (getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
         defer {
-            std.crypto.secureZero(u8, env_key);
+            cb.secureZero(env_key);
             allocator.free(env_key);
         }
         if (env_key.len >= master_key.len) {
             @memcpy(&master_key, env_key[0..master_key.len]);
         } else {
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            hasher.update(env_key);
-            hasher.final(&master_key);
+            _ = try cb.Hash.digest(.sha256, env_key, &master_key);
         }
         return master_key;
     } else |_| {
@@ -94,17 +93,17 @@ pub fn rewrapSchemaKey(
     schema: []const u8,
 ) !void {
     var old_trk = try hkdf.deriveTRK(&manager.master_key, tenant);
-    defer std.crypto.secureZero(u8, &old_trk);
+    defer cb.secureZero(&old_trk);
 
     var sk = try hkdf.deriveSK(&old_trk, schema);
-    defer std.crypto.secureZero(u8, &sk);
+    defer cb.secureZero(&sk);
 
     var wrapped_sk = try wrapKey(allocator, &sk, &old_trk);
     defer wrapped_sk.deinit(allocator);
 
     const unwrapped_sk = try unwrapKey(allocator, wrapped_sk, &old_trk);
     defer {
-        std.crypto.secureZero(u8, unwrapped_sk);
+        cb.secureZero(unwrapped_sk);
         allocator.free(unwrapped_sk);
     }
 
@@ -123,14 +122,14 @@ pub fn rewrapTenantRootKey(
     tenant: []const u8,
 ) !void {
     var trk = try hkdf.deriveTRK(&manager.master_key, tenant);
-    defer std.crypto.secureZero(u8, &trk);
+    defer cb.secureZero(&trk);
 
     var wrapped_trk = try wrapKey(allocator, &trk, &manager.master_key);
     defer wrapped_trk.deinit(allocator);
 
     const unwrapped_trk = try unwrapKey(allocator, wrapped_trk, &manager.master_key);
     defer {
-        std.crypto.secureZero(u8, unwrapped_trk);
+        cb.secureZero(unwrapped_trk);
         allocator.free(unwrapped_trk);
     }
 
