@@ -61,7 +61,11 @@ test "TestCANARY_REQ_GQL_MFA_CORE_001_StepUpBoundary" {
     var enforced = false;
     // Sequence of scores around threshold to test hysteresis behavior
     const scores = [_]f32{ 0.40, 0.54, 0.55, 0.56, 0.53, 0.49, 0.52, 0.50 };
-    const expected = [_]bool{ false, false, true, true, true, true, true, true };
+    // Hysteresis: enforce at >= threshold (0.55); once enforced, REMAIN enforced
+    // until score < (threshold - hysteresis) = 0.50, then clear. So at i=5
+    // (0.49 < 0.50) enforcement CLEARS, and i=6/i=7 stay clear (0.52, 0.50 are
+    // both < the 0.55 re-arm threshold). Matches requiresStepUp() exactly.
+    const expected = [_]bool{ false, false, true, true, true, false, false, false };
     for (scores, 0..) |s, i| {
         const req = policy.requiresStepUp(s, enforced);
         try std.testing.expect(req == expected[i]);
