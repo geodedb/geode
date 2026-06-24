@@ -2417,8 +2417,11 @@ pub const StorageAdapter = struct {
     ) !u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
-        if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
+        // Eviction-INDEPENDENT endpoint existence (see bulkMergeEdgeInnerShardLocked
+        // and GraphStore.edgeEndpointExists): the bounded node cache would
+        // orphan-skip a present-but-EVICTED endpoint and silently drop the edge.
+        if (!store.edgeEndpointExists(graph_name, source_id)) return error.SourceNodeNotFound;
+        if (!store.edgeEndpointExists(graph_name, target_id)) return error.TargetNodeNotFound;
 
         mg.string_indexes_mutex.lockUncancelable(io);
         // GAP-0891 (RC-1): tag the edge with the captured request tenant.
@@ -2543,9 +2546,15 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         // Re-check endpoint existence under the shard locks (orphan skip if a
-        // prior batch deleted one — same as the insert inner).
-        if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
-        if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
+        // prior batch deleted one — same as the insert inner). Use the
+        // eviction-INDEPENDENT IdMap oracle, NOT the bounded node cache: under a
+        // small cache at scale a present-but-EVICTED endpoint misses
+        // `store.nodes.getPtr` and would be wrongly orphan-skipped, silently
+        // dropping the edge (the itis from-dump "~2% observable" bug). The
+        // create path below already resolves endpoints via the IdMap, so this
+        // makes the guard agree with what the create will actually accept.
+        if (!store.edgeEndpointExists(graph_name, source_id)) return error.SourceNodeNotFound;
+        if (!store.edgeEndpointExists(graph_name, target_id)) return error.TargetNodeNotFound;
 
         // PHASE 3 (edge-engine-direct): O(1) MERGE dedup via the engine
         // edge-EXISTENCE index instead of the O(out-degree) resident adjacency

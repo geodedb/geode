@@ -4164,6 +4164,33 @@ pub const GraphStore = struct {
         return .not_found;
     }
 
+    /// Eviction-INDEPENDENT existence check for an edge endpoint by PUBLIC id.
+    ///
+    /// The bulk edge apply (insert + MERGE) re-checks both endpoints before
+    /// creating the edge so a node deleted by a prior batch is orphan-skipped
+    /// instead of producing a dangling edge. That re-check MUST NOT use the
+    /// BOUNDED node cache (`self.nodes.getPtr`): under a small cache at scale
+    /// (the from-dump edge phase) a present-but-EVICTED endpoint misses the
+    /// cache, so the apply wrongly returns Source/TargetNodeNotFound and the
+    /// edge is SILENTLY NEVER CREATED — the itis "~2% observable, tail-only"
+    /// bug. The IdMap is the authoritative live-node oracle: it is keyed
+    /// PER-GRAPH, populated at node creation, and removed only on explicit
+    /// delete — never on eviction. So `nodeSlot(id) != null` means the id is a
+    /// live node of THIS graph regardless of cache residency. This mirrors the
+    /// eviction-safe validation `lookupMergeCandidate` already performs above,
+    /// and matches the create path itself (`createEdgeWithGraphAndTenant`
+    /// resolves endpoints via the IdMap, never the node cache).
+    ///
+    /// Falls back to the resident cache only when no IdMap exists for the graph
+    /// (pure in-memory deployments with no engine/adapter wired — the cache is
+    /// unbounded there, so the resident check is complete and correct).
+    pub fn edgeEndpointExists(self: *GraphStore, graph_name: []const u8, node_id: u64) bool {
+        if (self.getIdMap(graph_name)) |id_map| {
+            return id_map.nodeSlot(@as(u128, node_id)) != null;
+        }
+        return self.nodes.getPtr(node_id) != null;
+    }
+
     // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-23
     // Issue #391: Get nodes by label and graph (O(1) lookup instead of O(n) scan)
     //

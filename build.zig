@@ -7132,6 +7132,20 @@ pub fn build(b: *std.Build) void {
     const edge_merge_sl_step = b.step("test-edge-merge-shard-locked", "Run edge-merge-shard-locked regression (rel MERGE: per-shard locks + dedup, coexists with readers)");
     edge_merge_sl_step.dependOn(&run_edge_merge_sl_tests.step);
 
+    // CORRECTNESS (edge-engine-direct): the from-dump edge phase must CREATE and
+    // make OBSERVABLE every edge whose endpoints are present, even when those
+    // endpoints have been EVICTED from the bounded node cache. Repro of the itis
+    // silent edge loss (~2% observable, tail-only) — ground-truthed against the
+    // engine persistent edge-EXISTENCE index (probeEdge).
+    const edge_evicted_ep_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_evicted_endpoint_silent_loss.zig"), .target = target, .optimize = optimize });
+    edge_evicted_ep_mod.addImport("geode", root_mod);
+    edge_evicted_ep_mod.addImport("graph_storage", graph_storage_dep.module("graph_storage"));
+    const edge_evicted_ep_tests = b.addTest(.{ .root_module = edge_evicted_ep_mod });
+    const run_edge_evicted_ep_tests = b.addRunArtifact(edge_evicted_ep_tests);
+    shardDep(test_step, &run_edge_evicted_ep_tests.step, 5, test_shard_loads, test_shard_index);
+    const edge_evicted_ep_step = b.step("test-edge-evicted-endpoint", "Run from-dump edge-phase evicted-endpoint silent-loss regression (every present-endpoint edge created + observable at small cache; ground-truthed via probeEdge)");
+    edge_evicted_ep_step.dependOn(&run_edge_evicted_ep_tests.step);
+
     // PHASE 4 (edge-engine-direct): popular-parent EDGE throughput A/B +
     // re-shard correctness. The headline bench measures edges/sec for one hot
     // parent (PARENT_OF) and one hot target (ACCEPTED_AS) ingested via the
