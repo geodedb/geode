@@ -456,11 +456,14 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 /// Verify password against stored hash using the canonical Argon2id verification.
 /// Delegates to geode_auth.verifyPasswordArgon2id (single source of truth).
 // CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
-pub fn verifyPassword(password: []const u8, stored_hash: []const u8) bool {
+pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
     // Use c_allocator for Argon2id scratch buffers in verification hot paths.
     // This avoids untracked page allocator usage in production runtime paths.
     const allocator = std.heap.c_allocator;
-    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch false;
+    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch |err| {
+        if (err == error.FipsUnsupported) return err;
+        return false;
+    };
 }
 
 // CANARY: REQ=REQ-QUIC-HC-068; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthSingleFlight; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=security; UPDATED=2026-05-26
@@ -713,11 +716,11 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
             if (!user_data.active) {
                 // Same timing-defense rationale: an inactive user should look the
                 // same as an active user with the wrong password.
-                _ = verifyPassword(password, user_data.password_hash);
+                _ = verifyPassword(password, user_data.password_hash) catch false;
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 return error.Unauthenticated;
             }
-            if (!verifyPassword(password, user_data.password_hash)) {
+            if (!(try verifyPassword(password, user_data.password_hash))) {
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 return error.Unauthenticated;
             }
@@ -808,7 +811,7 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
     const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
 
     // Reject if new password matches current password
-    if (verifyPassword(new_password, user_ptr.user.password_hash)) {
+    if (try verifyPassword(new_password, user_ptr.user.password_hash)) {
         return error.PasswordReuse;
     }
 

@@ -4,9 +4,11 @@
 
 const std = @import("std");
 const testing = std.testing;
+const build_options = @import("build_options");
 
 // Import from the local security module
 const user_management = @import("user_management.zig");
+const geode_auth = @import("geode_auth");
 const Role = user_management.Role;
 const Permission = user_management.Permission;
 
@@ -841,4 +843,32 @@ test "GAP0526_AllRolesU8RoundTrip_MutationMatrix" {
         const recovered = @as(Role, @enumFromInt(role_u8));
         try testing.expectEqual(expected_write[i], user_management.hasPermission(recovered, .Write));
     }
+}
+
+// ============================================================================
+// FIPS TASK 7: Fail-close tests for Argon2id/BLAKE2b under -Dfips=true
+// CANARY: REQ=REQ-FIPS-PWHASH-001; FEATURE="FIPSPasswordHashFailClose"; ASPECT=Security; STATUS=TESTED; OWNER=security; UPDATED=2026-06-23
+// ============================================================================
+
+test "FIPS fail-close: hashPasswordArgon2id returns FipsUnsupported under fips" {
+    if (!build_options.fips) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const result = geode_auth.hashPasswordArgon2id(allocator, "testpassword");
+    try testing.expectError(error.FipsUnsupported, result);
+}
+
+test "FIPS fail-close: verifyPasswordArgon2id returns FipsUnsupported under fips" {
+    if (!build_options.fips) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const fake_phc = "$argon2id$v=19$m=19456,t=2,p=1$aabbccddeeff00112233445566778899$aabbccddeeff001122334455667788990011223344556677889900112233445566";
+    const result = geode_auth.verifyPasswordArgon2id(allocator, "testpassword", fake_phc);
+    try testing.expectError(error.FipsUnsupported, result);
+}
+
+test "FIPS pass-through: hashPasswordArgon2id works normally without fips" {
+    if (build_options.fips) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const hash = try geode_auth.hashPasswordArgon2id(allocator, "testpassword");
+    defer allocator.free(hash);
+    try testing.expect(std.mem.startsWith(u8, hash, "$argon2id$"));
 }

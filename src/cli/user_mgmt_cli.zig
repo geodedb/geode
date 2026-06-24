@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -379,6 +380,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         if (!std.mem.eql(u8, algorithm, "argon2id") and !std.mem.eql(u8, algorithm, "blake2b")) {
             std.debug.print("Error: --algorithm must be 'argon2id' or 'blake2b'\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
+        // FIPS: reject both argon2id and blake2b algorithm imports under FIPS — neither is FIPS-approved
+        if (build_options.fips) {
+            std.debug.print("Error: user import with '--algorithm {s}' is unavailable under FIPS mode (argon2id and blake2b are not FIPS-approved primitives)\n", .{algorithm});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
         if (mgr.storage.getUserByUsername(username) != null) {

@@ -4602,6 +4602,7 @@ pub fn build(b: *std.Build) void {
     auth_mod.addImport("logging", logging_mod);
     auth_mod.addImport("auth_lib", auth_ext_mod);
     auth_mod.addImport("mfa_policy", mfa_policy_mod);
+    auth_mod.addImport("build_options", build_options_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
     root_mod.addImport("feature_flags", runtime_flags_mod);
@@ -5301,6 +5302,7 @@ pub fn build(b: *std.Build) void {
     });
     auth_enforcement_test_mod.addImport("logging", logging_mod);
     auth_enforcement_test_mod.addImport("geode_auth", auth_mod);
+    auth_enforcement_test_mod.addImport("build_options", build_options_mod);
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
     auth_enforcement_tests.root_module.link_libc = true;
     shardDep(test_step, &auth_enforcement_tests.step, 1, test_shard_loads, test_shard_index);

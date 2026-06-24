@@ -450,6 +450,8 @@ pub const UserStorage = struct {
 };
 
 fn hashPassword(allocator: Allocator, password: []const u8, salt: *const [32]u8) ![]const u8 {
+    // FIPS: Argon2id is not FIPS-approved — fail closed under -Dfips
+    if (cb.fips_enabled) return error.FipsUnsupported;
     // Use Argon2id for password hashing (OWASP recommended)
     var hash: [64]u8 = undefined;
 
