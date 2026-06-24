@@ -110,7 +110,7 @@ pub const Server = struct {
     auth_token: ?[]const u8 = null,
     attestation_hash: [32]u8 = [_]u8{0} ** 32,
     // Ephemeral Ed25519 key pair created on auth token set (test scope, could be rotated with token)
-    attest_keypair: ?std.crypto.sign.Ed25519.KeyPair = null,
+    attest_keypair: ?cb.Sig.KeyPair = null,
 
     /// Initialize KMS server with cryptographically secure KEK
     /// GAP-0142: Now uses std.crypto.random instead of deterministic PRNG
@@ -134,7 +134,7 @@ pub const Server = struct {
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
         compat_fillRandom(&seed);
-        const attest_kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
+        const attest_kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
         self.attest_keypair = attest_kp;
     }
 
@@ -349,7 +349,7 @@ pub const RemoteKmsServer = struct {
 
     fn handleAttest(self: *RemoteKmsServer, response_buf: []u8) ![]const u8 {
         // Generate attestation response
-        const kp = self.server.attest_keypair orelse return error.NotConfigured;
+        var kp = self.server.attest_keypair orelse return error.NotConfigured;
 
         // Sign the attestation hash
         const domain = "GEODE-KMS-ATTEST";
@@ -357,8 +357,11 @@ pub const RemoteKmsServer = struct {
         @memcpy(msg[0..domain.len], domain);
         @memcpy(msg[domain.len..], &self.server.attestation_hash);
 
-        const sig = try kp.sign(&msg, null);
-        const sig_bytes = sig.toBytes();
+        var sig_buf: [64]u8 = undefined;
+        _ = try cb.Sig.sign(.ed25519, &kp, &msg, &sig_buf);
+
+        var pub_buf: [32]u8 = undefined;
+        _ = try kp.publicBytes(&pub_buf);
 
         // Build response
         var fbs_writer: std.Io.Writer = .fixed(response_buf);
@@ -367,9 +370,9 @@ pub const RemoteKmsServer = struct {
         try writer.writeAll("{\"status\":\"OK\",\"hash\":\"");
         for (self.server.attestation_hash) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\",\"pub\":\"");
-        for (kp.public_key.bytes) |b| try writer.print("{x:0>2}", .{b});
+        for (pub_buf) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\",\"sig\":\"");
-        for (sig_bytes) |b| try writer.print("{x:0>2}", .{b});
+        for (sig_buf) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\"}\n");
 
         return fbs_writer.buffered();
@@ -715,9 +718,8 @@ pub const RemoteKmsClient = struct {
         defer allocator.free(msg);
         std.mem.copyForwards(u8, msg[0..domain_attest.len], domain_attest);
         std.mem.copyForwards(u8, msg[domain_attest.len..msg_len], &hash);
-        const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(pub_key) catch return false;
-        const signature = std.crypto.sign.Ed25519.Signature.fromBytes(sig);
-        signature.verify(msg, pk) catch return false;
+        var kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, &pub_key) catch return false;
+        cb.Sig.verify(.ed25519, &kp, msg, &sig) catch return false;
         return true;
     }
 };

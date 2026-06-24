@@ -1178,11 +1178,17 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     _ = allocator;
 
     // GAP-0211 FIX: Real Ed25519 key generation and signature verification
-    const Ed25519 = std.crypto.sign.Ed25519;
+    // Route through cb.Sig so this executes in the OpenSSL FIPS module under -Dfips
 
     // Generate a test keypair (in real usage, public key would come from KMS)
-    // Using generate() for random keypair generation (Zig 0.15.2 API)
-    const keypair = Ed25519.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
+    var keypair = cb.Sig.generate(.ed25519) catch {
+        return .{
+            .attestation_valid = false,
+            .signature_verified = false,
+            .ed25519_verification = false,
+            .tamper_detected = false,
+        };
+    };
 
     // Create attestation message (nonce + timestamp + KMS identifier)
     var attestation_data: [64]u8 = undefined;
@@ -1191,8 +1197,9 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     std.mem.writeInt(i64, attestation_data[32..40], timestamp, .little);
     @memset(attestation_data[40..64], 0); // padding
 
-    // Sign the attestation with private key (returns error union in Zig 0.15.2)
-    const signature = keypair.sign(&attestation_data, null) catch {
+    // Sign the attestation with private key
+    var sig_buf: [64]u8 = undefined;
+    _ = cb.Sig.sign(.ed25519, &keypair, &attestation_data, &sig_buf) catch {
         return .{
             .attestation_valid = false,
             .signature_verified = false,
@@ -1206,8 +1213,8 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     var ed25519_verification = false;
     var tamper_detected = false;
 
-    // Verify valid signature (Zig 0.15.2 API: signature.verify(msg, public_key) - no noise param)
-    signature.verify(&attestation_data, keypair.public_key) catch {
+    // Verify valid signature
+    cb.Sig.verify(.ed25519, &keypair, &attestation_data, &sig_buf) catch {
         // Signature verification failed
         return .{
             .attestation_valid = false,
@@ -1225,7 +1232,7 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     tampered_data[0] ^= 0xFF; // Flip bits to simulate tampering
 
     // Tampered data should fail verification
-    signature.verify(&tampered_data, keypair.public_key) catch {
+    cb.Sig.verify(.ed25519, &keypair, &tampered_data, &sig_buf) catch {
         // Tampered data correctly rejected - this is expected
         tamper_detected = true;
         return .{

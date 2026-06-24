@@ -633,16 +633,18 @@ pub const KeyRegistry = struct {
         // Re-encryption workflow:
         // 1. Decrypt with previous key using AES-256-GCM
         // 2. Re-encrypt with active key
-        const aes_gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+        // AES-256-GCM constants: 12-byte nonce, 16-byte tag (NIST SP 800-38D)
+        const aes_gcm_nonce_len: usize = 12;
+        const aes_gcm_tag_len: usize = 16;
 
         // Extract nonce (first 12 bytes) and tag (last 16 bytes) from ciphertext
-        if (ciphertext.len < aes_gcm.nonce_length + aes_gcm.tag_length) {
+        if (ciphertext.len < aes_gcm_nonce_len + aes_gcm_tag_len) {
             return error.InvalidCiphertext;
         }
 
-        const nonce = ciphertext[0..aes_gcm.nonce_length].*;
-        const encrypted_data = ciphertext[aes_gcm.nonce_length .. ciphertext.len - aes_gcm.tag_length];
-        const tag = ciphertext[ciphertext.len - aes_gcm.tag_length ..][0..aes_gcm.tag_length].*;
+        const nonce = ciphertext[0..aes_gcm_nonce_len].*;
+        const encrypted_data = ciphertext[aes_gcm_nonce_len .. ciphertext.len - aes_gcm_tag_len];
+        const tag = ciphertext[ciphertext.len - aes_gcm_tag_len ..][0..aes_gcm_tag_len].*;
 
         // Decrypt with previous key
         const plaintext = self.allocator.alloc(u8, encrypted_data.len) catch return error.OutOfMemory;
@@ -662,16 +664,16 @@ pub const KeyRegistry = struct {
         };
 
         // Generate new nonce for re-encryption
-        var new_nonce: [aes_gcm.nonce_length]u8 = undefined;
+        var new_nonce: [aes_gcm_nonce_len]u8 = undefined;
         compat_fillRandom(&new_nonce);
 
         // Re-encrypt with active key
-        var new_tag: [aes_gcm.tag_length]u8 = undefined;
+        var new_tag: [aes_gcm_tag_len]u8 = undefined;
         try cb.Aead.seal(.aes_256_gcm, &active_key.material, &new_nonce, "", plaintext, encrypted_data, &new_tag);
 
         // Update ciphertext buffer with new nonce and tag
-        @memcpy(ciphertext[0..aes_gcm.nonce_length], &new_nonce);
-        @memcpy(ciphertext[ciphertext.len - aes_gcm.tag_length ..], &new_tag);
+        @memcpy(ciphertext[0..aes_gcm_nonce_len], &new_nonce);
+        @memcpy(ciphertext[ciphertext.len - aes_gcm_tag_len ..], &new_tag);
 
         const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         try self.logAuditEvent(
