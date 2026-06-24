@@ -938,11 +938,19 @@ fn executeBulkMatchMergeEdge(
     const resolved = blk: {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_edge);
         defer graph_store.releaseGraphLock(read_handle);
-        const s = adapter.lookupNodeIdByLabelAndAllProps(query_graph_name, spec.source.label, src_filters, error.SourceNodeNotFound) catch |err| switch (err) {
+        // EDGE-PHASE COMMIT FIX (2026-06-24): resolve endpoints in the
+        // GraphStore PUBLIC-id space (the space `store.nodes` / the shard-locked
+        // edge MERGE apply use), NOT the engine-slot space that
+        // `lookupNodeIdByLabelAndAllProps` returns. Passing slot ids made the
+        // apply's `store.nodes.getPtr(id)` miss every endpoint, silently
+        // orphan-skipping EVERY edge (the from-dump edge phase committed ZERO
+        // edges). `lookupPublicNodeIdByLabelAndAllProps` carries the same
+        // authoritative-miss fast-negative (no O(N) scan on a dangling endpoint).
+        const s = adapter.lookupPublicNodeIdByLabelAndAllProps(query_graph_name, spec.source.label, src_filters, error.SourceNodeNotFound) catch |err| switch (err) {
             error.SourceNodeNotFound => break :blk null,
             else => return err,
         };
-        const t = adapter.lookupNodeIdByLabelAndAllProps(query_graph_name, spec.target.label, dst_filters, error.TargetNodeNotFound) catch |err| switch (err) {
+        const t = adapter.lookupPublicNodeIdByLabelAndAllProps(query_graph_name, spec.target.label, dst_filters, error.TargetNodeNotFound) catch |err| switch (err) {
             error.TargetNodeNotFound => break :blk null,
             else => return err,
         };

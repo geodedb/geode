@@ -33,6 +33,15 @@ const LabelScanContext = struct {
 
 var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Candidate nodes examined by the verify-loop in `lookupNodeIdByLabelAndAllProps`
+// (the bulk edge-endpoint resolver). A dangling composite-key endpoint whose
+// unique indexed component (e.g. {source_id}) has ZERO postings must NOT seed
+// the scan on a low-selectivity component (e.g. {source}, shared by ~N nodes)
+// and verify N candidates — that O(N)-per-edge scan, run under the SHARED graph
+// rwlock and amplified by the bounded node cache (each verify is a disk page
+// pin), is the edge-phase wedge. This counter makes the fix wall-clock-
+// independent: an authoritative unique-key miss examines ZERO candidates.
+var g_lookup_all_props_candidates_scanned: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
 // CANARY: REQ=REQ-QUIC-HC-122; FEATURE="HighConcurrencyMutations"; ASPECT=ExactPropertyIndexSharding; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
 pub const exact_node_property_index_shard_count: usize = 64;
@@ -51,10 +60,18 @@ const free_store_path_name = "free.store";
 pub fn resetLookupCounters() void {
     g_exact_node_property_lookup_count.store(0, .release);
     g_label_scan_lookup_count.store(0, .release);
+    g_lookup_all_props_candidates_scanned.store(0, .release);
 }
 
 pub fn getExactNodePropertyLookupCount() u64 {
     return g_exact_node_property_lookup_count.load(.acquire);
+}
+
+/// Candidates examined by `lookupNodeIdByLabelAndAllProps`'s verify-loop since
+/// the last `resetLookupCounters`. Zero for an authoritative unique-key miss
+/// (the dangling-endpoint fast-negative); ~posting-length for a real seek.
+pub fn getLookupAllPropsCandidatesScanned() u64 {
+    return g_lookup_all_props_candidates_scanned.load(.acquire);
 }
 
 pub fn getLabelScanLookupCount() u64 {
@@ -4064,11 +4081,46 @@ pub const StorageAdapter = struct {
 
         // Seed with the most selective indexed filter (smallest posting). Fall
         // back to the first filter if none is indexed (posting len 0/absent).
+        //
+        // EDGE-PHASE WEDGE FIX (2026-06-24): AUTHORITATIVE unique-key MISS
+        // short-circuit. The match is an AND of equalities, so if ANY filter
+        // whose key the exact index COVERS (`shouldIndexProperty` — a registered
+        // merge key, or every key when lean indexing is off) has a posting of
+        // ZERO for its value, then NO node has that (label,key,value) and the
+        // composite match is unsatisfiable — return `missing_err` WITHOUT
+        // scanning. Before this, a dangling composite endpoint (e.g. the
+        // from-dump edge phase's `{source, source_id}` where `source_id` is
+        // absent) skipped the zero-posting `source_id` (the `len > 0` seed
+        // guard) and instead SEEDED on the low-selectivity `source` (~N nodes
+        // share one value), then verified all ~N candidates with a per-candidate
+        // `getNodeProperty`. Under the bounded node cache each verify is an
+        // engine-direct disk page pin, and the whole O(N) scan runs while the
+        // bulk path (`executeBulkMatchMergeEdge`) holds the per-graph rwlock
+        // SHARED — so the periodic checkpoint's EXCLUSIVE `tryLock` never sees a
+        // reader-free instant (geode_nodes_total stuck at 0) and the edge
+        // workers thrash the buffer pool making ~0 progress: the edge-phase
+        // wedge captured via live gdb (`best_len = N`, `seed_idx = 0`, all
+        // workers parked in `BufferPool.pin`). This mirrors the executor path's
+        // `seekMultiNodeCandidate` authoritative-miss (KNOWN BUG #2); the bulk
+        // resolver was the missed copy.
+        //
+        // GAP-0334 correctness: a posting of 0 is authoritative ONLY for an
+        // indexed key. A non-indexed key's `countCandidate...` also returns 0
+        // (the index does not cover it) — that is NOT a "no such node" signal,
+        // so it must NEVER short-circuit. A unique posting of 1 is a real node
+        // (possibly CREATEd, hence absent from the 1:1 merge index but present
+        // in the exact index) and is verified normally below, never treated as a
+        // miss.
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
             const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
-            if (len > 0 and len < best_len) {
+            if (len == 0) {
+                // Authoritative miss only when the exact index covers this key.
+                if (graph_store.shouldIndexProperty(f.key)) return missing_err;
+                continue;
+            }
+            if (len < best_len) {
                 best_len = len;
                 seed_idx = i;
             }
@@ -4078,6 +4130,7 @@ pub const StorageAdapter = struct {
         defer self.allocator.free(candidates);
 
         for (candidates) |node_id| {
+            _ = g_lookup_all_props_candidates_scanned.fetchAdd(1, .monotonic);
             var all_match = true;
             for (filters, 0..) |f, i| {
                 if (i == seed_idx) continue; // seed already matched via the index
@@ -4102,6 +4155,124 @@ pub const StorageAdapter = struct {
             if (all_match) return node_id;
         }
         return missing_err;
+    }
+
+    /// PUBLIC-ID composite-key resolver for the bulk relationship-MERGE endpoint
+    /// path (`executeBulkMatchMergeEdge`). Resolves a node matching `label` and
+    /// ALL `filters` (a composite key, e.g. `{source, source_id}`) and returns
+    /// its **GraphStore public node id** — the id space `store.nodes` / the
+    /// shard-locked edge MERGE apply (`bulkMergeEdgeWithIdsShardLockedForTenant`)
+    /// operate in.
+    ///
+    /// EDGE-PHASE COMMIT FIX (2026-06-24): the sibling
+    /// `lookupNodeIdByLabelAndAllProps` returns ENGINE-SLOT ids (from the exact
+    /// property index, validated via `mg.engine.getNode`). Passing those to the
+    /// edge MERGE apply, which does `store.nodes.getPtr(id)` (a public-id map),
+    /// MISSED every endpoint → `error.SourceNodeNotFound` → the bulk MERGE-edge
+    /// fast path silently orphan-skipped EVERY edge (the from-dump edge phase
+    /// committed ZERO edges even with both endpoints loaded — a pre-existing bug
+    /// independent of the O(N)-scan wedge). The CREATE-edge fast path avoids this
+    /// by deferring resolution to the coordinator's `lookupNodeByMergeKey`
+    /// (public-id space); this resolver gives the MERGE-edge path the same
+    /// correct id space.
+    ///
+    /// Mirrors the executor's `match_operations.seekMultiNodeCandidate`:
+    ///   * Authoritative unique-key MISS (an indexed filter with ZERO postings)
+    ///     short-circuits to `missing_err` — the dangling-endpoint fast-negative
+    ///     that also prevents the O(N) scan wedge.
+    ///   * Resolves the seed via `store.lookupMergeCandidate` (public id), with
+    ///     the GAP-0334 fallback: a unique exact posting (len 1) whose value is
+    ///     absent from the 1:1 merge index (a CREATEd node) is NOT a miss — fall
+    ///     back to the public-id-space scan to find it.
+    ///   * Verifies the remaining filters against each candidate's stored
+    ///     properties (public-id `store.getNodeProperty`), so WHICH node matches
+    ///     is identical to the scan path.
+    pub fn lookupPublicNodeIdByLabelAndAllProps(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        filters: []const PropKV,
+        missing_err: anyerror,
+    ) !u64 {
+        if (filters.len == 0) return missing_err;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+        // Seed selection + authoritative-miss (same contract as
+        // lookupNodeIdByLabelAndAllProps — see its comment).
+        var seed_idx: usize = 0;
+        var best_len: usize = std.math.maxInt(usize);
+        for (filters, 0..) |f, i| {
+            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            if (len == 0) {
+                if (graph_store.shouldIndexProperty(f.key)) return missing_err;
+                continue;
+            }
+            if (len < best_len) {
+                best_len = len;
+                seed_idx = i;
+            }
+        }
+
+        // Try the O(1) public-id merge-index seek on the seed when it is UNIQUE
+        // (posting <= 1). A unique seed resolved via the merge index gives the
+        // single public id directly; verify the remaining filters on it.
+        if (best_len <= 1 and graph_store.shouldIndexProperty(filters[seed_idx].key)) {
+            var seed_id: u64 = 0;
+            switch (store.lookupMergeCandidate(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, &seed_id)) {
+                .found => {
+                    if (try self.publicNodeMatchesRemaining(graph_name, store, seed_id, filters, seed_idx)) return seed_id;
+                    return missing_err;
+                },
+                // Merge index miss but the exact index has it (best_len==1) ⇒ a
+                // CREATEd node not in the 1:1 merge index (GAP-0334). Fall
+                // through to the public-id scan to find it.
+                .not_found, .not_indexable => {},
+            }
+        }
+
+        // Public-id-space candidate scan over the label posting: verify ALL
+        // filters (including the seed) per candidate. Reached only for a
+        // non-unique seed or the GAP-0334 CREATE-seeded fallback (a node present
+        // in the exact index but not the 1:1 merge index). The from-dump
+        // endpoint key {source, source_id} has a UNIQUE source_id, so the O(1)
+        // merge-seek above handles the hot path; this O(label) scan is the rare
+        // correctness fallback, not the steady state.
+        const label_nodes = store.getNodesByLabel(graph_name, label) orelse return missing_err;
+        for (label_nodes) |node_id| {
+            var all_match = true;
+            for (filters) |f| {
+                const actual = store.getNodeProperty(node_id, f.key) orelse {
+                    all_match = false;
+                    break;
+                };
+                if (!propertyValuesEqual(actual, f.value)) {
+                    all_match = false;
+                    break;
+                }
+            }
+            if (all_match) return node_id;
+        }
+        return missing_err;
+    }
+
+    /// Verify every filter EXCEPT `seed_idx` against the public-id node's stored
+    /// properties (the seed already matched via the index/merge probe).
+    fn publicNodeMatchesRemaining(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        store: *graph_store.GraphStore,
+        node_id: u64,
+        filters: []const PropKV,
+        seed_idx: usize,
+    ) !bool {
+        _ = self;
+        _ = graph_name;
+        for (filters, 0..) |f, i| {
+            if (i == seed_idx) continue;
+            const actual = store.getNodeProperty(node_id, f.key) orelse return false;
+            if (!propertyValuesEqual(actual, f.value)) return false;
+        }
+        return true;
     }
 
     /// Cheap selectivity probe for an exact `(label, property = value)` posting.

@@ -6997,6 +6997,21 @@ pub fn build(b: *std.Build) void {
     const multi_seek_step = b.step("test-multi-pattern-index-seek", "Run multi-pattern index-seek regression (comma-MATCH endpoints seek the index, not a per-pattern full scan)");
     multi_seek_step.dependOn(&run_multi_seek_tests.step);
 
+    // Bulk edge-endpoint seek regression (from-dump EDGE phase wedge): the QUIC
+    // bulk fast path `executeBulkMatchMergeEdge` -> `lookupNodeIdByLabelAndAllProps`
+    // must short-circuit an AUTHORITATIVE unique-key MISS (a dangling composite
+    // endpoint) without seeding the scan on a low-selectivity component and
+    // verifying O(N) candidates — that scan, held under the SHARED graph rwlock
+    // and amplified by the bounded node cache (each verify is a disk page pin),
+    // is the edge-phase wedge (checkpoint starves, ~0 edges).
+    const bulk_edge_seek_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bulk_edge_endpoint_seek.zig"), .target = target, .optimize = optimize });
+    bulk_edge_seek_test_mod.addImport("geode", root_mod);
+    const bulk_edge_seek_tests = b.addTest(.{ .root_module = bulk_edge_seek_test_mod });
+    const run_bulk_edge_seek_tests = b.addRunArtifact(bulk_edge_seek_tests);
+    shardDep(test_step, &run_bulk_edge_seek_tests.step, 1, test_shard_loads, test_shard_index);
+    const bulk_edge_seek_step = b.step("test-bulk-edge-endpoint-seek", "Run bulk edge-endpoint seek regression (dangling composite endpoint is an authoritative miss, not an O(N) scan)");
+    bulk_edge_seek_step.dependOn(&run_bulk_edge_seek_tests.step);
+
     // Wire the MERGE-is-mutating classifier regression (declared earlier, before
     // test_step was in scope) into the aggregate `test` step here.
     shardDep(test_step, &run_merge_mutating_tests.step, 1, test_shard_loads, test_shard_index);
