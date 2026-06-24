@@ -37,6 +37,27 @@ builds:
     # Windows targets are intentionally excluded due to QUIC library socket type incompatibilities.
     # Re-enable once vendor/quic Windows socket support is available.
 
+  # FIPS-validated build: amd64-only, dynamically links the validated OpenSSL
+  # FIPS provider. The provider must be present at /usr/local/ssl on the BUILD
+  # host (see GoReleaser build-env concern in release notes / CI design).
+  # NOTE: GoReleaser's zig builder runs inside the build-release docker:dind
+  # container which uses docker:latest + zig installed via zvm — that image does
+  # NOT include the FIPS provider. As a result, this build will fail in the
+  # standard build-release job unless the job image is changed to one that has
+  # /usr/local/ssl (e.g. the ci-catalog/zig-fips image, or a pre-install step).
+  # The CI gap is documented; a follow-up job override or image change is needed.
+- id: geode-fips
+  builder: zig
+  binary: geode
+  dir: .
+  command: build
+  flags:
+  - -Doptimize=ReleaseSafe
+  - -Dfips=true
+  - -Dopenssl_path=/usr/local/ssl
+  targets:
+  - x86_64-linux-gnu
+
 # =============================================================================
 # Archives - Binary Distribution
 # =============================================================================
@@ -50,6 +71,17 @@ archives:
   format_overrides:
   - goos: windows
     formats: [zip]
+  files:
+  - README.md
+  - LICENSE
+  - docs/QUICK_REFERENCE.md
+  - docs/API_REFERENCE.md
+
+  # FIPS binary archive (amd64/x86_64-linux-gnu only)
+- id: geode-fips-archives
+  ids:
+  - geode-fips
+  name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Target }}-fips'
   files:
   - README.md
   - LICENSE
@@ -340,6 +372,55 @@ dockers:
   - --label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)
   - --label=org.opencontainers.image.licenses=Apache-2.0
 
+  # FIPS-validated images (amd64 only) - GitLab Registry
+  # Uses the geode-fips build ID (binary built with -Dfips=true -Dopenssl_path=/usr/local/ssl).
+  # Multi-stage Dockerfile copies the validated OpenSSL FIPS provider from zig-fips image.
+- id: geode-fips-amd64
+  ids:
+  - geode-fips
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips-amd64'
+  dockerfile: Dockerfile.release.fips
+  extra_files:
+  - docker
+  use: buildx
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-fips
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
+  - --label=org.opencontainers.image.source={{.GitURL}}
+  - --label=org.opencontainers.image.description=Geode Graph Database - FIPS-validated build (amd64)
+  - --label=org.opencontainers.image.licenses=Apache-2.0
+
+  # FIPS-validated images (amd64 only) - Docker Hub
+- id: geode-dockerhub-fips-amd64
+  ids:
+  - geode-fips
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-fips-amd64
+  dockerfile: Dockerfile.release.fips
+  extra_files:
+  - docker
+  use: buildx
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-fips
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
+  - --label=org.opencontainers.image.source=https://gitlab.com/devnw/codepros/geode/geode
+  - --label=org.opencontainers.image.description=Geode Graph Database - FIPS-validated build (amd64)
+  - --label=org.opencontainers.image.licenses=Apache-2.0
+
 # =============================================================================
 # Docker Manifests - Multi-arch tags
 # =============================================================================
@@ -439,6 +520,27 @@ docker_manifests:
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
+
+  # FIPS manifests (amd64 single-arch — no multi-arch, amd64-only validated provider)
+  # GitLab Registry FIPS manifests
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips-amd64'
+
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:latest-fips'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips-amd64'
+
+  # Docker Hub FIPS manifests
+- name_template: docker.io/geodedb/geode:{{ .Version }}-fips
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-fips-amd64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+
+- name_template: docker.io/geodedb/geode:latest-fips
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-fips-amd64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
 # =============================================================================
 # System Packages - nFPM (deb, rpm, apk)

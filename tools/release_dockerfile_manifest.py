@@ -22,6 +22,10 @@ REQUIRED_FIELDS = {
     "cmd",
 }
 
+# Fields required for manually-maintained Dockerfiles (not generated).
+# Only "path" and "title" are mandatory; the rest need not be present.
+MANUAL_REQUIRED_FIELDS = {"path", "title"}
+
 
 def load_manifest(path: pathlib.Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
@@ -32,11 +36,17 @@ def load_manifest(path: pathlib.Path) -> dict[str, Any]:
     for index, spec in enumerate(dockerfiles):
         if not isinstance(spec, dict):
             raise ValueError(f"dockerfiles[{index}] must be an object")
-        missing = REQUIRED_FIELDS.difference(spec.keys())
-        if missing:
-            raise ValueError(f"dockerfiles[{index}] missing fields: {', '.join(sorted(missing))}")
-        if spec["package_manager"] not in {"apt", "apk"}:
-            raise ValueError(f"dockerfiles[{index}] package_manager must be apt or apk")
+        if spec.get("manual"):
+            # Manually-maintained Dockerfiles: only path + title required.
+            missing = MANUAL_REQUIRED_FIELDS.difference(spec.keys())
+            if missing:
+                raise ValueError(f"dockerfiles[{index}] (manual) missing fields: {', '.join(sorted(missing))}")
+        else:
+            missing = REQUIRED_FIELDS.difference(spec.keys())
+            if missing:
+                raise ValueError(f"dockerfiles[{index}] missing fields: {', '.join(sorted(missing))}")
+            if spec["package_manager"] not in {"apt", "apk"}:
+                raise ValueError(f"dockerfiles[{index}] package_manager must be apt or apk")
     return data
 
 
@@ -115,8 +125,16 @@ def render_dockerfile(spec: dict[str, Any]) -> str:
 
 def sync_or_check(manifest: dict[str, Any], repo_root: pathlib.Path, check_only: bool) -> int:
     out_of_sync: list[str] = []
+    missing_manual: list[str] = []
     for spec in manifest["dockerfiles"]:
         path = repo_root / spec["path"]
+        if spec.get("manual"):
+            # Manual Dockerfiles are not generated; just verify they exist on disk.
+            if not path.exists():
+                missing_manual.append(spec["path"])
+            elif not check_only:
+                print(f"skipped (manual) {spec['path']}")
+            continue
         rendered = render_dockerfile(spec)
         current = path.read_text(encoding="utf-8") if path.exists() else None
         if current != rendered:
@@ -126,11 +144,16 @@ def sync_or_check(manifest: dict[str, Any], repo_root: pathlib.Path, check_only:
                 path.write_text(rendered, encoding="utf-8")
                 print(f"synced {spec['path']}")
 
-    if check_only and out_of_sync:
-        print("error: release Dockerfiles are out of sync with release/dockerfile_manifest.json", file=sys.stderr)
-        for path in out_of_sync:
-            print(f"  - {path}", file=sys.stderr)
-        print("run: python3 tools/release_dockerfile_manifest.py sync", file=sys.stderr)
+    if check_only and (out_of_sync or missing_manual):
+        if out_of_sync:
+            print("error: release Dockerfiles are out of sync with release/dockerfile_manifest.json", file=sys.stderr)
+            for p in out_of_sync:
+                print(f"  - {p}", file=sys.stderr)
+            print("run: python3 tools/release_dockerfile_manifest.py sync", file=sys.stderr)
+        if missing_manual:
+            print("error: manually-maintained Dockerfiles listed in manifest are missing from disk", file=sys.stderr)
+            for p in missing_manual:
+                print(f"  - {p}", file=sys.stderr)
         return 1
     if check_only:
         print("release Dockerfile manifest check passed")
@@ -147,8 +170,9 @@ def write_signoff_report(manifest: dict[str, Any], repo_root: pathlib.Path, outp
     ]
     for spec in manifest["dockerfiles"]:
         path = repo_root / spec["path"]
+        tag = " (manual)" if spec.get("manual") else ""
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        lines.append(f"{digest}  {spec['path']}")
+        lines.append(f"{digest}  {spec['path']}{tag}")
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote sign-off report: {output}")
     return 0

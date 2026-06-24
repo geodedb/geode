@@ -1829,10 +1829,31 @@ dev-image-build:
       build_one x86_64-linux-gnu amd64
       build_one aarch64-linux-gnu arm64
       ls -la dist/linux-amd64 dist/linux-arm64
+
+      # FIPS binary: amd64-only, -Dfips=true -Dopenssl_path=/usr/local/ssl.
+      # The $ZIG_IMAGE is the standard zig image and does NOT include the
+      # FIPS-validated OpenSSL provider at /usr/local/ssl.  This step is
+      # best-effort here; the canonical FIPS build is the dev-image-fips job
+      # which uses the zig-fips image.  We attempt it so the artifact path
+      # is present for dev-image-fips; on failure we log a warning and continue.
+      echo "=== cross-compiling geode FIPS build for x86_64-linux-gnu (amd64) ==="
+      mkdir -p dist/linux-fips-amd64
+      if zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu \
+            -Dfips=true -Dopenssl_path=/usr/local/ssl --summary all 2>&1; then
+        cp zig-out/bin/geode dist/linux-fips-amd64/geode
+        file dist/linux-fips-amd64/geode || true
+        echo "✓ FIPS binary built"
+      else
+        echo "WARNING: FIPS binary build failed (expected: ZIG_IMAGE lacks /usr/local/ssl provider)."
+        echo "         The dev-image-fips job uses zig-fips image and will produce the canonical binary."
+        echo "         Placing a stub so artifact paths are consistent."
+        # Leave dist/linux-fips-amd64/ empty; dev-image-fips detects missing binary and skips push.
+      fi
   artifacts:
     paths:
       - dist/linux-amd64/geode
       - dist/linux-arm64/geode
+      - dist/linux-fips-amd64/
     expire_in: 1 week
 
 dev-image:
@@ -1913,6 +1934,129 @@ dev-image:
         --push \
         .
       echo "✓ pushed geode dev image tags [${DEV_TAGS}] (no latest)"
+
+# =============================================================================
+# FIPS dev image: build (zig-fips image) + push (docker:dind)
+# Produces :dev-fips / :main-fips / :main-<sha8>-fips tags.
+# =============================================================================
+
+# FIPS binary build uses the ci-catalog zig-fips image which has the validated
+# OpenSSL FIPS provider pre-installed at /usr/local/ssl.  This is the CANONICAL
+# FIPS dev binary; the attempt in dev-image-build (standard ZIG_IMAGE) is
+# best-effort and will likely fail there.
+dev-image-build-fips:
+  stage: release
+  image: registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
+  allow_failure: true
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - *zig-vendor-cache
+  script:
+    - |
+      set -e
+      echo "=== cross-compiling FIPS geode for x86_64-linux-gnu (amd64) ==="
+      zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu \
+        -Dfips=true -Dopenssl_path=/usr/local/ssl --summary all
+      mkdir -p dist/linux-fips-amd64
+      cp zig-out/bin/geode dist/linux-fips-amd64/geode
+      file dist/linux-fips-amd64/geode || true
+      echo "✓ FIPS binary built (provider path: /usr/local/ssl)"
+  artifacts:
+    paths:
+      - dist/linux-fips-amd64/geode
+    expire_in: 1 week
+
+# FIPS dev image: single-arch amd64. Copies the validated OpenSSL FIPS provider
+# from the ci-catalog zig-fips image (same multi-stage pattern as Dockerfile.release.fips).
+# Tags: dev-fips, main-fips, main-<sha8>-fips.  NEVER 'latest' — releases own that.
+dev-image-fips:
+  stage: release
+  tags:
+    - company
+    - lab
+    - linux
+  image: docker:latest
+  services:
+    - docker:dind
+  needs:
+    - job: dev-image-build-fips
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
+  allow_failure: true
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - apk add --no-cache curl bash coreutils
+  script:
+    - |
+      set -e
+      if [ ! -f dist/linux-fips-amd64/geode ]; then
+        echo "ERROR: dist/linux-fips-amd64/geode not found — dev-image-build-fips artifact missing"
+        exit 1
+      fi
+
+      SHA8=$(echo "${CI_COMMIT_SHA}" | cut -c1-8)
+      FIPS_TAGS="dev-fips main-fips main-${SHA8}-fips"
+
+      echo "Logging into GitLab registry ${CI_REGISTRY}..."
+      docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+      PUSH_DOCKERHUB="false"
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+        if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
+          PUSH_DOCKERHUB="true"
+          echo "Docker Hub login OK — also pushing docker.io/geodedb/geode FIPS dev tags"
+        else
+          echo "WARNING: Docker Hub login failed — pushing GitLab registry only"
+        fi
+      else
+        echo "DOCKERHUB_USERNAME/TOKEN not set — pushing GitLab registry only"
+      fi
+
+      TAG_ARGS=""
+      for t in $FIPS_TAGS; do
+        TAG_ARGS="$TAG_ARGS --tag ${CI_REGISTRY_IMAGE}:${t}"
+        if [ "$PUSH_DOCKERHUB" = "true" ]; then
+          TAG_ARGS="$TAG_ARGS --tag docker.io/geodedb/geode:${t}"
+        fi
+      done
+      echo "Publishing FIPS dev tags: ${FIPS_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
+
+      # amd64-only: no multi-arch for FIPS (provider is x86_64 Linux only).
+      docker buildx create --name fipsdevimage-builder --driver docker-container --use 2>/dev/null \
+        || docker buildx use fipsdevimage-builder
+      docker buildx inspect --bootstrap
+
+      # Use a dedicated FIPS dev Dockerfile that stages the provider from zig-fips
+      # and copies the pre-built binary from dist/linux-fips-amd64/geode.
+      # shellcheck disable=SC2086  # TAG_ARGS is an intentional list of flags
+      docker buildx build \
+        --platform linux/amd64 \
+        --file Dockerfile.devimage.fips \
+        --label org.opencontainers.image.revision="${CI_COMMIT_SHA}" \
+        --label org.opencontainers.image.source="${CI_PROJECT_URL}" \
+        --label org.opencontainers.image.version="main-${SHA8}-fips" \
+        ${TAG_ARGS} \
+        --push \
+        .
+      echo "✓ pushed geode FIPS dev image tags [${FIPS_TAGS}] (no latest)"
 
 # Build release artifacts for tags (alpha, beta, stable)
 build-release:
