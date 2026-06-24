@@ -1135,14 +1135,14 @@ pub const SecurityManager = struct {
     /// Constant-time comparison for 32-byte arrays (Argon2id/Blake2b digests). GAP-0440.
     /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
     fn constantTimeEqual32(a: *const [32]u8, b: *const [32]u8) bool {
-        return std.crypto.timing_safe.eql([32]u8, a.*, b.*);
+        return crypto_backend.timingSafeEql(a, b);
     }
 
     /// Constant-time comparison for 64-byte hex-encoded hashes. GAP-0440.
     /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
     fn constantTimeEqual64(a: *const [64]u8, b: []const u8) bool {
         if (b.len != 64) return false;
-        return std.crypto.timing_safe.eql([64]u8, a.*, b[0..64].*);
+        return crypto_backend.timingSafeEql(a, b[0..64]);
     }
 
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
@@ -1891,7 +1891,7 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
     ) catch return false;
 
     // Constant-time comparison to prevent timing attacks
-    return std.crypto.timing_safe.eql([32]u8, computed_hash, expected_hash);
+    return crypto_backend.timingSafeEql(&computed_hash, &expected_hash);
 }
 
 // ============================================================================

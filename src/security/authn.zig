@@ -540,7 +540,7 @@ pub const AuthProvider = struct {
 
 /// Constant-time comparison to prevent timing attacks (#440: use stdlib implementation)
 fn constantTimeEqual(a: *const [32]u8, b: *const [32]u8) bool {
-    return std.crypto.timing_safe.eql([32]u8, a.*, b.*);
+    return cb.timingSafeEql(a, b);
 }
 
 /// Extract Bearer token from HTTP Authorization header

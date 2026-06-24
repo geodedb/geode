@@ -221,7 +221,7 @@ fn storeMfaCredential(allocator: std.mem.Allocator, username: []const u8, secret
 
     // Remove old entry if present
     if (g_mfa_store.fetchRemove(username)) |old_kv| {
-        std.crypto.secureZero(u8, old_kv.value.secret_base32);
+        crypto_backend.secureZero(old_kv.value.secret_base32);
         allocator.free(old_kv.value.secret_base32);
         for (old_kv.value.recovery_codes) |code| allocator.free(code);
         allocator.free(old_kv.value.recovery_codes);

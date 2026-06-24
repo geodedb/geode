@@ -356,7 +356,7 @@ fn deinitServerState(state: *server_state.ServerState) void {
     if (state.session_config) |*cfg| cfg.deinit();
     if (state.authenticated_user) |u| alloc.free(u);
     if (state.authenticated_password) |p| {
-        std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
+        cb.secureZero(@constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
         alloc.free(p);
     }
     state.txn_manager.deinit();
@@ -393,7 +393,7 @@ fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_s
         state.authenticated_user = null;
     }
     if (state.authenticated_password) |p| {
-        std.crypto.secureZero(u8, @constCast(p));
+        cb.secureZero(@constCast(p));
         allocator.free(p);
         state.authenticated_password = null;
     }
@@ -697,7 +697,7 @@ pub const GeodeGrpcServer = struct {
         grpc_tls.deinitTlsContext();
         // GAP-0518: Securely zero and free the random session key.
         if (self.grpc_session_key) |key| {
-            std.crypto.secureZero(u8, key);
+            cb.secureZero(key);
             self.allocator.free(key);
         }
         self.server.deinit();
