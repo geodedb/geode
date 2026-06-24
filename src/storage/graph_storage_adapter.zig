@@ -2564,30 +2564,69 @@ pub const StorageAdapter = struct {
         if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
         if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
 
-        // MERGE dedup probe UNDER the shard locks: the outgoing-adjacency list
-        // for `source_id` lives in the source shard (held EXCLUSIVE here), so a
-        // concurrent same-source MERGE cannot insert between this probe and the
-        // create below — two racing MERGEs of the same (src,dst,type) cannot
-        // both miss-then-create (no duplicate edge). Mirrors the executor's
-        // findExistingEdgeId scope/type semantics. Tenant scoping matches the
-        // create's request-tenant tag.
-        if (store.getOutgoingEdgeIds(source_id)) |outgoing| {
-            for (outgoing) |edge_id| {
-                // PHASE 1 (edge-engine-direct): hydrate-on-miss so the MERGE
-                // dedup probe still sees an EVICTED edge's body — otherwise a
-                // bounded edge cache would miss an existing edge and create a
-                // duplicate. Dedup LOGIC/locking is unchanged (Phase 3/4); only
-                // the body resolution hydrates.
-                const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+        // PHASE 3 (edge-engine-direct): O(1) MERGE dedup via the engine
+        // edge-EXISTENCE index instead of the O(out-degree) resident adjacency
+        // scan (which Phase 1 also burdened with a per-edge body hydrate). The
+        // engine index is keyed on (from_slot, rel_type, to_slot) and lives on
+        // the SOURCE shard — held EXCLUSIVE here — so a concurrent same-source
+        // MERGE cannot insert between this probe and the create below: two racing
+        // MERGEs of the same (src,dst,type) cannot both miss-then-create (no
+        // duplicate edge). The probe narrows the candidates from ALL of the
+        // parent's out-edges to JUST the edges with this exact tuple (≈1), then
+        // the SAME scope/tenant predicates + idempotent prop-upsert run on the
+        // tested public-id path — preserving EXACT MERGE semantics, multi-tenant
+        // same-tuple included.
+        //
+        // `source_id`/`target_id` are geode PUBLIC node ids; the engine indexes
+        // on dense engine SLOTS, so translate via the per-graph IdMap first. A
+        // missing slot mapping means the node has no engine presence → no edge to
+        // dedup against → fall through to create (which re-checks and errors).
+        // `rel_type` is a geode label string; the engine keys on its u32 LabelId.
+        // An unseen label has NO edges of that type → straight to create. We hold
+        // the graph rwlock (SHARED) + shard locks, so we reach the per-shard
+        // engine + IdMap DIRECTLY and must NOT re-enter the tier-0 self.mutex
+        // (GAP-0278 lock order) via the adapter's graph-scoped getEdgeProperty/
+        // getEdgeRecordBySlot wrappers.
+        probe: {
+            const id_map = store.getIdMap(graph_name) orelse break :probe;
+            const from_slot = id_map.nodeSlot(@as(u128, source_id)) orelse break :probe;
+            const to_slot = id_map.nodeSlot(@as(u128, target_id)) orelse break :probe;
+            const rel_label_id = mg.label_dict.getId(rel_type) orelse break :probe;
+
+            const src_engine = mg.shardEngineForNode(from_slot);
+            var probe_buf: [16]u64 = undefined;
+            const candidate_slots = try src_engine.probeEdge(from_slot, rel_label_id, to_slot, &probe_buf);
+            for (candidate_slots) |edge_slot| {
+                // Engine slot -> geode PUBLIC edge id (the id space the dedup
+                // match/return + prop-upsert operate in). Read directly off the
+                // source-shard engine, addressing the edge by its SOURCE slot (no
+                // self.mutex). A slot with no public-id tag is an orphan /
+                // not-yet-mapped edge → skip.
+                const stored = (src_engine.getEdgeProperty(
+                    from_slot,
+                    edge_slot,
+                    graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
+                    self.allocator,
+                ) catch null) orelse continue;
+                defer freeOwnedStorageProperty(self.allocator, stored);
+                const public_id = switch (stored) {
+                    .string => |text| graph_store.parsePersistedPublicId(text) orelse continue,
+                    else => continue,
+                };
+                // Apply the IDENTICAL scope/type/tenant predicates on the tested
+                // public-id path (hydrate-on-miss for an evicted body). probeEdge
+                // already guarantees (from,rel,to) and the engine identity covers
+                // graph_name, but we keep the full check as defense-in-depth and
+                // for the tenant disambiguation that the engine key cannot carry.
+                const edge = store.getEdgePtrHydrated(public_id) orelse continue;
                 if (edge.to_id != target_id) continue;
                 if (!std.mem.eql(u8, edge.graph_name, graph_name)) continue;
                 if (!std.mem.eql(u8, edge.label, rel_type)) continue;
                 if (request_tenant.len != 0 and !std.mem.eql(u8, edge.tenant_id, request_tenant)) continue;
                 // Already present — MERGE is a no-op create. Apply any props
-                // (idempotent upsert), matching the executor's create-path prop
-                // set so a re-MERGE with edge props converges.
-                if (props.len > 0) try self.applyEdgePropsLocked(store, edge_id, props);
-                return edge_id;
+                // (idempotent upsert) so a re-MERGE with edge props converges.
+                if (props.len > 0) try self.applyEdgePropsLocked(store, public_id, props);
+                return public_id;
             }
         }
 

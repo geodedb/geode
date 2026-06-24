@@ -401,9 +401,20 @@
         // the periodic checkpoint keeps pace with sustained bulk ingest.
         // Bumped 2026-06-23 to v0.2.7 (1c73f44) — lock-free buffer-pool pin/unpin hit path
         // + pin mutex-leak fix (aborts under concurrent reads+writes with eviction).
+        //
+        // PHASE 3 (edge-engine-direct) DEV PIN — 2026-06-24:
+        // Temporarily overridden to a LOCAL PATH so geode builds against the
+        // unreleased graph-storage edge-EXISTENCE index (probeEdge / O(1) durable
+        // MERGE dedup; commit d91173e on branch feat/edge-engine-direct in the
+        // graph-storage worktree). `git+file://` is unsupported by `zig fetch` and
+        // the commit is not pushed, so a path override is the correct sandbox dev
+        // pin. AT MERGE-TO-MAIN: tag graph-storage (e.g. v0.2.8), restore the
+        // url+hash form below, then run the diamond-cascade bump across consumers.
+        // Prior pin (restore at release):
+        //   .url  = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.8#<sha>",
+        //   .hash = "graph_storage-0.2.8-<...>",
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.7#1c73f44e291e63e620e20c428c5faafb74633bab",
-            .hash = "graph_storage-0.2.7-9UyJS5_cEgBtBmM4JoKt7_JO1IiG8QCbx-GgrqBWt-A-",
+            .path = "../graph-storage",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
