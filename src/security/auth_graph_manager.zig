@@ -10,6 +10,7 @@
 //! - HMAC-aware user creation
 
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -733,7 +734,7 @@ pub const AuthGraphManager = struct {
             }
 
             var random_bytes: [16]u8 = undefined;
-            compat_fillRandom(&random_bytes);
+            try cb.Csprng.bytes(&random_bytes);
             const pw = try self.allocator.alloc(u8, 32);
             const hex_chars = "0123456789abcdef";
             for (random_bytes, 0..) |byte, i| {
@@ -1300,7 +1301,7 @@ pub const AuthGraphManager = struct {
 fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
     // Generate cryptographically random 32-byte key
     var key: [32]u8 = undefined;
-    compat_fillRandom(&key);
+    try cb.Csprng.bytes(&key);
 
     // Convert to hex for human-readable file format
     const hex = auth_hmac.hmacToHex(&key);

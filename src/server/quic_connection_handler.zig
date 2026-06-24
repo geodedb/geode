@@ -5115,6 +5115,7 @@ fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Progra
 
 fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     var entropy: [16]u8 = undefined;
+    // fips-exempt: non-security session identifier (not a key, nonce, or secret)
     compat_fillRandom(&entropy);
     const token = std.fmt.bytesToHex(entropy, .lower);
     return std.fmt.allocPrint(allocator, "sess_{s}", .{token});

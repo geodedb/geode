@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -904,7 +905,7 @@ fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
     const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
     var password: [24]u8 = undefined;
     var random_bytes: [24]u8 = undefined;
-    compat_fillRandom(&random_bytes);
+    try cb.Csprng.bytes(&random_bytes);
 
     for (&password, random_bytes) |*p, r| {
         p.* = charset[r % charset.len];

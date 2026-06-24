@@ -65,6 +65,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
         defer allocator.free(test_data);
 
         // Fill with random data
+        // fips-exempt: non-security benchmark test-plaintext fill
         compat_fillRandom(test_data);
 
         const start = compat_microTimestamp();
@@ -107,6 +108,7 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
 
     const test_data = try allocator.alloc(u8, 256);
     defer allocator.free(test_data);
+    // fips-exempt: non-security benchmark test-plaintext fill
     compat_fillRandom(test_data);
 
     const iterations = duration_seconds * 10; // Simulate transactions

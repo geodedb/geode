@@ -4813,6 +4813,7 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_mod.addImport("user_storage", user_storage_mod);
     auth_graph_manager_mod.addImport("logging", logging_mod);
     auth_graph_manager_mod.addImport("transport/thread_pool", thread_pool_mod);
+    auth_graph_manager_mod.addImport("crypto_backend", crypto_backend_mod); // Task 9: HMAC key + admin password → FIPS DRBG
     // Note: auth_graph_manager imports geode (root_mod), so it cannot be added back to
     // root_mod (would create a file-in-two-modules error). Instead, consumers import it
     // directly via their own build module imports.
@@ -4850,6 +4851,7 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_tests.root_module.addImport("user_storage", user_storage_mod);
     auth_graph_manager_tests.root_module.addImport("logging", logging_mod);
     auth_graph_manager_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    auth_graph_manager_tests.root_module.addImport("crypto_backend", crypto_backend_mod); // Task 9: HMAC key + admin password → FIPS DRBG
     const run_auth_graph_manager_tests = b.addRunArtifact(auth_graph_manager_tests);
     shardDep(test_step, &run_auth_graph_manager_tests.step, 1, test_shard_loads, test_shard_index);
     // Named step so the inline auth_graph_manager source tests (HMAC verify,
@@ -5061,6 +5063,7 @@ pub fn build(b: *std.Build) void {
     // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
     key_rotate_tde_mod.addImport("crypto_backend", crypto_backend_mod);
     key_rotate_exe.root_module.addImport("tde_file_encryption", key_rotate_tde_mod);
+    key_rotate_exe.root_module.addImport("crypto_backend", crypto_backend_mod); // Task 9: TDE key generation → FIPS DRBG
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
 
@@ -5332,6 +5335,7 @@ pub fn build(b: *std.Build) void {
     auth_enforcement_test_mod.addImport("logging", logging_mod);
     auth_enforcement_test_mod.addImport("geode_auth", auth_mod);
     auth_enforcement_test_mod.addImport("build_options", build_options_mod);
+    auth_enforcement_test_mod.addImport("crypto_backend", crypto_backend_mod); // Task 9: user_management.zig → FIPS DRBG
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
     auth_enforcement_tests.root_module.link_libc = true;
     const run_auth_enforcement_tests = b.addRunArtifact(auth_enforcement_tests);

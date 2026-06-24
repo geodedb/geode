@@ -958,6 +958,7 @@ pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
     const iterations: usize = 1000;
     const test_data = try allocator.alloc(u8, 1024);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Baseline (no encryption)
@@ -1003,6 +1004,7 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
 
     const test_data = try allocator.alloc(u8, 256);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     const iterations = duration_seconds * 10; // Simulate transactions
@@ -1050,6 +1052,7 @@ pub fn testKeyZeroization(allocator: std.mem.Allocator) !struct {
     // Create test keys
     var keys: [5][32]u8 = undefined;
     for (&keys) |*key| {
+        // fips-exempt: non-security test-key fill for zeroization-verification (test-only)
         compat_fillRandom(key);
     }
 
@@ -1152,6 +1155,7 @@ pub fn testKmsWrapUnwrap(allocator: std.mem.Allocator) !struct {
 
     // Generate test key
     var test_key: [32]u8 = undefined;
+    // fips-exempt: non-security test PLAINTEXT (the value is the data being encrypted by encrypt(), NOT the AES key/nonce; encrypt() derives its own key+nonce)
     compat_fillRandom(&test_key);
 
     // Simulate wrap (encrypt key with KEK)
@@ -1200,6 +1204,7 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
 
     // Create attestation message (nonce + timestamp + KMS identifier)
     var attestation_data: [64]u8 = undefined;
+    // fips-exempt: non-security attestation replay-nonce (signed, not an AEAD IV or key)
     compat_fillRandom(attestation_data[0..32]); // nonce
     const timestamp = compat_milliTimestamp();
     std.mem.writeInt(i64, attestation_data[32..40], timestamp, .little);
@@ -1372,6 +1377,7 @@ pub fn testKeyRecovery(allocator: std.mem.Allocator) !struct {
     // Test recovery process
     const test_data = try allocator.alloc(u8, 128);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Encrypt with current key
@@ -1447,6 +1453,7 @@ pub fn testCorruptedKeyHandling(allocator: std.mem.Allocator) !struct {
     // Create test data
     const test_data = try allocator.alloc(u8, 128);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Encrypt with valid key

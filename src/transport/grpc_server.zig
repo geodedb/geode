@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -157,6 +158,7 @@ fn shouldAllowGrpcPlaintextFallback(allocator: std.mem.Allocator) bool {
 
 fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     var entropy: [16]u8 = undefined;
+    // fips-exempt: non-security session identifier (not a key, nonce, or secret)
     compat_fillRandom(&entropy);
     const token = std.fmt.bytesToHex(entropy, .lower);
     return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
@@ -164,6 +166,7 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 
 fn throttleInvalidSessionProbe() void {
     var jitter: [1]u8 = undefined;
+    // fips-exempt: non-security throttle delay jitter (timing only, not cryptographic)
     compat_fillRandom(&jitter);
     const delay_ms: u64 = 5 + @as(u64, @intCast(jitter[0] % 6));
     const ns: u64 = delay_ms * std.time.ns_per_ms;
@@ -623,7 +626,7 @@ pub const GeodeGrpcServer = struct {
         // hardcoded literal.  The 32-byte key is hex-encoded (64 chars) and
         // heap-allocated so it lives as long as the server.
         var grpc_session_key_raw: [32]u8 = undefined;
-        compat_fillRandom(&grpc_session_key_raw);
+        try cb.Csprng.bytes(&grpc_session_key_raw);
         const grpc_session_key = try allocator.alloc(u8, 64);
         const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
         @memcpy(grpc_session_key, &hex_array);

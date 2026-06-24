@@ -284,6 +284,7 @@ pub const S3BackupManager = struct {
         const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
         const jitter = blk: {
             var rng_buf: [8]u8 = undefined;
+            // fips-exempt: non-security retry backoff jitter (timing only, not cryptographic)
             compat_fillRandom(&rng_buf);
             break :blk std.mem.readInt(u64, &rng_buf, .little) % @max(delay / 2, 1);
         };
