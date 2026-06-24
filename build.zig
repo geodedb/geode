@@ -260,6 +260,12 @@ pub fn build(b: *std.Build) void {
     _ = b.option(bool, "otel_disabled", "(no-op while OTel seam is hardcoded off) Disable OTel emission") orelse false;
     _ = b.option(bool, "otel_profiles", "(no-op while OTel seam is hardcoded off) Enable profile signal") orelse false;
 
+    // FIPS crypto seam — defined HERE (before the transport deps below) so the
+    // flags can be forwarded into quic/tls so the cluster transport TLS also
+    // routes through the OpenSSL FIPS provider when -Dfips=true.
+    const fips = b.option(bool, "fips", "Route security crypto through the OpenSSL FIPS provider") orelse false;
+    const openssl_path = b.option([]const u8, "openssl_path", "OpenSSL FIPS prefix (e.g. /usr/local/ssl)");
+
     // Get version from git tags
     const version = getGitVersion(b);
 
@@ -343,6 +349,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .thread_pool = false,
+        // FIPS: propagate -Dfips/-Dopenssl_path into quic so its crypto_backend
+        // seam (and transitively tls's) route the cluster transport TLS through
+        // the OpenSSL FIPS provider. quic forwards these down to tls internally.
+        .fips = fips,
+        .openssl_path = openssl_path orelse "/usr/local/ssl",
     });
     const quic_ext_mod = quic_ext_dep.module("quic");
     const quic_parallel_serial_mod = b.createModule(.{
@@ -669,8 +680,8 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "allow_rls_raw_interp", allow_rls_raw_interp);
     // FIPS crypto seam: route security-critical crypto through the OpenSSL
     // FIPS 140-3 provider when -Dfips=true; uses the local std_shim when false.
-    const fips = b.option(bool, "fips", "Route security crypto through the OpenSSL FIPS provider") orelse false;
-    const openssl_path = b.option([]const u8, "openssl_path", "OpenSSL FIPS prefix (e.g. /usr/local/ssl)");
+    // (fips/openssl_path are defined near the top so they can be forwarded to
+    // the quic/tls transport deps; here we just record fips into build_options.)
     build_opts.addOption(bool, "fips", fips);
     const build_options_mod = build_opts.createModule();
 
@@ -700,7 +711,7 @@ pub fn build(b: *std.Build) void {
         // fips is `.lazy = true` in build.zig.zon, so it MUST be accessed via
         // lazyDependency (b.dependency panics on a lazy dep). We are already
         // inside `if (fips)`, so the dependency is requested + resolved here.
-        if (b.lazyDependency("fips", .{ .target = target, .optimize = optimize })) |fips_dep| {
+        if (b.lazyDependency("fips", .{ .target = target, .optimize = optimize, .openssl_path = openssl_path orelse "/usr/local/ssl" })) |fips_dep| {
             crypto_backend_mod.addImport("fips", fips_dep.module("fips"));
             // Link the FIPS-prefix OpenSSL onto the crypto_backend module using the
             // canonical linkOpenssl helper from the vendored link.zig. Force dynamic
