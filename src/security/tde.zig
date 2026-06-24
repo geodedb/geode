@@ -1189,6 +1189,7 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
             .tamper_detected = false,
         };
     };
+    defer keypair.deinit();
 
     // Create attestation message (nonce + timestamp + KMS identifier)
     var attestation_data: [64]u8 = undefined;

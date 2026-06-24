@@ -248,6 +248,7 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
         var i_bytes: [8]u8 = undefined;
         std.mem.writeInt(u64, &i_bytes, i, .little);
         var stream = try cb.Hash.Stream.init(.sha256);
+        defer stream.deinit();
         try stream.update(&master_key);
         try stream.update("data_key");
         try stream.update(&i_bytes);
@@ -260,6 +261,7 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
         var i_bytes: [8]u8 = undefined;
         std.mem.writeInt(u64, &i_bytes, i, .little);
         var stream = try cb.Hash.Stream.init(.sha256);
+        defer stream.deinit();
         try stream.update(&master_key);
         try stream.update("backup_key");
         try stream.update(&i_bytes);
@@ -559,6 +561,7 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyRe
     // Simple KDF: Hash(salt || ikm || info)
     {
         var stream = try cb.Hash.Stream.init(.sha256);
+        defer stream.deinit();
         try stream.update(salt);
         try stream.update(&ikm);
         try stream.update(info_bytes);
@@ -589,6 +592,7 @@ pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKey
 
     {
         var stream = try cb.Hash.Stream.init(.sha256);
+        defer stream.deinit();
         try stream.update(salt);
         try stream.update(&ikm);
         try stream.update(info_bytes);

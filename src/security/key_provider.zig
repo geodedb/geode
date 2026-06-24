@@ -89,6 +89,7 @@ fn derive(seed: u64, label: []const u8, out: *[32]u8) !void {
     var seed_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &seed_buf, seed, .little);
     var stream = try cb.Hash.Stream.init(.sha256);
+    defer stream.deinit();
     try stream.update(&seed_buf);
     try stream.update(label);
     _ = try stream.final(out);
@@ -181,6 +182,7 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     var seed_digest: [32]u8 = undefined;
     {
         var stream = try cb.Hash.Stream.init(.sha256);
+        defer stream.deinit();
         try stream.update(endpoint);
         try stream.update(api_key);
         _ = try stream.final(&seed_digest);
@@ -211,6 +213,7 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
 
 fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) !void {
     var stream = try cb.Hash.Stream.init(.sha256);
+    defer stream.deinit();
     try stream.update(base);
     try stream.update(label);
     _ = try stream.final(out);

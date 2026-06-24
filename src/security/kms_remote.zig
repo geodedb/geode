@@ -127,6 +127,7 @@ pub const Server = struct {
         // derive attestation hash (sha256 over token + kek prefix)
         {
             var stream = try cb.Hash.Stream.init(.sha256);
+            defer stream.deinit();
             try stream.update(tok);
             try stream.update(self.kek[0..16]);
             _ = try stream.final(&self.attestation_hash);
@@ -719,6 +720,7 @@ pub const RemoteKmsClient = struct {
         std.mem.copyForwards(u8, msg[0..domain_attest.len], domain_attest);
         std.mem.copyForwards(u8, msg[domain_attest.len..msg_len], &hash);
         var kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, &pub_key) catch return false;
+        defer kp.deinit();
         cb.Sig.verify(.ed25519, &kp, msg, &sig) catch return false;
         return true;
     }

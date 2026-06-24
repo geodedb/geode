@@ -382,6 +382,7 @@ pub const KeyRegistry = struct {
         var w = file.writer();
         // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
         var h = try cb.Hash.Stream.init(.sha256);
+        defer h.deinit();
         for (self.history.items) |entry| {
             if (entry.is_wrapped and entry.envelope_json) |ej| {
                 try h.update(ej);
@@ -573,6 +574,7 @@ pub const KeyRegistry = struct {
         if (have_checksum) {
             // verify checksum matches current history
             var h2 = try cb.Hash.Stream.init(.sha256);
+            defer h2.deinit();
             for (self.history.items) |entry| {
                 if (entry.is_wrapped and entry.envelope_json) |ej| try h2.update(ej) else try h2.update(&entry.material);
             }
