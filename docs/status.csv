@@ -1057,6 +1057,14 @@ REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,TESTED,,,distri
 REQ-FEDERATION-INDEX-REC-001,FederationIndexRecommendations,Index,IMPL,,,distributed,2026-04-05,src/server/index_optimizer.zig
 REQ-FEDERATION-QUERY-001,Federation,FederatedQuery,TESTED,,,federation,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-FINAL-001,FinalSort,SortExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
+REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncrypt,IMPL,,,security,2026-06-24,src/fle_integration.zig
+REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncryptAesGcmAllowed,TESTED,,,security,2026-06-24,src/fle_integration.zig
+REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncryptChaChaAllowedNonFips,TESTED,,,security,2026-06-24,src/fle_integration.zig
+REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncryptRejectChaCha,TESTED,,,security,2026-06-24,src/fle_integration.zig
+REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLETests,TESTED,,,security,2026-06-24,src/fle_integration.zig
+REQ-FIPS-CHACHA-FAILCLOSE-002,FIPSFailClose,FLEDecrypt,IMPL,,,security,2026-06-24,src/fle_integration.zig
+REQ-FIPS-CHACHA-FAILCLOSE-003,FIPSFailClose,QUICHeaderProtect,IMPL,,,security,2026-06-24,src/transport/quic_parallel_serial.zig
+REQ-FIPS-CHACHA-FAILCLOSE-004,FIPSFailClose,FLEMigrate,IMPL,,,security,2026-06-24,src/admin/fle_commands.zig
 REQ-FIPS-PWHASH-001,FIPSPasswordHashFailClose,Security,TESTED,,,security,2026-06-23,src/security/test_auth_enforcement.zig
 REQ-FLE-001,FieldLevelEncryption,EncryptField,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-FLE-001,FieldLevelEncryption,EncryptProperty,TESTED,,,security,2026-01-15,tests/test_gap_0193_priority_categories.zig

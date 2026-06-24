@@ -693,6 +693,8 @@ pub fn build(b: *std.Build) void {
     });
     crypto_backend_mod.addImport("build_options", build_options_mod);
     crypto_backend_mod.addImport("std_shim", std_shim_mod);
+    // Task 8: FIPS fail-close for ChaCha20 header protection in the QUIC parallel module.
+    quic_parallel_serial_mod.addImport("build_options", build_options_mod);
 
     if (fips) {
         const fips_dep = b.dependency("fips", .{ .target = target, .optimize = optimize });
@@ -1340,6 +1342,8 @@ pub fn build(b: *std.Build) void {
     gap0844_test_mod.addImport("fle_key_manager", fle_key_manager_mod);
     gap0844_test_mod.addImport("fle_key_types", fle_key_types_mod);
     gap0844_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    gap0844_test_mod.addImport("build_options", build_options_mod); // Task 8: FIPS fail-close gates
+    gap0844_test_mod.addImport("crypto_backend", crypto_backend_mod); // transitive: fle_catalog.zig → tde_file_encryption.zig → crypto_backend
     gap0844_test_mod.link_libc = true; // setenv/unsetenv + std.c.getenv
     // GAP-0886 (#813): the REQ-FLE-ENFORCE-030 flag-invariant regression also
     // lives inline in fle_integration.zig; run it through this same step.
@@ -1347,6 +1351,25 @@ pub fn build(b: *std.Build) void {
     const run_gap0844_tests = b.addRunArtifact(gap0844_tests);
     const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role) + GAP-0886 FLE flag invariant");
     gap0844_step.dependOn(&run_gap0844_tests.step);
+
+    // Task 8 (FIPS fail-close): Dedicated step for FIPS-gated ChaCha20-Poly1305 FLE tests.
+    // Filters to FIPS-Task8 tests so both modes can be verified independently:
+    //   -Dfips=false: "FIPS-Task8: ChaCha20-Poly1305 FLE is NOT gated under non-FIPS build"
+    //   -Dfips=true:  "FIPS-Task8: ChaCha20-Poly1305 FLE encrypt returns FipsUnsupported under FIPS"
+    //                 "FIPS-Task8: AES-256-GCM FLE encrypt is NOT blocked by FIPS gate"
+    const fips_chacha_test_mod = b.createModule(.{ .root_source_file = b.path("src/fle_integration.zig"), .target = target, .optimize = optimize });
+    fips_chacha_test_mod.addImport("logging", logging_mod);
+    fips_chacha_test_mod.addImport("fle_aead", fle_aead_mod);
+    fips_chacha_test_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    fips_chacha_test_mod.addImport("fle_key_types", fle_key_types_mod);
+    fips_chacha_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    fips_chacha_test_mod.addImport("build_options", build_options_mod);
+    fips_chacha_test_mod.addImport("crypto_backend", crypto_backend_mod);
+    fips_chacha_test_mod.link_libc = true;
+    const fips_chacha_tests = b.addTest(.{ .root_module = fips_chacha_test_mod, .filters = &.{"FIPS-Task8"} });
+    const run_fips_chacha_tests = b.addRunArtifact(fips_chacha_tests);
+    const fips_chacha_step = b.step("test-fips-chacha-failclose", "Task 8: FIPS fail-close for ChaCha20-Poly1305 FLE (run under both -Dfips=false and -Dfips=true)");
+    fips_chacha_step.dependOn(&run_fips_chacha_tests.step);
 
     // Quality #733 (2026-06-11): focused runner for the hot-path inline test
     // backfill — deep-nesting parse in src/gql/parser.zig, the tenant-filter
