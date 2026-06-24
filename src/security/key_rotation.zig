@@ -264,7 +264,7 @@ pub const KeyRegistry = struct {
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
-        compat_fillRandom(&key.material);
+        try cb.Csprng.bytes(&key.material);
         try self.history.append(self.allocator, key);
         self.active = key;
         return key;
@@ -316,7 +316,7 @@ pub const KeyRegistry = struct {
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
-        compat_fillRandom(&key.material);
+        try cb.Csprng.bytes(&key.material);
         try self.history.append(self.allocator, key);
         self.active = key;
         try self.logAuditEvent(.rotation_completed, if (old) |o| o.id else 0, key.id, .success, 0, null, 0);
@@ -330,7 +330,7 @@ pub const KeyRegistry = struct {
         const old = self.active;
         // Generate plaintext key material using cryptographically secure random
         var plaintext: [32]u8 = undefined;
-        compat_fillRandom(&plaintext);
+        try cb.Csprng.bytes(&plaintext);
         // Wrap key using KMS client
         const kms = @import("external_kms_client.zig");
         // GAP-0216: Handle potential error from LocalSimulated KMS init
@@ -667,7 +667,7 @@ pub const KeyRegistry = struct {
 
         // Generate new nonce for re-encryption
         var new_nonce: [aes_gcm_nonce_len]u8 = undefined;
-        compat_fillRandom(&new_nonce);
+        try cb.Csprng.bytes(&new_nonce);
 
         // Re-encrypt with active key
         var new_tag: [aes_gcm_tag_len]u8 = undefined;

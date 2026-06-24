@@ -14,7 +14,7 @@ const quic = @import("transport/quic");
 fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyerror!void) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xdeadbeefcafebabe);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xdeadbeefcafebabe);
     try server.start(port);
     try server.server.setAuthToken(auth);
     try body(&server);
@@ -120,7 +120,7 @@ pub fn runUnwrapConcurrencyVariance() !void {
     const port: u16 = 13054;
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x123456789abcdef0);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x123456789abcdef0);
     try server.start(port);
     try server.server.setAuthToken("bench-token");
     var client = try connectClient(port, "bench-token");

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -228,7 +229,7 @@ pub const UserStorage = struct {
 
         // Generate salt
         var salt: [32]u8 = undefined;
-        compat_fillRandom(&salt);
+        try cb.Csprng.bytes(&salt);
         const salt_hex = std.fmt.bytesToHex(salt, .lower);
         const salt_hex_str = try self.allocator.dupe(u8, &salt_hex);
         defer self.allocator.free(salt_hex_str);

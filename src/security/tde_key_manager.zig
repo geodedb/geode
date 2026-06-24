@@ -237,7 +237,7 @@ pub fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
 pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult {
     // Generate master key
     var master_key: [32]u8 = undefined;
-    compat_fillRandom(&master_key);
+    try cb.Csprng.bytes(&master_key);
 
     // Generate derived keys
     const data_key_count: u32 = 10; // Number of data encryption keys
@@ -294,7 +294,7 @@ pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
 
     // Generate new master key
     var new_master_key: [32]u8 = undefined;
-    compat_fillRandom(&new_master_key);
+    try cb.Csprng.bytes(&new_master_key);
 
     // Calculate key IDs
     var old_hash: [32]u8 = undefined;
@@ -326,7 +326,7 @@ pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
         records_migrated += 1;
 
         // Simulate some work
-        compat_fillRandom(&new_master_key);
+        try cb.Csprng.bytes(&new_master_key);
     }
 
     const duration_ms: u64 = @intCast(compat_milliTimestamp() - start_time);
@@ -418,8 +418,8 @@ pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !Configu
         // SEC-06: Use ephemeral random key and nonce instead of static values
         var key: [32]u8 = undefined;
         var nonce: [12]u8 = undefined;
-        compat_fillRandom(&key);
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&key);
+        try cb.Csprng.bytes(&nonce);
 
         // Encrypt test data
         var encrypted: [test_data.len]u8 = undefined;
@@ -551,7 +551,7 @@ pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !Conf
 pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
     // Generate key material using HKDF
     var ikm: [32]u8 = undefined;
-    compat_fillRandom(&ikm);
+    try cb.Csprng.bytes(&ikm);
 
     // Derive key using SHA-256 based HKDF
     var derived_key: [32]u8 = undefined;
@@ -584,7 +584,7 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyRe
 /// Derive backup encryption key from master key
 pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
     var ikm: [32]u8 = undefined;
-    compat_fillRandom(&ikm);
+    try cb.Csprng.bytes(&ikm);
 
     var derived_key: [32]u8 = undefined;
     const salt = "geode-backup-key";
@@ -1025,7 +1025,7 @@ test "per-tenant key isolates encryption - tenant A cannot decrypt tenant B data
     // Encrypt with tenant A's key
     const plaintext = "secret data for tenant A";
     var nonce: [12]u8 = undefined;
-    compat_fillRandom(&nonce);
+    try cb.Csprng.bytes(&nonce);
     var ciphertext: [plaintext.len]u8 = undefined;
     var tag: [16]u8 = undefined;
     try cb.Aead.seal(.aes_256_gcm, &key_a, &nonce, &.{}, plaintext, &ciphertext, &tag);

@@ -939,6 +939,7 @@ pub const SimpleShardManager = struct {
     pub fn addShard(self: *ShardManager, node_id: u64, address: []const u8) !void {
         const shard_id = blk: {
             var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            // fips-exempt: non-security shard-id generation
             compat_fillRandom(&_rng_buf);
             break :blk std.mem.readInt(u64, &_rng_buf, .little);
         };
@@ -1007,11 +1008,13 @@ pub const SimpleShardManager = struct {
         // Create two new shards
         const new_shard1_id = blk: {
             var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            // fips-exempt: non-security shard-id generation
             compat_fillRandom(&_rng_buf);
             break :blk std.mem.readInt(u64, &_rng_buf, .little);
         };
         const new_shard2_id = blk: {
             var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            // fips-exempt: non-security shard-id generation
             compat_fillRandom(&_rng_buf);
             break :blk std.mem.readInt(u64, &_rng_buf, .little);
         };
@@ -1067,6 +1070,7 @@ pub const SimpleShardManager = struct {
         // Create merged shard
         const merged_id = blk: {
             var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            // fips-exempt: non-security shard-id generation
             compat_fillRandom(&_rng_buf);
             break :blk std.mem.readInt(u64, &_rng_buf, .little);
         };

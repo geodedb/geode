@@ -3,6 +3,7 @@
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
 const build_options = @import("build_options");
+const crypto_backend = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -1362,7 +1363,7 @@ pub const SecurityManager = struct {
             }
             // SEC-04: Generate cryptographically random password in ALL build modes.
             // No hardcoded fallback — always random when env var is not set.
-            compat_fillRandom(&generated_password_buf);
+            try crypto_backend.Csprng.bytes(&generated_password_buf);
             generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
 
             // SEC-05: Write generated password to a file instead of stderr.
@@ -1756,7 +1757,7 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
     }
     // Generate cryptographically random 16-byte salt
     var salt: [16]u8 = undefined;
-    compat_fillRandom(&salt);
+    try crypto_backend.Csprng.bytes(&salt);
 
     // OWASP recommended Argon2id parameters (ASVS 2.4.1)
     const argon2_params = std.crypto.pwhash.argon2.Params{

@@ -94,7 +94,7 @@ pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const
     // NIST SP 800-38D requires unique nonces for AES-GCM security
     // Deterministic nonces would allow catastrophic IV reuse attacks
     var nonce: [NonceBytes]u8 = undefined;
-    nonce_gen.generateSecureNonce(&nonce);
+    try nonce_gen.generateSecureNonce(&nonce);
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
@@ -255,6 +255,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
         defer allocator.free(test_data);
 
         // Fill with random data
+        // fips-exempt: non-security test-plaintext fill
         compat_fillRandom(test_data);
 
         const start = compat_microTimestamp();
@@ -314,6 +315,7 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
         // Generate simulated data for each file
         const file_data = try allocator.alloc(u8, 10240); // 10KB per file
         defer allocator.free(file_data);
+        // fips-exempt: non-security test-plaintext fill
         compat_fillRandom(file_data);
 
         original_size += file_data.len;
@@ -483,7 +485,7 @@ pub fn encryptForTenant(allocator: std.mem.Allocator, plaintext: []const u8, aad
     const entry = try mgr.getKeyForTenant(tenant_id);
 
     var nonce: [NonceBytes]u8 = undefined;
-    nonce_gen.generateSecureNonce(&nonce);
+    try nonce_gen.generateSecureNonce(&nonce);
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
@@ -659,7 +661,7 @@ pub fn testKeyEscrow(allocator: std.mem.Allocator) !struct {
     // Generate shares for each byte of the secret
     for (0..32) |byte_idx| {
         // Random coefficients for polynomial (coeffs[0] will be set to secret byte)
-        compat_fillRandom(coeffs[1..threshold]);
+        try cb.Csprng.bytes(coeffs[1..threshold]);
 
         // Create share values for this byte
         var share_bytes: [5]u8 = undefined;
@@ -726,6 +728,7 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
     for (test_types) |test_type| {
         const data = try allocator.alloc(u8, test_type.size);
         defer allocator.free(data);
+        // fips-exempt: non-security test-plaintext fill
         compat_fillRandom(data);
 
         // Encrypt transparently
@@ -794,6 +797,7 @@ pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     const page_size: usize = 8192;
     const page_data = try allocator.alloc(u8, page_size);
     defer allocator.free(page_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(page_data);
 
     // Actually encrypt the page
@@ -825,6 +829,7 @@ pub fn encryptBackupTest(allocator: std.mem.Allocator) !struct {
     const backup_size: usize = 65536; // 64KB
     const backup_data = try allocator.alloc(u8, backup_size);
     defer allocator.free(backup_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(backup_data);
 
     // Actually encrypt the backup payload
@@ -888,6 +893,7 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
     // Simulate backup data
     const backup_data = try allocator.alloc(u8, 1048576); // 1MB
     defer allocator.free(backup_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(backup_data);
 
     // Actually encrypt backup
@@ -921,6 +927,7 @@ pub fn restoreWithKeys(allocator: std.mem.Allocator, backup_path: []const u8, ma
     // Simulate actual restore process
     const test_data = try allocator.alloc(u8, 1000);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Verify keys work

@@ -154,6 +154,7 @@ const AdaptiveSampler = struct {
             // Reservoir sampling
             const rand = blk: {
                 var _rf: [8]u8 = undefined;
+                // fips-exempt: non-security reservoir sampling
                 compat_fillRandom(&_rf);
                 const _ri = std.mem.readInt(u64, &_rf, .little);
                 break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
@@ -170,6 +171,7 @@ const AdaptiveSampler = struct {
 
         const rand = blk: {
             var _rf: [8]u8 = undefined;
+            // fips-exempt: non-security reservoir sampling
             compat_fillRandom(&_rf);
             const _ri = std.mem.readInt(u64, &_rf, .little);
             break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));

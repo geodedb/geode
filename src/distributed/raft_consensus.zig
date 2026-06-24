@@ -109,6 +109,7 @@ fn realNow() i64 {
 fn realRand(max: u64) u64 {
     return if (max == 0) 0 else blk: {
         var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+        // fips-exempt: non-security election-timeout jitter
         compat_fillRandom(&_rng_buf);
         break :blk std.mem.readInt(u64, &_rng_buf, .little);
     } % max;

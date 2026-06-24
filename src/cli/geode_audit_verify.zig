@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -297,7 +298,7 @@ test "TestCANARY_REQ_AUDIT_VERIFY_002_SignatureVerification" {
     // CANARY test marker for signature verification
     // Verifies Ed25519 is properly imported and usable
     var seed: [32]u8 = undefined;
-    compat_fillRandom(&seed);
+    try cb.Csprng.bytes(&seed);
     const keypair = Ed25519.KeyPair.generateDeterministic(seed);
 
     const message = "test message";

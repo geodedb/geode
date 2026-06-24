@@ -114,7 +114,7 @@ pub const UserStorage = struct {
         } else |err| switch (err) {
             error.FileNotFound => {
                 // Generate new key
-                compat_fillRandom(&encryption_key);
+                try cb.Csprng.bytes(&encryption_key);
 
                 // Save it
                 const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), key_path, .{ .mode = 0o600 });
@@ -157,7 +157,7 @@ pub const UserStorage = struct {
 
         // Generate random salt
         var salt: [32]u8 = undefined;
-        compat_fillRandom(&salt);
+        try cb.Csprng.bytes(&salt);
 
         // Hash password with Argon2id (OWASP recommended)
         const password_hash = try hashPassword(self.allocator, password, &salt);
@@ -411,7 +411,7 @@ pub const UserStorage = struct {
 
         // Generate random nonce
         var nonce: [nonce_len]u8 = undefined;
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
         @memcpy(result[0..nonce_len], &nonce);
 
         // Encrypt with authentication

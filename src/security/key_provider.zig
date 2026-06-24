@@ -196,9 +196,9 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     // Generate cryptographically secure random keys using std.crypto.random
     // CANARY: REQ=REQ-GQL-TDE-RANDOM-001; FEATURE="Cryptographic Key Generation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     var data_plain: [32]u8 = undefined;
-    compat_fillRandom(&data_plain);
+    try cb.Csprng.bytes(&data_plain);
     var backup_plain: [32]u8 = undefined;
-    compat_fillRandom(&backup_plain);
+    try cb.Csprng.bytes(&backup_plain);
 
     // Wrap keys via KMS client (uses AES-GCM internally)
     const env_data = try client.wrap(data_plain);
@@ -332,8 +332,8 @@ test "GAP-0069: crypto random bytes differ across calls" {
     var buf1: [32]u8 = undefined;
     var buf2: [32]u8 = undefined;
 
-    compat_fillRandom(&buf1);
-    compat_fillRandom(&buf2);
+    try cb.Csprng.bytes(&buf1);
+    try cb.Csprng.bytes(&buf2);
 
     // Extremely unlikely to be equal with cryptographic random
     try std.testing.expect(!std.mem.eql(u8, &buf1, &buf2));

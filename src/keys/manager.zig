@@ -108,7 +108,7 @@ pub fn rewrapSchemaKey(
     }
 
     var new_trk: [32]u8 = undefined;
-    compat_fillRandom(&new_trk);
+    try cb.Csprng.bytes(&new_trk);
 
     var rewrapped_sk = try wrapKey(allocator, unwrapped_sk, &new_trk);
     defer rewrapped_sk.deinit(allocator);
@@ -134,7 +134,7 @@ pub fn rewrapTenantRootKey(
     }
 
     var new_master: [32]u8 = undefined;
-    compat_fillRandom(&new_master);
+    try cb.Csprng.bytes(&new_master);
 
     var rewrapped_trk = try wrapKey(allocator, unwrapped_trk, &new_master);
     defer rewrapped_trk.deinit(allocator);

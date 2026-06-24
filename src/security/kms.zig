@@ -181,7 +181,7 @@ pub const KMSProvider = struct {
 
         // Use cryptographically random nonce (required for AES-GCM security)
         var nonce: [12]u8 = undefined;
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
 
         // AES-256-GCM encrypt with authentication tag
         // Output format: nonce (12) || ciphertext || tag (16)

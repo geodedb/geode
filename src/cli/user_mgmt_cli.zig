@@ -166,7 +166,7 @@ fn requirePasswordStrong(password: []const u8) bool {
 
 /// GAP-0154 FIX: Generate a cryptographically secure random password
 /// Returns a 32-character hex string (16 random bytes converted to hex)
-fn generateSecurePassword() [32]u8 {
+fn generateSecurePassword() ![32]u8 {
     return cli_auth.generateSecurePassword();
 }
 
@@ -286,7 +286,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
             if (generate_password) {
                 // Generate random password
-                generated_pw = generateSecurePassword();
+                generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }
@@ -876,7 +876,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 break :blk pw;
             }
             if (generate_password) {
-                generated_pw = generateSecurePassword();
+                generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }
@@ -935,7 +935,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 break :blk pw;
             }
             if (generate_password) {
-                generated_pw = generateSecurePassword();
+                generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }

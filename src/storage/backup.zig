@@ -783,7 +783,7 @@ fn encryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
     const TagSize = 16;
 
     var nonce: [NonceSize]u8 = undefined;
-    compat_fillRandom(&nonce);
+    try cb.Csprng.bytes(&nonce);
 
     var tag: [TagSize]u8 = undefined;
     const ciphertext = try allocator.alloc(u8, data.len);

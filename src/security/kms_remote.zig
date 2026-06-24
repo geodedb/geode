@@ -115,10 +115,10 @@ pub const Server = struct {
     /// Initialize KMS server with cryptographically secure KEK
     /// GAP-0142: Now uses std.crypto.random instead of deterministic PRNG
     /// The seed parameter is kept for API compatibility but IGNORED in production
-    pub fn init(allocator: std.mem.Allocator, _: u64) Server {
+    pub fn init(allocator: std.mem.Allocator, _: u64) !Server {
         var kek: [32]u8 = undefined;
         // Use cryptographic random for KEK generation
-        compat_fillRandom(&kek);
+        try cb.Csprng.bytes(&kek);
         return .{ .allocator = allocator, .kek = kek };
     }
 
@@ -134,7 +134,7 @@ pub const Server = struct {
         }
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
-        compat_fillRandom(&seed);
+        try cb.Csprng.bytes(&seed);
         const attest_kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
         self.attest_keypair = attest_kp;
     }
@@ -143,7 +143,7 @@ pub const Server = struct {
     pub fn wrap(self: *Server, plaintext: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
         // Use cryptographic random for nonce generation - CRITICAL for AES-GCM security
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         try cb.Aead.seal(.aes_256_gcm, &self.kek, &nonce, &.{}, &plaintext, &ct, &tag);
@@ -169,8 +169,8 @@ pub const RemoteKmsServer = struct {
     server: Server,
     port: u16 = 0,
 
-    pub fn init(allocator: std.mem.Allocator, seed: u64) RemoteKmsServer {
-        return .{ .allocator = allocator, .server = Server.init(allocator, seed) };
+    pub fn init(allocator: std.mem.Allocator, seed: u64) !RemoteKmsServer {
+        return .{ .allocator = allocator, .server = try Server.init(allocator, seed) };
     }
 
     pub fn deinit(self: *RemoteKmsServer) void {
@@ -307,7 +307,7 @@ pub const RemoteKmsServer = struct {
     fn handleGenerate(self: *RemoteKmsServer, response_buf: []u8) ![]const u8 {
         // Generate a new data key and wrap it
         var plaintext: [32]u8 = undefined;
-        compat_fillRandom(&plaintext);
+        try cb.Csprng.bytes(&plaintext);
 
         const envelope = try self.server.wrap(plaintext);
 
@@ -496,7 +496,7 @@ pub const RemoteKmsClient = struct {
             // GAP-0216: Handle potential error from LocalSimulated KMS init
             var client = try ext.Client.init(self.allocator, 0x12345678);
             var key: [32]u8 = undefined;
-            compat_fillRandom(&key);
+            try cb.Csprng.bytes(&key);
             const ext_envelope = try client.wrap(key);
             return Envelope{
                 .version = ext_envelope.version,

@@ -63,13 +63,13 @@ pub const NonceGenerator = struct {
     /// random bytes as required by NIST SP 800-38D. Deterministic mode is
     /// ONLY for testing and MUST NEVER be used in production as it would
     /// allow catastrophic IV reuse attacks.
-    pub fn generate(self: *NonceGenerator, nonce: *[NonceBytes]u8) void {
+    pub fn generate(self: *NonceGenerator, nonce: *[NonceBytes]u8) !void {
         switch (self.mode) {
             .Random => {
                 // CRITICAL SECURITY: Use cryptographically secure random nonce
                 // NIST SP 800-38D requires unique nonces for AES-GCM security
                 // Deterministic nonces would allow catastrophic IV reuse attacks
-                compat_fillRandom(nonce);
+                try cb.Csprng.bytes(nonce);
             },
             .Deterministic => {
                 // TESTING ONLY: Deterministic nonce generation
@@ -86,8 +86,8 @@ pub const NonceGenerator = struct {
 ///
 /// This is the recommended way to generate nonces for production use.
 /// Uses the system's cryptographically secure random number generator.
-pub fn generateSecureNonce(nonce: *[NonceBytes]u8) void {
-    compat_fillRandom(nonce);
+pub fn generateSecureNonce(nonce: *[NonceBytes]u8) !void {
+    try cb.Csprng.bytes(nonce);
 }
 
 /// Generate a deterministic nonce for testing
@@ -136,8 +136,8 @@ test "NonceGenerator - Random mode" {
     var nonce1: [NonceBytes]u8 = undefined;
     var nonce2: [NonceBytes]u8 = undefined;
 
-    gen.generate(&nonce1);
-    gen.generate(&nonce2);
+    try gen.generate(&nonce1);
+    try gen.generate(&nonce2);
 
     // Random nonces should be different
     try testing.expect(!std.mem.eql(u8, &nonce1, &nonce2));
@@ -151,8 +151,8 @@ test "NonceGenerator - Deterministic mode" {
     var nonce1: [NonceBytes]u8 = undefined;
     var nonce2: [NonceBytes]u8 = undefined;
 
-    gen.generate(&nonce1);
-    gen.generate(&nonce2);
+    try gen.generate(&nonce1);
+    try gen.generate(&nonce2);
 
     // Deterministic nonces should be different (counter increments)
     try testing.expect(!std.mem.eql(u8, &nonce1, &nonce2));
@@ -169,8 +169,8 @@ test "generateSecureNonce - produces unique nonces" {
     var nonce1: [NonceBytes]u8 = undefined;
     var nonce2: [NonceBytes]u8 = undefined;
 
-    generateSecureNonce(&nonce1);
-    generateSecureNonce(&nonce2);
+    try generateSecureNonce(&nonce1);
+    try generateSecureNonce(&nonce2);
 
     // Should produce different nonces
     try testing.expect(!std.mem.eql(u8, &nonce1, &nonce2));
@@ -197,7 +197,7 @@ test "verifyNonce - valid nonce" {
     _ = std.testing;
 
     var nonce: [NonceBytes]u8 = undefined;
-    generateSecureNonce(&nonce);
+    try generateSecureNonce(&nonce);
 
     try verifyNonce(&nonce);
 }
@@ -225,7 +225,7 @@ test "NonceGenerator - counter increments" {
 
     for (0..5) |i| {
         var nonce: [NonceBytes]u8 = undefined;
-        gen.generate(&nonce);
+        try gen.generate(&nonce);
 
         const counter = std.mem.readInt(u64, nonce[0..8], .little);
         try testing.expectEqual(i, counter);

@@ -2009,6 +2009,9 @@ pub fn build(b: *std.Build) void {
     otel_metrics_mod_for_graph_tests.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_mod.addImport("otel", otel_mod);
     graph_store_mod.addImport("otel_metrics", otel_metrics_mod_for_graph_tests);
+    // Task 9 (FIPS seam): tde_file_encryption.zig (pulled in transitively by
+    // graph_store.zig) now imports crypto_backend for CSPRNG nonce generation.
+    graph_store_mod.addImport("crypto_backend", crypto_backend_mod);
 
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
@@ -4626,6 +4629,9 @@ pub fn build(b: *std.Build) void {
     auth_mod.addImport("auth_lib", auth_ext_mod);
     auth_mod.addImport("mfa_policy", mfa_policy_mod);
     auth_mod.addImport("build_options", build_options_mod);
+    // Task 9 (FIPS seam): geode_auth_lib.zig routes password-hash salt +
+    // generated-password bytes through cb.Csprng (FIPS DRBG under -Dfips).
+    auth_mod.addImport("crypto_backend", crypto_backend_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
     root_mod.addImport("feature_flags", runtime_flags_mod);

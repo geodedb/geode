@@ -30,6 +30,7 @@ test "BlindIndex put and lookup" {
     defer index.deinit();
 
     var bik: [32]u8 = undefined;
+    // fips-exempt: non-security test-only BIK (would use cb.Csprng in prod key-derivation path)
     compat_fillRandom(&bik);
 
     // Index two records with same email
@@ -63,6 +64,7 @@ test "BlindIndex normalization handles case and whitespace" {
     defer index.deinit();
 
     var bik: [32]u8 = undefined;
+    // fips-exempt: non-security test-only BIK (would use cb.Csprng in prod key-derivation path)
     compat_fillRandom(&bik);
 
     // Index with different casing/whitespace
@@ -85,6 +87,7 @@ test "BlindIndex remove" {
     defer index.deinit();
 
     var bik: [32]u8 = undefined;
+    // fips-exempt: non-security test-only BIK (would use cb.Csprng in prod key-derivation path)
     compat_fillRandom(&bik);
 
     try index.put("Person", "email", bik, "alice@example.com", "person1");

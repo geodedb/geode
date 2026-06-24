@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -497,7 +498,7 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 
     // Generate new token
     var new_token_bytes: [32]u8 = undefined;
-    compat_fillRandom(&new_token_bytes);
+    try cb.Csprng.bytes(&new_token_bytes);
 
     // Convert to hex string
     const hex_chars = "0123456789abcdef";

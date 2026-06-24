@@ -107,7 +107,7 @@ pub fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, key: 
     // Generate a cryptographically random nonce for each encryption operation.
     // AES-GCM requires nonce uniqueness per key; random nonces avoid deterministic reuse.
     var nonce: [NONCE_BYTES]u8 = undefined;
-    compat_fillRandom(&nonce);
+    try cb.Csprng.bytes(&nonce);
 
     // Encrypt
     var tag: [TAG_BYTES]u8 = undefined;

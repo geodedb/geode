@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -894,7 +895,7 @@ pub const Client = struct {
         }
 
         var kek: [32]u8 = undefined;
-        compat_fillRandom(&kek);
+        try cb.Csprng.bytes(&kek);
         // GAP-0107 FIX: PRNG field retained for backward compatibility but NOT used for nonces
         return .{ .allocator = allocator, .kek = kek, .prng = std.Random.DefaultPrng.init(0) };
     }
@@ -902,7 +903,7 @@ pub const Client = struct {
     pub fn wrap(self: *Client, data_key: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
         // GAP-0107 SECURITY FIX: Use cryptographic random for nonces, not deterministic PRNG
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &data_key, &.{}, nonce, self.kek);
