@@ -43,6 +43,14 @@ include:
       sign_needs: build-release
       allow_failure: false
   - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.27.0
+  # FIPS dual-mode parity gate (Part 1): runs `test-fips-seam` in BOTH
+  # -Dfips=false (std.crypto shim) and -Dfips=true (validated OpenSSL FIPS
+  # provider) on the catalog's prebaked zig-fips image. Replaces the former
+  # hand-rolled fips-dual-mode job (which needed a custom FIPS runner image).
+  - component: gitlab.com/devnw/ci-catalog/zig-fips-test@v1.29.0
+    inputs:
+      zig_version: "0.16.0"
+      test_step: "test-fips-seam"
 
 # Auto-cancel redundant pipelines on push (non-tag builds only).
 # Tagged release pipelines are never cancelled — they must run to completion.
@@ -530,39 +538,13 @@ harness-rerun-selftest:
       echo "✓ harness_rerun selftest passed"
 
 # =============================================================================
-# Test Stage - FIPS Dual-Mode (follow-up: ci-fips-deps)
+# Test Stage - FIPS Dual-Mode
 # =============================================================================
-#
-# A dedicated job provisioning the OpenSSL FIPS provider and running
-# `make test-dual` is tracked as a follow-up.  The runner image must have
-# OpenSSL 3.x with a FIPS provider installed at /usr/local/ssl.
-# Uncomment and adapt once the FIPS runner image is available.
-#
-# fips-dual-mode:
-#   stage: test
-#   image: $ZIG_FIPS_IMAGE   # custom image with OpenSSL FIPS provider
-#   tags:
-#     - company
-#     - k8s
-#     - linux
-#   timeout: 30m
-#   variables:
-#     GIT_SUBMODULE_STRATEGY: recursive
-#     OPENSSL_PREFIX: /usr/local/ssl
-#   before_script:
-#     - *zig-vendor-cache
-#   script:
-#     - echo "=== FIPS std-shim mode ==="
-#     - zig build test-fips-seam -Dfips=false --summary all
-#     - echo "=== FIPS OpenSSL mode ==="
-#     - OPENSSL_CONF=${OPENSSL_PREFIX}/ssl/openssl.cnf
-#       zig build test-fips-seam -Dfips=true -Dopenssl_path=${OPENSSL_PREFIX} --summary all
-#     - echo "==> fips-dual-mode PASSED"
-#   rules:
-#     - if: '$CI_COMMIT_BRANCH'
-#       allow_failure: false
-#     - if: '$CI_COMMIT_TAG'
-#       allow_failure: true
+# Provided by the `zig-fips-test@v1.29.0` ci-catalog component (see the
+# include block near the top of this file): it runs `test-fips-seam` in BOTH
+# -Dfips=false (std.crypto shim) and -Dfips=true (validated OpenSSL FIPS
+# provider) on the prebaked `zig-fips` runner image. The former hand-rolled
+# job + "custom FIPS image" follow-up is now obsolete.
 
 # =============================================================================
 # Test Stage - Unit Tests
