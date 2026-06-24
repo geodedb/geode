@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // CANARY: REQ=REQ-GQL-046; FEATURE="TDE Key Hierarchy"; ASPECT=Storage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_046_KeyHierarchy; OWNER=security; UPDATED=2025-09-20
 
@@ -12,21 +13,22 @@ pub const KeyHierarchy = struct {
     data_key: [32]u8,
     backup_key: [32]u8,
 
-    pub fn init(master: [32]u8) KeyHierarchy {
+    pub fn init(master: [32]u8) !KeyHierarchy {
         var kh = KeyHierarchy{ .master = master, .data_key = undefined, .backup_key = undefined };
-        deriveChildKey(&master, "DATAv1", &kh.data_key);
-        deriveChildKey(&master, "BACKUPv1", &kh.backup_key);
+        try deriveChildKey(&master, "DATAv1", &kh.data_key);
+        try deriveChildKey(&master, "BACKUPv1", &kh.backup_key);
         return kh;
     }
 };
 
 /// Derive a child key using SHA-256(master || domain) -> 32 bytes.
-pub fn deriveChildKey(master: *const [32]u8, domain: []const u8, out: *[32]u8) void {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    h.update(master); // array coerces to slice
-    h.update(domain);
+pub fn deriveChildKey(master: *const [32]u8, domain: []const u8, out: *[32]u8) !void {
+    var h = try cb.Hash.Stream.init(.sha256);
+    defer h.deinit();
+    try h.update(master); // array coerces to slice
+    try h.update(domain);
     var digest: [32]u8 = undefined;
-    h.final(&digest);
+    _ = try h.final(&digest);
     // Copy digest into out
     out.* = digest;
 }

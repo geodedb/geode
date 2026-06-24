@@ -100,7 +100,7 @@ pub const TDEKeyManager = struct {
         // Create key hierarchy from the DEK
         var master_key: [32]u8 = undefined;
         @memcpy(&master_key, dek_plaintext[0..32]);
-        self.hierarchy = tde_hierarchy.KeyHierarchy.init(master_key);
+        self.hierarchy = try tde_hierarchy.KeyHierarchy.init(master_key);
 
         // Store KMS provider and status
         self.kms_provider = try self.allocator.create(kms.KMSProvider);
@@ -131,7 +131,7 @@ pub const TDEKeyManager = struct {
         try self.parseHexKey(key_hex, &master_key);
 
         // Create key hierarchy
-        self.hierarchy = tde_hierarchy.KeyHierarchy.init(master_key);
+        self.hierarchy = try tde_hierarchy.KeyHierarchy.init(master_key);
 
         self.key_status = KeyStatus{
             .loaded = true,
@@ -168,7 +168,7 @@ pub const TDEKeyManager = struct {
         // Update hierarchy
         var new_master: [32]u8 = undefined;
         @memcpy(&new_master, new_dek[0..32]);
-        self.hierarchy = tde_hierarchy.KeyHierarchy.init(new_master);
+        self.hierarchy = try tde_hierarchy.KeyHierarchy.init(new_master);
 
         // Update status
         self.key_status.last_rotation = compat_timestamp();

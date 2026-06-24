@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -893,12 +894,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             if (mgr.storage.getUserByUsername(username)) |existing| {
                 const stored = existing.getPasswordHash();
                 // Simple constant-time comparison via Blake2
+                // fips-guard: Blake2 is not FIPS-approved; fail closed in FIPS mode
+                if (comptime build_options.fips) return error.FipsUnsupported;
                 const Blake2 = std.crypto.hash.blake2.Blake2b256;
                 var stored_hash: [Blake2.digest_length]u8 = undefined;
                 var input_hash: [Blake2.digest_length]u8 = undefined;
                 Blake2.hash(stored, &stored_hash, .{});
                 Blake2.hash(old, &input_hash, .{});
-                if (!std.crypto.timing_safe.eql([Blake2.digest_length]u8, stored_hash, input_hash)) {
+                if (!cb.timingSafeEql(&stored_hash, &input_hash)) {
                     std.debug.print("Error: old password is incorrect\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }

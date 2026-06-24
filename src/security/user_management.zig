@@ -282,7 +282,7 @@ const AuthSnapshot = struct {
     auth_version: u64,
 };
 
-const AuthFlightKey = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+const AuthFlightKey = [32]u8;
 
 const AuthFlightResult = struct {
     ok: bool = false,
@@ -305,7 +305,7 @@ const AuthFlightStart = union(enum) {
     waited: AuthResult,
 };
 
-const RefreshFlightKey = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+const RefreshFlightKey = [32]u8;
 
 const RefreshFlightResult = union(enum) {
     ok: bool,
@@ -477,19 +477,20 @@ fn authFlightLane() u64 {
     return 0;
 }
 
-fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []const u8, auth_version: u64, lane: u64) AuthFlightKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(username);
-    hasher.update(&[_]u8{0});
-    hasher.update(password);
-    hasher.update(&[_]u8{0});
-    hasher.update(stored_hash);
+fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []const u8, auth_version: u64, lane: u64) !AuthFlightKey {
+    var hasher = try cb.Hash.Stream.init(.sha256);
+    defer hasher.deinit();
+    try hasher.update(username);
+    try hasher.update(&[_]u8{0});
+    try hasher.update(password);
+    try hasher.update(&[_]u8{0});
+    try hasher.update(stored_hash);
     const version_bytes = std.mem.toBytes(auth_version);
-    hasher.update(&version_bytes);
+    try hasher.update(&version_bytes);
     const lane_bytes = std.mem.toBytes(lane);
-    hasher.update(&lane_bytes);
+    try hasher.update(&lane_bytes);
     var out: AuthFlightKey = undefined;
-    hasher.final(&out);
+    _ = try hasher.final(&out);
     return out;
 }
 
@@ -543,13 +544,14 @@ fn finishAuthFlight(key: AuthFlightKey, flight: *AuthFlight, result: AuthFlightR
 }
 
 // CANARY: REQ=REQ-QUIC-HC-130; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthRefreshSingleFlight; STATUS=IMPL; TEST=authenticate_concurrent_cached_user_singleflights_persistent_refresh; OWNER=security; UPDATED=2026-05-28
-fn refreshFlightKey(username: []const u8) RefreshFlightKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("auth-refresh");
-    hasher.update(&[_]u8{0});
-    hasher.update(username);
+fn refreshFlightKey(username: []const u8) !RefreshFlightKey {
+    var hasher = try cb.Hash.Stream.init(.sha256);
+    defer hasher.deinit();
+    try hasher.update("auth-refresh");
+    try hasher.update(&[_]u8{0});
+    try hasher.update(username);
     var out: RefreshFlightKey = undefined;
-    hasher.final(&out);
+    _ = try hasher.final(&out);
     return out;
 }
 
@@ -710,7 +712,7 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     const user_data = maybe_user_data.?;
     defer std.heap.c_allocator.free(user_data.password_hash);
 
-    const flight_key = authFlightKey(username, password, user_data.password_hash, user_data.auth_version, authFlightLane());
+    const flight_key = try authFlightKey(username, password, user_data.password_hash, user_data.auth_version, authFlightLane());
     switch (try beginAuthFlight(flight_key)) {
         .waited => |result| return result,
         .owner => |flight| {
@@ -1077,7 +1079,7 @@ fn refreshCachedUserIfStaleOwner(username: []const u8) !bool {
 }
 
 fn refreshCachedUserIfStale(username: []const u8) !bool {
-    const key = refreshFlightKey(username);
+    const key = try refreshFlightKey(username);
     switch (try beginRefreshFlight(key)) {
         .waited => |ok| return ok,
         .owner => |flight| {

@@ -1,5 +1,6 @@
 /// Migration lock management and HMAC signature verification.
 const std = @import("std");
+const cb = @import("crypto_backend");
 const builtin = @import("builtin");
 const root = @import("mod.zig");
 const ledger_mod = root.ledger_mod;
@@ -66,11 +67,10 @@ pub const FileLock = struct {
 };
 
 // CANARY: REQ=REQ-SEC-MIG-01; FEATURE="MigrationSignatureVerification"; ASPECT=IntegrityCheck; STATUS=TESTED; OWNER=migration; UPDATED=2026-04-10
-const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
 
 pub fn computeHmacSha256(key: *const [32]u8, data: []const u8) [64]u8 {
-    var mac: [HmacSha256.mac_length]u8 = undefined;
-    HmacSha256.create(&mac, data, key);
+    var mac: [32]u8 = undefined;
+    _ = cb.Mac.hmac(.sha256, key, data, &mac) catch unreachable;
     return std.fmt.bytesToHex(mac, .lower);
 }
 

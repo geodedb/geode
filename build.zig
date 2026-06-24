@@ -942,6 +942,7 @@ pub fn build(b: *std.Build) void {
 
     // M11a: Add migration module for CLI migrate commands
     const migration_mod_cli = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
+    migration_mod_cli.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("migration", migration_mod_cli);
 
     // Phase 5: Add MCP module for CLI mcp commands
@@ -2661,6 +2662,7 @@ pub fn build(b: *std.Build) void {
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
+    migration_mod.addImport("crypto_backend", crypto_backend_mod);
     custom_tests.root_module.addImport("migration", migration_mod);
     // Logging module shared (uses centralized slog-based logging)
     custom_tests.root_module.addImport("logging", logging_mod);
@@ -3968,6 +3970,7 @@ pub fn build(b: *std.Build) void {
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
     // Provide tde_hierarchy for encryption import (even if disabled)
     const tde_hierarchy_mod_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    tde_hierarchy_mod_tests.addImport("crypto_backend", crypto_backend_mod);
     redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
     redo_canary_test.root_module.addImport("geode", root_mod);
     shardDep(test_step, &redo_canary_test.step, 1, test_shard_loads, test_shard_index);
@@ -4464,6 +4467,7 @@ pub fn build(b: *std.Build) void {
 
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
+    audit_mod.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("audit_cli", audit_mod);
 
     // Task 7 (OTel instrumentation plan): server/main.zig and
@@ -4786,6 +4790,7 @@ pub fn build(b: *std.Build) void {
     otel_metrics_mod_for_audit_tests.addImport("runtime_metrics", runtime_metrics_module);
     audit_security_mod.addImport("otel", otel_mod);
     audit_security_mod.addImport("otel_metrics", otel_metrics_mod_for_audit_tests);
+    audit_security_mod.addImport("crypto_backend", crypto_backend_mod);
 
     // Create user storage module (GraphStore-backed)
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
@@ -4866,6 +4871,7 @@ pub fn build(b: *std.Build) void {
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
     user_manager_mod.addImport("logging", logging_mod);
+    user_manager_mod.addImport("crypto_backend", crypto_backend_mod);
 
     user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);

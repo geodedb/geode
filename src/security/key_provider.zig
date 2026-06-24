@@ -80,7 +80,7 @@ fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
         };
     }
     const tde = @import("tde_hierarchy");
-    const kh = tde.KeyHierarchy.init(master);
+    const kh = try tde.KeyHierarchy.init(master);
     return KeyMaterial{ .data_key = kh.data_key, .backup_key = kh.backup_key };
 }
 
