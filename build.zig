@@ -7132,6 +7132,22 @@ pub fn build(b: *std.Build) void {
     const edge_merge_sl_step = b.step("test-edge-merge-shard-locked", "Run edge-merge-shard-locked regression (rel MERGE: per-shard locks + dedup, coexists with readers)");
     edge_merge_sl_step.dependOn(&run_edge_merge_sl_tests.step);
 
+    // PHASE 4 (edge-engine-direct): popular-parent EDGE throughput A/B +
+    // re-shard correctness. The headline bench measures edges/sec for one hot
+    // parent (PARENT_OF) and one hot target (ACCEPTED_AS) ingested via the
+    // coordinator, guarding the Phase-4 win (tuple shardKey fans a popular node
+    // out across all 16 workers; batched same-source-shard append) against the
+    // 313/s pre-Phase-4 baseline. Re-shard correctness asserts set/count/
+    // traversal integrity + idempotent re-run under the new routing.
+    const edge_pop_parent_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_popular_parent_throughput.zig"), .target = target, .optimize = optimize });
+    edge_pop_parent_test_mod.addImport("geode", root_mod);
+    edge_pop_parent_test_mod.addImport("graph_storage", graph_storage_dep.module("graph_storage"));
+    const edge_pop_parent_tests = b.addTest(.{ .root_module = edge_pop_parent_test_mod });
+    const run_edge_pop_parent_tests = b.addRunArtifact(edge_pop_parent_tests);
+    shardDep(test_step, &run_edge_pop_parent_tests.step, 5, test_shard_loads, test_shard_index);
+    const edge_pop_parent_step = b.step("test-edge-popular-parent-throughput", "Run Phase-4 popular-parent EDGE throughput A/B + re-shard correctness (edges/sec guard vs 313/s baseline)");
+    edge_pop_parent_step.dependOn(&run_edge_pop_parent_tests.step);
+
     // Merge-edge fast-path detection (FIX #3 routing): the from-dump edge query
     // (MATCH composite-key endpoints + MERGE rel + post-SET) must be classified
     // as .match_merge_edge so it routes to the shard-locked path, and

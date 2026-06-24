@@ -2642,6 +2642,151 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
+    /// PHASE 4 (edge-engine-direct, low-contention apply): one entry of a batched
+    /// relationship-MERGE apply. The coordinator collects a run of `bulk_merge_edge`
+    /// ops from a single shard batch and hands them here so the per-op overhead
+    /// (graph rwlock SHARED acquire/release, getOrCreateGraph, the source-shard
+    /// lock acquire/release) is paid ONCE for the run instead of per edge — the
+    /// residual per-source serialization the design (C.2) calls out. `out_id` /
+    /// `out_err` receive the per-edge result the coordinator copies into the op's
+    /// ApplyResult before waking the submitter.
+    pub const BatchMergeEdge = struct {
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        tenant: []const u8,
+        out_id: u64 = 0,
+        out_err: ?anyerror = null,
+    };
+
+    /// Apply a batch of relationship MERGEs under amortized locking.
+    ///
+    /// Lock protocol (preserves the per-op invariants exactly):
+    ///   * graph `rwlock` SHARED for the whole batch (coexists with readers; the
+    ///     per-op path took/released it per edge).
+    ///   * For each edge, the SOURCE endpoint's shard lock is held EXCLUSIVE
+    ///     across its probe+create (same as the per-op path) — but consecutive
+    ///     edges that share a source shard reuse a single hold instead of
+    ///     re-acquiring. The TARGET's shard lock (when distinct) is taken in
+    ///     canonical ASCENDING index order so the two-lock acquire is
+    ///     deadlock-free, identical to the per-op `min/max` discipline.
+    ///
+    /// Dedup / idempotency / orphan-skip / tenant disambiguation are UNCHANGED:
+    /// each edge runs the same `bulkMergeEdgeInnerShardLocked` under the same
+    /// endpoint shard locks, so two racing same-tuple MERGEs still serialize on
+    /// the source shard and the O(1) existence index still yields exactly one
+    /// edge. GAP-0278 lock order is preserved (we never re-enter tier-0
+    /// self.mutex while holding shard/graph locks; getOrCreateGraph runs before
+    /// any shard lock is taken).
+    ///
+    /// Orphan endpoints (SourceNodeNotFound / TargetNodeNotFound) are recorded as
+    /// out_id = 0, out_err = null (silent skip), matching the coordinator's
+    /// per-op handling; all other errors propagate via out_err.
+    pub fn bulkMergeEdgesBatchShardLocked(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        edges: []BatchMergeEdge,
+    ) !void {
+        if (edges.len == 0) return;
+        const mg = try self.getOrCreateGraph(graph_name);
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        exclusiveWaitingBackoff(mg); // yield to a pending exclusive (checkpoint / CREATE INDEX) ONCE for the batch.
+        const _t_start = monoNanosNow();
+        mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+        defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            _ = mg.rwlock_shared_hold_bulk_edge_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+        }
+
+        // Process edges in arrival order, but hold the CURRENT source-shard lock
+        // across a maximal run of consecutive edges that share that source shard.
+        // Source-id routing (group_commit.shardKey) groups a worker's batch by
+        // shardIndex(source_id), so for the popular-parent workload the entire
+        // run shares one source shard → one lock acquire for the whole batch.
+        var i: usize = 0;
+        while (i < edges.len) {
+            const src_shard = sharded_store.shardIndex(edges[i].source_id);
+            mg.shard_locks[src_shard].lockUncancelable(io);
+
+            // Drain the maximal run sharing this source shard under the one hold.
+            while (i < edges.len and sharded_store.shardIndex(edges[i].source_id) == src_shard) : (i += 1) {
+                const e = &edges[i];
+                const dst_shard = sharded_store.shardIndex(e.target_id);
+
+                if (dst_shard == src_shard) {
+                    // Co-resident: source lock alone covers both endpoints.
+                    self.applyOneMerge(mg, store, graph_name, e);
+                    continue;
+                }
+
+                // Cross-shard: also hold the target shard lock for THIS edge, in
+                // canonical ascending order so it is deadlock-free w.r.t. any
+                // other two-lock acquirer. We already hold src_shard.
+                if (dst_shard > src_shard) {
+                    // Ascending already (src then dst): just lock dst.
+                    mg.shard_locks[dst_shard].lockUncancelable(io);
+                    self.applyOneMerge(mg, store, graph_name, e);
+                    mg.shard_locks[dst_shard].unlock(io);
+                } else {
+                    // dst_shard < src_shard. Acquiring dst while holding src
+                    // would invert the global ascending order. tryLock first: if
+                    // it succeeds we got it WITHOUT waiting (no cycle possible);
+                    // otherwise drop src, re-acquire in ascending order, apply,
+                    // then re-acquire src to continue the run.
+                    if (mg.shard_locks[dst_shard].tryLock(io)) {
+                        self.applyOneMerge(mg, store, graph_name, e);
+                        mg.shard_locks[dst_shard].unlock(io);
+                    } else {
+                        mg.shard_locks[src_shard].unlock(io);
+                        mg.shard_locks[dst_shard].lockUncancelable(io); // ascending: dst < src
+                        mg.shard_locks[src_shard].lockUncancelable(io);
+                        self.applyOneMerge(mg, store, graph_name, e);
+                        mg.shard_locks[dst_shard].unlock(io);
+                    }
+                }
+            }
+
+            mg.shard_locks[src_shard].unlock(io);
+        }
+    }
+
+    /// Apply a single MERGE under already-held endpoint shard locks, recording
+    /// the result on the batch entry. Orphan endpoints are a silent skip
+    /// (out_id = 0, out_err = null); other errors land in out_err. The inner
+    /// bumps `pending_bulk_ops` on create (the checkpoint-cadence signal), so the
+    /// batch does NOT re-count.
+    fn applyOneMerge(
+        self: *StorageAdapter,
+        mg: *ManagedGraph,
+        store: *graph_store.GraphStore,
+        graph_name: []const u8,
+        e: *BatchMergeEdge,
+    ) void {
+        if (self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, e.source_id, e.target_id, e.rel_type, e.props, e.tenant)) |id| {
+            e.out_id = id;
+            e.out_err = null;
+        } else |err| switch (err) {
+            error.SourceNodeNotFound, error.TargetNodeNotFound => {
+                e.out_id = 0;
+                e.out_err = null;
+            },
+            else => {
+                e.out_id = 0;
+                e.out_err = err;
+            },
+        }
+    }
+
     /// Apply edge properties via the batch helper (shared by the merge inner's
     /// create + dedup-upsert branches). Caller holds the endpoint shard locks.
     fn applyEdgePropsLocked(self: *StorageAdapter, store: *graph_store.GraphStore, edge_id: u64, props: []const PropKV) !void {

@@ -275,10 +275,41 @@ pub const ApplyOp = union(enum) {
 
     /// Key that selects the shard whose worker applies this op.
     /// For node / merge inserts the pre-allocated id is used (filled
-    /// in by `submit`); for edge ops the source id is used so every
-    /// edge leaving the same source lands on the same shard
-    /// (cross-shard src != dst is handled by the helper's two-lock
-    /// ascending-index acquire).
+    /// in by `submit`); edge ops route by `source_id`.
+    ///
+    /// PHASE 4 (edge-engine-direct, low-contention apply) — routing decision and
+    /// the evidence behind it (corrects the original brief, which assumed routing
+    /// alone fixes the popular-parent serialization):
+    ///
+    /// From-dump edge orientation (data-ingest internal/geode/taxon.go:93-108):
+    ///   * PARENT_OF is `parent -[:PARENT_OF]-> child`  → HOT node is the SOURCE
+    ///     (a genus/kingdom with millions of children); child is the unique target.
+    ///   * ACCEPTED_AS is `synonym -[:ACCEPTED_AS]-> accepted` → HOT node is the
+    ///     TARGET (one accepted name, many synonyms); synonym is the unique source.
+    /// The two relationship types have OPPOSITE hot orientations, so if routing
+    /// were the lever, only the full EDGE TUPLE `(source,target,rel)` would spread
+    /// BOTH (see `edgeTupleShardKey`); `source_id` re-serializes PARENT_OF and
+    /// `target_id` alone re-serializes ACCEPTED_AS.
+    ///
+    /// HOWEVER, measurement (tests/test_edge_popular_parent_throughput.zig)
+    /// showed the popular-parent bottleneck is NOT coordinator queue
+    /// distribution: tuple-routing a single hot parent across all 16 workers made
+    /// throughput WORSE (321/s vs 421/s), because the parent's out-adjacency +
+    /// edge-existence index live on ONE engine shard (shardOfNode(src_slot)),
+    /// guarded by ONE shard lock — appends to one source are inherently serial,
+    /// and scattering them across workers only adds cross-worker contention on
+    /// that lock while DESTROYING the same-source batching locality below.
+    ///
+    /// So we KEEP `source_id` routing precisely so a worker's batch groups by
+    /// source shard, letting `bulkMergeEdgesBatchShardLocked` hold that source
+    /// shard lock ONCE for the whole run (amortizing the per-op rwlock + shard
+    /// lock + getOrCreateGraph churn) — the residual per-source serialization the
+    /// design (C.2) names. For the realistic multi-source ingest (millions of
+    /// distinct parents) `source_id` already fans out across all 16 shards/
+    /// workers; only the single-hot-parent micro-case is append-serial, and
+    /// batching makes that serial path fast. Routing never affects correctness —
+    /// the apply takes the endpoint shard locks (ascending) and the engine
+    /// co-locates a source's adjacency + existence index regardless of worker.
     pub fn shardKey(self: *const ApplyOp) u64 {
         return switch (self.*) {
             .bulk_insert_node => |p| p.assigned_id,
@@ -289,7 +320,42 @@ pub const ApplyOp = union(enum) {
             .bulk_merge_node_props => |p| p.assigned_id,
         };
     }
+
+    /// Mix `(source_id, target_id, rel_type)` into a single stable routing key.
+    /// Retained as the evidence-backed tuple-shardKey (the only key that spreads
+    /// BOTH hot orientations) for any future workload where coordinator queue
+    /// distribution — not the per-source engine-shard append — is the bottleneck.
+    /// NOT used by `shardKey` today: measurement showed it regresses the
+    /// single-hot-parent case (see `shardKey` doc). Exercised by
+    /// `edgeTupleShardKey distinct tuples spread across shards` below.
+    pub fn edgeTupleShardKey(source_id: u64, target_id: u64, rel_type: []const u8) u64 {
+        var h = std.hash.Wyhash.init(0x9E3779B97F4A7C15);
+        h.update(std.mem.asBytes(&source_id));
+        h.update(std.mem.asBytes(&target_id));
+        h.update(rel_type);
+        return h.final();
+    }
 };
+
+test "edgeTupleShardKey distinct tuples spread across shards" {
+    // Distinct tuples (here: same source, varied targets — the PARENT_OF shape)
+    // must not all collapse to one shard. Asserts the tuple key would spread a
+    // popular source IF routing were the lever (documents the analysis even
+    // though shardKey keeps source_id; see its doc for why).
+    var seen = [_]bool{false} ** graph_storage.sharded_store.SHARD_COUNT;
+    var distinct: usize = 0;
+    var t: u64 = 0;
+    while (t < 2000) : (t += 1) {
+        const key = ApplyOp.edgeTupleShardKey(42, t, "PARENT_OF");
+        const s = graph_storage.sharded_store.shardIndex(key);
+        if (!seen[s]) {
+            seen[s] = true;
+            distinct += 1;
+        }
+    }
+    // All 16 shards hit from a single hot source's distinct tuples.
+    try std.testing.expectEqual(graph_storage.sharded_store.SHARD_COUNT, distinct);
+}
 
 /// One-shot result + completion signal for a submitted `ApplyOp`.
 ///
@@ -713,10 +779,59 @@ pub const ShardedCoordinator = struct {
             recordDuration(&self.apply_begin_txn_ns_total, &self.apply_begin_txn_max_ns, monoNanosNow() -| begin_txn_start_ns);
         }
 
+        // PHASE 4 (edge-engine-direct, low-contention apply): batched
+        // relationship-MERGE pass. Collect this batch's `bulk_merge_edge` ops and
+        // apply them under ONE amortized lock protocol (source-shard lock reused
+        // across consecutive same-source-shard edges; graph rwlock SHARED held
+        // once) instead of acquire/release-per-op. Source-id routing keeps a
+        // worker's merge-edges grouped by source shard so a popular parent's
+        // edges land here as one run → one source-shard hold for the whole batch.
+        // Dedup/idempotency/orphan-skip semantics are identical to the per-op
+        // path (same inner under the same locks). Results are written back to
+        // each op's ApplyResult below; the per-op loop then SKIPS .bulk_merge_edge.
+        var merge_edge_buf: [max_batch]graph_storage_adapter.StorageAdapter.BatchMergeEdge = undefined;
+        var merge_edge_ops: [max_batch]*ApplyOp = undefined;
+        var merge_edge_n: usize = 0;
+        for (batch) |op| {
+            switch (op.*) {
+                .bulk_merge_edge => |p| {
+                    merge_edge_buf[merge_edge_n] = .{
+                        .source_id = p.source_id,
+                        .target_id = p.target_id,
+                        .rel_type = p.rel_type,
+                        .props = p.props,
+                        .tenant = p.tenant,
+                    };
+                    merge_edge_ops[merge_edge_n] = op;
+                    merge_edge_n += 1;
+                },
+                else => {},
+            }
+        }
+        if (merge_edge_n > 0) {
+            if (self.adapter.bulkMergeEdgesBatchShardLocked(self.graph_name, merge_edge_buf[0..merge_edge_n])) |_| {
+                for (merge_edge_ops[0..merge_edge_n], merge_edge_buf[0..merge_edge_n]) |op, entry| {
+                    const res = op.resultPtr();
+                    res.node_or_edge_id = entry.out_id;
+                    res.err = entry.out_err;
+                }
+            } else |e| {
+                // A whole-batch failure (e.g. getOrCreateGraph) — surface to every
+                // merge-edge op that did not already carry a per-edge error.
+                for (merge_edge_ops[0..merge_edge_n], merge_edge_buf[0..merge_edge_n]) |op, entry| {
+                    const res = op.resultPtr();
+                    res.node_or_edge_id = entry.out_id;
+                    res.err = entry.out_err orelse e;
+                }
+            }
+        }
+
         const ops_loop_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         for (batch) |op| {
             const res = op.resultPtr();
             switch (op.*) {
+                // PHASE 4: applied above in the batched merge-edge pass.
+                .bulk_merge_edge => {},
                 .bulk_insert_node => |p| {
                     // GAP-0891 (RC-1): tag with the tenant captured at submit.
                     if (self.adapter.bulkInsertNodeWithReservedIdForTenant(
@@ -743,24 +858,6 @@ pub const ShardedCoordinator = struct {
                         res.node_or_edge_id = id;
                     } else |e| {
                         res.err = e;
-                    }
-                },
-                .bulk_merge_edge => |p| {
-                    // FIX #3: shard-locked relationship MERGE (dedup under the
-                    // endpoint shard locks). Orphan endpoints silently skip
-                    // (id stays 0), matching bulk_match_create_edge.
-                    if (self.adapter.bulkMergeEdgeWithIdsShardLockedForTenant(
-                        self.graph_name,
-                        p.source_id,
-                        p.target_id,
-                        p.rel_type,
-                        p.props,
-                        p.tenant,
-                    )) |id| {
-                        res.node_or_edge_id = id;
-                    } else |e| switch (e) {
-                        error.SourceNodeNotFound, error.TargetNodeNotFound => {},
-                        else => res.err = e,
                     }
                 },
                 .bulk_match_create_edge => |p| {
