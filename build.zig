@@ -2017,6 +2017,13 @@ pub fn build(b: *std.Build) void {
     // Task 9 (FIPS seam): tde_file_encryption.zig (pulled in transitively by
     // graph_store.zig) now imports crypto_backend for CSPRNG nonce generation.
     graph_store_mod.addImport("crypto_backend", crypto_backend_mod);
+    // FIPS merge: fle_integration.zig (@import("build_options") line 2) and
+    // user_management.zig (@import("build_options") line 56) are reached
+    // transitively through graph_store.zig. The named module 'graph_store'
+    // is used as a dep by graph_algo_tests, point_read_view_*_tests, and
+    // merge_throughput_bench, so wire build_options onto the shared module
+    // rather than repeating it on each consumer.
+    graph_store_mod.addImport("build_options", build_options_mod);
 
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
@@ -2433,6 +2440,12 @@ pub fn build(b: *std.Build) void {
     // graph_store test root pulls it in transitively via advanced_types_index.zig
     // (index_manager → advanced_types_index → cryptographic). Wire it here.
     graph_store_unit_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
+    // FIPS merge: fle_integration.zig (@import("build_options") line 2) and
+    // user_management.zig (@import("build_options") line 56) are reached
+    // transitively through this test root (graph_store.zig → fle_integration,
+    // graph_store.zig → execution.zig → user_management.zig). Wire build_options
+    // so both transitive imports resolve under the standalone test artifact.
+    graph_store_unit_tests.root_module.addImport("build_options", build_options_mod);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
     // GAP-0514 Phase 6: named step so the graph_store.zig inline tests are
@@ -2902,6 +2915,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // FIPS merge: migration/mod.zig and migration/lock.zig both @import("crypto_backend")
+    // for HMAC-SHA-256 migration-lock signing. The test artifact is rooted directly at
+    // mod.zig (not via the main lib module), so the module must be wired here explicitly.
+    migration_unit_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_migration_unit_tests = b.addRunArtifact(migration_unit_tests);
 
     // GAP-0489: Security test — Blake2b accounts auto-migrate to Argon2id on successful login
