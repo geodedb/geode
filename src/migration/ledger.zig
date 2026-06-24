@@ -91,6 +91,7 @@ pub fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
     var rand_bytes: [8]u8 = undefined;
+    // fips-exempt: non-security temp-file suffix (collision avoidance, not secret material)
     compat_fillRandom(&rand_bytes);
     const rand_hex = std.fmt.bytesToHex(rand_bytes, .lower);
     var suffix_buf: [96]u8 = undefined;

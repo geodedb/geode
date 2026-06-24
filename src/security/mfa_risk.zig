@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // MFA Risk Sensitivity & Step-Up Decision Module
 // Provides per-action risk scoring and step-up enforcement logic.
@@ -164,7 +165,10 @@ fn generateTotpCode(allocator: std.mem.Allocator, secret_base32: []const u8, tim
     var counter_be: [8]u8 = undefined;
     std.mem.writeInt(u64, &counter_be, timestep, .big);
 
-    const h = hmacSha1(&counter_be, secret_raw);
+    // FIPS: HMAC-SHA1 is an approved MAC (SP 800-131A); routed through the validated module for RFC 6238 TOTP. Bare SHA-1 remains barred.
+    var mac: [20]u8 = undefined;
+    _ = try cb.Mac.hmacSha1(secret_raw, &counter_be, &mac);
+    const h = mac;
     const offset = h[19] & 0x0F;
     const bin_code: u32 = (@as(u32, h[offset] & 0x7f) << 24) |
         (@as(u32, h[offset + 1]) << 16) |
@@ -221,40 +225,4 @@ fn base32Decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     }
 
     return out;
-}
-
-fn hmacSha1(data: []const u8, key: []const u8) [20]u8 {
-    const Sha1 = std.crypto.hash.Sha1;
-    var k0: [64]u8 = [_]u8{0} ** 64;
-
-    if (key.len > 64) {
-        var h = Sha1.init(.{});
-        h.update(key);
-        var digest: [20]u8 = undefined;
-        h.final(&digest);
-        @memcpy(k0[0..20], digest[0..20]);
-    } else {
-        @memcpy(k0[0..key.len], key);
-    }
-
-    var ipad: [64]u8 = undefined;
-    var opad: [64]u8 = undefined;
-    for (k0, 0..) |b, i| {
-        ipad[i] = b ^ 0x36;
-        opad[i] = b ^ 0x5c;
-    }
-
-    var inner = Sha1.init(.{});
-    inner.update(&ipad);
-    inner.update(data);
-    var inner_digest: [20]u8 = undefined;
-    inner.final(&inner_digest);
-
-    var outer = Sha1.init(.{});
-    outer.update(&opad);
-    outer.update(&inner_digest);
-    var outer_digest: [20]u8 = undefined;
-    outer.final(&outer_digest);
-
-    return outer_digest;
 }

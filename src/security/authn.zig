@@ -12,6 +12,7 @@
 // The chain stops at the first successful authentication.
 
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -157,7 +158,7 @@ pub const RotatingSessionToken = struct {
     pub fn generate(allocator: Allocator, user_id: u64, ip: ?[]const u8) !RotatingSessionToken {
         _ = allocator;
         var token: [32]u8 = undefined;
-        compat_fillRandom(&token);
+        try cb.Csprng.bytes(&token);
 
         const now = compat_timestamp();
 
@@ -180,7 +181,7 @@ pub const RotatingSessionToken = struct {
         return compat_timestamp() >= self.rotation_at;
     }
 
-    pub fn rotate(self: *RotatingSessionToken) void {
+    pub fn rotate(self: *RotatingSessionToken) !void {
         const now = compat_timestamp();
 
         // Save current token as previous (grace period)
@@ -188,7 +189,7 @@ pub const RotatingSessionToken = struct {
         self.previous_expires_at = now + GRACE_PERIOD_SECS;
 
         // Generate new token
-        compat_fillRandom(&self.token);
+        try cb.Csprng.bytes(&self.token);
         self.rotation_at = now + ROTATION_INTERVAL_SECS;
         self.last_used_at = now;
     }
@@ -409,7 +410,7 @@ pub const AuthProvider = struct {
 
         var new_token: ?[]u8 = null;
         if (session.needsRotation()) {
-            session.rotate();
+            try session.rotate();
             new_token = try session.toHexString(self.allocator);
 
             // Update session key in map
@@ -539,7 +540,7 @@ pub const AuthProvider = struct {
 
 /// Constant-time comparison to prevent timing attacks (#440: use stdlib implementation)
 fn constantTimeEqual(a: *const [32]u8, b: *const [32]u8) bool {
-    return std.crypto.timing_safe.eql([32]u8, a.*, b.*);
+    return cb.timingSafeEql(a, b);
 }
 
 /// Extract Bearer token from HTTP Authorization header
@@ -573,7 +574,7 @@ test "RotatingSessionToken: rotation preserves grace period" {
     session.rotation_at = 0;
     try std.testing.expect(session.needsRotation());
 
-    session.rotate();
+    try session.rotate();
 
     // New token should be different
     try std.testing.expect(!std.mem.eql(u8, &session.token, &original_token));

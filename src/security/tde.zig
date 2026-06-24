@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -43,7 +44,6 @@ fn compat_microTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
-const crypto = std.crypto;
 const flags_mod = @import("feature_flags");
 const key_manager = @import("tde_key_manager.zig");
 const nonce_gen = @import("tde_nonce_gen.zig");
@@ -94,11 +94,11 @@ pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const
     // NIST SP 800-38D requires unique nonces for AES-GCM security
     // Deterministic nonces would allow catastrophic IV reuse attacks
     var nonce: [NonceBytes]u8 = undefined;
-    nonce_gen.generateSecureNonce(&nonce);
+    try nonce_gen.generateSecureNonce(&nonce);
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(out_buf, &tag, plaintext, aad, nonce, key);
+    try cb.Aead.seal(.aes_256_gcm, &key, &nonce, aad, plaintext, out_buf, &tag);
     return .{ .nonce = nonce, .tag = tag, .data = out_buf };
 }
 
@@ -108,7 +108,9 @@ pub fn decrypt(allocator: std.mem.Allocator, ct: Ciphertext, aad: []const u8) ![
     if (key_opt == null) return error.KeyNotLoaded;
     const key = key_opt.?;
     const out = try allocator.alloc(u8, ct.data.len);
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ct.data, ct.tag, aad, ct.nonce, key) catch |e| {
+    var tag = ct.tag;
+    var nonce = ct.nonce;
+    cb.Aead.open(.aes_256_gcm, &key, &nonce, aad, ct.data, &tag, out) catch |e| {
         allocator.free(out);
         return e;
     };
@@ -253,6 +255,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
         defer allocator.free(test_data);
 
         // Fill with random data
+        // fips-exempt: non-security test-plaintext fill
         compat_fillRandom(test_data);
 
         const start = compat_microTimestamp();
@@ -312,6 +315,7 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
         // Generate simulated data for each file
         const file_data = try allocator.alloc(u8, 10240); // 10KB per file
         defer allocator.free(file_data);
+        // fips-exempt: non-security test-plaintext fill
         compat_fillRandom(file_data);
 
         original_size += file_data.len;
@@ -342,7 +346,7 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
 
     // Calculate backup hash
     var hash_bytes: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &hash_bytes, .{});
+    _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &hash_bytes);
     const hex_array = std.fmt.bytesToHex(hash_bytes, .lower);
     const hash_str = try allocator.dupe(u8, &hex_array);
 
@@ -481,11 +485,11 @@ pub fn encryptForTenant(allocator: std.mem.Allocator, plaintext: []const u8, aad
     const entry = try mgr.getKeyForTenant(tenant_id);
 
     var nonce: [NonceBytes]u8 = undefined;
-    nonce_gen.generateSecureNonce(&nonce);
+    try nonce_gen.generateSecureNonce(&nonce);
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(out_buf, &tag, plaintext, aad, nonce, entry.key);
+    try cb.Aead.seal(.aes_256_gcm, &entry.key, &nonce, aad, plaintext, out_buf, &tag);
     return .{ .nonce = nonce, .tag = tag, .data = out_buf };
 }
 
@@ -504,7 +508,9 @@ pub fn decryptForTenant(allocator: std.mem.Allocator, ct: Ciphertext, aad: []con
     const entry = try mgr.getKeyForTenant(tenant_id);
 
     const out = try allocator.alloc(u8, ct.data.len);
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ct.data, ct.tag, aad, ct.nonce, entry.key) catch |e| {
+    var tag2 = ct.tag;
+    var nonce2 = ct.nonce;
+    cb.Aead.open(.aes_256_gcm, &entry.key, &nonce2, aad, ct.data, &tag2, out) catch |e| {
         allocator.free(out);
         return e;
     };
@@ -655,7 +661,7 @@ pub fn testKeyEscrow(allocator: std.mem.Allocator) !struct {
     // Generate shares for each byte of the secret
     for (0..32) |byte_idx| {
         // Random coefficients for polynomial (coeffs[0] will be set to secret byte)
-        compat_fillRandom(coeffs[1..threshold]);
+        try cb.Csprng.bytes(coeffs[1..threshold]);
 
         // Create share values for this byte
         var share_bytes: [5]u8 = undefined;
@@ -722,6 +728,7 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
     for (test_types) |test_type| {
         const data = try allocator.alloc(u8, test_type.size);
         defer allocator.free(data);
+        // fips-exempt: non-security test-plaintext fill
         compat_fillRandom(data);
 
         // Encrypt transparently
@@ -790,6 +797,7 @@ pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     const page_size: usize = 8192;
     const page_data = try allocator.alloc(u8, page_size);
     defer allocator.free(page_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(page_data);
 
     // Actually encrypt the page
@@ -821,6 +829,7 @@ pub fn encryptBackupTest(allocator: std.mem.Allocator) !struct {
     const backup_size: usize = 65536; // 64KB
     const backup_data = try allocator.alloc(u8, backup_size);
     defer allocator.free(backup_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(backup_data);
 
     // Actually encrypt the backup payload
@@ -878,12 +887,13 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
 
     // Generate key ID
     var key_hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&key, &key_hash, .{});
+    _ = try cb.Hash.digest(.sha256, &key, &key_hash);
     const key_id = try std.fmt.allocPrint(allocator, "mek-{x:0>8}", .{std.mem.readInt(u32, key_hash[0..4], .little)});
 
     // Simulate backup data
     const backup_data = try allocator.alloc(u8, 1048576); // 1MB
     defer allocator.free(backup_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(backup_data);
 
     // Actually encrypt backup
@@ -892,7 +902,7 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
 
     // Calculate integrity hash
     var integrity: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(encrypted.data, &integrity, .{});
+    _ = try cb.Hash.digest(.sha256, encrypted.data, &integrity);
     const hash_str = try std.fmt.allocPrint(allocator, "sha256:{x}", .{integrity[0..8].*});
 
     return .{
@@ -917,6 +927,7 @@ pub fn restoreWithKeys(allocator: std.mem.Allocator, backup_path: []const u8, ma
     // Simulate actual restore process
     const test_data = try allocator.alloc(u8, 1000);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Verify keys work
@@ -947,6 +958,7 @@ pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
     const iterations: usize = 1000;
     const test_data = try allocator.alloc(u8, 1024);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Baseline (no encryption)
@@ -992,6 +1004,7 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
 
     const test_data = try allocator.alloc(u8, 256);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     const iterations = duration_seconds * 10; // Simulate transactions
@@ -1039,12 +1052,13 @@ pub fn testKeyZeroization(allocator: std.mem.Allocator) !struct {
     // Create test keys
     var keys: [5][32]u8 = undefined;
     for (&keys) |*key| {
+        // fips-exempt: non-security test-key fill for zeroization-verification (test-only)
         compat_fillRandom(key);
     }
 
     // Zeroize keys using crypto-safe wipe (compiler cannot elide)
     for (&keys) |*key| {
-        std.crypto.secureZero(u8, key);
+        cb.secureZero(key);
     }
 
     // Verify zeroization
@@ -1141,6 +1155,7 @@ pub fn testKmsWrapUnwrap(allocator: std.mem.Allocator) !struct {
 
     // Generate test key
     var test_key: [32]u8 = undefined;
+    // fips-exempt: non-security test PLAINTEXT (the value is the data being encrypted by encrypt(), NOT the AES key/nonce; encrypt() derives its own key+nonce)
     compat_fillRandom(&test_key);
 
     // Simulate wrap (encrypt key with KEK)
@@ -1174,21 +1189,30 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     _ = allocator;
 
     // GAP-0211 FIX: Real Ed25519 key generation and signature verification
-    const Ed25519 = std.crypto.sign.Ed25519;
+    // Route through cb.Sig so this executes in the OpenSSL FIPS module under -Dfips
 
     // Generate a test keypair (in real usage, public key would come from KMS)
-    // Using generate() for random keypair generation (Zig 0.15.2 API)
-    const keypair = Ed25519.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
+    var keypair = cb.Sig.generate(.ed25519) catch {
+        return .{
+            .attestation_valid = false,
+            .signature_verified = false,
+            .ed25519_verification = false,
+            .tamper_detected = false,
+        };
+    };
+    defer keypair.deinit();
 
     // Create attestation message (nonce + timestamp + KMS identifier)
     var attestation_data: [64]u8 = undefined;
+    // fips-exempt: non-security attestation replay-nonce (signed, not an AEAD IV or key)
     compat_fillRandom(attestation_data[0..32]); // nonce
     const timestamp = compat_milliTimestamp();
     std.mem.writeInt(i64, attestation_data[32..40], timestamp, .little);
     @memset(attestation_data[40..64], 0); // padding
 
-    // Sign the attestation with private key (returns error union in Zig 0.15.2)
-    const signature = keypair.sign(&attestation_data, null) catch {
+    // Sign the attestation with private key
+    var sig_buf: [64]u8 = undefined;
+    _ = cb.Sig.sign(.ed25519, &keypair, &attestation_data, &sig_buf) catch {
         return .{
             .attestation_valid = false,
             .signature_verified = false,
@@ -1202,8 +1226,8 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     var ed25519_verification = false;
     var tamper_detected = false;
 
-    // Verify valid signature (Zig 0.15.2 API: signature.verify(msg, public_key) - no noise param)
-    signature.verify(&attestation_data, keypair.public_key) catch {
+    // Verify valid signature
+    cb.Sig.verify(.ed25519, &keypair, &attestation_data, &sig_buf) catch {
         // Signature verification failed
         return .{
             .attestation_valid = false,
@@ -1221,7 +1245,7 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
     tampered_data[0] ^= 0xFF; // Flip bits to simulate tampering
 
     // Tampered data should fail verification
-    signature.verify(&tampered_data, keypair.public_key) catch {
+    cb.Sig.verify(.ed25519, &keypair, &tampered_data, &sig_buf) catch {
         // Tampered data correctly rejected - this is expected
         tamper_detected = true;
         return .{
@@ -1353,6 +1377,7 @@ pub fn testKeyRecovery(allocator: std.mem.Allocator) !struct {
     // Test recovery process
     const test_data = try allocator.alloc(u8, 128);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Encrypt with current key
@@ -1428,6 +1453,7 @@ pub fn testCorruptedKeyHandling(allocator: std.mem.Allocator) !struct {
     // Create test data
     const test_data = try allocator.alloc(u8, 128);
     defer allocator.free(test_data);
+    // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
     // Encrypt with valid key
@@ -1463,7 +1489,7 @@ pub fn cleanupKeyHierarchy(allocator: std.mem.Allocator) !struct {
     // Zeroize all keys in hierarchy using crypto-safe wipe
     var keys: [3][32]u8 = undefined;
     for (&keys) |*key| {
-        std.crypto.secureZero(u8, key);
+        cb.secureZero(key);
     }
 
     // Reset rotation state

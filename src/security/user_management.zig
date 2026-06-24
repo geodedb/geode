@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -52,6 +53,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+const build_options = @import("build_options");
 const geode_auth = @import("geode_auth");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -280,7 +282,7 @@ const AuthSnapshot = struct {
     auth_version: u64,
 };
 
-const AuthFlightKey = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+const AuthFlightKey = [32]u8;
 
 const AuthFlightResult = struct {
     ok: bool = false,
@@ -303,7 +305,7 @@ const AuthFlightStart = union(enum) {
     waited: AuthResult,
 };
 
-const RefreshFlightKey = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+const RefreshFlightKey = [32]u8;
 
 const RefreshFlightResult = union(enum) {
     ok: bool,
@@ -456,11 +458,14 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 /// Verify password against stored hash using the canonical Argon2id verification.
 /// Delegates to geode_auth.verifyPasswordArgon2id (single source of truth).
 // CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
-pub fn verifyPassword(password: []const u8, stored_hash: []const u8) bool {
+pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
     // Use c_allocator for Argon2id scratch buffers in verification hot paths.
     // This avoids untracked page allocator usage in production runtime paths.
     const allocator = std.heap.c_allocator;
-    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch false;
+    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch |err| {
+        if (err == error.FipsUnsupported) return err;
+        return false;
+    };
 }
 
 // CANARY: REQ=REQ-QUIC-HC-068; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthSingleFlight; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=security; UPDATED=2026-05-26
@@ -472,19 +477,20 @@ fn authFlightLane() u64 {
     return 0;
 }
 
-fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []const u8, auth_version: u64, lane: u64) AuthFlightKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(username);
-    hasher.update(&[_]u8{0});
-    hasher.update(password);
-    hasher.update(&[_]u8{0});
-    hasher.update(stored_hash);
+fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []const u8, auth_version: u64, lane: u64) !AuthFlightKey {
+    var hasher = try cb.Hash.Stream.init(.sha256);
+    defer hasher.deinit();
+    try hasher.update(username);
+    try hasher.update(&[_]u8{0});
+    try hasher.update(password);
+    try hasher.update(&[_]u8{0});
+    try hasher.update(stored_hash);
     const version_bytes = std.mem.toBytes(auth_version);
-    hasher.update(&version_bytes);
+    try hasher.update(&version_bytes);
     const lane_bytes = std.mem.toBytes(lane);
-    hasher.update(&lane_bytes);
+    try hasher.update(&lane_bytes);
     var out: AuthFlightKey = undefined;
-    hasher.final(&out);
+    _ = try hasher.final(&out);
     return out;
 }
 
@@ -538,13 +544,14 @@ fn finishAuthFlight(key: AuthFlightKey, flight: *AuthFlight, result: AuthFlightR
 }
 
 // CANARY: REQ=REQ-QUIC-HC-130; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthRefreshSingleFlight; STATUS=IMPL; TEST=authenticate_concurrent_cached_user_singleflights_persistent_refresh; OWNER=security; UPDATED=2026-05-28
-fn refreshFlightKey(username: []const u8) RefreshFlightKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("auth-refresh");
-    hasher.update(&[_]u8{0});
-    hasher.update(username);
+fn refreshFlightKey(username: []const u8) !RefreshFlightKey {
+    var hasher = try cb.Hash.Stream.init(.sha256);
+    defer hasher.deinit();
+    try hasher.update("auth-refresh");
+    try hasher.update(&[_]u8{0});
+    try hasher.update(username);
     var out: RefreshFlightKey = undefined;
-    hasher.final(&out);
+    _ = try hasher.final(&out);
     return out;
 }
 
@@ -705,7 +712,7 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     const user_data = maybe_user_data.?;
     defer std.heap.c_allocator.free(user_data.password_hash);
 
-    const flight_key = authFlightKey(username, password, user_data.password_hash, user_data.auth_version, authFlightLane());
+    const flight_key = try authFlightKey(username, password, user_data.password_hash, user_data.auth_version, authFlightLane());
     switch (try beginAuthFlight(flight_key)) {
         .waited => |result| return result,
         .owner => |flight| {
@@ -713,11 +720,11 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
             if (!user_data.active) {
                 // Same timing-defense rationale: an inactive user should look the
                 // same as an active user with the wrong password.
-                _ = verifyPassword(password, user_data.password_hash);
+                _ = verifyPassword(password, user_data.password_hash) catch false;
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 return error.Unauthenticated;
             }
-            if (!verifyPassword(password, user_data.password_hash)) {
+            if (!(try verifyPassword(password, user_data.password_hash))) {
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 return error.Unauthenticated;
             }
@@ -808,7 +815,7 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
     const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
 
     // Reject if new password matches current password
-    if (verifyPassword(new_password, user_ptr.user.password_hash)) {
+    if (try verifyPassword(new_password, user_ptr.user.password_hash)) {
         return error.PasswordReuse;
     }
 
@@ -900,7 +907,7 @@ fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
     const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
     var password: [24]u8 = undefined;
     var random_bytes: [24]u8 = undefined;
-    compat_fillRandom(&random_bytes);
+    try cb.Csprng.bytes(&random_bytes);
 
     for (&password, random_bytes) |*p, r| {
         p.* = charset[r % charset.len];
@@ -1072,7 +1079,7 @@ fn refreshCachedUserIfStaleOwner(username: []const u8) !bool {
 }
 
 fn refreshCachedUserIfStale(username: []const u8) !bool {
-    const key = refreshFlightKey(username);
+    const key = try refreshFlightKey(username);
     switch (try beginRefreshFlight(key)) {
         .waited => |ok| return ok,
         .owner => |flight| {
@@ -1312,6 +1319,7 @@ const ConcurrentRefreshResolverState = struct {
 };
 
 test "authenticate uses persistent resolver and caches result" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1341,6 +1349,7 @@ test "authenticate uses persistent resolver and caches result" {
 }
 
 test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1407,6 +1416,7 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
 }
 
 test "isSessionAuthCurrent detects persistent auth version bump" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1435,6 +1445,7 @@ test "isSessionAuthCurrent detects persistent auth version bump" {
 }
 
 test "isSessionAuthCurrentCached_skips_persistent_lookup_until_epoch_changes" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1469,6 +1480,7 @@ test "isSessionAuthCurrentCached_skips_persistent_lookup_until_epoch_changes" {
 }
 
 test "isSessionAuthCurrentCached_rejects_local_auth_version_bump_without_graph_lookup" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1499,6 +1511,7 @@ test "isSessionAuthCurrentCached_rejects_local_auth_version_bump_without_graph_l
 }
 
 test "authenticate refreshes cached role after persistent auth version bump" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1533,6 +1546,7 @@ test "authenticate refreshes cached role after persistent auth version bump" {
 }
 
 test "auth cache evicts least recently used user" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1589,6 +1603,7 @@ test "ensureDefaultUser is ignored when persistent resolver is configured" {
 
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
 test "assignRole_changes_role_and_bumps_version" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1609,6 +1624,7 @@ test "assignRole_changes_role_and_bumps_version" {
 
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Idempotent; STATUS=TESTED; TEST=assignRole_same_role_is_noop; OWNER=security; UPDATED=2026-05-11
 test "assignRole_same_role_is_noop" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 

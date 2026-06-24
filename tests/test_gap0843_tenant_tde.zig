@@ -88,7 +88,7 @@ test "GAP-0843: per-tenant key isolation — A's ciphertext fails under B's key"
     // Decrypting under a DIFFERENT tenant's derived key MUST fail (AEAD tag
     // mismatch). No plaintext may be recovered.
     try testing.expectError(
-        error.AuthenticationFailed,
+        error.AuthFailed,
         tde.decryptForTenant(allocator, ct, aad, "tenant-b"),
     );
 }
@@ -127,11 +127,11 @@ test "GAP-0843: two tenants encrypting identical plaintext produce different key
 
     // Cross-decrypt both directions fails (proves keys differ, not just nonces).
     try testing.expectError(
-        error.AuthenticationFailed,
+        error.AuthFailed,
         tde.decryptForTenant(allocator, ct_a, aad, "beta"),
     );
     try testing.expectError(
-        error.AuthenticationFailed,
+        error.AuthFailed,
         tde.decryptForTenant(allocator, ct_b, aad, "alpha"),
     );
 

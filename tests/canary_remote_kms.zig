@@ -23,7 +23,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
             return self.a;
         }
     }{ .a = arena.allocator() };
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xBEEFCAFE);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xBEEFCAFE);
     try server.start(8876);
     try server.server.setAuthToken("TOKEN123");
 
@@ -51,7 +51,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
             return self.a;
         }
     }{ .a = arena.allocator() };
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
     try server.start(8877);
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
@@ -76,7 +76,7 @@ test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
             return self.a;
         }
     }{ .a = arena.allocator() };
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x11223344);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x11223344);
     try server.start(8878);
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
@@ -106,7 +106,7 @@ test "QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)" {
             return self.a;
         }
     }{ .a = arena.allocator() };
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x10CA1057);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x10CA1057);
     try server.start(8879);
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
@@ -135,7 +135,7 @@ test "QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with ar
             return self.a;
         }
     }{ .a = arena.allocator() };
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x0DDB17E5);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x0DDB17E5);
     try server.start(8880);
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {

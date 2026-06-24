@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -17,15 +18,16 @@ pub const Entry = struct {
 pub fn exportManifest(allocator: std.mem.Allocator, entries: []const Entry) ![]u8 {
     var w = std.ArrayList(u8).init(allocator);
     errdefer w.deinit();
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var hash = try cb.Hash.Stream.init(.sha256);
+    defer hash.deinit();
     try w.writer().print("{\n  \"version\":1,\n  \"entries\":[\n", .{});
     var i: usize = 0;
     while (i < entries.len) : (i += 1) {
         const e = entries[i];
-        hash.update(std.mem.asBytes(&e.id));
-        hash.update(std.mem.asBytes(&e.created));
-        hash.update(&[_]u8{@intFromBool(e.wrapped)});
-        hash.update(e.payload);
+        try hash.update(std.mem.asBytes(&e.id));
+        try hash.update(std.mem.asBytes(&e.created));
+        try hash.update(&[_]u8{@intFromBool(e.wrapped)});
+        try hash.update(e.payload);
         try w.writer().print("    {{\"id\":{},\"created\":{},\"wrapped\":{},\"payload\":\"", .{ e.id, e.created, if (e.wrapped) "true" else "false" });
         // escape quotes minimally (payload expected hex or JSON w/out quotes top-level)
         for (e.payload) |b| try w.writer().writeByte(b);
@@ -33,7 +35,7 @@ pub fn exportManifest(allocator: std.mem.Allocator, entries: []const Entry) ![]u
     }
     try w.writer().print("  ],\n  \"checksum\":\"", .{});
     var digest: [32]u8 = undefined;
-    hash.final(&digest);
+    _ = try hash.final(&digest);
     var j: usize = 0;
     while (j < 16) : (j += 1) try w.writer().print("{x:0>2}", .{digest[j]});
     try w.writer().print("\"\n}\n", .{});
@@ -104,15 +106,16 @@ pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
     }
     if (!have_checksum) return error.MissingChecksum;
     // Recompute checksum
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    var h = try cb.Hash.Stream.init(.sha256);
+    defer h.deinit();
     for (tmp_entries.items) |e| {
-        h.update(std.mem.asBytes(&e.id));
-        h.update(std.mem.asBytes(&e.created));
-        h.update(&[_]u8{@intFromBool(e.wrapped)});
-        h.update(e.payload);
+        try h.update(std.mem.asBytes(&e.id));
+        try h.update(std.mem.asBytes(&e.created));
+        try h.update(&[_]u8{@intFromBool(e.wrapped)});
+        try h.update(e.payload);
     }
     var dg: [32]u8 = undefined;
-    h.final(&dg);
+    _ = try h.final(&dg);
     var mismatch = false;
     var m: usize = 0;
     while (m < 16) : (m += 1) {

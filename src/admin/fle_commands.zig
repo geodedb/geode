@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -245,6 +246,14 @@ fn executeMigrationWithStorage(
             // Encrypt the plaintext value using proper AEAD function
             // Convert annotation Algorithm to aead.Alg
             const annotation_alg = field_meta.algorithm() orelse .aes256_gcm;
+            // FIPS fail-close: ChaCha20-Poly1305 is not approved under FIPS 140-3.
+            // Reject migration attempts that select ChaCha20; AES-256-GCM is the only approved path.
+            // CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-004; FEATURE="FIPSFailClose"; ASPECT=FLEMigrate; STATUS=IMPL; OWNER=security; UPDATED=2026-06-24
+            if (build_options.fips and annotation_alg == .chacha20_poly1305) {
+                state.error_count += 1;
+                std.log.err("FIPS: ChaCha20-Poly1305 is not permitted under FIPS 140-3 (field {s}.{s}); use AES-256-GCM", .{ state.schema_name, state.field_name });
+                continue;
+            }
             const alg: fle_aead.Alg = switch (annotation_alg) {
                 .aes256_gcm => .aes256_gcm,
                 .chacha20_poly1305 => .chacha20_poly1305,

@@ -1884,8 +1884,8 @@ fn effectiveIdempotencyKey(buf: *[32]u8) []const u8 {
         }
     }
     var raw: [16]u8 = undefined;
-    // Zig 0.16 compat: std.crypto.random was removed; use the getrandom syscall
-    // (same pattern as user_management.compat_fillRandom).
+    // fips-exempt: non-security idempotency key (coordination token, not secret material)
+    // Zig 0.16 compat: std.crypto.random was removed; use the getrandom syscall.
     if (comptime @import("builtin").os.tag == .linux) {
         _ = std.os.linux.getrandom(&raw, raw.len, 0);
     } else {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -263,7 +264,7 @@ pub const KeyRegistry = struct {
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
-        compat_fillRandom(&key.material);
+        try cb.Csprng.bytes(&key.material);
         try self.history.append(self.allocator, key);
         self.active = key;
         return key;
@@ -315,7 +316,7 @@ pub const KeyRegistry = struct {
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
-        compat_fillRandom(&key.material);
+        try cb.Csprng.bytes(&key.material);
         try self.history.append(self.allocator, key);
         self.active = key;
         try self.logAuditEvent(.rotation_completed, if (old) |o| o.id else 0, key.id, .success, 0, null, 0);
@@ -329,7 +330,7 @@ pub const KeyRegistry = struct {
         const old = self.active;
         // Generate plaintext key material using cryptographically secure random
         var plaintext: [32]u8 = undefined;
-        compat_fillRandom(&plaintext);
+        try cb.Csprng.bytes(&plaintext);
         // Wrap key using KMS client
         const kms = @import("external_kms_client.zig");
         // GAP-0216: Handle potential error from LocalSimulated KMS init
@@ -380,16 +381,17 @@ pub const KeyRegistry = struct {
         defer file.close();
         var w = file.writer();
         // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
-        var h = std.crypto.hash.sha2.Sha256.init(.{});
+        var h = try cb.Hash.Stream.init(.sha256);
+        defer h.deinit();
         for (self.history.items) |entry| {
             if (entry.is_wrapped and entry.envelope_json) |ej| {
-                h.update(ej);
+                try h.update(ej);
             } else {
-                h.update(&entry.material);
+                try h.update(&entry.material);
             }
         }
         var digest: [32]u8 = undefined;
-        h.final(&digest);
+        _ = try h.final(&digest);
         var checksum_buf: [16]u8 = undefined;
         @memcpy(checksum_buf[0..16], digest[0..16]);
         try w.print("{{\n", .{});
@@ -571,12 +573,13 @@ pub const KeyRegistry = struct {
         }
         if (have_checksum) {
             // verify checksum matches current history
-            var h2 = std.crypto.hash.sha2.Sha256.init(.{});
+            var h2 = try cb.Hash.Stream.init(.sha256);
+            defer h2.deinit();
             for (self.history.items) |entry| {
-                if (entry.is_wrapped and entry.envelope_json) |ej| h2.update(ej) else h2.update(&entry.material);
+                if (entry.is_wrapped and entry.envelope_json) |ej| try h2.update(ej) else try h2.update(&entry.material);
             }
             var digest2: [32]u8 = undefined;
-            h2.final(&digest2);
+            _ = try h2.final(&digest2);
             var mismatch = false;
             var k: usize = 0;
             while (k < 16) : (k += 1) if (digest2[k] != parsed_checksum[k]) {
@@ -632,22 +635,24 @@ pub const KeyRegistry = struct {
         // Re-encryption workflow:
         // 1. Decrypt with previous key using AES-256-GCM
         // 2. Re-encrypt with active key
-        const aes_gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+        // AES-256-GCM constants: 12-byte nonce, 16-byte tag (NIST SP 800-38D)
+        const aes_gcm_nonce_len: usize = 12;
+        const aes_gcm_tag_len: usize = 16;
 
         // Extract nonce (first 12 bytes) and tag (last 16 bytes) from ciphertext
-        if (ciphertext.len < aes_gcm.nonce_length + aes_gcm.tag_length) {
+        if (ciphertext.len < aes_gcm_nonce_len + aes_gcm_tag_len) {
             return error.InvalidCiphertext;
         }
 
-        const nonce = ciphertext[0..aes_gcm.nonce_length].*;
-        const encrypted_data = ciphertext[aes_gcm.nonce_length .. ciphertext.len - aes_gcm.tag_length];
-        const tag = ciphertext[ciphertext.len - aes_gcm.tag_length ..][0..aes_gcm.tag_length].*;
+        const nonce = ciphertext[0..aes_gcm_nonce_len].*;
+        const encrypted_data = ciphertext[aes_gcm_nonce_len .. ciphertext.len - aes_gcm_tag_len];
+        const tag = ciphertext[ciphertext.len - aes_gcm_tag_len ..][0..aes_gcm_tag_len].*;
 
         // Decrypt with previous key
         const plaintext = self.allocator.alloc(u8, encrypted_data.len) catch return error.OutOfMemory;
         defer self.allocator.free(plaintext);
 
-        aes_gcm.decrypt(plaintext, encrypted_data, tag, "", nonce, previous_key.material) catch {
+        cb.Aead.open(.aes_256_gcm, &previous_key.material, &nonce, "", encrypted_data, &tag, plaintext) catch {
             try self.logAuditEvent(
                 .reencryption_failed,
                 previous_key.id,
@@ -661,16 +666,16 @@ pub const KeyRegistry = struct {
         };
 
         // Generate new nonce for re-encryption
-        var new_nonce: [aes_gcm.nonce_length]u8 = undefined;
-        compat_fillRandom(&new_nonce);
+        var new_nonce: [aes_gcm_nonce_len]u8 = undefined;
+        try cb.Csprng.bytes(&new_nonce);
 
         // Re-encrypt with active key
-        var new_tag: [aes_gcm.tag_length]u8 = undefined;
-        aes_gcm.encrypt(encrypted_data, &new_tag, plaintext, "", new_nonce, active_key.material);
+        var new_tag: [aes_gcm_tag_len]u8 = undefined;
+        try cb.Aead.seal(.aes_256_gcm, &active_key.material, &new_nonce, "", plaintext, encrypted_data, &new_tag);
 
         // Update ciphertext buffer with new nonce and tag
-        @memcpy(ciphertext[0..aes_gcm.nonce_length], &new_nonce);
-        @memcpy(ciphertext[ciphertext.len - aes_gcm.tag_length ..], &new_tag);
+        @memcpy(ciphertext[0..aes_gcm_nonce_len], &new_nonce);
+        @memcpy(ciphertext[ciphertext.len - aes_gcm_tag_len ..], &new_tag);
 
         const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         try self.logAuditEvent(

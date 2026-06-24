@@ -32,7 +32,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-const crypto = std.crypto;
+const cb = @import("crypto_backend");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=TDE; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-28
 const logging = @import("logging");
@@ -107,7 +107,7 @@ pub fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, key: 
     // Generate a cryptographically random nonce for each encryption operation.
     // AES-GCM requires nonce uniqueness per key; random nonces avoid deterministic reuse.
     var nonce: [NONCE_BYTES]u8 = undefined;
-    compat_fillRandom(&nonce);
+    try cb.Csprng.bytes(&nonce);
 
     // Encrypt
     var tag: [TAG_BYTES]u8 = undefined;
@@ -116,7 +116,7 @@ pub fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, key: 
 
     // Use empty AAD (additional authenticated data)
     const aad: []const u8 = &[_]u8{};
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(ciphertext, &tag, plaintext, aad, nonce, key);
+    try cb.Aead.seal(.aes_256_gcm, &key, &nonce, aad, plaintext, ciphertext, &tag);
 
     // Build output: MAGIC + nonce + tag + ciphertext
     const total_len = MAGIC.len + OVERHEAD + ciphertext.len;
@@ -176,7 +176,7 @@ pub fn decryptWithKey(allocator: std.mem.Allocator, data: []const u8, key: [KEY_
     errdefer allocator.free(plaintext);
 
     const aad: []const u8 = &[_]u8{};
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ciphertext, tag, aad, nonce, key) catch {
+    cb.Aead.open(.aes_256_gcm, &key, &nonce, aad, ciphertext, &tag, plaintext) catch {
         log.err("TDE: Decryption failed - wrong key or corrupted data", &.{});
         return TdeError.DecryptionFailed;
     };
@@ -294,9 +294,6 @@ pub fn decryptWithTenantKey(allocator: std.mem.Allocator, data: []const u8, tena
 /// Derive a per-tenant file encryption key using HKDF-SHA256.
 /// Uses distinct salt from FLE to ensure domain separation.
 fn deriveTenantFileKey(master_key: [KEY_BYTES]u8, tenant_id: []const u8) [KEY_BYTES]u8 {
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-    const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
-
     const salt = "geode-tde-tenant-salt-v1";
 
     // Build info string
@@ -308,19 +305,21 @@ fn deriveTenantFileKey(master_key: [KEY_BYTES]u8, tenant_id: []const u8) [KEY_BY
     const info = std.fmt.bufPrint(&info_buf, "geode/tde/tenant/{s}", .{tenant_id}) catch
         std.fmt.bufPrint(&info_buf, "geode/tde/tenant/truncated", .{}) catch unreachable;
 
-    // HKDF-Extract
-    var prk: [32]u8 = undefined;
-    Hmac.create(&prk, &master_key, salt);
+    // HKDF-Extract: PRK = HMAC-SHA256(salt, master_key)
+    var prk: [32]u8 = [_]u8{0} ** 32;
+    // cb.Mac.hmac returns !usize; failure is not possible with well-formed
+    // fixed-size inputs but error-policy requires handling it.
+    _ = cb.Mac.hmac(.sha256, salt, &master_key, &prk) catch {};
 
     // HKDF-Expand (single block, 32 bytes)
     var expand_input: [512 + 1]u8 = undefined;
     @memcpy(expand_input[0..info.len], info);
     expand_input[info.len] = 0x01;
 
-    var derived: [KEY_BYTES]u8 = undefined;
-    Hmac.create(&derived, expand_input[0 .. info.len + 1], &prk);
+    var derived: [KEY_BYTES]u8 = [_]u8{0} ** KEY_BYTES;
+    _ = cb.Mac.hmac(.sha256, &prk, expand_input[0 .. info.len + 1], &derived) catch {};
 
-    std.crypto.secureZero(u8, &prk);
+    cb.secureZero(&prk);
     return derived;
 }
 

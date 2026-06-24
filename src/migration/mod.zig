@@ -5,6 +5,7 @@
 /// in the CLI, injectable for tests).  Migration files live in a
 /// configurable directory and are applied in version order.
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -197,9 +198,9 @@ pub fn checksumPrefix(bytes: []const u8) [7]u8 {
 }
 
 /// SEC-MIG-05: Computes the SHA-256 hash of content, returned as a 64-char lowercase hex string.
-pub fn computeContentSha256(data: []const u8) [64]u8 {
-    var hash: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(data, &hash, .{});
+pub fn computeContentSha256(data: []const u8) ![64]u8 {
+    var hash: [32]u8 = undefined;
+    _ = try cb.Hash.digest(.sha256, data, &hash);
     return std.fmt.bytesToHex(hash, .lower);
 }
 
@@ -1128,18 +1129,18 @@ test "checksumValidate fails for mismatched manifest" {
 // ==================== SEC-MIG-05: SHA-256 Content Hash Tests ====================
 
 test "computeContentSha256 produces deterministic 64-char hex" {
-    const hash = computeContentSha256("CREATE GRAPH test");
+    const hash = try computeContentSha256("CREATE GRAPH test");
     try std.testing.expectEqual(@as(usize, 64), hash.len);
     for (hash) |c| {
         try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
     }
-    const hash2 = computeContentSha256("CREATE GRAPH test");
+    const hash2 = try computeContentSha256("CREATE GRAPH test");
     try std.testing.expect(std.mem.eql(u8, &hash, &hash2));
 }
 
 test "computeContentSha256 detects single-byte changes" {
-    const hash_a = computeContentSha256("CREATE GRAPH safe");
-    const hash_b = computeContentSha256("CREATE GRAPH safE"); // single char differs
+    const hash_a = try computeContentSha256("CREATE GRAPH safe");
+    const hash_b = try computeContentSha256("CREATE GRAPH safE"); // single char differs
     try std.testing.expect(!std.mem.eql(u8, &hash_a, &hash_b));
 }
 
@@ -1171,7 +1172,7 @@ test "applyUpMigrations stores SHA-256 content hash in ledger" {
     try std.testing.expect(!std.mem.eql(u8, &row.content_sha256, &sha256_zero));
 
     // Verify it matches the expected SHA-256 of the content
-    const expected_sha = computeContentSha256(script_content);
+    const expected_sha = try computeContentSha256(script_content);
     try std.testing.expect(std.mem.eql(u8, &row.content_sha256, &expected_sha));
 }
 

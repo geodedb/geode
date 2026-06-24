@@ -1,12 +1,13 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // secure_mem.zig
 // Utilities for explicit secret zeroization and audit.
 // CANARY: REQ=REQ-GQL-SEC-ZEROIZE-001; FEATURE="SecretsZeroization"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_ZEROIZE_001_Basic; OWNER=security; UPDATED=2025-09-26
 
 pub fn wipe(buf: []u8) void {
-    // SEC-11: Use std.crypto.secureZero for consistent, optimizer-resistant zeroing.
-    std.crypto.secureZero(u8, buf);
+    // SEC-11: Route through FIPS seam for optimizer-resistant zeroing.
+    cb.secureZero(buf);
 }
 
 pub fn wipeStruct(comptime T: type, val: *T) void {

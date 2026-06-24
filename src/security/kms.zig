@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -176,12 +177,11 @@ pub const KMSProvider = struct {
     fn wrapLocalDev(self: *KMSProvider, key_id: MasterKeyId, plaintext: []const u8) !WrappedKey {
         // Derive AES-256 key from key_id using HKDF (extract-then-expand)
         var wrap_key: [32]u8 = undefined;
-        const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("LOCAL_DEV_WRAP", key_id);
-        std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
+        try cb.Kdf.hkdf(.sha256, key_id, "LOCAL_DEV_WRAP", "", &wrap_key);
 
         // Use cryptographically random nonce (required for AES-GCM security)
         var nonce: [12]u8 = undefined;
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
 
         // AES-256-GCM encrypt with authentication tag
         // Output format: nonce (12) || ciphertext || tag (16)
@@ -190,7 +190,7 @@ pub const KMSProvider = struct {
 
         // Prepend nonce so unwrap can recover it
         @memcpy(output[0..12], &nonce);
-        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(output[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, wrap_key);
+        try cb.Aead.seal(.aes_256_gcm, &wrap_key, &nonce, "", plaintext, output[12 .. 12 + plaintext.len], &tag);
 
         // Append tag
         @memcpy(output[12 + plaintext.len ..], &tag);
@@ -207,8 +207,7 @@ pub const KMSProvider = struct {
 
         // Derive same key from key_id using HKDF (extract-then-expand)
         var wrap_key: [32]u8 = undefined;
-        const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("LOCAL_DEV_WRAP", wrapped.key_id);
-        std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
+        try cb.Kdf.hkdf(.sha256, wrapped.key_id, "LOCAL_DEV_WRAP", "", &wrap_key);
 
         // Try new format first: nonce (12) || ciphertext || tag (16)
         if (wrapped.ciphertext.len >= 28) {
@@ -218,7 +217,7 @@ pub const KMSProvider = struct {
             const new_tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[12 + new_plaintext_len ..][0..16]);
 
             const plaintext = try self.allocator.alloc(u8, new_plaintext_len);
-            if (std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, new_ct, new_tag.*, "", nonce, wrap_key)) |_| {
+            if (cb.Aead.open(.aes_256_gcm, &wrap_key, &nonce, "", new_ct, new_tag, plaintext)) |_| {
                 return plaintext;
             } else |_| {
                 self.allocator.free(plaintext);
@@ -232,12 +231,12 @@ pub const KMSProvider = struct {
         const legacy_tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[legacy_plaintext_len..][0..16]);
 
         var legacy_nonce: [12]u8 = undefined;
-        std.crypto.secureZero(u8, &legacy_nonce);
+        cb.secureZero(&legacy_nonce);
         const key_hash = std.hash.crc.Crc32.hash(wrapped.key_id);
         std.mem.writeInt(u32, legacy_nonce[0..4], key_hash, .little);
 
         const plaintext = try self.allocator.alloc(u8, legacy_plaintext_len);
-        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, legacy_ct, legacy_tag.*, "", legacy_nonce, wrap_key) catch {
+        cb.Aead.open(.aes_256_gcm, &wrap_key, &legacy_nonce, "", legacy_ct, legacy_tag, plaintext) catch {
             self.allocator.free(plaintext);
             return error.DecryptionFailed;
         };

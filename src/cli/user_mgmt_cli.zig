@@ -1,4 +1,6 @@
 const std = @import("std");
+const build_options = @import("build_options");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -165,7 +167,7 @@ fn requirePasswordStrong(password: []const u8) bool {
 
 /// GAP-0154 FIX: Generate a cryptographically secure random password
 /// Returns a 32-character hex string (16 random bytes converted to hex)
-fn generateSecurePassword() [32]u8 {
+fn generateSecurePassword() ![32]u8 {
     return cli_auth.generateSecurePassword();
 }
 
@@ -285,7 +287,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
             if (generate_password) {
                 // Generate random password
-                generated_pw = generateSecurePassword();
+                generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }
@@ -379,6 +381,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         if (!std.mem.eql(u8, algorithm, "argon2id") and !std.mem.eql(u8, algorithm, "blake2b")) {
             std.debug.print("Error: --algorithm must be 'argon2id' or 'blake2b'\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
+        // FIPS: reject both argon2id and blake2b algorithm imports under FIPS — neither is FIPS-approved
+        if (build_options.fips) {
+            std.debug.print("Error: user import with '--algorithm {s}' is unavailable under FIPS mode (argon2id and blake2b are not FIPS-approved primitives)\n", .{algorithm});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
         if (mgr.storage.getUserByUsername(username) != null) {
@@ -869,7 +877,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 break :blk pw;
             }
             if (generate_password) {
-                generated_pw = generateSecurePassword();
+                generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }
@@ -886,12 +894,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             if (mgr.storage.getUserByUsername(username)) |existing| {
                 const stored = existing.getPasswordHash();
                 // Simple constant-time comparison via Blake2
+                // fips-guard: Blake2 is not FIPS-approved; fail closed in FIPS mode
+                if (comptime build_options.fips) return error.FipsUnsupported;
                 const Blake2 = std.crypto.hash.blake2.Blake2b256;
                 var stored_hash: [Blake2.digest_length]u8 = undefined;
                 var input_hash: [Blake2.digest_length]u8 = undefined;
                 Blake2.hash(stored, &stored_hash, .{});
                 Blake2.hash(old, &input_hash, .{});
-                if (!std.crypto.timing_safe.eql([Blake2.digest_length]u8, stored_hash, input_hash)) {
+                if (!cb.timingSafeEql(&stored_hash, &input_hash)) {
                     std.debug.print("Error: old password is incorrect\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
@@ -928,7 +938,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 break :blk pw;
             }
             if (generate_password) {
-                generated_pw = generateSecurePassword();
+                generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }

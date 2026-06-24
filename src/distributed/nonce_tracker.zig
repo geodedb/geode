@@ -78,6 +78,7 @@ pub const NonceTracker = struct {
     pub fn generateNonce() u64 {
         return blk: {
             var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            // fips-exempt: non-security frame-coordination nonce (not key material)
             compat_fillRandom(&_rng_buf);
             break :blk std.mem.readInt(u64, &_rng_buf, .little);
         };

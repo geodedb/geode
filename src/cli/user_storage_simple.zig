@@ -1,4 +1,6 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
+const build_options = @import("build_options");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -228,7 +230,7 @@ pub const UserStorage = struct {
 
         // Generate salt
         var salt: [32]u8 = undefined;
-        compat_fillRandom(&salt);
+        try cb.Csprng.bytes(&salt);
         const salt_hex = std.fmt.bytesToHex(salt, .lower);
         const salt_hex_str = try self.allocator.dupe(u8, &salt_hex);
         defer self.allocator.free(salt_hex_str);
@@ -303,6 +305,8 @@ pub const UserStorage = struct {
 };
 
 fn hashPassword(allocator: Allocator, password: []const u8, salt: *const [32]u8) ![]const u8 {
+    // Argon2id is not FIPS-approved; fail closed in FIPS mode
+    if (comptime build_options.fips) return error.FipsUnsupported;
     // Use Argon2id for password hashing
     var hash: [64]u8 = undefined;
 

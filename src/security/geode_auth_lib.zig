@@ -2,6 +2,8 @@
 // CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-01-15
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
+const build_options = @import("build_options");
+const crypto_backend = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -1133,14 +1135,14 @@ pub const SecurityManager = struct {
     /// Constant-time comparison for 32-byte arrays (Argon2id/Blake2b digests). GAP-0440.
     /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
     fn constantTimeEqual32(a: *const [32]u8, b: *const [32]u8) bool {
-        return std.crypto.timing_safe.eql([32]u8, a.*, b.*);
+        return crypto_backend.timingSafeEql(a, b);
     }
 
     /// Constant-time comparison for 64-byte hex-encoded hashes. GAP-0440.
     /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
     fn constantTimeEqual64(a: *const [64]u8, b: []const u8) bool {
         if (b.len != 64) return false;
-        return std.crypto.timing_safe.eql([64]u8, a.*, b[0..64].*);
+        return crypto_backend.timingSafeEql(a, b[0..64]);
     }
 
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
@@ -1178,6 +1180,11 @@ pub const SecurityManager = struct {
     /// Accounts verified via this path should be flagged for password_reset_required
     /// to force migration to Argon2id on next login.
     fn verifyBlake2bLegacy(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
+        // FIPS: BLAKE2b is not FIPS-approved — fail closed under -Dfips
+        if (build_options.fips) {
+            log.err("password verification unavailable under FIPS: BLAKE2b is not a FIPS-approved primitive", &.{});
+            return error.FipsUnsupported;
+        }
         const salt = "geode-salt-secure-v2";
         var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
         hasher.update(password);
@@ -1356,7 +1363,7 @@ pub const SecurityManager = struct {
             }
             // SEC-04: Generate cryptographically random password in ALL build modes.
             // No hardcoded fallback — always random when env var is not set.
-            compat_fillRandom(&generated_password_buf);
+            try crypto_backend.Csprng.bytes(&generated_password_buf);
             generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
 
             // SEC-05: Write generated password to a file instead of stderr.
@@ -1743,9 +1750,14 @@ pub const SecurityManager = struct {
 ///   - m=19456: 19 MiB memory (OWASP minimum)
 ///   - p=1: 1 parallel lane
 pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const u8 {
+    // FIPS: Argon2id is not FIPS-approved — fail closed under -Dfips
+    if (build_options.fips) {
+        log.err("password hashing unavailable under FIPS: Argon2id is not a FIPS-approved primitive", &.{});
+        return error.FipsUnsupported;
+    }
     // Generate cryptographically random 16-byte salt
     var salt: [16]u8 = undefined;
-    compat_fillRandom(&salt);
+    try crypto_backend.Csprng.bytes(&salt);
 
     // OWASP recommended Argon2id parameters (ASVS 2.4.1)
     const argon2_params = std.crypto.pwhash.argon2.Params{
@@ -1803,6 +1815,11 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
 /// Supports any valid Argon2id PHC string (not just OWASP params), enabling
 /// verification of hashes created with different parameter sets during migration.
 pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_string: []const u8) !bool {
+    // FIPS: Argon2id is not FIPS-approved — fail closed under -Dfips
+    if (build_options.fips) {
+        log.err("password verification unavailable under FIPS: Argon2id is not a FIPS-approved primitive", &.{});
+        return error.FipsUnsupported;
+    }
     // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
     var parts = std.mem.splitScalar(u8, phc_string, '$');
 
@@ -1874,7 +1891,7 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
     ) catch return false;
 
     // Constant-time comparison to prevent timing attacks
-    return std.crypto.timing_safe.eql([32]u8, computed_hash, expected_hash);
+    return crypto_backend.timingSafeEql(&computed_hash, &expected_hash);
 }
 
 // ============================================================================

@@ -17,8 +17,7 @@
 // CANARY: REQ=REQ-SEC-S3-SIGV4-001; FEATURE="S3 SigV4 Signing"; ASPECT=Crypto; STATUS=TESTED; TEST=tests/test_s3_sigv4.zig; OWNER=security; UPDATED=2026-06-10
 
 const std = @import("std");
-const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
-const Sha256 = std.crypto.hash.sha2.Sha256;
+const cb = @import("crypto_backend");
 
 /// SHA-256 of the empty string — the x-amz-content-sha256 value for
 /// payload-less requests (GET/DELETE/POST-without-body).
@@ -62,9 +61,9 @@ pub const SignInput = struct {
 };
 
 /// Lowercase hex SHA-256 of a payload, for the x-amz-content-sha256 header.
-pub fn hashPayloadHex(payload: []const u8) [64]u8 {
+pub fn hashPayloadHex(payload: []const u8) ![64]u8 {
     var digest: [32]u8 = undefined;
-    Sha256.hash(payload, &digest, .{});
+    _ = try cb.Hash.digest(.sha256, payload, &digest);
     return std.fmt.bytesToHex(digest, .lower);
 }
 
@@ -75,7 +74,7 @@ pub fn signingKey(
     date_yyyymmdd: []const u8,
     region: []const u8,
     service: []const u8,
-) [32]u8 {
+) ![32]u8 {
     // Runtime-checked (not just debug-asserted): a >256-byte secret in a
     // ReleaseFast build must not overflow the stack buffer. Real AWS
     // secrets are 40 bytes; truncate-and-sign would produce a wrong
@@ -87,13 +86,13 @@ pub fn signingKey(
     @memcpy(prefixed[4..][0..key_len], secret_access_key[0..key_len]);
 
     var k_date: [32]u8 = undefined;
-    HmacSha256.create(&k_date, date_yyyymmdd, prefixed[0 .. 4 + key_len]);
+    _ = try cb.Mac.hmac(.sha256, prefixed[0 .. 4 + key_len], date_yyyymmdd, &k_date);
     var k_region: [32]u8 = undefined;
-    HmacSha256.create(&k_region, region, &k_date);
+    _ = try cb.Mac.hmac(.sha256, &k_date, region, &k_region);
     var k_service: [32]u8 = undefined;
-    HmacSha256.create(&k_service, service, &k_region);
+    _ = try cb.Mac.hmac(.sha256, &k_region, service, &k_service);
     var k_signing: [32]u8 = undefined;
-    HmacSha256.create(&k_signing, "aws4_request", &k_service);
+    _ = try cb.Mac.hmac(.sha256, &k_service, "aws4_request", &k_signing);
     return k_signing;
 }
 
@@ -200,7 +199,7 @@ pub fn buildCanonicalRequest(allocator: std.mem.Allocator, in: SignInput) ![]u8 
 pub fn buildStringToSign(allocator: std.mem.Allocator, in: SignInput, canonical_request: []const u8) ![]u8 {
     std.debug.assert(in.amz_date.len >= 8);
     var cr_hash: [32]u8 = undefined;
-    Sha256.hash(canonical_request, &cr_hash, .{});
+    _ = try cb.Hash.digest(.sha256, canonical_request, &cr_hash);
     const cr_hex = std.fmt.bytesToHex(cr_hash, .lower);
     return std.fmt.allocPrint(allocator, "AWS4-HMAC-SHA256\n{s}\n{s}/{s}/{s}/aws4_request\n{s}", .{
         in.amz_date,
@@ -218,9 +217,9 @@ pub fn signatureHex(allocator: std.mem.Allocator, in: SignInput) ![64]u8 {
     const sts = try buildStringToSign(allocator, in, cr);
     defer allocator.free(sts);
 
-    const key = signingKey(in.secret_access_key, in.amz_date[0..8], in.region, in.service);
+    const key = try signingKey(in.secret_access_key, in.amz_date[0..8], in.region, in.service);
     var mac: [32]u8 = undefined;
-    HmacSha256.create(&mac, sts, &key);
+    _ = try cb.Mac.hmac(.sha256, &key, sts, &mac);
     return std.fmt.bytesToHex(mac, .lower);
 }
 

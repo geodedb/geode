@@ -75,6 +75,7 @@ test "Key hierarchy derivation" {
     const testing = std.testing;
 
     var master: [32]u8 = undefined;
+    // fips-exempt: non-security test-only master key (unit test fixture, not production key material)
     compat_fillRandom(&master);
 
     const tenant_id = "tenant-123";

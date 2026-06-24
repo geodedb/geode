@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -739,7 +740,7 @@ pub const UserManager = struct {
 
     fn generateMFASecret(self: *Self) ![]const u8 {
         var secret: [32]u8 = undefined;
-        compat_fillRandom(&secret);
+        try cb.Csprng.bytes(&secret);
         const encoder = std.base64.standard.Encoder;
         const result = try self.allocator.alloc(u8, encoder.calcSize(secret.len));
         _ = encoder.encode(result, &secret);

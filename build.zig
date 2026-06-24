@@ -667,7 +667,50 @@ pub fn build(b: *std.Build) void {
         "Allow the legacy raw-string RLS interpreter path (SECURITY: default OFF; set ONLY for compatibility tests)",
     ) orelse false;
     build_opts.addOption(bool, "allow_rls_raw_interp", allow_rls_raw_interp);
+    // FIPS crypto seam: route security-critical crypto through the OpenSSL
+    // FIPS 140-3 provider when -Dfips=true; uses the local std_shim when false.
+    const fips = b.option(bool, "fips", "Route security crypto through the OpenSSL FIPS provider") orelse false;
+    const openssl_path = b.option([]const u8, "openssl_path", "OpenSSL FIPS prefix (e.g. /usr/local/ssl)");
+    build_opts.addOption(bool, "fips", fips);
     const build_options_mod = build_opts.createModule();
+
+    // -------------------------------------------------------------------------
+    // FIPS crypto seam modules: std_shim (non-fips path) + crypto_backend
+    // (dispatches to std_shim or the OpenSSL FIPS backend based on -Dfips).
+    // Both modules are vendored verbatim from the fips repo (Task 1).
+    // -------------------------------------------------------------------------
+    const link = @import("src/link.zig"); // build-time helper only; no runtime dep
+    const std_shim_mod = b.createModule(.{
+        .root_source_file = b.path("src/std_shim.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const crypto_backend_mod = b.createModule(.{
+        .root_source_file = b.path("src/crypto_backend.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    crypto_backend_mod.addImport("build_options", build_options_mod);
+    crypto_backend_mod.addImport("std_shim", std_shim_mod);
+    // Task 8: FIPS fail-close for ChaCha20 header protection in the QUIC parallel module.
+    quic_parallel_serial_mod.addImport("build_options", build_options_mod);
+
+    if (fips) {
+        // fips is `.lazy = true` in build.zig.zon, so it MUST be accessed via
+        // lazyDependency (b.dependency panics on a lazy dep). We are already
+        // inside `if (fips)`, so the dependency is requested + resolved here.
+        if (b.lazyDependency("fips", .{ .target = target, .optimize = optimize })) |fips_dep| {
+            crypto_backend_mod.addImport("fips", fips_dep.module("fips"));
+            // Link the FIPS-prefix OpenSSL onto the crypto_backend module using the
+            // canonical linkOpenssl helper from the vendored link.zig. Force dynamic
+            // linking so the FIPS provider's fips.so is resolved at runtime, not
+            // statically embedded (would void the FIPS 140-3 validation boundary).
+            link.linkOpenssl(b, crypto_backend_mod, openssl_path);
+        }
+    }
+    // Wire crypto_backend into root_mod (helps later routing tasks) and into
+    // the executable (smoke test and future call-site routing).
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -696,6 +739,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     root_mod.addImport("runtime_metrics", runtime_metrics_module);
+    // FIPS seam: make crypto_backend importable from root_mod for later routing tasks.
+    root_mod.addImport("crypto_backend", crypto_backend_mod);
 
     // GAP-0810: `server/query_ast_cache.zig` must be reachable from both the
     // public `geode` module (for `parseGqlCached`/`SharedAstCache` re-exports)
@@ -788,6 +833,8 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode", root_mod);
+    // FIPS seam: wire crypto_backend into the executable for later routing tasks.
+    geode_exe.root_module.addImport("crypto_backend", crypto_backend_mod);
     // GAP-0810: named-module form to keep a single owning module for
     // server/query_ast_cache.zig across lib.zig and server files.
     geode_exe.root_module.addImport("query_ast_cache", query_ast_cache_mod);
@@ -892,11 +939,14 @@ pub fn build(b: *std.Build) void {
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     storage_backup_mod.addImport("logging", logging_mod);
     storage_backup_mod.addImport("geode", root_mod);
+    // Task 5 (FIPS seam): backup.zig routes AES-256-GCM through crypto_backend.
+    storage_backup_mod.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
     root_mod.addImport("storage/backup", storage_backup_mod);
 
     // M11a: Add migration module for CLI migrate commands
     const migration_mod_cli = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
+    migration_mod_cli.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("migration", migration_mod_cli);
 
     // Phase 5: Add MCP module for CLI mcp commands
@@ -979,6 +1029,8 @@ pub fn build(b: *std.Build) void {
     fle_key_manager_mod.addImport("fle_hkdf", fle_hkdf_mod);
     fle_key_manager_mod.addImport("fle_key_types", fle_key_types_mod);
     fle_key_manager_mod.addImport("fle_aead", fle_aead_mod);
+    // Task 5 (FIPS seam): keys/manager.zig routes SHA-256 + secureZero through crypto_backend.
+    fle_key_manager_mod.addImport("crypto_backend", crypto_backend_mod);
     fle_blind_index_mod.addImport("fle_hmac", fle_hmac_mod);
     fle_catalog_mod.addImport("annotations", fle_annotations_mod);
 
@@ -1075,6 +1127,8 @@ pub fn build(b: *std.Build) void {
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
     const tde_file_encryption_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
     tde_file_encryption_mod.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    tde_file_encryption_mod.addImport("crypto_backend", crypto_backend_mod);
     tde_encrypt_pages_exe.root_module.addImport("tde_file_encryption", tde_file_encryption_mod);
     const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
     bench_step.dependOn(&run_tde_encrypt_pages.step);
@@ -1293,6 +1347,8 @@ pub fn build(b: *std.Build) void {
     gap0844_test_mod.addImport("fle_key_manager", fle_key_manager_mod);
     gap0844_test_mod.addImport("fle_key_types", fle_key_types_mod);
     gap0844_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    gap0844_test_mod.addImport("build_options", build_options_mod); // Task 8: FIPS fail-close gates
+    gap0844_test_mod.addImport("crypto_backend", crypto_backend_mod); // transitive: fle_catalog.zig → tde_file_encryption.zig → crypto_backend
     gap0844_test_mod.link_libc = true; // setenv/unsetenv + std.c.getenv
     // GAP-0886 (#813): the REQ-FLE-ENFORCE-030 flag-invariant regression also
     // lives inline in fle_integration.zig; run it through this same step.
@@ -1300,6 +1356,25 @@ pub fn build(b: *std.Build) void {
     const run_gap0844_tests = b.addRunArtifact(gap0844_tests);
     const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role) + GAP-0886 FLE flag invariant");
     gap0844_step.dependOn(&run_gap0844_tests.step);
+
+    // Task 8 (FIPS fail-close): Dedicated step for FIPS-gated ChaCha20-Poly1305 FLE tests.
+    // Filters to FIPS-Task8 tests so both modes can be verified independently:
+    //   -Dfips=false: "FIPS-Task8: ChaCha20-Poly1305 FLE is NOT gated under non-FIPS build"
+    //   -Dfips=true:  "FIPS-Task8: ChaCha20-Poly1305 FLE encrypt returns FipsUnsupported under FIPS"
+    //                 "FIPS-Task8: AES-256-GCM FLE encrypt is NOT blocked by FIPS gate"
+    const fips_chacha_test_mod = b.createModule(.{ .root_source_file = b.path("src/fle_integration.zig"), .target = target, .optimize = optimize });
+    fips_chacha_test_mod.addImport("logging", logging_mod);
+    fips_chacha_test_mod.addImport("fle_aead", fle_aead_mod);
+    fips_chacha_test_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    fips_chacha_test_mod.addImport("fle_key_types", fle_key_types_mod);
+    fips_chacha_test_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    fips_chacha_test_mod.addImport("build_options", build_options_mod);
+    fips_chacha_test_mod.addImport("crypto_backend", crypto_backend_mod);
+    fips_chacha_test_mod.link_libc = true;
+    const fips_chacha_tests = b.addTest(.{ .root_module = fips_chacha_test_mod, .filters = &.{"FIPS-Task8"} });
+    const run_fips_chacha_tests = b.addRunArtifact(fips_chacha_tests);
+    const fips_chacha_step = b.step("test-fips-chacha-failclose", "Task 8: FIPS fail-close for ChaCha20-Poly1305 FLE (run under both -Dfips=false and -Dfips=true)");
+    fips_chacha_step.dependOn(&run_fips_chacha_tests.step);
 
     // Quality #733 (2026-06-11): focused runner for the hot-path inline test
     // backfill — deep-nesting parse in src/gql/parser.zig, the tenant-filter
@@ -1335,10 +1410,15 @@ pub fn build(b: *std.Build) void {
     // symlinked files which are already part of the geode module tree.
     const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_math_functions.zig"), .target = target, .optimize = optimize }) });
     math_func_tests.root_module.addImport("uuid", uuid_ext_mod);
+    // Task 2 (FIPS seam): cryptographic.zig now imports crypto_backend; the
+    // symlinked types/ path pulls cryptographic.zig in via evaluator_functions.zig.
+    math_func_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_math_func_tests = b.addRunArtifact(math_func_tests);
 
     const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_string_functions.zig"), .target = target, .optimize = optimize }) });
     string_func_tests.root_module.addImport("uuid", uuid_ext_mod);
+    // Task 2 (FIPS seam): same reason as math_func_tests above.
+    string_func_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_string_func_tests = b.addRunArtifact(string_func_tests);
 
     // Distributed cluster CLI flag tests (Task A1 of 2026-05-25-geode-distributed-cluster-testing).
@@ -1934,6 +2014,9 @@ pub fn build(b: *std.Build) void {
     otel_metrics_mod_for_graph_tests.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_mod.addImport("otel", otel_mod);
     graph_store_mod.addImport("otel_metrics", otel_metrics_mod_for_graph_tests);
+    // Task 9 (FIPS seam): tde_file_encryption.zig (pulled in transitively by
+    // graph_store.zig) now imports crypto_backend for CSPRNG nonce generation.
+    graph_store_mod.addImport("crypto_backend", crypto_backend_mod);
 
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
@@ -2346,6 +2429,10 @@ pub fn build(b: *std.Build) void {
     // Phase C1: graph_storage_adapter.zig / group_commit.zig (in this root module)
     // now `@import("runtime_metrics")` directly, so the root needs it too.
     graph_store_unit_tests.root_module.addImport("runtime_metrics", runtime_metrics_module);
+    // Task 2 (FIPS seam): cryptographic.zig now imports crypto_backend; the
+    // graph_store test root pulls it in transitively via advanced_types_index.zig
+    // (index_manager → advanced_types_index → cryptographic). Wire it here.
+    graph_store_unit_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
     // GAP-0514 Phase 6: named step so the graph_store.zig inline tests are
@@ -2579,6 +2666,7 @@ pub fn build(b: *std.Build) void {
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
+    migration_mod.addImport("crypto_backend", crypto_backend_mod);
     custom_tests.root_module.addImport("migration", migration_mod);
     // Logging module shared (uses centralized slog-based logging)
     custom_tests.root_module.addImport("logging", logging_mod);
@@ -3857,6 +3945,8 @@ pub fn build(b: *std.Build) void {
         // TDE module for file-level encryption (REQ-TDE-FILELEVEL-001)
         const tde_fuzz_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
         tde_fuzz_mod.addImport("logging", logging_mod);
+        // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+        tde_fuzz_mod.addImport("crypto_backend", crypto_backend_mod);
         hnsw_persist_mod.addImport("hnsw", hnsw_ext_mod);
         hnsw_persist_mod.addImport("tde", tde_fuzz_mod);
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
@@ -3884,6 +3974,7 @@ pub fn build(b: *std.Build) void {
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
     // Provide tde_hierarchy for encryption import (even if disabled)
     const tde_hierarchy_mod_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    tde_hierarchy_mod_tests.addImport("crypto_backend", crypto_backend_mod);
     redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
     redo_canary_test.root_module.addImport("geode", root_mod);
     shardDep(test_step, &redo_canary_test.step, 1, test_shard_loads, test_shard_index);
@@ -3978,9 +4069,15 @@ pub fn build(b: *std.Build) void {
 
     // MFA risk sensitivity & step-up tests
     const mfa_risk_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa_risk.zig"), .target = target, .optimize = optimize });
+    // Task 6 (FIPS seam): mfa_risk.zig routes TOTP HMAC-SHA1 through crypto_backend.
+    mfa_risk_mod.addImport("crypto_backend", crypto_backend_mod);
     const mfa_risk_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_risk_stepup.zig"), .target = target, .optimize = optimize }) });
     mfa_risk_tests.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
     shardDep(test_step, &mfa_risk_tests.step, 1, test_shard_loads, test_shard_index);
+    // Dedicated step: zig build test-mfa-totp — RFC 6238 vector + seam routing check, both -Dfips modes.
+    const run_mfa_risk_tests = b.addRunArtifact(mfa_risk_tests);
+    const mfa_totp_step = b.step("test-mfa-totp", "Task 6: MFA TOTP HMAC-SHA1 seam routing — RFC 6238 KAT + step-up logic");
+    mfa_totp_step.dependOn(&run_mfa_risk_tests.step);
     // Recovery code contention test
     const mfa_recovery_contention_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
     shardDep(test_step, &mfa_recovery_contention_tests.step, 1, test_shard_loads, test_shard_index);
@@ -4374,6 +4471,7 @@ pub fn build(b: *std.Build) void {
 
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
+    audit_mod.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("audit_cli", audit_mod);
 
     // Task 7 (OTel instrumentation plan): server/main.zig and
@@ -4419,6 +4517,7 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("transport/quic", transport_quic_mod);
     kms_remote_mod.addImport("logging", logging_mod);
     kms_remote_mod.addImport("json", json_mod);
+    kms_remote_mod.addImport("crypto_backend", crypto_backend_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     remote_kms_tests.root_module.link_libc = true;
     shardDep(test_step, &remote_kms_tests.step, 1, test_shard_loads, test_shard_index);
@@ -4532,11 +4631,16 @@ pub fn build(b: *std.Build) void {
     mfa_mod.addImport("feature_flags", runtime_flags_mod);
     mfa_mod.addImport("auth_lib", auth_ext_mod);
     mfa_mod.addImport("mfa_policy", mfa_policy_mod);
+    mfa_mod.addImport("crypto_backend", crypto_backend_mod); // FIPS seam: secureZero now routes through cb
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
     auth_mod.link_libc = true;
     auth_mod.addImport("logging", logging_mod);
     auth_mod.addImport("auth_lib", auth_ext_mod);
     auth_mod.addImport("mfa_policy", mfa_policy_mod);
+    auth_mod.addImport("build_options", build_options_mod);
+    // Task 9 (FIPS seam): geode_auth_lib.zig routes password-hash salt +
+    // generated-password bytes through cb.Csprng (FIPS DRBG under -Dfips).
+    auth_mod.addImport("crypto_backend", crypto_backend_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
     root_mod.addImport("feature_flags", runtime_flags_mod);
@@ -4691,6 +4795,7 @@ pub fn build(b: *std.Build) void {
     otel_metrics_mod_for_audit_tests.addImport("runtime_metrics", runtime_metrics_module);
     audit_security_mod.addImport("otel", otel_mod);
     audit_security_mod.addImport("otel_metrics", otel_metrics_mod_for_audit_tests);
+    audit_security_mod.addImport("crypto_backend", crypto_backend_mod);
 
     // Create user storage module (GraphStore-backed)
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
@@ -4718,6 +4823,7 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_mod.addImport("user_storage", user_storage_mod);
     auth_graph_manager_mod.addImport("logging", logging_mod);
     auth_graph_manager_mod.addImport("transport/thread_pool", thread_pool_mod);
+    auth_graph_manager_mod.addImport("crypto_backend", crypto_backend_mod); // Task 9: HMAC key + admin password → FIPS DRBG
     // Note: auth_graph_manager imports geode (root_mod), so it cannot be added back to
     // root_mod (would create a file-in-two-modules error). Instead, consumers import it
     // directly via their own build module imports.
@@ -4755,6 +4861,7 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_tests.root_module.addImport("user_storage", user_storage_mod);
     auth_graph_manager_tests.root_module.addImport("logging", logging_mod);
     auth_graph_manager_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    auth_graph_manager_tests.root_module.addImport("crypto_backend", crypto_backend_mod); // Task 9: HMAC key + admin password → FIPS DRBG
     const run_auth_graph_manager_tests = b.addRunArtifact(auth_graph_manager_tests);
     shardDep(test_step, &run_auth_graph_manager_tests.step, 1, test_shard_loads, test_shard_index);
     // Named step so the inline auth_graph_manager source tests (HMAC verify,
@@ -4769,6 +4876,7 @@ pub fn build(b: *std.Build) void {
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
     user_manager_mod.addImport("logging", logging_mod);
+    user_manager_mod.addImport("crypto_backend", crypto_backend_mod);
 
     user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);
@@ -4963,7 +5071,10 @@ pub fn build(b: *std.Build) void {
     });
     const key_rotate_tde_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
     key_rotate_tde_mod.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    key_rotate_tde_mod.addImport("crypto_backend", crypto_backend_mod);
     key_rotate_exe.root_module.addImport("tde_file_encryption", key_rotate_tde_mod);
+    key_rotate_exe.root_module.addImport("crypto_backend", crypto_backend_mod); // Task 9: TDE key generation → FIPS DRBG
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
 
@@ -4975,6 +5086,8 @@ pub fn build(b: *std.Build) void {
 
     // New AES-GCM page manager integration test (ensures ciphertext on disk)
     // NOTE: Temporarily excluding test_tde_integration until TDE module exposure strategy finalized.
+    // tde_kms_integration.zig now routes AES-256-GCM + CSPRNG through crypto_backend seam;
+    // the file compiles correctly within geode root_mod (which provides crypto_backend + feature_flags).
 
     const multi_graph_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),
@@ -5039,6 +5152,8 @@ pub fn build(b: *std.Build) void {
     });
     tde_file_encryption_test.root_module.link_libc = true;
     tde_file_encryption_test.root_module.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    tde_file_encryption_test.root_module.addImport("crypto_backend", crypto_backend_mod);
     shardDep(test_step, &tde_file_encryption_test.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
@@ -5232,8 +5347,13 @@ pub fn build(b: *std.Build) void {
     });
     auth_enforcement_test_mod.addImport("logging", logging_mod);
     auth_enforcement_test_mod.addImport("geode_auth", auth_mod);
+    auth_enforcement_test_mod.addImport("build_options", build_options_mod);
+    auth_enforcement_test_mod.addImport("crypto_backend", crypto_backend_mod); // Task 9: user_management.zig → FIPS DRBG
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
     auth_enforcement_tests.root_module.link_libc = true;
+    const run_auth_enforcement_tests = b.addRunArtifact(auth_enforcement_tests);
+    const auth_enforcement_step = b.step("test-auth-enforcement", "Run auth enforcement + FIPS fail-close password hashing tests");
+    auth_enforcement_step.dependOn(&run_auth_enforcement_tests.step);
     shardDep(test_step, &auth_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -5245,6 +5365,8 @@ pub fn build(b: *std.Build) void {
     });
     tde_file_mod.link_libc = true;
     tde_file_mod.addImport("logging", logging_mod);
+    // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
+    tde_file_mod.addImport("crypto_backend", crypto_backend_mod);
     const tde_enforcement_test_mod = b.createModule(.{
         .root_source_file = b.path("src/security/test_tde_enforcement.zig"),
         .target = target,
@@ -5431,6 +5553,7 @@ pub fn build(b: *std.Build) void {
     // allowlist-check tests guard against regression until it is.
     const vault_kms_test_mod = b.createModule(.{ .root_source_file = b.path("src/security/vault_kms_provider.zig"), .target = target, .optimize = optimize });
     vault_kms_test_mod.addImport("logging", logging_mod);
+    vault_kms_test_mod.addImport("crypto_backend", crypto_backend_mod); // FIPS seam: AES-256-GCM + CSPRNG now route through cb
     vault_kms_test_mod.link_libc = true;
     const vault_kms_tests = b.addTest(.{ .root_module = vault_kms_test_mod });
     const run_vault_kms_tests = b.addRunArtifact(vault_kms_tests);
@@ -6344,6 +6467,7 @@ pub fn build(b: *std.Build) void {
     // storage_backup_mod above) so the previously-orphaned manager compiles
     // again and the SigV4 request path stays semantically analyzed.
     const s3_sigv4_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_sigv4.zig"), .target = target, .optimize = optimize });
+    s3_sigv4_mod.addImport("crypto_backend", crypto_backend_mod);
     const s3_backup_sig_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_backup.zig"), .target = target, .optimize = optimize });
     s3_backup_sig_mod.addImport("logging", logging_mod);
     s3_backup_sig_mod.addImport("geode", root_mod);
@@ -7898,6 +8022,7 @@ pub fn build(b: *std.Build) void {
     // periodic HMAC verification thread lifecycle, login-state persistence,
     // coarse LSP graph-visibility gate).
     const agm_unit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_graph_manager_unit.zig"), .target = target, .optimize = optimize });
+    agm_unit_test_mod.addImport("build_options", build_options_mod);
     agm_unit_test_mod.addImport("geode", root_mod);
     agm_unit_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
     const agm_unit_tests = b.addTest(.{ .root_module = agm_unit_test_mod });
@@ -8111,4 +8236,61 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_distributed_wire_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_distributed_wire_step = b.step("test-gps-distributed-wire", "Run GPS distributed Principal envelope wire integration tests (Phase 7 Task 7-6)");
     gps_distributed_wire_step.dependOn(&run_gps_distributed_wire_tests.step);
+
+    // -------------------------------------------------------------------------
+    // Task 1: crypto_backend smoke test — proves the seam is wired correctly
+    // in both -Dfips=false (std_shim) and -Dfips=true (OpenSSL FIPS) modes.
+    // -------------------------------------------------------------------------
+    const crypto_backend_smoke_mod = b.createModule(.{
+        .root_source_file = b.path("src/crypto_backend_smoke_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    crypto_backend_smoke_mod.addImport("crypto_backend", crypto_backend_mod);
+    const crypto_backend_smoke_tests = b.addTest(.{ .root_module = crypto_backend_smoke_mod });
+    const run_crypto_backend_smoke = b.addRunArtifact(crypto_backend_smoke_tests);
+    const crypto_backend_smoke_step = b.step("test-crypto-backend-smoke", "Smoke test: crypto_backend seam wired + SHA-256 KAT + HMAC-SHA1 KAT");
+    crypto_backend_smoke_step.dependOn(&run_crypto_backend_smoke.step);
+    // Also wire into the main test step so `zig build test` includes it.
+    shardDep(test_step, &run_crypto_backend_smoke.step, 1, test_shard_loads, test_shard_index);
+
+    // -------------------------------------------------------------------------
+    // Task 11: FIPS dual-mode parity/KAT test + fail-closed test
+    // -------------------------------------------------------------------------
+
+    // fips_parity_test: KAT vectors for SHA-256/SHA3-256/HMAC-SHA256/HMAC-SHA1/
+    // AES-256-GCM/HKDF-SHA256/Ed25519/ECDSA-P256; passes under both backends.
+    const fips_parity_mod = b.createModule(.{
+        .root_source_file = b.path("src/fips_parity_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fips_parity_mod.addImport("crypto_backend", crypto_backend_mod);
+    const fips_parity_tests = b.addTest(.{ .root_module = fips_parity_mod });
+    const run_fips_parity = b.addRunArtifact(fips_parity_tests);
+    const fips_parity_step = b.step("test-fips-parity", "Task 11: FIPS parity KAT — SHA-256/SHA3-256/HMAC-SHA256/HMAC-SHA1/AES-GCM/HKDF/Ed25519/ECDSA-P256 (both backends)");
+    fips_parity_step.dependOn(&run_fips_parity.step);
+    shardDep(test_step, &run_fips_parity.step, 1, test_shard_loads, test_shard_index);
+
+    // fips_failclosed_test: asserts error.FipsUnsupported for argon2id/BLAKE2b/
+    // BLAKE3 under -Dfips=true; asserts they work under -Dfips=false.
+    // NOTE: types_hash module (src/types/hash.zig) imports storage/heap.zig
+    // which has complex multi-module deps (GAP-413 BLOCKED).  The guard
+    // patterns are inlined directly in the test file; build_options only.
+    const fips_failclosed_mod = b.createModule(.{
+        .root_source_file = b.path("src/fips_failclosed_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fips_failclosed_mod.addImport("build_options", build_options_mod);
+    const fips_failclosed_tests = b.addTest(.{ .root_module = fips_failclosed_mod });
+    const run_fips_failclosed = b.addRunArtifact(fips_failclosed_tests);
+    const fips_failclosed_step = b.step("test-fips-failclosed", "Task 11: FIPS fail-closed gate — argon2id/BLAKE2b/BLAKE3 return FipsUnsupported under -Dfips=true");
+    fips_failclosed_step.dependOn(&run_fips_failclosed.step);
+    shardDep(test_step, &run_fips_failclosed.step, 1, test_shard_loads, test_shard_index);
+
+    // test-fips-seam: runs both parity + failclosed steps
+    const fips_seam_step = b.step("test-fips-seam", "Task 11: FIPS seam gate — parity KATs + fail-closed assertions (run under both -Dfips=false and -Dfips=true)");
+    fips_seam_step.dependOn(&run_fips_parity.step);
+    fips_seam_step.dependOn(&run_fips_failclosed.step);
 }

@@ -3,6 +3,7 @@
 /// Handles routing for all `geode.auth.*` procedure calls.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+const crypto_backend = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -220,7 +221,7 @@ fn storeMfaCredential(allocator: std.mem.Allocator, username: []const u8, secret
 
     // Remove old entry if present
     if (g_mfa_store.fetchRemove(username)) |old_kv| {
-        std.crypto.secureZero(u8, old_kv.value.secret_base32);
+        crypto_backend.secureZero(old_kv.value.secret_base32);
         allocator.free(old_kv.value.secret_base32);
         for (old_kv.value.recovery_codes) |code| allocator.free(code);
         allocator.free(old_kv.value.recovery_codes);
@@ -485,7 +486,7 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     var actual_password = password;
     if (std.mem.eql(u8, password, "auto_generated_password_placeholder")) {
         var random_bytes: [16]u8 = undefined;
-        compat_fillRandom(&random_bytes);
+        try crypto_backend.Csprng.bytes(&random_bytes);
         generated_pw = std.fmt.bytesToHex(random_bytes, .lower);
         actual_password = &generated_pw;
     }

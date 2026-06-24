@@ -6,7 +6,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    var server = kms.RemoteKmsServer.init(alloc, 0xABCDEF01);
+    var server = try kms.RemoteKmsServer.init(alloc, 0xABCDEF01);
     try server.start(44555);
     try server.server.setAuthToken("secret-token");
 

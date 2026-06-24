@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -89,8 +90,7 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 
     // Generate random key
     var key_data: [tde.KEY_BYTES]u8 = undefined;
-    // Zig 0.16: std.crypto.random removed; use Linux getrandom syscall
-    _ = std.os.linux.getrandom(&key_data, key_data.len, 0);
+    try cb.Csprng.bytes(&key_data);
 
     if (output_path) |path| {
         const io = std.Io.Threaded.global_single_threaded.io();

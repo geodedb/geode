@@ -54,6 +54,7 @@ pub const Xid = struct {
 
     pub fn generate() Xid {
         var xid: Xid = undefined;
+        // fips-exempt: non-security transaction identifier (coordination ID, not key/secret material)
         compat_fillRandom(&xid.bytes);
         return xid;
     }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -21,7 +22,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
 }
-const crypto = std.crypto;
 const builtin = @import("builtin");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -237,14 +237,14 @@ pub const VaultTransitClient = struct {
             .alg = "VAULT-TRANSIT",
         };
 
-        // Store truncated ciphertext hash for identification
+        // Store truncated ciphertext hash for identification (routed through FIPS seam)
         var hash: [32]u8 = undefined;
-        crypto.hash.sha2.Sha256.hash(ciphertext, &hash, .{});
+        _ = try cb.Hash.digest(.sha256, ciphertext, &hash);
         @memcpy(&env.ct, &hash);
 
-        // Store nonce as hash of key_name for consistency checks
+        // Store nonce as hash of key_name for consistency checks (routed through FIPS seam)
         var key_hash: [32]u8 = undefined;
-        crypto.hash.sha2.Sha256.hash(self.config.vault_key_name.?, &key_hash, .{});
+        _ = try cb.Hash.digest(.sha256, self.config.vault_key_name.?, &key_hash);
         @memcpy(&env.nonce, key_hash[0..12]);
 
         // Tag stores first 16 bytes for verification
@@ -306,7 +306,7 @@ pub const VaultTransitClient = struct {
     pub fn generateKey(self: *VaultTransitClient) ![32]u8 {
         // Vault Transit generates keys internally; we generate locally and wrap
         var key: [32]u8 = undefined;
-        crypto.random.bytes(&key);
+        try cb.Csprng.bytes(&key);
         _ = self;
         return key;
     }
@@ -533,14 +533,14 @@ pub const AwsKmsClient = struct {
             .alg = "AWS-KMS",
         };
 
-        // Store hash of ciphertext blob
+        // Store hash of ciphertext blob (routed through FIPS seam)
         var hash: [32]u8 = undefined;
-        crypto.hash.sha2.Sha256.hash(decoded_blob, &hash, .{});
+        _ = try cb.Hash.digest(.sha256, decoded_blob, &hash);
         @memcpy(&env.ct, &hash);
 
-        // Store key ID hash in nonce
+        // Store key ID hash in nonce (routed through FIPS seam)
         var key_hash: [32]u8 = undefined;
-        crypto.hash.sha2.Sha256.hash(self.config.aws_key_id.?, &key_hash, .{});
+        _ = try cb.Hash.digest(.sha256, self.config.aws_key_id.?, &key_hash);
         @memcpy(&env.nonce, key_hash[0..12]);
         @memcpy(&env.tag, hash[0..16]);
 
@@ -776,10 +776,12 @@ pub fn createKmsProvider(allocator: std.mem.Allocator, config: KmsConfig) !KmsPr
     switch (config.backend) {
         .LocalSimulated => {
             const seed = blk: {
-                var h = crypto.hash.sha2.Sha256.init(.{});
-                h.update("local-kms-seed");
+                // Route through FIPS seam (cb.Hash.Stream) for incremental hash
+                var h = try cb.Hash.Stream.init(.sha256);
+                defer h.deinit();
+                try h.update("local-kms-seed");
                 var digest: [32]u8 = undefined;
-                h.final(&digest);
+                _ = try h.final(&digest);
                 break :blk std.mem.readInt(u64, digest[0..8], .little);
             };
             const client_ptr = try allocator.create(Client);
@@ -826,7 +828,7 @@ fn localUnwrap(ctx: *anyopaque, envelope: Envelope) anyerror![32]u8 {
 
 fn localGenKey(_: *anyopaque) anyerror![32]u8 {
     var key: [32]u8 = undefined;
-    crypto.random.bytes(&key);
+    try cb.Csprng.bytes(&key);
     return key;
 }
 
@@ -894,7 +896,7 @@ pub const Client = struct {
         }
 
         var kek: [32]u8 = undefined;
-        compat_fillRandom(&kek);
+        try cb.Csprng.bytes(&kek);
         // GAP-0107 FIX: PRNG field retained for backward compatibility but NOT used for nonces
         return .{ .allocator = allocator, .kek = kek, .prng = std.Random.DefaultPrng.init(0) };
     }
@@ -902,10 +904,11 @@ pub const Client = struct {
     pub fn wrap(self: *Client, data_key: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
         // GAP-0107 SECURITY FIX: Use cryptographic random for nonces, not deterministic PRNG
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
-        crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &data_key, &.{}, nonce, self.kek);
+        // Route through FIPS seam
+        try cb.Aead.seal(.aes_256_gcm, &self.kek, &nonce, &.{}, &data_key, &ct, &tag);
         return .{ .nonce = nonce, .tag = tag, .ct = ct };
     }
 
@@ -913,7 +916,10 @@ pub const Client = struct {
         if (env.version != 1) return error.UnsupportedEnvelopeVersion;
         if (!std.mem.eql(u8, env.alg, "AES-256-GCM")) return error.UnsupportedAlgorithm;
         var out: [32]u8 = undefined;
-        crypto.aead.aes_gcm.Aes256Gcm.decrypt(&out, &env.ct, env.tag, &.{}, env.nonce, self.kek) catch |e| return e;
+        var nonce = env.nonce;
+        var tag = env.tag;
+        // Route through FIPS seam
+        cb.Aead.open(.aes_256_gcm, &self.kek, &nonce, &.{}, &env.ct, &tag, &out) catch |e| return e;
         return out;
     }
 };
