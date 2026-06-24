@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -43,7 +44,6 @@ fn compat_microTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
-const crypto = std.crypto;
 const flags_mod = @import("feature_flags");
 const key_manager = @import("tde_key_manager.zig");
 const nonce_gen = @import("tde_nonce_gen.zig");
@@ -98,7 +98,7 @@ pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(out_buf, &tag, plaintext, aad, nonce, key);
+    try cb.Aead.seal(.aes_256_gcm, &key, &nonce, aad, plaintext, out_buf, &tag);
     return .{ .nonce = nonce, .tag = tag, .data = out_buf };
 }
 
@@ -108,7 +108,9 @@ pub fn decrypt(allocator: std.mem.Allocator, ct: Ciphertext, aad: []const u8) ![
     if (key_opt == null) return error.KeyNotLoaded;
     const key = key_opt.?;
     const out = try allocator.alloc(u8, ct.data.len);
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ct.data, ct.tag, aad, ct.nonce, key) catch |e| {
+    var tag = ct.tag;
+    var nonce = ct.nonce;
+    cb.Aead.open(.aes_256_gcm, &key, &nonce, aad, ct.data, &tag, out) catch |e| {
         allocator.free(out);
         return e;
     };
@@ -342,7 +344,7 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
 
     // Calculate backup hash
     var hash_bytes: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &hash_bytes, .{});
+    _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &hash_bytes);
     const hex_array = std.fmt.bytesToHex(hash_bytes, .lower);
     const hash_str = try allocator.dupe(u8, &hex_array);
 
@@ -485,7 +487,7 @@ pub fn encryptForTenant(allocator: std.mem.Allocator, plaintext: []const u8, aad
 
     const out_buf = try allocator.alloc(u8, plaintext.len);
     var tag: [TagBytes]u8 = undefined;
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(out_buf, &tag, plaintext, aad, nonce, entry.key);
+    try cb.Aead.seal(.aes_256_gcm, &entry.key, &nonce, aad, plaintext, out_buf, &tag);
     return .{ .nonce = nonce, .tag = tag, .data = out_buf };
 }
 
@@ -504,7 +506,9 @@ pub fn decryptForTenant(allocator: std.mem.Allocator, ct: Ciphertext, aad: []con
     const entry = try mgr.getKeyForTenant(tenant_id);
 
     const out = try allocator.alloc(u8, ct.data.len);
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ct.data, ct.tag, aad, ct.nonce, entry.key) catch |e| {
+    var tag2 = ct.tag;
+    var nonce2 = ct.nonce;
+    cb.Aead.open(.aes_256_gcm, &entry.key, &nonce2, aad, ct.data, &tag2, out) catch |e| {
         allocator.free(out);
         return e;
     };
@@ -878,7 +882,7 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
 
     // Generate key ID
     var key_hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&key, &key_hash, .{});
+    _ = try cb.Hash.digest(.sha256, &key, &key_hash);
     const key_id = try std.fmt.allocPrint(allocator, "mek-{x:0>8}", .{std.mem.readInt(u32, key_hash[0..4], .little)});
 
     // Simulate backup data
@@ -892,7 +896,7 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
 
     // Calculate integrity hash
     var integrity: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(encrypted.data, &integrity, .{});
+    _ = try cb.Hash.digest(.sha256, encrypted.data, &integrity);
     const hash_str = try std.fmt.allocPrint(allocator, "sha256:{x}", .{integrity[0..8].*});
 
     return .{
@@ -1044,7 +1048,7 @@ pub fn testKeyZeroization(allocator: std.mem.Allocator) !struct {
 
     // Zeroize keys using crypto-safe wipe (compiler cannot elide)
     for (&keys) |*key| {
-        std.crypto.secureZero(u8, key);
+        cb.secureZero(key);
     }
 
     // Verify zeroization
@@ -1463,7 +1467,7 @@ pub fn cleanupKeyHierarchy(allocator: std.mem.Allocator) !struct {
     // Zeroize all keys in hierarchy using crypto-safe wipe
     var keys: [3][32]u8 = undefined;
     for (&keys) |*key| {
-        std.crypto.secureZero(u8, key);
+        cb.secureZero(key);
     }
 
     // Reset rotation state

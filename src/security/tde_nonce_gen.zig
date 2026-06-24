@@ -5,6 +5,7 @@
 ///
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -73,7 +74,7 @@ pub const NonceGenerator = struct {
             .Deterministic => {
                 // TESTING ONLY: Deterministic nonce generation
                 // This is UNSAFE for production use!
-                std.crypto.secureZero(u8, nonce);
+                cb.secureZero(nonce);
                 std.mem.writeInt(u64, nonce[0..8], self.deterministic_counter, .little);
                 self.deterministic_counter += 1;
             },
@@ -95,7 +96,7 @@ pub fn generateSecureNonce(nonce: *[NonceBytes]u8) void {
 /// be used in production code. Using deterministic nonces with AES-GCM
 /// allows catastrophic IV reuse attacks that completely break encryption.
 pub fn generateDeterministicNonce(nonce: *[NonceBytes]u8, counter: u64) void {
-    std.crypto.secureZero(u8, nonce);
+    cb.secureZero(nonce);
     std.mem.writeInt(u64, nonce[0..8], counter, .little);
 }
 

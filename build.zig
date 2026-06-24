@@ -4469,6 +4469,7 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("transport/quic", transport_quic_mod);
     kms_remote_mod.addImport("logging", logging_mod);
     kms_remote_mod.addImport("json", json_mod);
+    kms_remote_mod.addImport("crypto_backend", crypto_backend_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     remote_kms_tests.root_module.link_libc = true;
     shardDep(test_step, &remote_kms_tests.step, 1, test_shard_loads, test_shard_index);

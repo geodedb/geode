@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -380,16 +381,16 @@ pub const KeyRegistry = struct {
         defer file.close();
         var w = file.writer();
         // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
-        var h = std.crypto.hash.sha2.Sha256.init(.{});
+        var h = try cb.Hash.Stream.init(.sha256);
         for (self.history.items) |entry| {
             if (entry.is_wrapped and entry.envelope_json) |ej| {
-                h.update(ej);
+                try h.update(ej);
             } else {
-                h.update(&entry.material);
+                try h.update(&entry.material);
             }
         }
         var digest: [32]u8 = undefined;
-        h.final(&digest);
+        _ = try h.final(&digest);
         var checksum_buf: [16]u8 = undefined;
         @memcpy(checksum_buf[0..16], digest[0..16]);
         try w.print("{{\n", .{});
@@ -571,12 +572,12 @@ pub const KeyRegistry = struct {
         }
         if (have_checksum) {
             // verify checksum matches current history
-            var h2 = std.crypto.hash.sha2.Sha256.init(.{});
+            var h2 = try cb.Hash.Stream.init(.sha256);
             for (self.history.items) |entry| {
-                if (entry.is_wrapped and entry.envelope_json) |ej| h2.update(ej) else h2.update(&entry.material);
+                if (entry.is_wrapped and entry.envelope_json) |ej| try h2.update(ej) else try h2.update(&entry.material);
             }
             var digest2: [32]u8 = undefined;
-            h2.final(&digest2);
+            _ = try h2.final(&digest2);
             var mismatch = false;
             var k: usize = 0;
             while (k < 16) : (k += 1) if (digest2[k] != parsed_checksum[k]) {
@@ -647,7 +648,7 @@ pub const KeyRegistry = struct {
         const plaintext = self.allocator.alloc(u8, encrypted_data.len) catch return error.OutOfMemory;
         defer self.allocator.free(plaintext);
 
-        aes_gcm.decrypt(plaintext, encrypted_data, tag, "", nonce, previous_key.material) catch {
+        cb.Aead.open(.aes_256_gcm, &previous_key.material, &nonce, "", encrypted_data, &tag, plaintext) catch {
             try self.logAuditEvent(
                 .reencryption_failed,
                 previous_key.id,
@@ -666,7 +667,7 @@ pub const KeyRegistry = struct {
 
         // Re-encrypt with active key
         var new_tag: [aes_gcm.tag_length]u8 = undefined;
-        aes_gcm.encrypt(encrypted_data, &new_tag, plaintext, "", new_nonce, active_key.material);
+        try cb.Aead.seal(.aes_256_gcm, &active_key.material, &new_nonce, "", plaintext, encrypted_data, &new_tag);
 
         // Update ciphertext buffer with new nonce and tag
         @memcpy(ciphertext[0..aes_gcm.nonce_length], &new_nonce);

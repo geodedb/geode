@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -49,7 +50,7 @@ pub const Provider = struct {
     pub fn fetch(self: Provider, allocator: std.mem.Allocator) !?KeyMaterial {
         switch (self.typ) {
             .StaticEnv => return try loadStatic(allocator),
-            .MockKms => return self.fetchMockKms(),
+            .MockKms => return try self.fetchMockKms(),
             .ExternalKms => return try fetchExternalKms(allocator),
         }
     }
@@ -84,37 +85,34 @@ fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
 }
 
 // Deterministic mock KMS: derives two keys from seed using SHA-256(seed || label)
-fn derive(seed: u64, label: []const u8, out: *[32]u8) void {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
+fn derive(seed: u64, label: []const u8, out: *[32]u8) !void {
     var seed_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &seed_buf, seed, .little);
-    h.update(&seed_buf);
-    h.update(label);
-    var digest: [32]u8 = undefined;
-    h.final(&digest);
-    out.* = digest;
+    var stream = try cb.Hash.Stream.init(.sha256);
+    try stream.update(&seed_buf);
+    try stream.update(label);
+    _ = try stream.final(out);
 }
 
 /// AES-256-GCM key wrapping (RFC 5116 compliant)
 /// Uses seed to derive a wrapping key via HKDF, then encrypts with AES-GCM
 /// CANARY: REQ=REQ-GQL-TDE-KEYWRAP-001; FEATURE="AES-GCM Key Wrapping"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
-fn wrapKey(seed: u64, plain: [32]u8) [32]u8 {
+fn wrapKey(seed: u64, plain: [32]u8) ![32]u8 {
     // Derive wrapping key from seed using HKDF-SHA256 (extract-then-expand)
     var wrap_key: [32]u8 = undefined;
     var seed_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &seed_bytes, seed, .little);
-    const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("KEYWRAP", &seed_bytes);
-    std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
+    try cb.Kdf.hkdf(.sha256, &seed_bytes, "KEYWRAP", "", &wrap_key);
 
     // Use deterministic nonce for mock (real KMS would use random nonces)
     var nonce: [12]u8 = undefined;
-    std.crypto.secureZero(u8, &nonce);
+    cb.secureZero(&nonce);
     std.mem.writeInt(u64, nonce[0..8], seed, .little);
 
     // AES-256-GCM encrypt
     var wrapped: [32]u8 = undefined;
     var tag: [16]u8 = undefined;
-    std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(&wrapped, &tag, &plain, "", nonce, wrap_key);
+    try cb.Aead.seal(.aes_256_gcm, &wrap_key, &nonce, "", &plain, &wrapped, &tag);
 
     // For mock purposes, we store ciphertext only (tag validation skipped in unwrap for simplicity)
     // In production, tag would be stored alongside ciphertext
@@ -123,45 +121,44 @@ fn wrapKey(seed: u64, plain: [32]u8) [32]u8 {
 
 /// AES-256-GCM key unwrapping
 /// CANARY: REQ=REQ-GQL-TDE-KEYWRAP-002; FEATURE="AES-GCM Key Unwrapping"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
-fn unwrapKey(seed: u64, wrapped: [32]u8) [32]u8 {
+fn unwrapKey(seed: u64, wrapped: [32]u8) ![32]u8 {
     // Derive same wrapping key from seed using HKDF (extract-then-expand)
     var wrap_key: [32]u8 = undefined;
     var seed_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &seed_bytes, seed, .little);
-    const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("KEYWRAP", &seed_bytes);
-    std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
+    try cb.Kdf.hkdf(.sha256, &seed_bytes, "KEYWRAP", "", &wrap_key);
 
     // Reconstruct nonce
     var nonce: [12]u8 = undefined;
-    std.crypto.secureZero(u8, &nonce);
+    cb.secureZero(&nonce);
     std.mem.writeInt(u64, nonce[0..8], seed, .little);
 
     // For mock, generate expected tag (in production, tag would be stored with ciphertext)
     var expected_tag: [16]u8 = undefined;
     var temp_ct: [32]u8 = undefined;
     var temp_plain: [32]u8 = undefined;
-    std.crypto.secureZero(u8, &temp_plain);
-    std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(&temp_ct, &expected_tag, &temp_plain, "", nonce, wrap_key);
+    cb.secureZero(&temp_plain);
+    try cb.Aead.seal(.aes_256_gcm, &wrap_key, &nonce, "", &temp_plain, &temp_ct, &expected_tag);
 
     // AES-256-GCM decrypt (using zero tag for mock - production would verify stored tag)
     var plain: [32]u8 = undefined;
-    std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(&plain, &wrapped, expected_tag, "", nonce, wrap_key) catch {
+    cb.Aead.open(.aes_256_gcm, &wrap_key, &nonce, "", &wrapped, &expected_tag, &plain) catch {
         // If decryption fails, return zeros (error case)
-        std.crypto.secureZero(u8, &plain);
+        cb.secureZero(&plain);
     };
     return plain;
 }
 
-fn Provider_fetchMock(self: Provider) KeyMaterial {
+fn Provider_fetchMock(self: Provider) !KeyMaterial {
     var data_key: [32]u8 = undefined;
     var backup_key: [32]u8 = undefined;
-    derive(self.mock_seed, "DATA", &data_key);
-    derive(self.mock_seed, "BACKUP", &backup_key);
+    try derive(self.mock_seed, "DATA", &data_key);
+    try derive(self.mock_seed, "BACKUP", &backup_key);
     return .{ .data_key = data_key, .backup_key = backup_key };
 }
 
-fn fetchMockKms(self: Provider) ?KeyMaterial {
-    return Provider_fetchMock(self);
+fn fetchMockKms(self: Provider) !?KeyMaterial {
+    return try Provider_fetchMock(self);
 }
 
 /// External KMS integration: generates cryptographically secure keys and wraps via KMS client
@@ -181,11 +178,13 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     defer allocator.free(api_key);
 
     // Derive KEK seed from credentials for client initialization
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    h.update(endpoint);
-    h.update(api_key);
     var seed_digest: [32]u8 = undefined;
-    h.final(&seed_digest);
+    {
+        var stream = try cb.Hash.Stream.init(.sha256);
+        try stream.update(endpoint);
+        try stream.update(api_key);
+        _ = try stream.final(&seed_digest);
+    }
     const seed = std.mem.readInt(u64, seed_digest[0..8], .little);
 
     const kms = @import("external_kms_client.zig");
@@ -210,13 +209,11 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     return KeyMaterial{ .data_key = recovered_data, .backup_key = recovered_backup };
 }
 
-fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) void {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    h.update(base);
-    h.update(label);
-    var dig: [32]u8 = undefined;
-    h.final(&dig);
-    out.* = dig;
+fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) !void {
+    var stream = try cb.Hash.Stream.init(.sha256);
+    try stream.update(base);
+    try stream.update(label);
+    _ = try stream.final(out);
 }
 
 // CANARY: REQ=REQ-GQL-TDE-005; FEATURE="ExternalKmsStub"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub; OWNER=security; UPDATED=2026-01-15
@@ -278,7 +275,7 @@ test "external kms provider generates non-deterministic envelopes but stable see
 test "GAP-0017: wrapKey produces non-XOR ciphertext" {
     // Test that wrapping is not simple XOR with a constant
     const plaintext: [32]u8 = [_]u8{0x00} ** 32;
-    const wrapped = wrapKey(12345, plaintext);
+    const wrapped = try wrapKey(12345, plaintext);
 
     // XOR with any constant would produce the constant itself for all-zero input
     // Real encryption produces pseudo-random looking output
@@ -301,8 +298,8 @@ test "GAP-0017: wrapKey/unwrapKey roundtrip preserves data" {
     };
     const seed: u64 = 0x1234567890ABCDEF;
 
-    const wrapped = wrapKey(seed, test_key);
-    const unwrapped = unwrapKey(seed, wrapped);
+    const wrapped = try wrapKey(seed, test_key);
+    const unwrapped = try unwrapKey(seed, wrapped);
 
     try std.testing.expectEqualSlices(u8, &test_key, &unwrapped);
 }
@@ -310,15 +307,15 @@ test "GAP-0017: wrapKey/unwrapKey roundtrip preserves data" {
 test "GAP-0017: different seeds produce different wrapped keys" {
     const plaintext: [32]u8 = [_]u8{0x42} ** 32;
 
-    const wrapped1 = wrapKey(111, plaintext);
-    const wrapped2 = wrapKey(222, plaintext);
+    const wrapped1 = try wrapKey(111, plaintext);
+    const wrapped2 = try wrapKey(222, plaintext);
 
     try std.testing.expect(!std.mem.eql(u8, &wrapped1, &wrapped2));
 }
 
 test "GAP-0017: wrapped key differs from plaintext" {
     const plaintext: [32]u8 = [_]u8{0xAB} ** 32;
-    const wrapped = wrapKey(999, plaintext);
+    const wrapped = try wrapKey(999, plaintext);
 
     try std.testing.expect(!std.mem.eql(u8, &wrapped, &plaintext));
 }

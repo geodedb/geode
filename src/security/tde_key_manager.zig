@@ -6,6 +6,7 @@
 ///
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -186,29 +187,26 @@ pub fn loadKey(allocator: std.mem.Allocator, enabled: bool) !KeyStatus {
     // Derive key_id using HKDF-SHA256 with info="geode-tde-key-id"
     // This ensures: (1) no key material in ID, (2) collision-resistant, (3) deterministic
     var ks = KeyStatus{ .loaded = true };
-    deriveKeyId(&raw_key, &ks.key_id);
+    try deriveKeyId(&raw_key, &ks.key_id);
 
     return ks;
 }
 
 /// Derive key ID using HKDF-Extract + HKDF-Expand with SHA-256
 /// GAP-0085: Secure key identifier derivation without exposing key material
-fn deriveKeyId(key: *const [KeyBytes]u8, out: *[32]u8) void {
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-    const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
-
+fn deriveKeyId(key: *const [KeyBytes]u8, out: *[32]u8) !void {
     // HKDF-Extract: PRK = HMAC(salt, IKM)
     // Use fixed salt for consistent key IDs
     const salt = "geode-tde-key-id-salt-v1";
     var prk: [32]u8 = undefined;
-    Hmac.create(&prk, key, salt);
+    _ = try cb.Mac.hmac(.sha256, salt, key, &prk);
 
     // HKDF-Expand: OKM = HMAC(PRK, info || 0x01)
     const info = "geode-tde-key-id-info-v1";
     var expand_input: [info.len + 1]u8 = undefined;
     @memcpy(expand_input[0..info.len], info);
     expand_input[info.len] = 0x01;
-    Hmac.create(out, &expand_input, &prk);
+    _ = try cb.Mac.hmac(.sha256, &prk, expand_input[0 .. info.len + 1], out);
 }
 
 /// Derive key from hex string
@@ -247,31 +245,31 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
 
     // Create data keys using inline derivation
     for (0..data_key_count) |i| {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&master_key);
-        hasher.update("data_key");
         var i_bytes: [8]u8 = undefined;
         std.mem.writeInt(u64, &i_bytes, i, .little);
-        hasher.update(&i_bytes);
+        var stream = try cb.Hash.Stream.init(.sha256);
+        try stream.update(&master_key);
+        try stream.update("data_key");
+        try stream.update(&i_bytes);
         var data_key: [32]u8 = undefined;
-        hasher.final(&data_key);
+        _ = try stream.final(&data_key);
     }
 
     // Create backup keys using inline derivation
     for (0..backup_key_count) |i| {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&master_key);
-        hasher.update("backup_key");
         var i_bytes: [8]u8 = undefined;
         std.mem.writeInt(u64, &i_bytes, i, .little);
-        hasher.update(&i_bytes);
+        var stream = try cb.Hash.Stream.init(.sha256);
+        try stream.update(&master_key);
+        try stream.update("backup_key");
+        try stream.update(&i_bytes);
         var backup_key: [32]u8 = undefined;
-        hasher.final(&backup_key);
+        _ = try stream.final(&backup_key);
     }
 
     // Generate master key ID (hash of master key)
     var hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&master_key, &hash, .{});
+    _ = try cb.Hash.digest(.sha256, &master_key, &hash);
     const key_id = try allocator.alloc(u8, 64);
     // Format hash as hex string manually
     for (hash, 0..) |byte, i| {
@@ -298,7 +296,7 @@ pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
 
     // Calculate key IDs
     var old_hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&old_key, &old_hash, .{});
+    _ = try cb.Hash.digest(.sha256, &old_key, &old_hash);
     const old_key_id = try allocator.alloc(u8, 64);
     // Format hash as hex string manually
     for (old_hash, 0..) |byte, i| {
@@ -306,7 +304,7 @@ pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
     }
 
     var new_hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&new_master_key, &new_hash, .{});
+    _ = try cb.Hash.digest(.sha256, &new_master_key, &new_hash);
     const new_key_id = try allocator.alloc(u8, 64);
     // Format hash as hex string manually
     for (new_hash, 0..) |byte, i| {
@@ -424,11 +422,11 @@ pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !Configu
         // Encrypt test data
         var encrypted: [test_data.len]u8 = undefined;
         var tag: [16]u8 = undefined;
-        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(&encrypted, &tag, test_data, &.{}, nonce, key);
+        try cb.Aead.seal(.aes_256_gcm, &key, &nonce, &.{}, test_data, &encrypted, &tag);
 
         // Decrypt test data
         var decrypted: [test_data.len]u8 = undefined;
-        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(&decrypted, &encrypted, tag, &.{}, nonce, key) catch {
+        cb.Aead.open(.aes_256_gcm, &key, &nonce, &.{}, &encrypted, &tag, &decrypted) catch {
             break :blk try allocator.dupe(u8, "FAILED: Decryption failed");
         };
 
@@ -559,15 +557,17 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyRe
     const info_bytes = std.mem.asBytes(&key_id);
 
     // Simple KDF: Hash(salt || ikm || info)
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(salt);
-    hasher.update(&ikm);
-    hasher.update(info_bytes);
-    hasher.final(&derived_key);
+    {
+        var stream = try cb.Hash.Stream.init(.sha256);
+        try stream.update(salt);
+        try stream.update(&ikm);
+        try stream.update(info_bytes);
+        _ = try stream.final(&derived_key);
+    }
 
     // Calculate key hash for identification
     var key_hash_bytes: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&derived_key, &key_hash_bytes, .{});
+    _ = try cb.Hash.digest(.sha256, &derived_key, &key_hash_bytes);
     const key_hash = try std.fmt.allocPrint(allocator, "{x}", .{key_hash_bytes});
 
     return .{
@@ -587,14 +587,16 @@ pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKey
     const salt = "geode-backup-key";
     const info_bytes = std.mem.asBytes(&key_id);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(salt);
-    hasher.update(&ikm);
-    hasher.update(info_bytes);
-    hasher.final(&derived_key);
+    {
+        var stream = try cb.Hash.Stream.init(.sha256);
+        try stream.update(salt);
+        try stream.update(&ikm);
+        try stream.update(info_bytes);
+        _ = try stream.final(&derived_key);
+    }
 
     var key_hash_bytes: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&derived_key, &key_hash_bytes, .{});
+    _ = try cb.Hash.digest(.sha256, &derived_key, &key_hash_bytes);
     const key_hash = try std.fmt.allocPrint(allocator, "{x}", .{key_hash_bytes});
 
     return .{
@@ -643,10 +645,7 @@ const tenant_tde_salt = "geode-tde-tenant-salt-v1";
 ///
 /// For key rotation, pass a version > 1 which appends ":v{version}" to the
 /// HKDF info string, producing a distinct key per version.
-pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8, version: u16) [KeyBytes]u8 {
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-    const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
-
+pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8, version: u16) ![KeyBytes]u8 {
     // Build info string: "geode/tde/tenant/{tenant_id}" or "geode/tde/tenant/{tenant_id}:v{version}"
     // error-policy: D — the inner `catch unreachable` covers the fixed-literal
     // fallback, which always fits info_buf. KNOWN RESIDUAL (documented in
@@ -665,7 +664,7 @@ pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8
 
     // HKDF-Extract: PRK = HMAC-SHA256(salt, IKM)
     var prk: [32]u8 = undefined;
-    Hmac.create(&prk, master_key, tenant_tde_salt);
+    _ = try cb.Mac.hmac(.sha256, tenant_tde_salt, master_key, &prk);
 
     // HKDF-Expand: OKM = HMAC(PRK, info || 0x01)
     // Only need 32 bytes (one block), so single expand iteration suffices
@@ -674,10 +673,10 @@ pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8
     expand_input[info.len] = 0x01;
 
     var derived: [KeyBytes]u8 = undefined;
-    Hmac.create(&derived, expand_input[0 .. info.len + 1], &prk);
+    _ = try cb.Mac.hmac(.sha256, &prk, expand_input[0 .. info.len + 1], &derived);
 
     // Zeroize PRK
-    std.crypto.secureZero(u8, &prk);
+    cb.secureZero(&prk);
 
     return derived;
 }
@@ -715,13 +714,13 @@ pub const TenantKeyManager = struct {
         // Zeroize all cached keys before freeing
         var it = self.tenant_keys.iterator();
         while (it.next()) |entry| {
-            std.crypto.secureZero(u8, &entry.value_ptr.key);
+            cb.secureZero(&entry.value_ptr.key);
             self.allocator.free(entry.key_ptr.*);
         }
         self.tenant_keys.deinit();
 
         // Zeroize master key
-        std.crypto.secureZero(u8, &self.master_key);
+        cb.secureZero(&self.master_key);
     }
 
     /// Get the TDE encryption key for a tenant. Derives and caches on first access.
@@ -735,7 +734,7 @@ pub const TenantKeyManager = struct {
 
         // Derive key and cache it
         const version: u16 = 1;
-        const derived = deriveTenantTdeKey(&self.master_key, tenant_id, version);
+        const derived = try deriveTenantTdeKey(&self.master_key, tenant_id, version);
 
         // Store owned copy of tenant_id
         const owned_id = try self.allocator.dupe(u8, tenant_id);
@@ -759,11 +758,11 @@ pub const TenantKeyManager = struct {
             1;
 
         const new_version = current_version + 1;
-        const derived = deriveTenantTdeKey(&self.master_key, tenant_id, new_version);
+        const derived = try deriveTenantTdeKey(&self.master_key, tenant_id, new_version);
 
         // Check if key exists -- if so, update in-place
         if (self.tenant_keys.getPtr(tenant_id)) |entry_ptr| {
-            std.crypto.secureZero(u8, &entry_ptr.key);
+            cb.secureZero(&entry_ptr.key);
             entry_ptr.key = derived;
             entry_ptr.version = new_version;
         } else {
@@ -919,8 +918,8 @@ test "cleanupKeyHierarchy - resets state" {
 test "deriveTenantTdeKey - different tenants produce different keys" {
     const master_key: [KeyBytes]u8 = [_]u8{0x42} ** KeyBytes;
 
-    const key_a = deriveTenantTdeKey(&master_key, "tenant-alpha", 1);
-    const key_b = deriveTenantTdeKey(&master_key, "tenant-beta", 1);
+    const key_a = try deriveTenantTdeKey(&master_key, "tenant-alpha", 1);
+    const key_b = try deriveTenantTdeKey(&master_key, "tenant-beta", 1);
 
     // Keys must differ for different tenant IDs
     try std.testing.expect(!std.mem.eql(u8, &key_a, &key_b));
@@ -929,8 +928,8 @@ test "deriveTenantTdeKey - different tenants produce different keys" {
 test "deriveTenantTdeKey - same tenant produces same key (deterministic)" {
     const master_key: [KeyBytes]u8 = [_]u8{0xAB} ** KeyBytes;
 
-    const key1 = deriveTenantTdeKey(&master_key, "tenant-123", 1);
-    const key2 = deriveTenantTdeKey(&master_key, "tenant-123", 1);
+    const key1 = try deriveTenantTdeKey(&master_key, "tenant-123", 1);
+    const key2 = try deriveTenantTdeKey(&master_key, "tenant-123", 1);
 
     try std.testing.expectEqualSlices(u8, &key1, &key2);
 }
@@ -938,8 +937,8 @@ test "deriveTenantTdeKey - same tenant produces same key (deterministic)" {
 test "deriveTenantTdeKey - different versions produce different keys" {
     const master_key: [KeyBytes]u8 = [_]u8{0xCD} ** KeyBytes;
 
-    const key_v1 = deriveTenantTdeKey(&master_key, "tenant-xyz", 1);
-    const key_v2 = deriveTenantTdeKey(&master_key, "tenant-xyz", 2);
+    const key_v1 = try deriveTenantTdeKey(&master_key, "tenant-xyz", 1);
+    const key_v2 = try deriveTenantTdeKey(&master_key, "tenant-xyz", 2);
 
     try std.testing.expect(!std.mem.eql(u8, &key_v1, &key_v2));
 }
@@ -948,8 +947,8 @@ test "deriveTenantTdeKey - different master keys produce different tenant keys" 
     const master_a: [KeyBytes]u8 = [_]u8{0x11} ** KeyBytes;
     const master_b: [KeyBytes]u8 = [_]u8{0x22} ** KeyBytes;
 
-    const key_a = deriveTenantTdeKey(&master_a, "same-tenant", 1);
-    const key_b = deriveTenantTdeKey(&master_b, "same-tenant", 1);
+    const key_a = try deriveTenantTdeKey(&master_a, "same-tenant", 1);
+    const key_b = try deriveTenantTdeKey(&master_b, "same-tenant", 1);
 
     try std.testing.expect(!std.mem.eql(u8, &key_a, &key_b));
 }
@@ -1014,11 +1013,10 @@ test "TenantKeyManager - getTenantKeyVersion" {
 }
 
 test "per-tenant key isolates encryption - tenant A cannot decrypt tenant B data" {
-    const crypto = std.crypto;
     const master_key: [KeyBytes]u8 = [_]u8{0x99} ** KeyBytes;
 
-    const key_a = deriveTenantTdeKey(&master_key, "tenant-a", 1);
-    const key_b = deriveTenantTdeKey(&master_key, "tenant-b", 1);
+    const key_a = try deriveTenantTdeKey(&master_key, "tenant-a", 1);
+    const key_b = try deriveTenantTdeKey(&master_key, "tenant-b", 1);
 
     // Encrypt with tenant A's key
     const plaintext = "secret data for tenant A";
@@ -1026,16 +1024,16 @@ test "per-tenant key isolates encryption - tenant A cannot decrypt tenant B data
     compat_fillRandom(&nonce);
     var ciphertext: [plaintext.len]u8 = undefined;
     var tag: [16]u8 = undefined;
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ciphertext, &tag, plaintext, &.{}, nonce, key_a);
+    try cb.Aead.seal(.aes_256_gcm, &key_a, &nonce, &.{}, plaintext, &ciphertext, &tag);
 
     // Decrypt with tenant A's key should succeed
     var decrypted_a: [plaintext.len]u8 = undefined;
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(&decrypted_a, &ciphertext, tag, &.{}, nonce, key_a) catch
+    cb.Aead.open(.aes_256_gcm, &key_a, &nonce, &.{}, &ciphertext, &tag, &decrypted_a) catch
         return error.UnexpectedDecryptionFailure;
     try std.testing.expectEqualStrings(plaintext, &decrypted_a);
 
     // Decrypt with tenant B's key must fail
     var decrypted_b: [plaintext.len]u8 = undefined;
-    const result = crypto.aead.aes_gcm.Aes256Gcm.decrypt(&decrypted_b, &ciphertext, tag, &.{}, nonce, key_b);
-    try std.testing.expectError(error.AuthenticationFailed, result);
+    const result = cb.Aead.open(.aes_256_gcm, &key_b, &nonce, &.{}, &ciphertext, &tag, &decrypted_b);
+    try std.testing.expectError(error.AuthFailed, result);
 }

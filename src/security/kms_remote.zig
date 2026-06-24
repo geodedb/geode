@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -9,7 +10,6 @@ fn compat_fillRandom(buf: []u8) void {
     }
 }
 const quic = @import("transport/quic");
-const crypto = std.crypto;
 
 // CANARY: REQ=REQ-M6-UNREACHABLE-001; FEATURE="CodeQuality"; ASPECT=ErrorHandling; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // M6: Replaced all 'unreachable' statements with proper error handling (try/panic)
@@ -125,10 +125,12 @@ pub const Server = struct {
     pub fn setAuthToken(self: *Server, tok: []const u8) !void {
         self.auth_token = tok;
         // derive attestation hash (sha256 over token + kek prefix)
-        var h = std.crypto.hash.sha2.Sha256.init(.{});
-        h.update(tok);
-        h.update(self.kek[0..16]);
-        h.final(&self.attestation_hash);
+        {
+            var stream = try cb.Hash.Stream.init(.sha256);
+            try stream.update(tok);
+            try stream.update(self.kek[0..16]);
+            _ = try stream.final(&self.attestation_hash);
+        }
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
         compat_fillRandom(&seed);
@@ -137,19 +139,21 @@ pub const Server = struct {
     }
 
     /// GAP-0142: Wrap key material using cryptographically secure nonces
-    pub fn wrap(self: *Server, plaintext: [32]u8) Envelope {
+    pub fn wrap(self: *Server, plaintext: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
         // Use cryptographic random for nonce generation - CRITICAL for AES-GCM security
         compat_fillRandom(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
-        crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &plaintext, &.{}, nonce, self.kek);
+        try cb.Aead.seal(.aes_256_gcm, &self.kek, &nonce, &.{}, &plaintext, &ct, &tag);
         return .{ .nonce = nonce, .tag = tag, .ct = ct };
     }
 
     pub fn unwrap(self: *Server, env: Envelope) ![32]u8 {
         var out: [32]u8 = undefined;
-        crypto.aead.aes_gcm.Aes256Gcm.decrypt(&out, &env.ct, env.tag, &.{}, env.nonce, self.kek) catch return error.AuthenticationFailed;
+        var tag = env.tag;
+        var nonce = env.nonce;
+        cb.Aead.open(.aes_256_gcm, &self.kek, &nonce, &.{}, &env.ct, &tag, &out) catch return error.AuthenticationFailed;
         return out;
     }
 };
@@ -304,7 +308,7 @@ pub const RemoteKmsServer = struct {
         var plaintext: [32]u8 = undefined;
         compat_fillRandom(&plaintext);
 
-        const envelope = self.server.wrap(plaintext);
+        const envelope = try self.server.wrap(plaintext);
 
         // Build response
         var fbs_writer: std.Io.Writer = .fixed(response_buf);
@@ -589,7 +593,7 @@ pub const RemoteKmsClient = struct {
         // If not connected, fall back to local attestation hash
         if (!self.connected) {
             var hash: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash("GEODE-KMS-ATTEST", &hash, .{});
+            _ = try cb.Hash.digest(.sha256, "GEODE-KMS-ATTEST", &hash);
             return hash;
         }
 
