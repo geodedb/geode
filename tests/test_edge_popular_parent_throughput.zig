@@ -118,7 +118,10 @@ fn countEdgesTo(env: *Env, src: u64, dst: u64, rel: []const u8) usize {
     const outgoing = env.store.getOutgoingEdgeIds(src) orelse return 0;
     var n: usize = 0;
     for (outgoing) |eid| {
-        const e = env.store.getEdgePtrHydrated(eid) orelse continue;
+        // Concurrency-safe by-value read: getEdgeHydrated snapshots the edge
+        // body under the cache's per-shard map lock, so a concurrent writer's
+        // edge-cache insert-resize cannot tear/move it mid-read.
+        const e = env.store.getEdgeHydrated(eid) orelse continue;
         if (e.to_id != dst) continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;
@@ -131,7 +134,7 @@ fn outDegree(env: *Env, src: u64, rel: []const u8) usize {
     const outgoing = env.store.getOutgoingEdgeIds(src) orelse return 0;
     var n: usize = 0;
     for (outgoing) |eid| {
-        const e = env.store.getEdgePtrHydrated(eid) orelse continue;
+        const e = env.store.getEdgeHydrated(eid) orelse continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;
         n += 1;

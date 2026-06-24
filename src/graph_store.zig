@@ -2344,9 +2344,15 @@ pub const GraphStore = struct {
 
     /// By-value variant of `getEdgePtrHydrated`. Returns a COPY of the edge body
     /// (its byte slices still point into the cache-owned heap, valid for the
-    /// caller's read span under the shared lock).
+    /// caller's read span — that heap is grace-freed). CONCURRENCY-SAFE: the copy
+    /// is taken under the cache's per-shard map lock SHARED, so it cannot observe
+    /// a torn/moved value during a concurrent writer's insert-resize on the
+    /// edge's shard (the edge-body torn-read race). Prefer THIS over
+    /// `getEdgePtrHydrated` on any read path that runs concurrently with the
+    /// shard-locked edge-create writers (e.g. analytical traverse during ingest).
     pub fn getEdgeHydrated(self: *const GraphStore, edge_id: u64) ?Edge {
-        if (self.getEdgePtrHydrated(edge_id)) |p| return p.* else return null;
+        const cache: *EdgeCache = @constCast(&self.edges);
+        return cache.getOrHydrate(edge_id) catch return null;
     }
 
     /// Predicate: does this retired/evicted edge belong to `graph_name`? An Edge
@@ -6125,16 +6131,119 @@ pub const GraphStore = struct {
                 // FIFO/accounting stays consistent if the cap is ever raised.
                 try cache.noteInserted(node);
             }
-            try r.value_ptr.list.append(self.allocator, edge_id);
+            try self.appendAdjId(cache, node, r.value_ptr, edge_id, graph_name);
             return;
         }
         // Bounded + engine-backed: only touch a resident entry; otherwise the
         // engine already holds the edge and the next read rehydrates the full
         // list. (A resident entry is the complete current list, so appending is
         // correct and keeps insertion order identical to the pre-cache mirror.)
-        if (cache.getPtr(node)) |entry| {
-            try entry.list.append(self.allocator, edge_id);
+        //
+        // Hold the per-shard map lock EXCLUSIVE across the lookup + in-place
+        // mutation: it excludes a concurrent SHARED reader's lookup AND a
+        // concurrent resize that could MOVE the resident entry out from under
+        // `entry`. The in-place id append itself is then published with the
+        // borrowed-slice-safe ordering in appendAdjId.
+        cache.lockShardExclusive(node);
+        defer cache.unlockShardExclusive(node);
+        if (cache.getPtrUnlocked(node)) |entry| {
+            try self.appendAdjId(cache, node, entry, edge_id, graph_name);
         }
+    }
+
+    // PHASE 4 (edge-engine-direct): borrowed-slice-SAFE adjacency append.
+    //
+    // SEGV ROOT CAUSE (use-after-free): readers traverse adjacency holding only
+    // the per-graph SHARED lock and borrow Phase-0's `[]const u64` slice
+    // (`AdjList.list.items`). The batched MERGE append runs under the SOURCE
+    // shard's EXCLUSIVE lock — a DIFFERENT lock — so it does NOT exclude readers.
+    // `std.ArrayList.append` grows the backing array IN PLACE: on a capacity grow
+    // it frees the OLD buffer immediately, dangling every concurrent reader's
+    // borrowed slice → UAF (confirmed: all reader threads SIGSEGV in `outDegree`
+    // iterating the freed slice).
+    //
+    // FIX (publish-via-immutable-swap, reusing the existing grace discipline):
+    // when the append fits the CURRENT capacity we write past the end and only
+    // THEN publish the new length (`items.len += 1`) — a reader either sees the
+    // old length (skips the new slot) or the new length (the slot is already
+    // fully written), never a torn element, and never touches a reallocated
+    // buffer. When the append would REALLOC (len == capacity), we allocate a
+    // FRESH grown buffer, copy + append into it, swap it into the entry, and
+    // RETIRE the old buffer onto the cache's grace list (freed only at the
+    // per-graph EXCLUSIVE checkpoint window, which has drained all SHARED readers)
+    // instead of freeing it inline. Identical to how eviction already protects
+    // borrowed slices. Append stays amortized O(1) (geometric growth) and the
+    // hot single-source batch is unaffected (it holds the source shard lock for
+    // the whole run, so capacity grows a handful of times across 20k appends).
+    //
+    // The appender holds the SOURCE shard EXCLUSIVE lock, so two appenders to the
+    // same source list are serialized (no writer/writer race); the only concurrent
+    // peer is a SHARED reader, which this swap-and-retire makes safe.
+    fn appendAdjId(
+        self: *GraphStore,
+        cache: *AdjCache,
+        node: u64,
+        entry: *AdjList,
+        edge_id: u64,
+        graph_name: []const u8,
+    ) !void {
+        const list = &entry.list;
+        if (list.items.len < list.capacity) {
+            // Fits: write into the spare slot, THEN publish the length. A reader
+            // racing on `items.len` sees either the old or the new count; the new
+            // slot is fully written before it becomes visible. No realloc, so no
+            // reader's borrowed slice is invalidated.
+            const new_len = list.items.len + 1;
+            list.allocatedSlice()[list.items.len] = edge_id;
+            // Release store on the published length: the slot write above
+            // happens-before any reader that observes the new length (a reader
+            // iterates [0..len), so a len it sees must imply the element it then
+            // reads is committed). Pairs with the reader's data-dependent slice
+            // read; prevents the compiler/CPU from publishing the length ahead of
+            // the element write.
+            @atomicStore(usize, &list.items.len, new_len, .release);
+            return;
+        }
+        // Would realloc. Build a fresh grown buffer (do NOT free the old one
+        // inline — a SHARED reader may hold a slice into it). Geometric growth
+        // keeps appends amortized O(1).
+        const old_cap = list.capacity;
+        const new_cap = if (old_cap == 0) 4 else old_cap * 2;
+        var grown = try std.ArrayList(u64).initCapacity(self.allocator, new_cap);
+        grown.appendSliceAssumeCapacity(list.items);
+        grown.appendAssumeCapacity(edge_id);
+
+        // Swap the new buffer in, then retire the OLD one to the grace list. The
+        // old AdjList carries the SAME owning graph so the per-graph reclaim
+        // predicate frees it in that graph's checkpoint window. If retiring OOMs
+        // we keep the OLD buffer (cannot inline-free it) and roll back the new
+        // one — correctness preserved, this append is simply dropped from the
+        // resident mirror (the engine still holds the edge; the next read
+        // rehydrates the complete list).
+        const retired_old = AdjList{ .list = list.*, .graph = try self.allocator.dupe(u8, graph_name) };
+        cache.retireValue(node, retired_old) catch |err| {
+            self.allocator.free(retired_old.graph);
+            grown.deinit(self.allocator);
+            return err;
+        };
+
+        // Publish the grown buffer WITHOUT exposing a torn (ptr,len) header. A
+        // concurrent SHARED reader reads `list.items` (ptr THEN len) as two
+        // words; we order the writer so no reader can observe the OLD pointer
+        // paired with the NEW length (which would read one-past the old buffer):
+        //   1) store the new PTR + capacity while len is still the OLD len. A
+        //      reader sees (new_ptr, old_len) — valid: the first old_len slots of
+        //      the grown buffer are a copy of the old list.
+        //   2) THEN release-store the new len. A reader now sees (new_ptr,
+        //      new_len) — valid. The only old-ptr combo a reader can see is
+        //      (old_ptr, old_len) (len is never raised before the ptr store), and
+        //      the old buffer is still alive on the grace list.
+        // entry.graph is untouched (still owned, now paired with the grown buffer).
+        const old_len = list.items.len;
+        list.items.ptr = grown.items.ptr;
+        list.capacity = grown.capacity;
+        std.debug.assert(list.items.len == old_len); // len unchanged until the release store
+        @atomicStore(usize, &list.items.len, grown.items.len, .release);
     }
 
     // Issue #392: Helper to maintain adjacency indexes (dual-write mirror).

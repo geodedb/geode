@@ -102,7 +102,32 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             /// reclaim). Leaf lock: held only across getOrPut+insert, never
             /// across the engine read or another cache call.
             hydrate_mutex: std.Io.Mutex = std.Io.Mutex.init,
+            /// PHASE 4 (edge-engine-direct): per-shard structural RwLock guarding
+            /// the backing AutoHashMap partition against the resize/move race.
+            ///
+            /// THE RACE this closes (root-caused via the torn-read test): the
+            /// bounded EDGE-BODY cache is written (`put`) under the writer's
+            /// SOURCE/TARGET node shard locks — but an edge's public id is a
+            /// UUIDv7 (`generateTimeBasedId`), so `shardIndex(edge_id)` is
+            /// UNRELATED to those node shards. The `put` therefore mutates (and
+            /// on growth RESIZES) the edge cache's AutoHashMap partition with NO
+            /// lock excluding a concurrent SHARED reader's `getPtr` lookup —
+            /// AutoHashMap lookup racing an insert-resize is UB (returns null for
+            /// a present key → the traverse undercounts → the torn-read
+            /// monotonicity assertion fails; at worst a dangling probe). The
+            /// caller's node-shard lock cannot serialise this because it is the
+            /// WRONG shard. This RwLock makes every map op on a shard atomic
+            /// w.r.t. that shard's resize, regardless of which external lock the
+            /// caller holds: point reads take it SHARED, structural writes
+            /// (getOrPut/insert/evict/remove) take it EXCLUSIVE. It is a LEAF lock
+            /// (held only across the AutoHashMap call), so it adds no ordering
+            /// constraint against the graph rwlock or the engine shard locks.
+            map_lock: std.Io.RwLock = std.Io.RwLock.init,
         };
+
+        inline fn io() std.Io {
+            return std.Io.Threaded.global_single_threaded.io();
+        }
 
         allocator: std.mem.Allocator,
         store: Store,
@@ -196,14 +221,26 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         // ---- Read API (pure cache; no hydration) ----------------------------
 
         pub fn get(self: *const Self, key: K) ?V {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            const sh: *Shard = @constCast(&self.shards[idx]);
+            sh.map_lock.lockSharedUncancelable(io());
+            defer sh.map_lock.unlockShared(io());
             return self.store.get(key);
         }
 
         pub fn getPtr(self: *const Self, key: K) ?*V {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            const sh: *Shard = @constCast(&self.shards[idx]);
+            sh.map_lock.lockSharedUncancelable(io());
+            defer sh.map_lock.unlockShared(io());
             return self.store.getPtr(key);
         }
 
         pub fn contains(self: *const Self, key: K) bool {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            const sh: *Shard = @constCast(&self.shards[idx]);
+            sh.map_lock.lockSharedUncancelable(io());
+            defer sh.map_lock.unlockShared(io());
             return self.store.contains(key);
         }
 
@@ -220,23 +257,32 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// guarantee; pure shared readers use `getPtr` and tolerate a null on a
         /// not-yet-hydrated id (then retry under the write path).
         pub fn getOrHydratePtr(self: *Self, key: K) !?*V {
-            // Fast path: resident hit (lock-free, like a bare ShardedStore get).
-            if (self.store.getPtr(key)) |p| return p;
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            // Fast path: resident hit. Take the per-shard map lock SHARED so the
+            // AutoHashMap lookup cannot race a concurrent insert-resize on this
+            // shard (the edge-body torn-read race).
+            {
+                self.shards[idx].map_lock.lockSharedUncancelable(io());
+                defer self.shards[idx].map_lock.unlockShared(io());
+                if (self.store.getPtr(key)) |p| return p;
+            }
             const hydrate = self.hydrate_fn orelse return null;
             const ctx = self.hydrate_ctx orelse return null;
 
-            // Build the node from the engine OUTSIDE the shard lock (slow I/O,
-            // and the callback must not re-enter this cache).
+            // Build the node from the engine OUTSIDE every lock (slow I/O, and
+            // the callback must not re-enter this cache).
             var value = (try hydrate(ctx, self.allocator, key)) orelse return null;
 
             // Insert under the shard's hydrate mutex so concurrent hydrations of
-            // the same shard cannot race on the backing AutoHashMap. Re-check
-            // residence under the lock (another thread may have hydrated the same
-            // key meanwhile) and, if so, drop our duplicate build.
-            const idx = sharded_store.shardIndex(@as(u64, key));
-            const io = std.Io.Threaded.global_single_threaded.io();
-            self.shards[idx].hydrate_mutex.lockUncancelable(io);
-            defer self.shards[idx].hydrate_mutex.unlock(io);
+            // the same shard cannot race on building, then under the map_lock
+            // EXCLUSIVE so the insert (and any resize) excludes concurrent SHARED
+            // readers of this shard. Re-check residence under the locks (another
+            // thread may have hydrated the same key meanwhile) and, if so, drop
+            // our duplicate build.
+            self.shards[idx].hydrate_mutex.lockUncancelable(io());
+            defer self.shards[idx].hydrate_mutex.unlock(io());
+            self.shards[idx].map_lock.lockUncancelable(io());
+            defer self.shards[idx].map_lock.unlock(io());
             if (self.store.getPtr(key)) |p| {
                 self.free_fn(self.allocator, &value);
                 return p;
@@ -246,9 +292,36 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             return self.store.getPtr(key);
         }
 
-        /// By-value variant of `getOrHydratePtr`.
+        /// By-value variant of `getOrHydratePtr`. CONCURRENCY-SAFE for readers
+        /// that race a writer's insert/resize on this shard: the resident-hit COPY
+        /// is taken while the per-shard map lock is held SHARED, so the value is
+        /// snapshotted atomically w.r.t. a concurrent resize that would MOVE the
+        /// in-map value storage. (The returned V's sub-slices, if any, point into
+        /// cache-owned heap freed only at the grace window, so they stay valid for
+        /// the caller's read span.) Use this — not `getOrHydratePtr` — on any read
+        /// path that runs concurrently with shard-locked writers.
         pub fn getOrHydrate(self: *Self, key: K) !?V {
-            if (try self.getOrHydratePtr(key)) |p| return p.* else return null;
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            {
+                self.shards[idx].map_lock.lockSharedUncancelable(io());
+                defer self.shards[idx].map_lock.unlockShared(io());
+                if (self.store.getPtr(key)) |p| return p.*; // copy under SHARED
+            }
+            const hydrate = self.hydrate_fn orelse return null;
+            const ctx = self.hydrate_ctx orelse return null;
+            var value = (try hydrate(ctx, self.allocator, key)) orelse return null;
+
+            self.shards[idx].hydrate_mutex.lockUncancelable(io());
+            defer self.shards[idx].hydrate_mutex.unlock(io());
+            self.shards[idx].map_lock.lockUncancelable(io());
+            defer self.shards[idx].map_lock.unlock(io());
+            if (self.store.getPtr(key)) |p| {
+                self.free_fn(self.allocator, &value);
+                return p.*;
+            }
+            self.hydrations_total += 1;
+            try self.insertEvicting(key, value);
+            return self.store.getPtr(key).?.*;
         }
 
         // ---- Write API ------------------------------------------------------
@@ -258,6 +331,9 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// to make room. An overwrite of an existing key frees the OLD value via
         /// the retire list (its heap may still be referenced by a reader).
         pub fn put(self: *Self, key: K, value: V) !void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.lockUncancelable(io());
+            defer self.shards[idx].map_lock.unlock(io());
             try self.insertEvicting(key, value);
         }
 
@@ -282,8 +358,10 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// `reclaimRetired`), never freed inline, to protect outstanding
         /// pointers.
         pub fn remove(self: *Self, key: K) void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.lockUncancelable(io());
+            defer self.shards[idx].map_lock.unlock(io());
             if (self.store.fetchRemove(key)) |kv| {
-                const idx = sharded_store.shardIndex(@as(u64, key));
                 self.shards[idx].retired.append(self.allocator, kv.value) catch {
                     // OOM on the retire list: fall back to inline free. This is
                     // only reached under memory pressure; the caller holds the
@@ -299,6 +377,9 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// the removed value (e.g. to free sub-objects themselves). The caller
         /// then owns the value and must free it; it is NOT retired here.
         pub fn fetchRemove(self: *Self, key: K) ?KV {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.lockUncancelable(io());
+            defer self.shards[idx].map_lock.unlock(io());
             return self.store.fetchRemove(key);
         }
 
@@ -310,6 +391,9 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// if an entry was present. A stale FIFO entry, if any, is skipped at
         /// eviction time.
         pub fn unlink(self: *Self, key: K) bool {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.lockUncancelable(io());
+            defer self.shards[idx].map_lock.unlock(io());
             return self.store.remove(key) != null;
         }
 
@@ -397,6 +481,45 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 }
                 sh.retired.shrinkRetainingCapacity(w);
             }
+        }
+
+        /// Retire a RAW value (not tied to a key removal) onto the grace list so
+        /// it is freed at the next `reclaimRetired`/`reclaimRetiredWhere` instead
+        /// of inline. Used by the in-place-grow safety path: when a RESIDENT
+        /// value's heap is replaced under the exclusive write lock but a concurrent
+        /// SHARED reader may still hold a pointer/slice into the OLD heap (e.g. an
+        /// adjacency id-list backing array that must grow), the caller swaps in a
+        /// fresh copy and hands the OLD value here. `idx_key` selects the shard
+        /// retire list (use the same key the value is stored under, so the
+        /// per-graph reclaim predicate scans it in the right shard). On OOM the
+        /// caller must NOT inline-free (a reader may hold it) — this returns the
+        /// error so the caller can fall back to NOT growing (keep the old buffer).
+        pub fn retireValue(self: *Self, idx_key: K, value: V) !void {
+            const idx = sharded_store.shardIndex(@as(u64, idx_key));
+            try self.shards[idx].retired.append(self.allocator, value);
+        }
+
+        /// Take the per-shard map lock EXCLUSIVE for `key`'s shard. For callers
+        /// that look up a RESIDENT entry and then MUTATE it in place (e.g. the
+        /// borrowed-slice-safe adjacency append): holding this across the lookup +
+        /// mutation excludes both a concurrent SHARED reader's lookup and a
+        /// concurrent resize that could MOVE the entry. Must be released via
+        /// `unlockShardExclusive`. Re-entrant cache calls are NOT permitted while
+        /// held (use the bare `store`/`getPtrUnlocked`).
+        pub fn lockShardExclusive(self: *Self, key: K) void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.lockUncancelable(io());
+        }
+
+        pub fn unlockShardExclusive(self: *Self, key: K) void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.unlock(io());
+        }
+
+        /// Bare resident lookup WITHOUT taking the map lock — for callers that
+        /// already hold the shard lock (via `lockShardExclusive`).
+        pub fn getPtrUnlocked(self: *const Self, key: K) ?*V {
+            return self.store.getPtr(key);
         }
 
         // ---- Internals ------------------------------------------------------

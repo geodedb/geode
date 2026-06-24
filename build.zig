@@ -7148,6 +7148,17 @@ pub fn build(b: *std.Build) void {
     const edge_pop_parent_step = b.step("test-edge-popular-parent-throughput", "Run Phase-4 popular-parent EDGE throughput A/B + re-shard correctness (edges/sec guard vs 313/s baseline)");
     edge_pop_parent_step.dependOn(&run_edge_pop_parent_tests.step);
 
+    // PHASE 4 (edge-engine-direct): focused STRESS for the borrowed-slice
+    // torn-read SEGV fix (many short rounds of concurrent append + traverse).
+    const edge_torn_stress_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_torn_read_stress.zig"), .target = target, .optimize = optimize });
+    edge_torn_stress_mod.addImport("geode", root_mod);
+    edge_torn_stress_mod.addImport("graph_storage", graph_storage_dep.module("graph_storage"));
+    const edge_torn_stress_tests = b.addTest(.{ .root_module = edge_torn_stress_mod });
+    const run_edge_torn_stress_tests = b.addRunArtifact(edge_torn_stress_tests);
+    shardDep(test_step, &run_edge_torn_stress_tests.step, 5, test_shard_loads, test_shard_index);
+    const edge_torn_stress_step = b.step("test-edge-torn-read-stress", "Run Phase-4 borrowed-slice torn-read SEGV stress (concurrent append + traverse, UAF/torn-free)");
+    edge_torn_stress_step.dependOn(&run_edge_torn_stress_tests.step);
+
     // Merge-edge fast-path detection (FIX #3 routing): the from-dump edge query
     // (MATCH composite-key endpoints + MERGE rel + post-SET) must be classified
     // as .match_merge_edge so it routes to the shard-locked path, and
