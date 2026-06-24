@@ -43,7 +43,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-const crypto = std.crypto;
+const cb = @import("crypto_backend");
 const kms = @import("kms.zig");
 const tde_hierarchy = @import("tde_hierarchy.zig");
 const flags_mod = @import("feature_flags");
@@ -188,7 +188,7 @@ pub const TDEKeyManager = struct {
     /// Generate a cryptographically secure 32-byte data encryption key
     fn generateDataEncryptionKey(self: *TDEKeyManager) ![]u8 {
         const dek = try self.allocator.alloc(u8, 32);
-        crypto.random.bytes(dek);
+        try cb.Csprng.bytes(dek);
         return dek;
     }
 
@@ -250,16 +250,16 @@ pub const EncryptedData = struct {
 
 /// Low-level encryption with specific key
 fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const u8, key: [32]u8) !EncryptedData {
-    // Generate secure random nonce
+    // Generate secure random nonce via FIPS seam
     var nonce: [12]u8 = undefined;
-    crypto.random.bytes(&nonce);
+    try cb.Csprng.bytes(&nonce);
 
     // Allocate ciphertext buffer
     const ciphertext = try allocator.alloc(u8, plaintext.len);
     var tag: [16]u8 = undefined;
 
-    // Perform AES-256-GCM encryption
-    crypto.aead.aes_gcm.Aes256Gcm.encrypt(ciphertext, &tag, plaintext, aad, nonce, key);
+    // Perform AES-256-GCM encryption via FIPS seam
+    try cb.Aead.seal(.aes_256_gcm, &key, &nonce, aad, plaintext, ciphertext, &tag);
 
     return EncryptedData{
         .nonce = nonce,
@@ -272,7 +272,7 @@ fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, aad: []co
 fn decryptWithKey(allocator: std.mem.Allocator, encrypted: EncryptedData, aad: []const u8, key: [32]u8) ![]u8 {
     const plaintext = try allocator.alloc(u8, encrypted.ciphertext.len);
 
-    crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, encrypted.ciphertext, encrypted.tag, aad, encrypted.nonce, key) catch |e| {
+    cb.Aead.open(.aes_256_gcm, &key, &encrypted.nonce, aad, encrypted.ciphertext, &encrypted.tag, plaintext) catch |e| {
         allocator.free(plaintext);
         return e;
     };

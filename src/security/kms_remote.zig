@@ -132,11 +132,19 @@ pub const Server = struct {
             try stream.update(self.kek[0..16]);
             _ = try stream.final(&self.attestation_hash);
         }
+        // Free the prior ephemeral keypair before generating a new one (prevents EVP_PKEY leak)
+        if (self.attest_keypair) |*kp| kp.deinit();
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
         try cb.Csprng.bytes(&seed);
         const attest_kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
         self.attest_keypair = attest_kp;
+    }
+
+    /// Release resources owned by Server (ephemeral attestation keypair).
+    pub fn deinit(self: *Server) void {
+        if (self.attest_keypair) |*kp| kp.deinit();
+        self.attest_keypair = null;
     }
 
     /// GAP-0142: Wrap key material using cryptographically secure nonces
@@ -179,6 +187,7 @@ pub const RemoteKmsServer = struct {
             self.allocator.destroy(qt);
             self.quic_transport = null;
         }
+        self.server.deinit();
     }
 
     pub fn start(self: *RemoteKmsServer, port: u16) !void {

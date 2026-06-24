@@ -34,7 +34,7 @@ fn compat_microTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
-const crypto = std.crypto;
+const cb = @import("crypto_backend");
 const flags_mod = @import("feature_flags");
 const ext_mfa = @import("auth_lib").mfa;
 const mfa_policy = @import("mfa_policy");
@@ -71,7 +71,7 @@ pub fn enroll(allocator: std.mem.Allocator, username: []const u8) !Enrollment {
 
     const secret_raw = try ext_mfa.base32Decode(allocator, ext_enrollment.secret_base32);
     errdefer {
-        crypto.secureZero(u8, secret_raw);
+        cb.secureZero(secret_raw);
         allocator.free(secret_raw);
     }
 
@@ -120,9 +120,9 @@ pub fn verifyRecoveryCode(candidate: []const u8, codes_ptr: anytype) ?usize {
 pub fn freeEnrollment(allocator: std.mem.Allocator, enrollment: *Enrollment) void {
     for (enrollment.scratch_codes) |code| allocator.free(code);
     allocator.free(enrollment.scratch_codes);
-    crypto.secureZero(u8, enrollment.secret_raw);
+    cb.secureZero(enrollment.secret_raw);
     allocator.free(enrollment.secret_raw);
-    crypto.secureZero(u8, enrollment.secret_base32);
+    cb.secureZero(enrollment.secret_base32);
     allocator.free(enrollment.secret_base32);
     allocator.free(enrollment.provisioning_uri);
 }

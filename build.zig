@@ -4627,6 +4627,7 @@ pub fn build(b: *std.Build) void {
     mfa_mod.addImport("feature_flags", runtime_flags_mod);
     mfa_mod.addImport("auth_lib", auth_ext_mod);
     mfa_mod.addImport("mfa_policy", mfa_policy_mod);
+    mfa_mod.addImport("crypto_backend", crypto_backend_mod); // FIPS seam: secureZero now routes through cb
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
     auth_mod.link_libc = true;
     auth_mod.addImport("logging", logging_mod);
@@ -5081,6 +5082,8 @@ pub fn build(b: *std.Build) void {
 
     // New AES-GCM page manager integration test (ensures ciphertext on disk)
     // NOTE: Temporarily excluding test_tde_integration until TDE module exposure strategy finalized.
+    // tde_kms_integration.zig now routes AES-256-GCM + CSPRNG through crypto_backend seam;
+    // the file compiles correctly within geode root_mod (which provides crypto_backend + feature_flags).
 
     const multi_graph_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),
@@ -5546,6 +5549,7 @@ pub fn build(b: *std.Build) void {
     // allowlist-check tests guard against regression until it is.
     const vault_kms_test_mod = b.createModule(.{ .root_source_file = b.path("src/security/vault_kms_provider.zig"), .target = target, .optimize = optimize });
     vault_kms_test_mod.addImport("logging", logging_mod);
+    vault_kms_test_mod.addImport("crypto_backend", crypto_backend_mod); // FIPS seam: AES-256-GCM + CSPRNG now route through cb
     vault_kms_test_mod.link_libc = true;
     const vault_kms_tests = b.addTest(.{ .root_module = vault_kms_test_mod });
     const run_vault_kms_tests = b.addRunArtifact(vault_kms_tests);

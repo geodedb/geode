@@ -322,6 +322,7 @@ pub const AuditLogger = struct {
         if (self.owned_path) |p| {
             self.allocator.free(p);
         }
+        if (self.signing_key) |*kp| kp.deinit();
     }
 
     fn loadKeys(self: *AuditLogger) !void {

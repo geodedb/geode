@@ -47,7 +47,7 @@ fn compat_microTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
-const crypto = std.crypto;
+const cb = @import("crypto_backend");
 const Allocator = std.mem.Allocator;
 
 /// Certificate identity extraction method
@@ -307,9 +307,9 @@ pub const AuthResult = struct {
 /// GAP-0248: Implements ASN.1/DER X.509 parsing for subject CN, SAN, validity dates, serial number.
 /// CANARY: REQ=REQ-AUTH-MTLS-004; FEATURE="CertificateIdentityExtraction"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-03-13
 pub fn extractIdentity(allocator: Allocator, cert_der: []const u8) !CertificateIdentity {
-    // Calculate SHA-256 fingerprint
+    // Calculate SHA-256 fingerprint via FIPS seam
     var fingerprint_bytes: [32]u8 = undefined;
-    crypto.hash.sha2.Sha256.hash(cert_der, &fingerprint_bytes, .{});
+    _ = try cb.Hash.digest(.sha256, cert_der, &fingerprint_bytes);
     const fingerprint = std.fmt.bytesToHex(fingerprint_bytes, .lower);
 
     // Parse X.509 certificate structure using ASN.1 DER decoder
