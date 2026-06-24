@@ -697,13 +697,17 @@ pub fn build(b: *std.Build) void {
     quic_parallel_serial_mod.addImport("build_options", build_options_mod);
 
     if (fips) {
-        const fips_dep = b.dependency("fips", .{ .target = target, .optimize = optimize });
-        crypto_backend_mod.addImport("fips", fips_dep.module("fips"));
-        // Link the FIPS-prefix OpenSSL onto the crypto_backend module using the
-        // canonical linkOpenssl helper from the vendored link.zig. Force dynamic
-        // linking so the FIPS provider's fips.so is resolved at runtime, not
-        // statically embedded (would void the FIPS 140-3 validation boundary).
-        link.linkOpenssl(b, crypto_backend_mod, openssl_path);
+        // fips is `.lazy = true` in build.zig.zon, so it MUST be accessed via
+        // lazyDependency (b.dependency panics on a lazy dep). We are already
+        // inside `if (fips)`, so the dependency is requested + resolved here.
+        if (b.lazyDependency("fips", .{ .target = target, .optimize = optimize })) |fips_dep| {
+            crypto_backend_mod.addImport("fips", fips_dep.module("fips"));
+            // Link the FIPS-prefix OpenSSL onto the crypto_backend module using the
+            // canonical linkOpenssl helper from the vendored link.zig. Force dynamic
+            // linking so the FIPS provider's fips.so is resolved at runtime, not
+            // statically embedded (would void the FIPS 140-3 validation boundary).
+            link.linkOpenssl(b, crypto_backend_mod, openssl_path);
+        }
     }
     // Wire crypto_backend into root_mod (helps later routing tasks) and into
     // the executable (smoke test and future call-site routing).
