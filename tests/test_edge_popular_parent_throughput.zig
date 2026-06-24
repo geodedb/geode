@@ -142,6 +142,36 @@ fn outDegree(env: *Env, src: u64, rel: []const u8) usize {
     return n;
 }
 
+// Reverse-traversal mirror of outDegree: count `rel` in-edges to `dst` via the
+// public getIncomingEdgeIds path (which, post co-location, hydrates from the
+// engine's 16-shard FanInEdgeIterator scatter on cache miss).
+fn inDegree(env: *Env, dst: u64, rel: []const u8) usize {
+    const incoming = env.store.getIncomingEdgeIds(dst) orelse return 0;
+    var n: usize = 0;
+    for (incoming) |eid| {
+        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
+        if (!std.mem.eql(u8, e.label, rel)) continue;
+        n += 1;
+    }
+    return n;
+}
+
+// Count `rel` in-edges to `dst` whose source is exactly `src` (reverse mirror of
+// countEdgesTo).
+fn countEdgesFrom(env: *Env, src: u64, dst: u64, rel: []const u8) usize {
+    const incoming = env.store.getIncomingEdgeIds(dst) orelse return 0;
+    var n: usize = 0;
+    for (incoming) |eid| {
+        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        if (e.from_id != src) continue;
+        if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
+        if (!std.mem.eql(u8, e.label, rel)) continue;
+        n += 1;
+    }
+    return n;
+}
+
 // Ingest K (parent)-[:PARENT_OF]->(child_i) edges via the coordinator, filling
 // per-shard queues (submitNoWait) before awaiting so the 16 shard workers drain
 // in parallel — the realistic from-dump bulk path. Returns edges/sec.
@@ -446,20 +476,23 @@ test "PHASE4 ENTERPRISE aggregate: cross-shard (2PC-bound) vs co-located (the ac
     const colo = try benchAggregate(&env, coord, P, FANOUT, true);
 
     std.debug.print(
-        "\n[PHASE4-ENTERPRISE] aggregate PARENT_OF (P={d} distinct parents x {d}): cross-shard(2PC)={d:.0} edges/sec | co-located(no-2PC)={d:.0} edges/sec\n",
+        "\n[PHASE4-ENTERPRISE] aggregate PARENT_OF (P={d} distinct parents x {d}): cross-shard(single-shard)={d:.0} edges/sec | co-located(single-shard)={d:.0} edges/sec\n",
         .{ P, FANOUT, cross, colo },
     );
 
-    // The cross-shard aggregate is the realistic-shape DIAGNOSTIC: assert only
-    // that it has not REGRESSED below the 313/s pre-Phase-4 baseline (it is
-    // cross-shard-2PC-bound by design — see the block comment).
-    try testing.expect(cross > 280.0);
-    // The co-located aggregate is the ACHIEVABLE Phase-4 win (distinct parents
-    // fan across workers AND no per-edge 2PC): it must clear a node-ingest-order
-    // floor, demonstrably >> the 313/s baseline.
+    // EDGE CO-LOCATION (Phase A) UPDATE: cross-endpoint edge writes are NO LONGER
+    // 2PC — every edge is a single-shard write on shard(source). The natural
+    // (arbitrary-endpoint) aggregate must now converge ON the co-located number,
+    // i.e. it must clear the same node-ingest-order floor the co-located path did
+    // (it was ~539/s when 2PC-bound). This is THE throughput unlock.
+    try testing.expect(cross > 1200.0);
+    // The co-located aggregate still clears the node-ingest-order floor.
     try testing.expect(colo > 1200.0);
-    // And co-location must be a clear, large win over the cross-shard floor.
-    try testing.expect(colo > cross * 2.0);
+    // And the two are now the SAME ORDER (co-location removed the gap that made
+    // colo >> cross). Assert cross is within a small constant factor of colo
+    // (not the old colo > cross*2.0). Both directions guarded so neither path
+    // silently regresses relative to the other.
+    try testing.expect(cross > colo / 3.0);
 }
 
 // ===========================================================================
@@ -518,6 +551,79 @@ test "PHASE4 reshard correctness: mixed-orientation edges commit, traverse, and 
         in_acc += 1;
     }
     try testing.expectEqual(N, in_acc);
+}
+
+// ===========================================================================
+// EDGE CO-LOCATION (Phase A) REVERSE-TRAVERSAL CORRECTNESS: after co-located
+// (single-shard) writes, getIncomingEdgeIds(dst) must return the EXACT, COMPLETE
+// in-edge set for dst — sources deliberately spread across multiple shards (so
+// the 16-shard FanInEdgeIterator scatter union is exercised), both hot
+// orientations (parent<-child PARENT_OF and accepted<-synonym ACCEPTED_AS), with
+// the right count + membership and no phantom/missing edges. This is the
+// engine-fan-in reverse hop seen through the public reverse-read API.
+// ===========================================================================
+
+test "co-location reverse traversal: getIncomingEdgeIds returns the exact in-edge set (scatter union)" {
+    const allocator = testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = try Env.setup(allocator, &tmp.sub_path);
+    defer env.teardown();
+
+    group_commit.setEnabledForTest(true);
+    const coord = try group_commit.getOrStartCoordinator(env.allocator, env.adapter, GRAPH);
+
+    // One hot accepted node (the TARGET of ACCEPTED_AS); K synonym sources spread
+    // across arbitrary shards (the natural shape → most are cross-shard, so their
+    // in-entries are recorded on DIFFERENT shards' adj_in_remote). Also one hot
+    // parent with the same K children so PARENT_OF reverse hops (child has one
+    // incoming PARENT_OF) are checked too.
+    const K: usize = 1_000;
+    const accepted = try makeNode(&env, "rev-accepted");
+    const parent = try makeNode(&env, "rev-parent");
+    const kids = try allocator.alloc(u64, K);
+    defer allocator.free(kids);
+    for (kids, 0..) |*k, i| {
+        var buf: [24]u8 = undefined;
+        const sid = std.fmt.bufPrint(&buf, "revk{d}", .{i}) catch unreachable;
+        k.* = try makeNode(&env, sid);
+    }
+
+    // Confirm the sources land on >= 2 distinct engine shards (otherwise the
+    // scatter union would be trivially single-shard).
+    var shard_seen = std.AutoHashMap(usize, void).init(allocator);
+    defer shard_seen.deinit();
+    for (kids) |k| try shard_seen.put(sharded_store.shardIndex(k), {});
+    try testing.expect(shard_seen.count() >= 2);
+
+    const ops = try allocator.alloc(group_commit.ApplyOp, K * 2);
+    defer allocator.free(ops);
+    var idx: usize = 0;
+    for (kids) |k| {
+        // parent -[:PARENT_OF]-> k   (k is the TARGET → reverse hop k<-parent)
+        ops[idx] = .{ .bulk_merge_edge = .{ .source_id = parent, .target_id = k, .rel_type = PARENT_OF, .props = &.{}, .result = .{} } };
+        idx += 1;
+        // k -[:ACCEPTED_AS]-> accepted  (accepted is the HOT TARGET → reverse hop accepted<-k)
+        ops[idx] = .{ .bulk_merge_edge = .{ .source_id = k, .target_id = accepted, .rel_type = ACCEPTED_AS, .props = &.{}, .result = .{} } };
+        idx += 1;
+    }
+    for (ops[0..idx]) |*op| try coord.submitNoWait(op);
+    for (ops[0..idx]) |*op| _ = try coord.awaitOp(op);
+
+    // The hot accepted node has EXACTLY K incoming ACCEPTED_AS edges, one from
+    // each synonym (complete + no phantoms), via the scatter union.
+    try testing.expectEqual(K, inDegree(&env, accepted, ACCEPTED_AS));
+    // Every synonym is present in accepted's incoming set exactly once.
+    var i: usize = 0;
+    while (i < K) : (i += (K / 50) + 1) {
+        try testing.expectEqual(@as(usize, 1), countEdgesFrom(&env, kids[i], accepted, ACCEPTED_AS));
+        // And the parent<-child reverse hop: each child has exactly one incoming
+        // PARENT_OF, from the parent.
+        try testing.expectEqual(@as(usize, 1), inDegree(&env, kids[i], PARENT_OF));
+        try testing.expectEqual(@as(usize, 1), countEdgesFrom(&env, parent, kids[i], PARENT_OF));
+    }
+    // accepted has NO incoming PARENT_OF (rel filter is honored across shards).
+    try testing.expectEqual(@as(usize, 0), inDegree(&env, accepted, PARENT_OF));
 }
 
 // ===========================================================================

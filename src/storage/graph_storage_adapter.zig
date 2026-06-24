@@ -2375,8 +2375,13 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
+        // Edge co-location (Phase A): the engine edge write is now SINGLE-shard
+        // on shard(source) — out-adjacency, edge body, edge_index, existence
+        // index AND the incoming adjacency (engine adj_in_remote keyed by target)
+        // all live on the source shard, with no cross-shard 2PC. So only the
+        // SOURCE shard lock is needed; the old ascending two-lock dance for a
+        // cross-shard target is gone (there is no dst-shard write to protect).
         const src_shard = sharded_store.shardIndex(source_id);
-        const dst_shard = sharded_store.shardIndex(target_id);
 
         exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
         const _t_start = monoNanosNow();
@@ -2394,21 +2399,9 @@ pub const StorageAdapter = struct {
             }
         }
 
-        if (src_shard == dst_shard) {
-            mg.shard_locks[src_shard].lockUncancelable(io);
-            defer mg.shard_locks[src_shard].unlock(io);
-            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
-        } else {
-            const first = @min(src_shard, dst_shard);
-            const second = @max(src_shard, dst_shard);
-            mg.shard_locks[first].lockUncancelable(io);
-            mg.shard_locks[second].lockUncancelable(io);
-            defer {
-                mg.shard_locks[second].unlock(io);
-                mg.shard_locks[first].unlock(io);
-            }
-            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
-        }
+        mg.shard_locks[src_shard].lockUncancelable(io);
+        defer mg.shard_locks[src_shard].unlock(io);
+        return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
     }
 
     fn bulkInsertEdgeInnerShardLocked(
@@ -2507,13 +2500,15 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
+        // Edge co-location (Phase A): single SOURCE-shard lock only. The engine
+        // edge write (incl. the incoming adjacency, now in shard(source)'s
+        // adj_in_remote keyed by target) is single-shard, so the old ascending
+        // two-lock acquire for a cross-shard target is unnecessary. The O(1)
+        // existence-index dedup probe in the inner already runs on the source
+        // shard held EXCLUSIVE here, so two racing same-tuple MERGEs still
+        // serialize and cannot both miss-then-create (no duplicate edge).
         const src_shard = sharded_store.shardIndex(source_id);
-        const dst_shard = sharded_store.shardIndex(target_id);
 
-        // Same lock protocol as bulkInsertEdgeWithIdsShardLockedForTenant: yield
-        // to a pending exclusive (checkpoint / CREATE INDEX), take graph rwlock
-        // SHARED, then the endpoint shards EXCLUSIVE in ascending order (single
-        // lock when co-resident, to avoid double-locking the same mutex).
         exclusiveWaitingBackoff(mg);
         const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
@@ -2531,21 +2526,9 @@ pub const StorageAdapter = struct {
             }
         }
 
-        if (src_shard == dst_shard) {
-            mg.shard_locks[src_shard].lockUncancelable(io);
-            defer mg.shard_locks[src_shard].unlock(io);
-            return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
-        } else {
-            const first = @min(src_shard, dst_shard);
-            const second = @max(src_shard, dst_shard);
-            mg.shard_locks[first].lockUncancelable(io);
-            mg.shard_locks[second].lockUncancelable(io);
-            defer {
-                mg.shard_locks[second].unlock(io);
-                mg.shard_locks[first].unlock(io);
-            }
-            return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
-        }
+        mg.shard_locks[src_shard].lockUncancelable(io);
+        defer mg.shard_locks[src_shard].unlock(io);
+        return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
     }
 
     fn bulkMergeEdgeInnerShardLocked(
@@ -2708,11 +2691,19 @@ pub const StorageAdapter = struct {
             if (_hold_ns > _cur_max) mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
         }
 
-        // Process edges in arrival order, but hold the CURRENT source-shard lock
+        // Process edges in arrival order, holding the CURRENT source-shard lock
         // across a maximal run of consecutive edges that share that source shard.
         // Source-id routing (group_commit.shardKey) groups a worker's batch by
         // shardIndex(source_id), so for the popular-parent workload the entire
         // run shares one source shard → one lock acquire for the whole batch.
+        //
+        // Edge co-location (Phase A): the engine edge write is now SINGLE-shard
+        // on shard(source) (the incoming adjacency lives in shard(source)'s
+        // adj_in_remote keyed by target — no dst-shard write). The per-edge
+        // target-shard lock (and its tryLock/drop-and-reacquire ascending dance
+        // for dst < src) is therefore GONE: one source-shard lock covers the
+        // whole edge, cross-endpoint included, with no cross-worker dst
+        // contention. This is the lock-side half of the throughput unlock.
         var i: usize = 0;
         while (i < edges.len) {
             const src_shard = sharded_store.shardIndex(edges[i].source_id);
@@ -2720,40 +2711,7 @@ pub const StorageAdapter = struct {
 
             // Drain the maximal run sharing this source shard under the one hold.
             while (i < edges.len and sharded_store.shardIndex(edges[i].source_id) == src_shard) : (i += 1) {
-                const e = &edges[i];
-                const dst_shard = sharded_store.shardIndex(e.target_id);
-
-                if (dst_shard == src_shard) {
-                    // Co-resident: source lock alone covers both endpoints.
-                    self.applyOneMerge(mg, store, graph_name, e);
-                    continue;
-                }
-
-                // Cross-shard: also hold the target shard lock for THIS edge, in
-                // canonical ascending order so it is deadlock-free w.r.t. any
-                // other two-lock acquirer. We already hold src_shard.
-                if (dst_shard > src_shard) {
-                    // Ascending already (src then dst): just lock dst.
-                    mg.shard_locks[dst_shard].lockUncancelable(io);
-                    self.applyOneMerge(mg, store, graph_name, e);
-                    mg.shard_locks[dst_shard].unlock(io);
-                } else {
-                    // dst_shard < src_shard. Acquiring dst while holding src
-                    // would invert the global ascending order. tryLock first: if
-                    // it succeeds we got it WITHOUT waiting (no cycle possible);
-                    // otherwise drop src, re-acquire in ascending order, apply,
-                    // then re-acquire src to continue the run.
-                    if (mg.shard_locks[dst_shard].tryLock(io)) {
-                        self.applyOneMerge(mg, store, graph_name, e);
-                        mg.shard_locks[dst_shard].unlock(io);
-                    } else {
-                        mg.shard_locks[src_shard].unlock(io);
-                        mg.shard_locks[dst_shard].lockUncancelable(io); // ascending: dst < src
-                        mg.shard_locks[src_shard].lockUncancelable(io);
-                        self.applyOneMerge(mg, store, graph_name, e);
-                        mg.shard_locks[dst_shard].unlock(io);
-                    }
-                }
+                self.applyOneMerge(mg, store, graph_name, &edges[i]);
             }
 
             mg.shard_locks[src_shard].unlock(io);
