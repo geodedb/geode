@@ -758,6 +758,22 @@ test-macos-unit:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
+    # Provision the validated OpenSSL FIPS provider for the geode-fips build
+    # (-Dopenssl_path=/usr/local/ssl): extract /usr/local/ssl (libs + headers +
+    # fips.so + openssl.cnf) from the ci-catalog zig-fips image into this build
+    # container. Cross-project pull uses the CI job token.
+    - |
+      if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 2; done; fi
+      if docker info >/dev/null 2>&1; then
+        echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
+        echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
+        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
+        docker rm _fipsprov
+        [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
+      else
+        echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
+      fi
     # Use vendored cache if present, otherwise zig build fetches from network.
     # Check current (zig-pkg) and legacy (docker/zig-packages) vendor paths.
     - |
@@ -774,6 +790,22 @@ test-macos-unit:
       eval "$(zvm env)"
       zvm use "${ZIG_VERSION}"
       zig version
+    # Provision the validated OpenSSL FIPS provider for the geode-fips build
+    # (-Dopenssl_path=/usr/local/ssl): extract /usr/local/ssl (libs + headers +
+    # fips.so + openssl.cnf) from the ci-catalog zig-fips image into this build
+    # container. Cross-project pull uses the CI job token.
+    - |
+      if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 2; done; fi
+      if docker info >/dev/null 2>&1; then
+        echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
+        echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
+        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
+        docker rm _fipsprov
+        [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
+      else
+        echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
+      fi
     # Debug build and tests only - ReleaseSafe is covered by test-cross-build jobs
     # ReleaseSafe compilation on macOS M1 runners exceeds the 1h job timeout.
     #
@@ -1646,6 +1678,9 @@ snapshot:
     DOCKER_TLS_CERTDIR: "/certs"
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
+    # FIPS GoReleaser build (geode-fips) links + loads the validated OpenSSL
+    # provider provisioned into /usr/local/ssl by the before_script below.
+    OPENSSL_CONF: /usr/local/ssl/ssl/openssl.cnf
   before_script:
     - apk add --no-cache curl git bash tar xz coreutils jq python3
     # Defensive cleanup: remove any stale artifacts or generated files
@@ -1660,6 +1695,22 @@ snapshot:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
+    # Provision the validated OpenSSL FIPS provider for the geode-fips build
+    # (-Dopenssl_path=/usr/local/ssl): extract /usr/local/ssl (libs + headers +
+    # fips.so + openssl.cnf) from the ci-catalog zig-fips image into this build
+    # container. Cross-project pull uses the CI job token.
+    - |
+      if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 2; done; fi
+      if docker info >/dev/null 2>&1; then
+        echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
+        echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
+        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
+        docker rm _fipsprov
+        [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
+      else
+        echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
+      fi
     # Populate the Zig package cache from the vendored packages so the build
     # does NOT fetch deps over the network. The 87 vendored packages (incl.
     # the private devnw/zig/* deps like gql) live in zig-pkg/;
@@ -2104,6 +2155,9 @@ build-release:
     DOCKER_TLS_CERTDIR: "/certs"
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
+    # FIPS GoReleaser build (geode-fips) links + loads the validated OpenSSL
+    # provider provisioned into /usr/local/ssl by the before_script below.
+    OPENSSL_CONF: /usr/local/ssl/ssl/openssl.cnf
   before_script:
     - apk add --no-cache curl git bash tar xz coreutils jq python3
     # Defensive cleanup: remove any stale artifacts or generated files
@@ -2118,6 +2172,22 @@ build-release:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
+    # Provision the validated OpenSSL FIPS provider for the geode-fips build
+    # (-Dopenssl_path=/usr/local/ssl): extract /usr/local/ssl (libs + headers +
+    # fips.so + openssl.cnf) from the ci-catalog zig-fips image into this build
+    # container. Cross-project pull uses the CI job token.
+    - |
+      if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 2; done; fi
+      if docker info >/dev/null 2>&1; then
+        echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
+        echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
+        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
+        docker rm _fipsprov
+        [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
+      else
+        echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
+      fi
     # Populate the Zig package cache from the vendored packages so the build
     # does NOT fetch deps over the network. The 87 vendored packages (incl.
     # the private devnw/zig/* deps like gql) live in zig-pkg/;
