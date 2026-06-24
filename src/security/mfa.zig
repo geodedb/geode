@@ -110,7 +110,7 @@ pub fn verifyRecoveryCode(candidate: []const u8, codes_ptr: anytype) ?usize {
 
     for (codes_ptr.*, 0..) |code, idx| {
         if (code.len != candidate.len) continue;
-        if (std.crypto.timing_safe.eql([8]u8, code[0..8].*, candidate[0..8].*)) {
+        if (std.crypto.timing_safe.eql([8]u8, code[0..8].*, candidate[0..8].*)) { // fips-exempt: non-security (timing-safe TOTP code comparison; HMAC-SHA1 is already routed through cb.Mac.hmacSha1)
             return idx;
         }
     }

@@ -420,6 +420,85 @@ Copyright 2024-2025 CodePros
 
 ---
 
+## FIPS Mode
+
+Geode ships a FIPS seam (`src/std_shim.zig` / `src/crypto_backend.zig`) that
+routes all cryptographic operations through either the Zig standard library
+(default) or an OpenSSL FIPS provider (opt-in).
+
+### Building with -Dfips=true
+
+```sh
+# Requires an OpenSSL 3.x installation with the FIPS provider enabled.
+# Default path: /usr/local/ssl — override with -Dopenssl_path=<prefix>.
+zig build -Dfips=true -Dopenssl_path=/usr/local/ssl
+```
+
+### Running the dual-mode test suite
+
+```sh
+# Std-shim backend only (no OpenSSL required):
+make test-shim
+# or: zig build test-fips-seam -Dfips=false
+
+# OpenSSL FIPS backend (requires FIPS provider at OPENSSL_PREFIX):
+make test-fips
+# or: OPENSSL_CONF=/usr/local/ssl/ssl/openssl.cnf zig build test-fips-seam -Dfips=true -Dopenssl_path=/usr/local/ssl
+
+# Both modes in sequence:
+make test-dual
+# or: make test-fips-seam
+```
+
+The `test-fips-seam` Zig build step runs:
+
+- **test-fips-parity** — Known-Answer Tests (SHA-256, SHA3-256, HMAC-SHA256
+  RFC 4231 TC2, HMAC-SHA1 RFC 2202 TC2, AES-256-GCM round-trip + tamper,
+  HKDF-SHA256 RFC 5869 A.1, Ed25519 + ECDSA-P256 sign/verify + corrupt-sig)
+- **test-fips-failclosed** — argon2id, BLAKE2b-256, and BLAKE3 return
+  `error.FipsUnsupported` under `-Dfips=true`; succeed under `-Dfips=false`
+
+### Go FIPS toggle
+
+The Go components (transport, quic) can be compiled under FIPS-approved mode
+using the Go FIPS 140 overlay:
+
+```sh
+make go-test-fips
+# or: GOFIPS140=v1.0.0 GODEBUG=fips140=on go build ./...
+```
+
+### FIPS caveat — disabled algorithms
+
+When built with `-Dfips=true`, the following algorithms are **disabled** and
+callers receive `error.FipsUnsupported`:
+
+| Feature | Algorithm | Return under -Dfips=true |
+|---------|-----------|--------------------------|
+| Password auth | argon2id | `error.FipsUnsupported` |
+| Hash | BLAKE2b-256 / BLAKE2b-512 / BLAKE2s-256 | `error.FipsUnsupported` |
+| Hash | BLAKE3 | `error.FipsUnsupported` |
+| FLE encrypt/decrypt | ChaCha20-Poly1305 | `error.FipsUnsupported` |
+
+Callers MUST handle this error and either fall back to FIPS-approved
+alternatives (argon2id → PBKDF2-SHA256; BLAKE3 → SHA-256/SHA3-256;
+ChaCha20-Poly1305 → AES-256-GCM) or fail closed.
+
+### Follow-up items
+
+- **fips dep**: currently pinned as a local path (`path: ../fips`) in
+  `build.zig.zon`.  A `v0.1.1` remote repin is tracked as a follow-up once
+  the package registry publishes the hash.
+- **Transport TLS** (`src/server/quic_connection_handler.zig`,
+  `src/transport/grpc_server.zig`): propagation of the FIPS seam to the TLS
+  layer is a follow-up task.
+- **CI fips-dual-mode job**: see the commented-out skeleton in
+  `.gitlab-ci.yml` — provisioning the OpenSSL FIPS provider in the runner
+  image and running `make test-dual` is tracked as a follow-up.
+  See the `ci-fips-deps` note in `.gitlab-ci.yml`.
+
+---
+
 **Geode** - Enterprise-ready graph database for the modern data stack
 
 *Built with ❤️ by CodePros*

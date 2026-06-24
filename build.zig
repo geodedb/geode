@@ -8223,4 +8223,44 @@ pub fn build(b: *std.Build) void {
     crypto_backend_smoke_step.dependOn(&run_crypto_backend_smoke.step);
     // Also wire into the main test step so `zig build test` includes it.
     shardDep(test_step, &run_crypto_backend_smoke.step, 1, test_shard_loads, test_shard_index);
+
+    // -------------------------------------------------------------------------
+    // Task 11: FIPS dual-mode parity/KAT test + fail-closed test
+    // -------------------------------------------------------------------------
+
+    // fips_parity_test: KAT vectors for SHA-256/SHA3-256/HMAC-SHA256/HMAC-SHA1/
+    // AES-256-GCM/HKDF-SHA256/Ed25519/ECDSA-P256; passes under both backends.
+    const fips_parity_mod = b.createModule(.{
+        .root_source_file = b.path("src/fips_parity_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fips_parity_mod.addImport("crypto_backend", crypto_backend_mod);
+    const fips_parity_tests = b.addTest(.{ .root_module = fips_parity_mod });
+    const run_fips_parity = b.addRunArtifact(fips_parity_tests);
+    const fips_parity_step = b.step("test-fips-parity", "Task 11: FIPS parity KAT — SHA-256/SHA3-256/HMAC-SHA256/HMAC-SHA1/AES-GCM/HKDF/Ed25519/ECDSA-P256 (both backends)");
+    fips_parity_step.dependOn(&run_fips_parity.step);
+    shardDep(test_step, &run_fips_parity.step, 1, test_shard_loads, test_shard_index);
+
+    // fips_failclosed_test: asserts error.FipsUnsupported for argon2id/BLAKE2b/
+    // BLAKE3 under -Dfips=true; asserts they work under -Dfips=false.
+    // NOTE: types_hash module (src/types/hash.zig) imports storage/heap.zig
+    // which has complex multi-module deps (GAP-413 BLOCKED).  The guard
+    // patterns are inlined directly in the test file; build_options only.
+    const fips_failclosed_mod = b.createModule(.{
+        .root_source_file = b.path("src/fips_failclosed_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fips_failclosed_mod.addImport("build_options", build_options_mod);
+    const fips_failclosed_tests = b.addTest(.{ .root_module = fips_failclosed_mod });
+    const run_fips_failclosed = b.addRunArtifact(fips_failclosed_tests);
+    const fips_failclosed_step = b.step("test-fips-failclosed", "Task 11: FIPS fail-closed gate — argon2id/BLAKE2b/BLAKE3 return FipsUnsupported under -Dfips=true");
+    fips_failclosed_step.dependOn(&run_fips_failclosed.step);
+    shardDep(test_step, &run_fips_failclosed.step, 1, test_shard_loads, test_shard_index);
+
+    // test-fips-seam: runs both parity + failclosed steps
+    const fips_seam_step = b.step("test-fips-seam", "Task 11: FIPS seam gate — parity KATs + fail-closed assertions (run under both -Dfips=false and -Dfips=true)");
+    fips_seam_step.dependOn(&run_fips_parity.step);
+    fips_seam_step.dependOn(&run_fips_failclosed.step);
 }

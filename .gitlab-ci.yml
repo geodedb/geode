@@ -530,6 +530,41 @@ harness-rerun-selftest:
       echo "✓ harness_rerun selftest passed"
 
 # =============================================================================
+# Test Stage - FIPS Dual-Mode (follow-up: ci-fips-deps)
+# =============================================================================
+#
+# A dedicated job provisioning the OpenSSL FIPS provider and running
+# `make test-dual` is tracked as a follow-up.  The runner image must have
+# OpenSSL 3.x with a FIPS provider installed at /usr/local/ssl.
+# Uncomment and adapt once the FIPS runner image is available.
+#
+# fips-dual-mode:
+#   stage: test
+#   image: $ZIG_FIPS_IMAGE   # custom image with OpenSSL FIPS provider
+#   tags:
+#     - company
+#     - k8s
+#     - linux
+#   timeout: 30m
+#   variables:
+#     GIT_SUBMODULE_STRATEGY: recursive
+#     OPENSSL_PREFIX: /usr/local/ssl
+#   before_script:
+#     - *zig-vendor-cache
+#   script:
+#     - echo "=== FIPS std-shim mode ==="
+#     - zig build test-fips-seam -Dfips=false --summary all
+#     - echo "=== FIPS OpenSSL mode ==="
+#     - OPENSSL_CONF=${OPENSSL_PREFIX}/ssl/openssl.cnf
+#       zig build test-fips-seam -Dfips=true -Dopenssl_path=${OPENSSL_PREFIX} --summary all
+#     - echo "==> fips-dual-mode PASSED"
+#   rules:
+#     - if: '$CI_COMMIT_BRANCH'
+#       allow_failure: false
+#     - if: '$CI_COMMIT_TAG'
+#       allow_failure: true
+
+# =============================================================================
 # Test Stage - Unit Tests
 # =============================================================================
 

@@ -31,6 +31,7 @@ endif
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
+.PHONY: test-shim test-fips test-dual test-fips-seam
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate status-generate-test no-feature-flags zig-package-cache-check cluster-test
 .PHONY: loadtest-compare loadtest-save-baseline loadtest-save-all-baselines bench-timeseries
@@ -785,6 +786,26 @@ go-test-fips:
 	echo "    Results: $$ok compiled OK, $$fail failed ($$skip pre-existing skipped)"; \
 	[ "$$fail" -eq 0 ]
 	@echo "==> go-test-fips PASSED (all non-pre-existing quic_tests harnesses compile under FIPS mode)"
+
+# ---------------------------------------------------------------------------
+# Task 11: FIPS dual-mode test targets
+# ---------------------------------------------------------------------------
+OPENSSL_PREFIX ?= /usr/local/ssl
+
+# Run parity KATs + fail-closed tests under the std_shim backend (-Dfips=false)
+test-shim:
+	$(ZIG) build test-fips-seam -Dfips=false
+
+# Run parity KATs + fail-closed tests under the OpenSSL FIPS backend (-Dfips=true)
+# Requires an OpenSSL FIPS provider at OPENSSL_PREFIX (default /usr/local/ssl).
+test-fips:
+	OPENSSL_CONF=$(OPENSSL_PREFIX)/ssl/openssl.cnf $(ZIG) build test-fips-seam -Dfips=true -Dopenssl_path=$(OPENSSL_PREFIX)
+
+# Run both modes sequentially (shim first, then FIPS)
+test-dual: test-shim test-fips
+
+# Alias: same as test-dual (shim + FIPS seam in sequence)
+test-fips-seam: test-shim test-fips
 
 .PHONY: verify-all verify-fast ci-verify dependency-integration-audit
 

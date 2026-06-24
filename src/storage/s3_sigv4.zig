@@ -17,6 +17,9 @@
 // CANARY: REQ=REQ-SEC-S3-SIGV4-001; FEATURE="S3 SigV4 Signing"; ASPECT=Crypto; STATUS=TESTED; TEST=tests/test_s3_sigv4.zig; OWNER=security; UPDATED=2026-06-10
 
 const std = @import("std");
+// fips-exempt: AWS SigV4 transport signing — HMAC-SHA256/SHA-256 are
+// protocol-mandated by AWS (https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html);
+// routing through cb is tracked as a post-v0.1.0 follow-up.
 const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
