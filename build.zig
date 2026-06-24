@@ -5305,6 +5305,9 @@ pub fn build(b: *std.Build) void {
     auth_enforcement_test_mod.addImport("build_options", build_options_mod);
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
     auth_enforcement_tests.root_module.link_libc = true;
+    const run_auth_enforcement_tests = b.addRunArtifact(auth_enforcement_tests);
+    const auth_enforcement_step = b.step("test-auth-enforcement", "Run auth enforcement + FIPS fail-close password hashing tests");
+    auth_enforcement_step.dependOn(&run_auth_enforcement_tests.step);
     shardDep(test_step, &auth_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -7956,6 +7959,7 @@ pub fn build(b: *std.Build) void {
     // periodic HMAC verification thread lifecycle, login-state persistence,
     // coarse LSP graph-visibility gate).
     const agm_unit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_graph_manager_unit.zig"), .target = target, .optimize = optimize });
+    agm_unit_test_mod.addImport("build_options", build_options_mod);
     agm_unit_test_mod.addImport("geode", root_mod);
     agm_unit_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
     const agm_unit_tests = b.addTest(.{ .root_module = agm_unit_test_mod });

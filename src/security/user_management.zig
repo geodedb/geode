@@ -52,6 +52,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+const build_options = @import("build_options");
 const geode_auth = @import("geode_auth");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -1315,6 +1316,7 @@ const ConcurrentRefreshResolverState = struct {
 };
 
 test "authenticate uses persistent resolver and caches result" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1344,6 +1346,7 @@ test "authenticate uses persistent resolver and caches result" {
 }
 
 test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1410,6 +1413,7 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
 }
 
 test "isSessionAuthCurrent detects persistent auth version bump" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1438,6 +1442,7 @@ test "isSessionAuthCurrent detects persistent auth version bump" {
 }
 
 test "isSessionAuthCurrentCached_skips_persistent_lookup_until_epoch_changes" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1472,6 +1477,7 @@ test "isSessionAuthCurrentCached_skips_persistent_lookup_until_epoch_changes" {
 }
 
 test "isSessionAuthCurrentCached_rejects_local_auth_version_bump_without_graph_lookup" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1502,6 +1508,7 @@ test "isSessionAuthCurrentCached_rejects_local_auth_version_bump_without_graph_l
 }
 
 test "authenticate refreshes cached role after persistent auth version bump" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1536,6 +1543,7 @@ test "authenticate refreshes cached role after persistent auth version bump" {
 }
 
 test "auth cache evicts least recently used user" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1592,6 +1600,7 @@ test "ensureDefaultUser is ignored when persistent resolver is configured" {
 
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
 test "assignRole_changes_role_and_bumps_version" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
@@ -1612,6 +1621,7 @@ test "assignRole_changes_role_and_bumps_version" {
 
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Idempotent; STATUS=TESTED; TEST=assignRole_same_role_is_noop; OWNER=security; UPDATED=2026-05-11
 test "assignRole_same_role_is_noop" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
     deinitUserStore();
     defer deinitUserStore();
 
