@@ -235,9 +235,9 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStoreIntegrat
     var alice_posts = std.ArrayList(u64).init(allocator);
     defer alice_posts.deinit();
 
-    // Get Alice's outgoing edges
+    // Get Alice's outgoing edges (PHASE 0: AdjList wraps the id-list).
     if (graph.outgoing_edges.get(user_node_ids.items[0])) |alice_edges| {
-        for (alice_edges.items) |edge_id| {
+        for (alice_edges.list.items) |edge_id| {
             if (graph.edges.get(edge_id)) |edge| {
                 if (std.mem.eql(u8, edge.label, "CREATED")) {
                     try alice_posts.append(edge.to_id);
@@ -419,7 +419,7 @@ test "Build system stability under load" {
         graphs.deinit();
     }
 
-    for (0..num_instances) |i| {
+    for (0..num_instances) |_| {
         var graph = try geode.graph_common.GraphStore.init(allocator);
 
         // Add nodes to each graph
@@ -444,7 +444,7 @@ test "Build system stability under load" {
     }
 
     for (0..num_instances) |_| {
-        var manager = geode.materialized_views.MaterializedViewManager.init(allocator);
+        const manager = geode.materialized_views.MaterializedViewManager.init(allocator);
         try managers.append(manager);
     }
 

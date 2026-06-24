@@ -6972,6 +6972,19 @@ pub fn build(b: *std.Build) void {
     const conc_analytical_step = b.step("test-gap0902-concurrent-analytical", "Run GAP-0902 concurrent analytical reads crash regression (bounded cache + ingest + reclaim, no crash/corruption)");
     conc_analytical_step.dependOn(&run_conc_analytical_tests.step);
 
+    // PHASE 0 (edge-engine-direct): the adjacency cache (outgoing_edges /
+    // incoming_edges) must be BOUNDED + hydrate-on-miss from the engine —
+    // residency plateaus at/below the cap for a million-edge parent while reads
+    // stay exact (all K ids), correct under eviction, and consistent after
+    // creating edges on an evicted node.
+    const adj_engine_direct_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_adj_engine_direct_bounded.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    adj_engine_direct_test_mod.addImport("geode", root_mod);
+    const adj_engine_direct_tests = b.addTest(.{ .root_module = adj_engine_direct_test_mod });
+    const run_adj_engine_direct_tests = b.addRunArtifact(adj_engine_direct_tests);
+    shardDep(test_step, &run_adj_engine_direct_tests.step, 1, test_shard_loads, test_shard_index);
+    const adj_engine_direct_step = b.step("test-adj-engine-direct", "Run Phase-0 bounded engine-direct adjacency cache regression (bounded residency + hydrate-on-miss correctness + edge-create-on-evicted consistency)");
+    adj_engine_direct_step.dependOn(&run_adj_engine_direct_tests.step);
+
     // Inline-key index-seek regression (read-stress KNOWN BUG #1): inline
     // `{indexed_prop: val}` equality reads seek the exact-property index
     // (O(matching)) instead of full-scanning the label (O(graph)); results are

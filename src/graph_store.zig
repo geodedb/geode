@@ -488,6 +488,71 @@ pub fn freeNodeValue(allocator: std.mem.Allocator, node: *Node) void {
     node.properties.deinit();
 }
 
+// ============================================================================
+// PHASE 0 (edge-engine-direct): bounded, evict-freely ADJACENCY cache.
+//
+// `outgoing_edges`/`incoming_edges` used to be UNBOUNDED, fully-resident
+// `ShardedStore(u64, ArrayList(u64))` mirrors — a popular parent's entire
+// adjacency id-list pinned in RAM forever. The adjacency is ALREADY durable +
+// evictable in the graph-storage engine (`expandOutIter`/`expandInIter`), so the
+// resident maps are a redundant mirror. This bounds them: at most `cap` resident
+// per-node id-lists, with HYDRATE-ON-MISS rebuilding an evicted node's PUBLIC
+// edge-id list from the engine. Correctness never depends on residency.
+//
+// EVICTION-SAFETY (grace-point, NOT copy-out): the read API
+// (`getOutgoingEdgeIds`/`getIncomingEdgeIds`) keeps returning a BORROWED
+// `[]const u64` into the resident list's `.items` — so eviction must not free a
+// list while a reader holds a slice into it. We reuse the BoundedNodeCache
+// retire/reclaim discipline exactly as `nodes` does: eviction only UNLINKs +
+// RETIRES (never frees inline); retired lists are freed at the per-graph
+// EXCLUSIVE checkpoint grace window (`reclaimAdjCacheRetiredForGraph`), which has
+// drained all SHARED readers of that graph. The node cache scopes its grace
+// reclaim by `Node.graph_name`; the adjacency value carries no graph, so the
+// cache value wraps the list together with an OWNED `graph` dupe so the same
+// per-graph predicate works (an evicted graph-B list is never freed during a
+// graph-A checkpoint while a graph-B reader could still hold its slice).
+//
+// dedup / locking / the `edges` body mirror / `edge_type_index` are UNCHANGED
+// (Phases 1-4).
+
+/// Cache value for one node's adjacency id-list. `list` holds the node's PUBLIC
+/// edge ids (insertion order while resident; engine-adjacency order when
+/// hydrated — same as the post-restart rebuild). `graph` is an OWNED dupe of the
+/// owning graph name so grace-point reclamation can be scoped per-graph exactly
+/// like the node cache scopes by `Node.graph_name`.
+pub const AdjList = struct {
+    list: std.ArrayList(u64) = .empty,
+    graph: []u8 = &.{},
+};
+
+/// Per-`AdjList` heap free: the id-list backing array + the owned graph dupe.
+/// Used as the adjacency cache's `free_fn` for both inline frees (overwrite) and
+/// grace-point reclamation of evicted entries.
+pub fn freeAdjListValue(allocator: std.mem.Allocator, value: *AdjList) void {
+    value.list.deinit(allocator);
+    if (value.graph.len > 0) allocator.free(value.graph);
+}
+
+/// Bounded, evict-freely cache backing `GraphStore.outgoing_edges` /
+/// `incoming_edges`. See the block comment above and src/storage/node_cache.zig.
+pub const AdjCache = node_cache_mod.BoundedNodeCache(u64, AdjList);
+
+/// Resident adjacency-cache cap from `GEODE_ADJ_CACHE_ENTRIES`.
+///   unset   -> node_cache DEFAULT_CAP (1_000_000) — BOUNDED by default
+///   "0"     -> 0 (unbounded legacy mirror; A/B + safety fallback)
+///   N       -> N
+/// NOTE: like the node cache, the cap only becomes ACTIVE once the hydrate hook
+/// is installed (engine available); until then eviction is disabled so an
+/// in-memory-only edge list is never lost.
+fn adjCacheCapFromEnv() usize {
+    if (std.c.getenv("GEODE_ADJ_CACHE_ENTRIES")) |raw_z| {
+        const raw = std.mem.span(raw_z);
+        return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t\r\n"), 10) catch
+            node_cache_mod.DEFAULT_CAP;
+    }
+    return node_cache_mod.DEFAULT_CAP;
+}
+
 pub const Edge = struct {
     id: u64,
     from_id: u64,
@@ -1257,9 +1322,11 @@ pub const GraphStore = struct {
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
     edge_type_index: std.StringHashMap(std.ArrayList(u64)),
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
-    // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
-    outgoing_edges: sharded_store.ShardedStore(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
-    incoming_edges: sharded_store.ShardedStore(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
+    // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH.
+    // PHASE 0 (edge-engine-direct): BOUNDED, evict-freely caches over the engine
+    // adjacency (hydrate-on-miss). See AdjCache / AdjList above.
+    outgoing_edges: AdjCache, // from_node_id -> PUBLIC edge_ids (bounded)
+    incoming_edges: AdjCache, // to_node_id -> PUBLIC edge_ids (bounded)
     /// Per-graph IdMaps for UUIDv7 ↔ engine slot_id translation.
     id_maps: std.StringHashMap(id_map_mod.IdMap) = undefined,
     // dsn_graph_binding.yml race fix (2026-05-23): serialize CREATE /
@@ -1321,8 +1388,22 @@ pub const GraphStore = struct {
             .merge_prop_index = MergePropertyIndex.init(allocator),
             // PERF-P0-001: Edge-type index for O(1) edge-type lookups
             .edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
-            .outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(allocator),
-            .incoming_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(allocator),
+            // PHASE 0: bounded adjacency caches. Like the node cache, the cap is
+            // forced UNBOUNDED until the hydrate hook is installed (engine
+            // available) via installAdjCacheHydrate — eviction without
+            // rehydration would lose an in-memory-only edge list.
+            .outgoing_edges = try AdjCache.init(allocator, .{
+                .cap = adjCacheCapFromEnv(),
+                .free_fn = freeAdjListValue,
+                .hydrate_fn = null,
+                .hydrate_ctx = null,
+            }),
+            .incoming_edges = try AdjCache.init(allocator, .{
+                .cap = adjCacheCapFromEnv(),
+                .free_fn = freeAdjListValue,
+                .hydrate_fn = null,
+                .hydrate_ctx = null,
+            }),
             .id_maps = std.StringHashMap(id_map_mod.IdMap).init(allocator),
         };
         // Register default graph name
@@ -1423,17 +1504,10 @@ pub const GraphStore = struct {
         }
         self.edge_type_index.deinit();
 
-        // Issue #392: Clean up adjacency indexes
-        var out_iter = self.outgoing_edges.iterator();
-        while (out_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
+        // Issue #392 / PHASE 0: clean up adjacency caches. AdjCache.deinit frees
+        // every resident AND retired AdjList via freeAdjListValue, so no manual
+        // per-entry walk is needed (and a walk would miss the retired backlog).
         self.outgoing_edges.deinit();
-
-        var in_iter = self.incoming_edges.iterator();
-        while (in_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
         self.incoming_edges.deinit();
 
         // Clean up per-graph IdMaps
@@ -1547,20 +1621,11 @@ pub const GraphStore = struct {
         self.edge_type_index.deinit();
         self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
-        // Reset adjacency indexes — walk each list to free its inner
-        // ArrayList, then clearRetainingCapacity keeps the shard backing
-        // arrays live (cheaper than deinit+init, and importantly avoids
-        // allocating under any lock Phase 2 may be holding here).
-        var out_iter = self.outgoing_edges.iterator();
-        while (out_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
+        // Reset adjacency caches. PHASE 0: AdjCache.clearRetainingCapacity frees
+        // every resident AND retired AdjList via freeAdjListValue and clears each
+        // shard's FIFO, keeping the shard backing arrays live (cheaper than
+        // deinit+init).
         self.outgoing_edges.clearRetainingCapacity();
-
-        var in_iter = self.incoming_edges.iterator();
-        while (in_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
         self.incoming_edges.clearRetainingCapacity();
 
         // Reset per-graph IdMaps
@@ -1977,6 +2042,116 @@ pub const GraphStore = struct {
     pub fn reclaimNodeCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
         var gn = graph_name;
         self.nodes.reclaimRetiredWhere(@ptrCast(&gn), retiredNodeInGraph);
+    }
+
+    // ========================================================================
+    // PHASE 0: bounded ADJACENCY cache hydrate-on-miss + grace-point reclaim.
+    // Mirrors the node-cache machinery above (hydrateNodeCb / installNodeCache-
+    // Hydrate / retiredNodeInGraph / reclaimNodeCacheRetiredForGraph).
+    // ========================================================================
+
+    /// Rebuild a node's PUBLIC outgoing edge-id list from the durable engine.
+    /// Iterates the engine's out-adjacency for the node's slot and reverse-maps
+    /// each engine edge_id to its PUBLIC id via the persisted
+    /// `__geode_internal_edge_id` property (same mechanism as the load path).
+    /// Engine-adjacency order (== post-restart rebuild order). Returns null if
+    /// the node is unknown to any IdMap (no engine record).
+    fn hydrateOutgoingCb(ctx: *anyopaque, allocator: std.mem.Allocator, node_id: u64) anyerror!?AdjList {
+        const self: *GraphStore = @ptrCast(@alignCast(ctx));
+        const adapter = global_adapter orelse return null;
+        const gs_slot = self.resolveNodeGraphSlot(node_id) orelse return null;
+        return hydrateAdjFromEngine(adapter, allocator, gs_slot.graph_name, gs_slot.slot_id, .outgoing);
+    }
+
+    /// Incoming analog of `hydrateOutgoingCb`.
+    fn hydrateIncomingCb(ctx: *anyopaque, allocator: std.mem.Allocator, node_id: u64) anyerror!?AdjList {
+        const self: *GraphStore = @ptrCast(@alignCast(ctx));
+        const adapter = global_adapter orelse return null;
+        const gs_slot = self.resolveNodeGraphSlot(node_id) orelse return null;
+        return hydrateAdjFromEngine(adapter, allocator, gs_slot.graph_name, gs_slot.slot_id, .incoming);
+    }
+
+    const AdjDir = enum { outgoing, incoming };
+
+    /// Shared hydrate body for both directions. Owns the returned AdjList (its
+    /// `list` backing array + `graph` dupe are freed by freeAdjListValue).
+    fn hydrateAdjFromEngine(
+        adapter: *graph_storage_adapter.StorageAdapter,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        slot_id: u64,
+        dir: AdjDir,
+    ) anyerror!?AdjList {
+        var iter = switch (dir) {
+            .outgoing => adapter.iterateOutgoingEdges(graph_name, slot_id, allocator) catch |err| switch (err) {
+                error.NodeNotFound => return null,
+                else => return err,
+            },
+            .incoming => adapter.iterateIncomingEdges(graph_name, slot_id, allocator) catch |err| switch (err) {
+                error.NodeNotFound => return null,
+                else => return err,
+            },
+        };
+        defer iter.deinit();
+
+        var list: std.ArrayList(u64) = .empty;
+        errdefer list.deinit(allocator);
+
+        while (try iter.next()) |edge_entry| {
+            // Reverse-map engine edge_id -> PUBLIC id. The canonical edge prop
+            // lives on the edge's SOURCE node: for an OUTGOING edge that is this
+            // node (slot_id); for an INCOMING edge it is the other endpoint
+            // (entry.neighbor == the source, per the engine's in-adjacency).
+            const source_slot = switch (dir) {
+                .outgoing => slot_id,
+                .incoming => edge_entry.neighbor,
+            };
+            const stored = (adapter.getEdgeProperty(
+                graph_name,
+                source_slot,
+                edge_entry.edge_id,
+                INTERNAL_EDGE_ID_PROPERTY_KEY,
+                allocator,
+            ) catch null) orelse continue; // orphan / not-yet-mapped slot: skip
+            defer graph_storage_adapter.freeOwnedStorageProperty(allocator, stored);
+            const public_id = switch (stored) {
+                .string => |text| parsePersistedPublicId(text) orelse continue,
+                else => continue,
+            };
+            try list.append(allocator, public_id);
+        }
+
+        return AdjList{ .list = list, .graph = try allocator.dupe(u8, graph_name) };
+    }
+
+    /// Install the hydrate-on-miss hooks for BOTH adjacency caches and activate
+    /// the configured cap (GEODE_ADJ_CACHE_ENTRIES). Call once the global storage
+    /// adapter is available (engine durable). Until this point the caches stay
+    /// UNBOUNDED — eviction without rehydration would lose an in-memory-only edge
+    /// list.
+    pub fn installAdjCacheHydrate(self: *GraphStore) void {
+        self.outgoing_edges.setHydrate(hydrateOutgoingCb, @ptrCast(self));
+        self.incoming_edges.setHydrate(hydrateIncomingCb, @ptrCast(self));
+    }
+
+    /// Predicate: does this evicted/retired adjacency list belong to `graph_name`
+    /// (passed as ctx)? Scopes grace-point reclamation to the checkpointed graph,
+    /// exactly like retiredNodeInGraph for nodes.
+    fn retiredAdjInGraph(ctx: *anyopaque, value: *const AdjList) bool {
+        const graph_name: *const []const u8 = @ptrCast(@alignCast(ctx));
+        return std.mem.eql(u8, value.graph, graph_name.*);
+    }
+
+    /// Reclaim (free) BOTH adjacency caches' retired entries that belong to
+    /// `graph_name`. MUST be called by the storage adapter while it holds that
+    /// graph's per-graph rwlock EXCLUSIVE (the checkpoint window), which drains
+    /// all SHARED readers of that graph — so freeing a list cannot race a live
+    /// `[]const u64` slice a reader still holds. This is the adjacency grace
+    /// boundary (the borrowed-slice eviction-safety guarantee).
+    pub fn reclaimAdjCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
+        var gn = graph_name;
+        self.outgoing_edges.reclaimRetiredWhere(@ptrCast(&gn), retiredAdjInGraph);
+        self.incoming_edges.reclaimRetiredWhere(@ptrCast(&gn), retiredAdjInGraph);
     }
 
     fn requireEdgeSlot(self: *GraphStore, graph_name: []const u8, edge_id: u64) !u64 {
@@ -3991,20 +4166,12 @@ pub const GraphStore = struct {
         self.edge_type_index.deinit();
         self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
-        // Reset adjacency indexes
-        var out_iter = self.outgoing_edges.iterator();
-        while (out_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.outgoing_edges.deinit();
-        self.outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
-
-        var in_iter = self.incoming_edges.iterator();
-        while (in_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.incoming_edges.deinit();
-        self.incoming_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
+        // Reset adjacency caches. PHASE 0: clearRetainingCapacity frees every
+        // resident + retired AdjList and clears the FIFO, while PRESERVING the
+        // installed hydrate hook + active cap (a deinit+reinit would drop them,
+        // re-disabling bounding until the next installAdjCacheHydrate).
+        self.outgoing_edges.clearRetainingCapacity();
+        self.incoming_edges.clearRetainingCapacity();
 
         // Rebuild label index, merge property index, and ensure graph registry entries for nodes
         var node_iter = self.nodes.iterator();
@@ -4865,18 +5032,46 @@ pub const GraphStore = struct {
         return self.edges.getPtr(edge_id);
     }
 
+    // PHASE 0: borrowed-slice adjacency read with HYDRATE-ON-MISS. Returns the
+    // resident list's `.items` (a hit), or hydrates the node's PUBLIC edge-id
+    // list from the engine, inserts it into the bounded cache (evicting cold
+    // entries), and returns the freshly-resident slice. Null only if the node's
+    // adjacency exists in neither the cache nor the engine (e.g. pure in-memory
+    // deployment with no adapter, or a node with no edges).
+    //
+    // The returned slice stays valid for the caller's read span under the
+    // per-graph SHARED lock: eviction (triggered by the insert here, or by a
+    // concurrent write) only UNLINKs+RETIREs lists, never frees them inline —
+    // retired lists are freed only at the per-graph EXCLUSIVE checkpoint grace
+    // window, which has drained all SHARED readers. `getOrHydratePtr` mutates the
+    // cache on a miss (insert + maybe evict) under the shard's hydrate mutex, so
+    // we `@constCast`: callers already hold the store/graph read lock that
+    // serializes this against the per-graph-exclusive evict/reclaim, matching the
+    // node cache's hydrate-on-miss contract.
+    fn outAdjItems(self: *const GraphStore, node_id: u64) ?[]const u64 {
+        const cache: *AdjCache = @constCast(&self.outgoing_edges);
+        const p = (cache.getOrHydratePtr(node_id) catch return null) orelse return null;
+        return p.list.items;
+    }
+
+    fn inAdjItems(self: *const GraphStore, node_id: u64) ?[]const u64 {
+        const cache: *AdjCache = @constCast(&self.incoming_edges);
+        const p = (cache.getOrHydratePtr(node_id) catch return null) orelse return null;
+        return p.list.items;
+    }
+
     pub fn getOutgoingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
-        return if (self.outgoing_edges.get(node_id)) |list| list.items else null;
+        return self.outAdjItems(node_id);
     }
 
     pub fn getIncomingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
-        return if (self.incoming_edges.get(node_id)) |list| list.items else null;
+        return self.inAdjItems(node_id);
     }
 
     pub fn getOutgoingEdges(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
-        var result = std.ArrayList(Edge).init(allocator);
-        if (self.outgoing_edges.get(node_id)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        var result: std.ArrayList(Edge) = .empty;
+        if (self.outAdjItems(node_id)) |outgoing| {
+            for (outgoing) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     try result.append(allocator, edge.*);
                 }
@@ -4886,9 +5081,9 @@ pub const GraphStore = struct {
     }
 
     pub fn getIncomingEdges(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
-        var result = std.ArrayList(Edge).init(allocator);
-        if (self.incoming_edges.get(node_id)) |incoming| {
-            for (incoming.items) |edge_id| {
+        var result: std.ArrayList(Edge) = .empty;
+        if (self.inAdjItems(node_id)) |incoming| {
+            for (incoming) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     try result.append(allocator, edge.*);
                 }
@@ -4900,8 +5095,8 @@ pub const GraphStore = struct {
     pub fn getNeighbors(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
-        if (self.outgoing_edges.get(node_id)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        if (self.outAdjItems(node_id)) |outgoing| {
+            for (outgoing) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     try result.append(allocator, edge.to_id);
                 }
@@ -4911,9 +5106,9 @@ pub const GraphStore = struct {
     }
 
     pub fn getIncomingNodes(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
-        var result = std.ArrayList(u64).init(allocator);
-        if (self.incoming_edges.get(node_id)) |incoming| {
-            for (incoming.items) |edge_id| {
+        var result: std.ArrayList(u64) = .empty;
+        if (self.inAdjItems(node_id)) |incoming| {
+            for (incoming) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     try result.append(allocator, edge.from_id);
                 }
@@ -4923,9 +5118,9 @@ pub const GraphStore = struct {
     }
 
     pub fn getOutgoingNodes(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
-        var result = std.ArrayList(u64).init(allocator);
-        if (self.outgoing_edges.get(node_id)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        var result: std.ArrayList(u64) = .empty;
+        if (self.outAdjItems(node_id)) |outgoing| {
+            for (outgoing) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     try result.append(allocator, edge.to_id);
                 }
@@ -4935,12 +5130,12 @@ pub const GraphStore = struct {
     }
 
     pub fn getOutDegree(self: *const GraphStore, node_id: u64) usize {
-        return if (self.outgoing_edges.get(node_id)) |outgoing| outgoing.items.len else 0;
+        return if (self.outAdjItems(node_id)) |outgoing| outgoing.len else 0;
     }
 
     pub fn hasEdge(self: *const GraphStore, source: u64, target: u64) bool {
-        if (self.outgoing_edges.get(source)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        if (self.outAdjItems(source)) |outgoing| {
+            for (outgoing) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     if (edge.to_id == target) return true;
                 }
@@ -5033,8 +5228,8 @@ pub const GraphStore = struct {
             const current = queue.items[head];
             if (current == end) break;
 
-            if (self.outgoing_edges.get(current)) |outgoing| {
-                for (outgoing.items) |edge_id| {
+            if (self.outAdjItems(current)) |outgoing| {
+                for (outgoing) |edge_id| {
                     if (self.edges.get(edge_id)) |edge| {
                         const next = edge.to_id;
                         if (visited.contains(next)) continue;
@@ -5102,8 +5297,8 @@ pub const GraphStore = struct {
         while (head < queue.items.len) : (head += 1) {
             const current = queue.items[head];
             const current_dist = distance.get(current) orelse 0;
-            if (self.outgoing_edges.get(current)) |outgoing| {
-                for (outgoing.items) |edge_id| {
+            if (self.outAdjItems(current)) |outgoing| {
+                for (outgoing) |edge_id| {
                     if (self.edges.get(edge_id)) |edge| {
                         const next = edge.to_id;
                         const next_dist = current_dist + 1;
@@ -5191,8 +5386,8 @@ pub const GraphStore = struct {
             const current = queue.items[head];
             if (current.depth >= options.max_depth) continue;
 
-            if (self.outgoing_edges.get(current.node)) |outgoing| {
-                for (outgoing.items) |edge_id| {
+            if (self.outAdjItems(current.node)) |outgoing| {
+                for (outgoing) |edge_id| {
                     if (self.edges.get(edge_id)) |edge| {
                         const next = edge.to_id;
                         if (visited.contains(next)) continue;
@@ -5249,8 +5444,8 @@ pub const GraphStore = struct {
             }
         }.shouldSkip;
 
-        if (self.outgoing_edges.get(current)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        if (self.outAdjItems(current)) |outgoing| {
+            for (outgoing) |edge_id| {
                 if (self.edges.getPtr(edge_id)) |edge| {
                     const next = edge.to_id;
                     if (visit(path_nodes.items, next, end)) continue;
@@ -5275,8 +5470,8 @@ pub const GraphStore = struct {
         }
 
         if (bidirectional) {
-            if (self.incoming_edges.get(current)) |incoming| {
-                for (incoming.items) |edge_id| {
+            if (self.inAdjItems(current)) |incoming| {
+                for (incoming) |edge_id| {
                     if (self.edges.getPtr(edge_id)) |edge| {
                         const next = edge.from_id;
                         if (visit(path_nodes.items, next, end)) continue;
@@ -5637,55 +5832,90 @@ pub const GraphStore = struct {
         return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false, false);
     }
 
-    // Issue #392: Helper to maintain adjacency indexes
-    fn addToAdjacencyIndex(self: *GraphStore, from_id: u64, to_id: u64, edge_id: u64) !void {
-        // Add to outgoing edges for from_id
-        const out_result = try self.outgoing_edges.getOrPut(from_id);
-        if (!out_result.found_existing) {
-            out_result.value_ptr.* = std.ArrayList(u64).empty;
+    // Issue #392 / PHASE 0: append `edge_id` to `node`'s adjacency list in
+    // `cache`, dual-writing the in-memory mirror alongside the engine write that
+    // already happened in createEdgeWithIdInternal.
+    //
+    // Residency-aware to avoid a PARTIAL-LIST trap: when the cache is BOUNDED
+    // (engine is the source of truth, evicted lists are rehydrated on read), a
+    // node whose entry is NOT resident may have other edges that live only in
+    // the engine. Inserting a fresh single-id list here would make a later read
+    // HIT that partial list and miss those edges. So when bounded we only update
+    // a RESIDENT entry; if absent we leave it absent and let the next read
+    // hydrate the COMPLETE list from the engine (which already contains this
+    // edge). When UNBOUNDED (no engine / nothing ever evicts), a miss means the
+    // node genuinely had no prior edges, so we create+append exactly as before.
+    fn appendAdj(self: *GraphStore, cache: *AdjCache, node: u64, edge_id: u64, graph_name: []const u8) !void {
+        if (cache.effectiveCap() == 0) {
+            // Unbounded legacy mirror: the cache IS the source of truth.
+            const r = try cache.getOrPut(node);
+            if (!r.found_existing) {
+                r.value_ptr.* = .{ .list = .empty, .graph = try self.allocator.dupe(u8, graph_name) };
+                // New entry: record it for (disabled) eviction bookkeeping so the
+                // FIFO/accounting stays consistent if the cap is ever raised.
+                try cache.noteInserted(node);
+            }
+            try r.value_ptr.list.append(self.allocator, edge_id);
+            return;
         }
-        try out_result.value_ptr.append(self.allocator, edge_id);
+        // Bounded + engine-backed: only touch a resident entry; otherwise the
+        // engine already holds the edge and the next read rehydrates the full
+        // list. (A resident entry is the complete current list, so appending is
+        // correct and keeps insertion order identical to the pre-cache mirror.)
+        if (cache.getPtr(node)) |entry| {
+            try entry.list.append(self.allocator, edge_id);
+        }
+    }
 
-        // Add to incoming edges for to_id
-        const in_result = try self.incoming_edges.getOrPut(to_id);
-        if (!in_result.found_existing) {
-            in_result.value_ptr.* = std.ArrayList(u64).empty;
+    // Issue #392: Helper to maintain adjacency indexes (dual-write mirror).
+    fn addToAdjacencyIndex(self: *GraphStore, from_id: u64, to_id: u64, edge_id: u64) !void {
+        try self.appendAdj(&self.outgoing_edges, from_id, edge_id, self.nodeGraphNameOrDefault(from_id));
+        try self.appendAdj(&self.incoming_edges, to_id, edge_id, self.nodeGraphNameOrDefault(to_id));
+    }
+
+    /// Best-effort owning graph name for a node id, for tagging adjacency cache
+    /// entries (used to scope grace-point reclamation). Resolves via the
+    /// resident node mirror; falls back to the default graph. The tag only
+    /// affects WHICH per-graph checkpoint window frees a retired list, never
+    /// correctness of the ids themselves.
+    fn nodeGraphNameOrDefault(self: *const GraphStore, node_id: u64) []const u8 {
+        if (self.nodes.getPtr(node_id)) |n| {
+            if (n.graph_name.len > 0) return n.graph_name;
         }
-        try in_result.value_ptr.append(self.allocator, edge_id);
+        return DEFAULT_GRAPH_NAME;
     }
 
     fn removeFromAdjacencyIndex(self: *GraphStore, from_id: u64, to_id: u64, edge_id: u64) void {
-        if (self.outgoing_edges.getPtr(from_id)) |list| {
+        // Only the RESIDENT mirror is edited here; the engine removal is handled
+        // by the caller's durable delete path. An evicted entry is simply left to
+        // rehydrate (without this edge) on the next read.
+        if (self.outgoing_edges.getPtr(from_id)) |entry| {
             var i: usize = 0;
-            while (i < list.items.len) {
-                if (list.items[i] == edge_id) {
-                    _ = list.swapRemove(i);
+            while (i < entry.list.items.len) {
+                if (entry.list.items[i] == edge_id) {
+                    _ = entry.list.swapRemove(i);
                     break;
                 }
                 i += 1;
             }
-            if (list.items.len == 0) {
-                if (self.outgoing_edges.fetchRemove(from_id)) |kv| {
-                    var list_copy = kv.value;
-                    list_copy.deinit(self.allocator);
-                }
+            if (entry.list.items.len == 0) {
+                // Retire (do NOT inline-free): a concurrent SHARED reader may hold
+                // a slice into this list; the cache frees it at the grace window.
+                self.outgoing_edges.remove(from_id);
             }
         }
 
-        if (self.incoming_edges.getPtr(to_id)) |list| {
+        if (self.incoming_edges.getPtr(to_id)) |entry| {
             var i: usize = 0;
-            while (i < list.items.len) {
-                if (list.items[i] == edge_id) {
-                    _ = list.swapRemove(i);
+            while (i < entry.list.items.len) {
+                if (entry.list.items[i] == edge_id) {
+                    _ = entry.list.swapRemove(i);
                     break;
                 }
                 i += 1;
             }
-            if (list.items.len == 0) {
-                if (self.incoming_edges.fetchRemove(to_id)) |kv| {
-                    var list_copy = kv.value;
-                    list_copy.deinit(self.allocator);
-                }
+            if (entry.list.items.len == 0) {
+                self.incoming_edges.remove(to_id);
             }
         }
     }
@@ -5774,16 +6004,16 @@ pub const GraphStore = struct {
         defer seen.deinit();
 
         // Get outgoing edges
-        if (self.outgoing_edges.get(node_id)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        if (self.outAdjItems(node_id)) |outgoing| {
+            for (outgoing) |edge_id| {
                 seen.put(edge_id, {}) catch continue;
                 result.append(allocator, edge_id) catch continue;
             }
         }
 
         // Get incoming edges — deduplicate self-loops via HashSet (#450)
-        if (self.incoming_edges.get(node_id)) |incoming| {
-            for (incoming.items) |edge_id| {
+        if (self.inAdjItems(node_id)) |incoming| {
+            for (incoming) |edge_id| {
                 if (!seen.contains(edge_id)) {
                     seen.put(edge_id, {}) catch continue;
                     result.append(allocator, edge_id) catch continue;
@@ -6166,8 +6396,8 @@ pub const GraphStore = struct {
     /// Deprecated: prefer getOutgoingEdgeIds for zero-copy access.
     pub fn getEdgesFrom(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
         var result: std.ArrayList(Edge) = .empty;
-        if (self.outgoing_edges.get(node_id)) |outgoing| {
-            for (outgoing.items) |edge_id| {
+        if (self.outAdjItems(node_id)) |outgoing| {
+            for (outgoing) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     result.append(allocator, edge) catch continue;
                 }
@@ -6179,8 +6409,8 @@ pub const GraphStore = struct {
     /// Deprecated: prefer getIncomingEdgeIds for zero-copy access.
     pub fn getEdgesTo(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
         var result = std.ArrayList(Edge){};
-        if (self.incoming_edges.get(node_id)) |incoming| {
-            for (incoming.items) |edge_id| {
+        if (self.inAdjItems(node_id)) |incoming| {
+            for (incoming) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
                     result.append(allocator, edge) catch continue;
                 }
@@ -7711,11 +7941,14 @@ pub const GraphStore = struct {
         var edge_ids = std.ArrayList(u64).empty;
         defer edge_ids.deinit(self.allocator);
 
-        if (self.outgoing_edges.get(node_id)) |outgoing| {
-            edge_ids.appendSlice(self.allocator, outgoing.items) catch {};
+        // PHASE 0: collect via the hydrating accessors so an EVICTED node's full
+        // edge set is still found (appendSlice copies, so the later inAdjItems
+        // call can safely evict the outgoing entry we already copied).
+        if (self.outAdjItems(node_id)) |outgoing| {
+            edge_ids.appendSlice(self.allocator, outgoing) catch {};
         }
-        if (self.incoming_edges.get(node_id)) |incoming| {
-            for (incoming.items) |edge_id| {
+        if (self.inAdjItems(node_id)) |incoming| {
+            for (incoming) |edge_id| {
                 var exists = false;
                 for (edge_ids.items) |existing| {
                     if (existing == edge_id) {
@@ -7775,15 +8008,13 @@ pub const GraphStore = struct {
         // ALSO retire+reclaim this value — that would double-free.
         _ = self.nodes.unlink(node_id);
 
-        // Remove adjacency lists for this node
-        if (self.outgoing_edges.fetchRemove(node_id)) |kv| {
-            var list_copy = kv.value;
-            list_copy.deinit(self.allocator);
-        }
-        if (self.incoming_edges.fetchRemove(node_id)) |kv| {
-            var list_copy = kv.value;
-            list_copy.deinit(self.allocator);
-        }
+        // Remove any still-resident adjacency lists for this node. PHASE 0: use
+        // the cache's retire-based remove (frees the AdjList via freeAdjListValue
+        // at the grace window) rather than an inline free, so a concurrent SHARED
+        // reader holding a slice into the list stays valid. Usually a no-op here:
+        // deleting the connected edges above already emptied + removed them.
+        self.outgoing_edges.remove(node_id);
+        self.incoming_edges.remove(node_id);
     }
 
     /// Delete an edge without saving (used during rollback)
@@ -9390,6 +9621,10 @@ pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*Gra
     // configured resident cap (GEODE_NODE_CACHE_ENTRIES). Until this point the
     // cache stays unbounded (eviction without rehydration would lose data).
     store.installNodeCacheHydrate();
+    // PHASE 0: same for the bounded adjacency caches — the engine can now serve
+    // an evicted node's edge-id list via hydrate-on-miss, so activate the
+    // configured cap (GEODE_ADJ_CACHE_ENTRIES). Until here they stay unbounded.
+    store.installAdjCacheHydrate();
     return store;
 }
 
@@ -9556,15 +9791,15 @@ test "TestEdgeAdjacencyIndex" {
     _ = try store.createEdgeWithGraph(node1, node3, "CONNECTS", "test_graph");
     _ = try store.createEdgeWithGraph(node2, node3, "LINKS", "test_graph");
 
-    // Test outgoing edges from node1
+    // Test outgoing edges from node1 (PHASE 0: AdjList wraps the id-list).
     const outgoing1 = store.outgoing_edges.get(node1);
     try testing.expect(outgoing1 != null);
-    try testing.expect(outgoing1.?.items.len == 2);
+    try testing.expect(outgoing1.?.list.items.len == 2);
 
     // Test incoming edges to node3
     const incoming3 = store.incoming_edges.get(node3);
     try testing.expect(incoming3 != null);
-    try testing.expect(incoming3.?.items.len == 2);
+    try testing.expect(incoming3.?.list.items.len == 2);
 
     // Test getEdgesForNode
     var edges_for_node1 = store.getEdgesForNode(testing.allocator, node1);

@@ -8012,12 +8012,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // index instead of calling getEdgesFrom/getEdgesTo which allocate
                         // arena-backed slices that are never freed. This prevents unbounded
                         // arena growth during multi-hop traversal with many bindings.
-                        const edge_id_list = if (hop_direction == 'l')
-                            store.incoming_edges.get(curr_node.id)
+                        // PHASE 0: hydrate-on-miss adjacency read (bounded cache).
+                        const edge_ids = (if (hop_direction == 'l')
+                            store.getIncomingEdgeIds(curr_node.id)
                         else
-                            store.outgoing_edges.get(curr_node.id);
-
-                        const edge_ids = if (edge_id_list) |list| list.items else &[_]u64{};
+                            store.getOutgoingEdgeIds(curr_node.id)) orelse &[_]u64{};
 
                         for (edge_ids) |edge_id| {
                             const edge = store.edges.get(edge_id) orelse continue;

@@ -4946,6 +4946,12 @@ pub const StorageAdapter = struct {
             // ~cache cap + retire backlog since the last checkpoint.
             if (graph_store.getCurrentGlobalStore()) |store| {
                 store.reclaimNodeCacheRetiredForGraph(mg.name);
+                // PHASE 0: same grace boundary for the bounded adjacency caches.
+                // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
+                // graph, so any `[]const u64` adjacency slice handed to an
+                // in-flight reader of THIS graph is no longer live — free this
+                // graph's retired (evicted/removed) adjacency lists now.
+                store.reclaimAdjCacheRetiredForGraph(mg.name);
             }
             mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }

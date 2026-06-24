@@ -21,16 +21,21 @@ test "GraphStore.edges is a ShardedStore" {
     try testing.expectEqual(expected, FieldType);
 }
 
-test "GraphStore.outgoing_edges is a ShardedStore" {
+test "GraphStore.outgoing_edges is a BoundedNodeCache backed by a ShardedStore" {
+    // PHASE 0 (edge-engine-direct): adjacency is now a bounded, evict-freely
+    // AdjCache (eviction + hydrate-on-miss from the engine) rather than a bare
+    // unbounded ShardedStore mirror — but it is still sharded underneath, so
+    // per-shard locking/routing is preserved. Pins both facts so an accidental
+    // revert to a bare ShardedStore (loss of the bounded layer) is caught.
     const FieldType = @TypeOf(@as(graph_store.GraphStore, undefined).outgoing_edges);
-    const expected = sharded.ShardedStore(u64, std.ArrayList(u64));
-    try testing.expectEqual(expected, FieldType);
+    try testing.expectEqual(graph_store.AdjCache, FieldType);
+    try testing.expectEqual(sharded.ShardedStore(u64, graph_store.AdjList), FieldType.Store);
 }
 
-test "GraphStore.incoming_edges is a ShardedStore" {
+test "GraphStore.incoming_edges is a BoundedNodeCache backed by a ShardedStore" {
     const FieldType = @TypeOf(@as(graph_store.GraphStore, undefined).incoming_edges);
-    const expected = sharded.ShardedStore(u64, std.ArrayList(u64));
-    try testing.expectEqual(expected, FieldType);
+    try testing.expectEqual(graph_store.AdjCache, FieldType);
+    try testing.expectEqual(sharded.ShardedStore(u64, graph_store.AdjList), FieldType.Store);
 }
 
 test "createEdgeWithGraph populates outgoing + incoming shards" {
