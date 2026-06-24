@@ -338,7 +338,7 @@ pub const AuditLogger = struct {
         defer if (sec_hex) |s| self.allocator.free(s);
 
         if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or sec_hex.?.len != 64) {
+            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
                 log.err("Invalid key length in env vars", &.{
                     Attr.int("pub_key_len", @intCast(pub_hex.?.len)),
                     Attr.int("sec_key_len", @intCast(sec_hex.?.len)),
@@ -347,8 +347,12 @@ pub const AuditLogger = struct {
                 });
                 return error.ConfigError;
             }
+            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
+                log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
+                break :blk sec_hex.?[0..64];
+            } else sec_hex.?;
             var seed: [32]u8 = undefined;
-            _ = try std.fmt.hexToBytes(&seed, sec_hex.?);
+            _ = try std.fmt.hexToBytes(&seed, seed_hex);
             const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
             self.signing_key = kp;
             return;
@@ -379,11 +383,15 @@ pub const AuditLogger = struct {
         const sec_hex: ?[]const u8 = if (sec_hex_raw) |b| std.mem.trim(u8, b, " \t\r\n") else null;
 
         if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or sec_hex.?.len != 64) {
+            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
                 return error.ConfigError;
             }
+            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
+                log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
+                break :blk sec_hex.?[0..64];
+            } else sec_hex.?;
             var seed: [32]u8 = undefined;
-            _ = try std.fmt.hexToBytes(&seed, sec_hex.?);
+            _ = try std.fmt.hexToBytes(&seed, seed_hex);
             const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
             self.signing_key = kp;
             return;

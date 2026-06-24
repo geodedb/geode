@@ -6459,6 +6459,7 @@ pub fn build(b: *std.Build) void {
     // storage_backup_mod above) so the previously-orphaned manager compiles
     // again and the SigV4 request path stays semantically analyzed.
     const s3_sigv4_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_sigv4.zig"), .target = target, .optimize = optimize });
+    s3_sigv4_mod.addImport("crypto_backend", crypto_backend_mod);
     const s3_backup_sig_mod = b.createModule(.{ .root_source_file = b.path("src/storage/s3_backup.zig"), .target = target, .optimize = optimize });
     s3_backup_sig_mod.addImport("logging", logging_mod);
     s3_backup_sig_mod.addImport("geode", root_mod);

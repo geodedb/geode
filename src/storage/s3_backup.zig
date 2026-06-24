@@ -398,7 +398,7 @@ pub const S3BackupManager = struct {
         const amz_date = try allocator.dupe(u8, &amz_date_buf);
         errdefer allocator.free(amz_date);
 
-        const payload_hash_buf = sigv4.hashPayloadHex(payload);
+        const payload_hash_buf = try sigv4.hashPayloadHex(payload);
         const payload_hash = try allocator.dupe(u8, &payload_hash_buf);
         errdefer allocator.free(payload_hash);
 
