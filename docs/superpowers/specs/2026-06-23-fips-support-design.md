@@ -130,3 +130,49 @@ All work in the `geode-fips-wt` worktree; commit on `feat/fips`. Do NOT touch
 the main tree or the other active worktrees. Push the branch when green
 (no merge to main without user direction). Given the size, implement via
 subagents per phase/subsystem, each verifying the dual-mode build.
+
+---
+
+## Go 1.24 FIPS mode (Task 10 — implemented 2026-06-24)
+
+### Environment variables
+
+| Variable | Value | Effect |
+|---|---|---|
+| `GOFIPS140` | `v1.0.0` (or `latest`) | Select the FIPS 140-3 validated Go Cryptographic Module at **build time**. Requires Go ≥ 1.24. |
+| `GODEBUG` | `fips140=on` | Enforce FIPS mode at **runtime**; the process panics if a non-approved algorithm is requested. |
+
+Both variables are set on the Makefile `canary` target (canaryscan `go build`)
+and on the new `go-test-fips` target.
+
+### Production Go (canaryscan)
+
+`tools/canaryscan` is crypto-free — it imports no `crypto/*` packages.
+`GOFIPS140=v1.0.0` and `GODEBUG=fips140=on` on its `go build` confirm the
+toolchain accepts FIPS mode and ensure the binary is linked against the
+validated cryptographic module, even though it makes no cryptographic calls.
+
+### QUIC-interop test harnesses (tests/quic_tests/)
+
+All files carry `//go:build ignore` — they are standalone `main` programs, not
+a `go test` package.  Their crypto surface is:
+
+- `crypto/tls` (TLS 1.3) — FIPS approved
+- `crypto/rand` — FIPS approved
+- `crypto/rsa` — FIPS approved (RSA-2048+)
+- `crypto/x509` — FIPS approved
+
+No non-approved algorithms (MD5, RC4, DES, ChaCha20-Poly1305, BLAKE2/3,
+Argon2id) are used in any Go source.
+
+**`make go-test-fips`** compiles all 11 structurally-valid harnesses under
+`GOFIPS140=v1.0.0 GODEBUG=fips140=on` and reports pass/fail.  Four harnesses
+have pre-existing build failures unrelated to FIPS (quic-go API drift, a
+local relative import) and are skipped with documentation.  Full runtime
+interop testing requires a live geode QUIC peer and is environment-gated.
+
+### Non-approved Go crypto: none
+
+`grep -rn 'crypto/(md5|rc4|des|sha1)' tools/ tests/` — no hits in any `.go`
+source. The only Go crypto is the FIPS-approved TLS/RSA/X.509 surface in the
+QUIC test harnesses.

@@ -30,7 +30,7 @@ endif
 .PHONY: all build release install install-tuning test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl test-mermaid-integration
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
-.PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
+.PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate status-generate-test no-feature-flags zig-package-cache-check cluster-test
 .PHONY: loadtest-compare loadtest-save-baseline loadtest-save-all-baselines bench-timeseries
@@ -733,10 +733,14 @@ cert-gen: build
 	fi
 
 # CANARY scanner targets
+# GOFIPS140 selects the Go 1.24 Cryptographic Module (FIPS 140-3 validated);
+# GODEBUG=fips140=on enforces it at runtime.  canaryscan itself is crypto-free
+# so these env vars are a build-time affirmation that the toolchain accepts FIPS
+# mode — they do not restrict behaviour.
 canary:
-	@echo "Building canaryscan tool..."
+	@echo "Building canaryscan tool (Go FIPS mode: GOFIPS140=v1.0.0)..."
 	@if [ -d tools/canaryscan ]; then \
-		cd tools/canaryscan && go build -o ../../bin/canaryscan . ; \
+		cd tools/canaryscan && GOFIPS140=v1.0.0 GODEBUG=fips140=on go build -o ../../bin/canaryscan . ; \
 	else \
 		echo "tools/canaryscan directory not found" && exit 1; \
 	fi
@@ -744,6 +748,43 @@ canary:
 
 canary-verify: canary
 	./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
+
+# Run the Go QUIC-interop harnesses under Go 1.24 FIPS mode.
+# The files in tests/quic_tests/ carry //go:build ignore and are standalone
+# main programs (not a go test package), so they cannot be exercised with
+# "go test ./...".  We compile each file individually under GOFIPS140/GODEBUG
+# to confirm the Go FIPS Cryptographic Module accepts the crypto surface
+# (crypto/tls TLS-1.3, crypto/rand, crypto/rsa, crypto/x509 — all approved).
+# Full runtime interop testing requires a live QUIC peer and is therefore
+# environment-gated (run manually against a geode server).
+#
+# Known pre-existing build failures (unrelated to FIPS; same failure without
+# GOFIPS140 set):
+#   comprehensive_quic.go  — quic-go v0.54 API type change (*quic.Stream)
+#   test_quic.go           — relative import "./clients/go/gql" (module mode)
+#   test_quic_3143.go      — removed qlog.DefaultTracer/WriteCloser API
+#   test_quic_detailed.go  — removed qlog.DefaultTracer/WriteCloser API
+# These are pre-existing and are NOT introduced by FIPS mode.
+GO_FIPS_SKIP := comprehensive_quic.go test_quic.go test_quic_3143.go test_quic_detailed.go
+go-test-fips:
+	@echo "==> Go FIPS build-verification (GOFIPS140=v1.0.0 GODEBUG=fips140=on)"
+	@echo "    Toolchain: $$(go version)"
+	@echo "    Note: tests/quic_tests/*.go are //go:build ignore standalone programs;"
+	@echo "    each is compiled (not run) to verify FIPS-mode acceptance."
+	@echo "    Skipping 4 files with known pre-existing non-FIPS build failures."
+	@ok=0; fail=0; skip=0; \
+	for f in tests/quic_tests/*.go; do \
+		base=$$(basename "$$f"); \
+		case " $(GO_FIPS_SKIP) " in \
+		  *" $$base "*) skip=$$((skip+1)); continue ;; \
+		esac; \
+		out=$$(GOFIPS140=v1.0.0 GODEBUG=fips140=on go build -o /dev/null "$$f" 2>&1); \
+		if [ $$? -eq 0 ]; then ok=$$((ok+1)); else \
+			echo "    FAIL: $$f"; echo "$$out"; fail=$$((fail+1)); fi; \
+	done; \
+	echo "    Results: $$ok compiled OK, $$fail failed ($$skip pre-existing skipped)"; \
+	[ "$$fail" -eq 0 ]
+	@echo "==> go-test-fips PASSED (all non-pre-existing quic_tests harnesses compile under FIPS mode)"
 
 .PHONY: verify-all verify-fast ci-verify dependency-integration-audit
 
