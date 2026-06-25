@@ -4351,18 +4351,43 @@ pub const StorageAdapter = struct {
                     // This is the from-dump hot path: ZERO getNodeProperty.
                     return cid;
                 },
-                // Composite-index MISS. For the from-dump flow EVERY Taxon carries
-                // the full composite (node-create + reopen-load both write the
-                // entry), so a miss almost always means a genuinely-dangling
-                // endpoint. But to PRESERVE the GAP-0334 CREATE-seeded fallback
-                // (a node created via a path that didn't populate the composite
-                // entry), DON'T treat this as authoritative — fall through to the
-                // generic seed+verify path below. That path verifies ALL filters
-                // (so it stays collision-CORRECT: it never returns a wrong-source
-                // node), just without the zero-read fast path. Dangling endpoints
-                // are rare, and the seed path's own unique-key authoritative-miss
-                // keeps that case from scanning.
-                .not_found, .not_indexable => {},
+                // AUTHORITATIVE composite MISS (FIX #1 of the 14.27M edge-ingest
+                // wedge). The filter set EXACTLY matches a REGISTERED composite
+                // merge key, so the composite index is the AUTHORITATIVE oracle
+                // for that key: it captures BOTH `source` AND `source_id`, and the
+                // index is COMPLETE — EVERY path that gives a live node the full
+                // composite writes the entry: bulk create
+                // (setNodePropertiesBatchInMemoryOnly), single set
+                // (setNodeProperty), rollback / Raft-restore set
+                // (setNodePropertyNoSave — GAP-A), reopen-load
+                // (loadOneGraphFromAdapter, ALL nodes), index rebuild, and
+                // late-registration backfill; it is removed on delete and on
+                // composite-component removal (removeNodeProperty[NoSave] —
+                // GAP-B); and `merge_prop_index` is process-wide and NOT evicted,
+                // so the entry survives node-cache eviction. Therefore a composite
+                // MISS ⇒ NO node carries that exact {source, source_id} ⇒ return
+                // missing_err IMMEDIATELY: ZERO seed+verify fall-through and ZERO
+                // getNodeProperty / BufferPool property-page reads.
+                //
+                // This is precisely what fixes the indexfungorum (source #7)
+                // wedge: a dangling/cross-source target whose `source_id`
+                // COLLIDES under a DIFFERENT source defeats the seed-side
+                // dangling-O(1)-miss (830c0c45) — `source_id` has a posting, so
+                // the seed resolves the wrong-source node and the old fall-through
+                // verified `source` via getNodeProperty → BufferPool.pin →
+                // deadlock at 14.27M. The composite captures BOTH props, so it
+                // cannot be fooled by the collision: the {indexfungorum, X}
+                // composite simply is not present → authoritative miss, no pool
+                // read. (Mirrors the seed-side authoritative dangling-miss, but at
+                // the composite level where it is collision-correct.)
+                .not_found => return missing_err,
+                // NOT a "no such node" signal: the composite cannot ENCODE this
+                // probe (an unserializable value type) even though the filter
+                // NAMES matched a registered composite. Fall through to the
+                // generic seed+verify path, which verifies ALL filters (stays
+                // collision-correct) — never reached for the from-dump
+                // string-keyed {source, source_id}.
+                .not_indexable => {},
             }
         }
 

@@ -5403,6 +5403,14 @@ pub const GraphStore = struct {
             };
         }
         if (self.nodes.getPtr(node_id)) |node| {
+            // Caveat "B" COMPLETENESS (GAP-B): if `key` is a composite component,
+            // removing it makes any composite merge entry (keyed on the node's
+            // CURRENT full value set) stale — and lookupCompositeMergeCandidate
+            // does NOT re-verify property values, so a stale entry would resolve a
+            // node that no longer carries this value. Remove the composite entry
+            // BEFORE the property is dropped (the entry is rebuilt from the node's
+            // still-present values). No-op when no composite key is registered.
+            if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
             if (node.properties.fetchRemove(key)) |kv| {
                 // Remove from merge property index before freeing
                 self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
@@ -9222,6 +9230,19 @@ pub const GraphStore = struct {
             const value_copy = try copyPropertyValue(self, value);
             errdefer freePropertyValue(self, value_copy);
 
+            // Caveat "B" COMPLETENESS (GAP-A): the composite merge index must stay
+            // complete on the rollback / Raft-snapshot-restore path too — those
+            // restore a node's properties EXCLUSIVELY through this NoSave setter
+            // (createNodeWithId...NoSave then setNodePropertyNoSave per prop). If
+            // this path skips the composite entry, a live composite-bearing node
+            // ends up with NO composite entry and the authoritative composite MISS
+            // (graph_storage_adapter.lookupPublicNodeIdByLabelAndAllProps) would
+            // wrongly report it absent. Mirror the saving setNodeProperty: when
+            // `key` is a composite component, remove the OLD composite entry before
+            // overwriting and re-assert it from the node's CURRENT values below.
+            const composite_component = isCompositeComponentKey(key);
+            if (composite_component) self.removeNodeCompositeMergeEntries(node);
+
             const result = try node.properties.getOrPut(key);
             const was_new = !result.found_existing;
             if (was_new) {
@@ -9232,6 +9253,10 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
             self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
+            // Re-assert the composite merge entry from the node's CURRENT values
+            // (now including the new value for `key`). No-op until the node carries
+            // ALL composite props, or when no composite key is registered.
+            if (composite_component) self.addNodeCompositeMergeEntries(node);
             // PERF-C (issue #814): mirror the bump from setNodeProperty so
             // the rollback / WAL replay path keeps the introspection index in
             // sync with the in-memory state.
@@ -9246,6 +9271,10 @@ pub const GraphStore = struct {
     /// Remove a node property without saving (used during rollback)
     pub fn removeNodePropertyNoSave(self: *GraphStore, node_id: u64, key: []const u8) void {
         if (self.nodes.getPtr(node_id)) |node| {
+            // Caveat "B" COMPLETENESS (GAP-B): drop the (soon-stale) composite
+            // merge entry before removing a composite component, symmetric with
+            // the saving removeNodeProperty. No-op when no composite registered.
+            if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
             if (node.properties.fetchRemove(key)) |kv| {
                 self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
                 // PERF-C (issue #814): mirror the dec from removeNodeProperty.
