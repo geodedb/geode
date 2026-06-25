@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -9,7 +10,6 @@ fn compat_fillRandom(buf: []u8) void {
     }
 }
 const quic = @import("transport/quic");
-const crypto = std.crypto;
 
 // CANARY: REQ=REQ-M6-UNREACHABLE-001; FEATURE="CodeQuality"; ASPECT=ErrorHandling; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // M6: Replaced all 'unreachable' statements with proper error handling (try/panic)
@@ -110,46 +110,59 @@ pub const Server = struct {
     auth_token: ?[]const u8 = null,
     attestation_hash: [32]u8 = [_]u8{0} ** 32,
     // Ephemeral Ed25519 key pair created on auth token set (test scope, could be rotated with token)
-    attest_keypair: ?std.crypto.sign.Ed25519.KeyPair = null,
+    attest_keypair: ?cb.Sig.KeyPair = null,
 
     /// Initialize KMS server with cryptographically secure KEK
     /// GAP-0142: Now uses std.crypto.random instead of deterministic PRNG
     /// The seed parameter is kept for API compatibility but IGNORED in production
-    pub fn init(allocator: std.mem.Allocator, _: u64) Server {
+    pub fn init(allocator: std.mem.Allocator, _: u64) !Server {
         var kek: [32]u8 = undefined;
         // Use cryptographic random for KEK generation
-        compat_fillRandom(&kek);
+        try cb.Csprng.bytes(&kek);
         return .{ .allocator = allocator, .kek = kek };
     }
 
     pub fn setAuthToken(self: *Server, tok: []const u8) !void {
         self.auth_token = tok;
         // derive attestation hash (sha256 over token + kek prefix)
-        var h = std.crypto.hash.sha2.Sha256.init(.{});
-        h.update(tok);
-        h.update(self.kek[0..16]);
-        h.final(&self.attestation_hash);
+        {
+            var stream = try cb.Hash.Stream.init(.sha256);
+            defer stream.deinit();
+            try stream.update(tok);
+            try stream.update(self.kek[0..16]);
+            _ = try stream.final(&self.attestation_hash);
+        }
+        // Free the prior ephemeral keypair before generating a new one (prevents EVP_PKEY leak)
+        if (self.attest_keypair) |*kp| kp.deinit();
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
-        compat_fillRandom(&seed);
-        const attest_kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
+        try cb.Csprng.bytes(&seed);
+        const attest_kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
         self.attest_keypair = attest_kp;
     }
 
+    /// Release resources owned by Server (ephemeral attestation keypair).
+    pub fn deinit(self: *Server) void {
+        if (self.attest_keypair) |*kp| kp.deinit();
+        self.attest_keypair = null;
+    }
+
     /// GAP-0142: Wrap key material using cryptographically secure nonces
-    pub fn wrap(self: *Server, plaintext: [32]u8) Envelope {
+    pub fn wrap(self: *Server, plaintext: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
         // Use cryptographic random for nonce generation - CRITICAL for AES-GCM security
-        compat_fillRandom(&nonce);
+        try cb.Csprng.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
-        crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &plaintext, &.{}, nonce, self.kek);
+        try cb.Aead.seal(.aes_256_gcm, &self.kek, &nonce, &.{}, &plaintext, &ct, &tag);
         return .{ .nonce = nonce, .tag = tag, .ct = ct };
     }
 
     pub fn unwrap(self: *Server, env: Envelope) ![32]u8 {
         var out: [32]u8 = undefined;
-        crypto.aead.aes_gcm.Aes256Gcm.decrypt(&out, &env.ct, env.tag, &.{}, env.nonce, self.kek) catch return error.AuthenticationFailed;
+        var tag = env.tag;
+        var nonce = env.nonce;
+        cb.Aead.open(.aes_256_gcm, &self.kek, &nonce, &.{}, &env.ct, &tag, &out) catch return error.AuthenticationFailed;
         return out;
     }
 };
@@ -164,8 +177,8 @@ pub const RemoteKmsServer = struct {
     server: Server,
     port: u16 = 0,
 
-    pub fn init(allocator: std.mem.Allocator, seed: u64) RemoteKmsServer {
-        return .{ .allocator = allocator, .server = Server.init(allocator, seed) };
+    pub fn init(allocator: std.mem.Allocator, seed: u64) !RemoteKmsServer {
+        return .{ .allocator = allocator, .server = try Server.init(allocator, seed) };
     }
 
     pub fn deinit(self: *RemoteKmsServer) void {
@@ -174,6 +187,7 @@ pub const RemoteKmsServer = struct {
             self.allocator.destroy(qt);
             self.quic_transport = null;
         }
+        self.server.deinit();
     }
 
     pub fn start(self: *RemoteKmsServer, port: u16) !void {
@@ -302,9 +316,9 @@ pub const RemoteKmsServer = struct {
     fn handleGenerate(self: *RemoteKmsServer, response_buf: []u8) ![]const u8 {
         // Generate a new data key and wrap it
         var plaintext: [32]u8 = undefined;
-        compat_fillRandom(&plaintext);
+        try cb.Csprng.bytes(&plaintext);
 
-        const envelope = self.server.wrap(plaintext);
+        const envelope = try self.server.wrap(plaintext);
 
         // Build response
         var fbs_writer: std.Io.Writer = .fixed(response_buf);
@@ -345,7 +359,7 @@ pub const RemoteKmsServer = struct {
 
     fn handleAttest(self: *RemoteKmsServer, response_buf: []u8) ![]const u8 {
         // Generate attestation response
-        const kp = self.server.attest_keypair orelse return error.NotConfigured;
+        var kp = self.server.attest_keypair orelse return error.NotConfigured;
 
         // Sign the attestation hash
         const domain = "GEODE-KMS-ATTEST";
@@ -353,8 +367,11 @@ pub const RemoteKmsServer = struct {
         @memcpy(msg[0..domain.len], domain);
         @memcpy(msg[domain.len..], &self.server.attestation_hash);
 
-        const sig = try kp.sign(&msg, null);
-        const sig_bytes = sig.toBytes();
+        var sig_buf: [64]u8 = undefined;
+        _ = try cb.Sig.sign(.ed25519, &kp, &msg, &sig_buf);
+
+        var pub_buf: [32]u8 = undefined;
+        _ = try kp.publicBytes(&pub_buf);
 
         // Build response
         var fbs_writer: std.Io.Writer = .fixed(response_buf);
@@ -363,9 +380,9 @@ pub const RemoteKmsServer = struct {
         try writer.writeAll("{\"status\":\"OK\",\"hash\":\"");
         for (self.server.attestation_hash) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\",\"pub\":\"");
-        for (kp.public_key.bytes) |b| try writer.print("{x:0>2}", .{b});
+        for (pub_buf) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\",\"sig\":\"");
-        for (sig_bytes) |b| try writer.print("{x:0>2}", .{b});
+        for (sig_buf) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\"}\n");
 
         return fbs_writer.buffered();
@@ -488,7 +505,7 @@ pub const RemoteKmsClient = struct {
             // GAP-0216: Handle potential error from LocalSimulated KMS init
             var client = try ext.Client.init(self.allocator, 0x12345678);
             var key: [32]u8 = undefined;
-            compat_fillRandom(&key);
+            try cb.Csprng.bytes(&key);
             const ext_envelope = try client.wrap(key);
             return Envelope{
                 .version = ext_envelope.version,
@@ -589,7 +606,7 @@ pub const RemoteKmsClient = struct {
         // If not connected, fall back to local attestation hash
         if (!self.connected) {
             var hash: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash("GEODE-KMS-ATTEST", &hash, .{});
+            _ = try cb.Hash.digest(.sha256, "GEODE-KMS-ATTEST", &hash);
             return hash;
         }
 
@@ -711,9 +728,9 @@ pub const RemoteKmsClient = struct {
         defer allocator.free(msg);
         std.mem.copyForwards(u8, msg[0..domain_attest.len], domain_attest);
         std.mem.copyForwards(u8, msg[domain_attest.len..msg_len], &hash);
-        const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(pub_key) catch return false;
-        const signature = std.crypto.sign.Ed25519.Signature.fromBytes(sig);
-        signature.verify(msg, pk) catch return false;
+        var kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, &pub_key) catch return false;
+        defer kp.deinit();
+        cb.Sig.verify(.ed25519, &kp, msg, &sig) catch return false;
         return true;
     }
 };

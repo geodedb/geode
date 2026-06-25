@@ -26,7 +26,7 @@ fn tokenEqlConstantTime(password: []const u8, expected: []const u8) bool {
     const n_ex = @min(expected.len, 256);
     @memcpy(buf_a[0..n_pw], password[0..n_pw]);
     @memcpy(buf_b[0..n_ex], expected[0..n_ex]);
-    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
+    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b); // fips-exempt: non-security (timing-safe memcmp for token comparison; not a crypto primitive)
 }
 
 /// SEC-INFRA-03: Dual-token validation for zero-downtime bearer rotation.

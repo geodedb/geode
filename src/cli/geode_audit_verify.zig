@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -8,8 +9,6 @@ fn compat_fillRandom(buf: []u8) void {
         std.c.arc4random_buf(buf.ptr, buf.len);
     }
 }
-const Ed25519 = std.crypto.sign.Ed25519;
-
 // CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml,tests/test_audit_verify_chain_roundtrip.zig; OWNER=security; UPDATED=2026-05-21
 // GAP-0151 RESOLVED: Now implements Ed25519 signature verification and digest interval validation
 
@@ -124,7 +123,7 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
         // step here so the comparison matches the on-disk format.
         const prev_buf = try hex32(prev_hex);
         var expected_prev: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(&last_hash, &expected_prev, .{});
+        _ = cb.Hash.digest(.sha256, &last_hash, &expected_prev) catch return error.ReadError;
         if (!std.mem.eql(u8, &prev_buf, &expected_prev)) {
             std.debug.print("TAMPER chain ❌  at_seq={} reason=PREV_HASH_MISMATCH expected=", .{seq + 1});
             for (expected_prev) |b| std.debug.print("{x:0>2}", .{b});
@@ -202,8 +201,7 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
 
                     // Verify signature over event_hash
                     const ev_hash_bytes = try hex32(ev_hex);
-                    const signature = Ed25519.Signature.fromBytes(sig_bytes);
-                    const public_key = Ed25519.PublicKey.fromBytes(pk) catch {
+                    var pub_kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, &pk) catch {
                         std.debug.print("SIGNATURE_ERROR ❌  at_seq={} reason=INVALID_PUBLIC_KEY\n", .{seq + 1});
                         signature_failed_count += 1;
                         events_since_digest = 0;
@@ -211,8 +209,8 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
                         seq += 1;
                         continue;
                     };
-
-                    signature.verify(&ev_hash_bytes, public_key) catch {
+                    defer pub_kp.deinit();
+                    cb.Sig.verify(.ed25519, &pub_kp, &ev_hash_bytes, &sig_bytes) catch {
                         std.debug.print("SIGNATURE_ERROR ❌  at_seq={} reason=VERIFICATION_FAILED\n", .{seq + 1});
                         signature_failed_count += 1;
                         events_since_digest = 0;
@@ -295,18 +293,15 @@ test "TestCANARY_REQ_AUDIT_VERIFY_001_ChainVerification" {
 
 test "TestCANARY_REQ_AUDIT_VERIFY_002_SignatureVerification" {
     // CANARY test marker for signature verification
-    // Verifies Ed25519 is properly imported and usable
-    var seed: [32]u8 = undefined;
-    compat_fillRandom(&seed);
-    const keypair = Ed25519.KeyPair.generateDeterministic(seed);
+    // Verifies Ed25519 is properly routed through crypto_backend seam
+    var keypair = try cb.Sig.generate(.ed25519);
+    defer keypair.deinit();
 
     const message = "test message";
-    const sig = keypair.sign(message, null);
+    var sig_out: [64]u8 = undefined;
+    _ = try cb.Sig.sign(.ed25519, &keypair, message, &sig_out);
 
     // Verify the signature
-    sig.verify(message, keypair.public_key) catch {
-        try std.testing.expect(false);
-        return;
-    };
+    try cb.Sig.verify(.ed25519, &keypair, message, &sig_out);
     try std.testing.expect(true);
 }

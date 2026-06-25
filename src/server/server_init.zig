@@ -367,6 +367,11 @@ pub fn initialize(
                 error.NoHmacKeyAvailable => {
                     log.warn("No HMAC key available for auth chain verification - auth graph disabled", &.{});
                 },
+                else => {
+                    log.warn("Failed to resolve HMAC key for auth chain - auth graph disabled", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                },
             }
             break :hmac_blk null;
         };

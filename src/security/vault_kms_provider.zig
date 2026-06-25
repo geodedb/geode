@@ -8,7 +8,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-const crypto = std.crypto;
+const cb = @import("crypto_backend");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -84,9 +84,9 @@ pub const VaultKMSProvider = struct {
     /// Generate a new encryption key and store it in Vault
     pub fn generateAndStoreKey(self: *Self, key_name: []const u8) ![]u8 {
         try validateKeyName(key_name);
-        // Generate a cryptographically secure 32-byte key
+        // Generate a cryptographically secure 32-byte key via FIPS seam
         var key_bytes: [32]u8 = undefined;
-        crypto.random.bytes(&key_bytes);
+        try cb.Csprng.bytes(&key_bytes);
 
         // Convert to hex for storage
         const hex_key = std.fmt.bytesToHex(key_bytes, .lower);
@@ -125,9 +125,9 @@ pub const VaultKMSProvider = struct {
 
         if (master_key.len != 32) return error.InvalidMasterKeyLength;
 
-        // Perform AES-256-GCM encryption
+        // Perform AES-256-GCM encryption via FIPS seam
         var nonce: [12]u8 = undefined;
-        crypto.random.bytes(&nonce);
+        try cb.Csprng.bytes(&nonce);
 
         const ciphertext = try self.allocator.alloc(u8, plaintext.len);
         var tag: [16]u8 = undefined;
@@ -135,7 +135,7 @@ pub const VaultKMSProvider = struct {
         var master_key_array: [32]u8 = undefined;
         @memcpy(&master_key_array, master_key[0..32]);
 
-        crypto.aead.aes_gcm.Aes256Gcm.encrypt(ciphertext, &tag, plaintext, &.{}, nonce, master_key_array);
+        try cb.Aead.seal(.aes_256_gcm, &master_key_array, &nonce, &.{}, plaintext, ciphertext, &tag);
 
         // Create envelope with metadata
         const envelope = VaultEnvelope{
@@ -169,14 +169,14 @@ pub const VaultKMSProvider = struct {
 
         if (master_key.len != 32) return error.InvalidMasterKeyLength;
 
-        // Decrypt
+        // Decrypt via FIPS seam
         const plaintext = try self.allocator.alloc(u8, envelope.ciphertext.len);
 
         var master_key_array: [32]u8 = undefined;
         @memcpy(&master_key_array, master_key[0..32]);
 
-        crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, envelope.ciphertext, envelope.tag, &.{}, // No AAD
-            envelope.nonce, master_key_array) catch |e| {
+        cb.Aead.open(.aes_256_gcm, &master_key_array, &envelope.nonce, &.{}, // No AAD
+            envelope.ciphertext, &envelope.tag, plaintext) catch |e| {
             self.allocator.free(plaintext);
             return e;
         };

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -1934,7 +1935,7 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
 
     const plaintext = try allocator.alloc(u8, ciphertext.len);
     errdefer allocator.free(plaintext);
-    std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ciphertext, tag, "", nonce, key) catch {
+    cb.Aead.open(.aes_256_gcm, &key, &nonce, "", ciphertext, &tag, plaintext) catch {
         allocator.free(plaintext);
         return error.DecryptionFailed;
     };

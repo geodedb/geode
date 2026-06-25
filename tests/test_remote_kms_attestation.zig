@@ -6,7 +6,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    var server = kms.RemoteKmsServer.init(alloc, 0x1234);
+    var server = try kms.RemoteKmsServer.init(alloc, 0x1234);
     try server.start(44556);
     try server.server.setAuthToken("tok-attest");
 
@@ -50,7 +50,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    var server = kms.RemoteKmsServer.init(alloc, 0x9999);
+    var server = try kms.RemoteKmsServer.init(alloc, 0x9999);
     try server.start(44557);
     try server.server.setAuthToken("tok-attest2");
 

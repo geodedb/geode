@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const crypto_zig = @import("quic_crypto");
 const tp = @import("thread_pool");
 
@@ -295,6 +296,13 @@ fn generateHeaderMask(suite: crypto_zig.AeadSuite, hp_key: []const u8, sample: [
             }
         },
         .chacha20_poly1305 => {
+            // FIPS fail-close: ChaCha20 header protection is not approved under FIPS 140-3.
+            // Under FIPS, only AES cipher suites are negotiated, so this branch is unreachable
+            // in production. Gate it defensively to prevent silent fallback.
+            // CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-003; FEATURE="FIPSFailClose"; ASPECT=QUICHeaderProtect; STATUS=IMPL; OWNER=security; UPDATED=2026-06-24
+            if (comptime build_options.fips) {
+                @panic("FIPS: ChaCha20 header protection is not permitted under FIPS 140-3; only AES cipher suites are approved");
+            }
             if (hp_key.len >= 32) {
                 const counter = std.mem.readInt(u32, sample[0..4], .little);
                 var nonce: [12]u8 = undefined;

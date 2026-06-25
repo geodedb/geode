@@ -612,6 +612,7 @@ const RandomWalker = struct {
     pub fn init(allocator: Allocator, graph: *GraphData, p: f64, q: f64, seed: ?u64) !RandomWalker {
         const effective_seed = seed orelse blk: {
             var buf: [@sizeOf(u64)]u8 = undefined;
+            // fips-exempt: non-security ML random-walk PRNG seed (node2vec, not cryptographic)
             compat_fillRandom(&buf);
             break :blk std.mem.readInt(u64, &buf, .little);
         };
@@ -720,6 +721,7 @@ const SkipGram = struct {
                     for (embedding) |*v| {
                         v.* = (blk: {
                             var _rf: [4]u8 = undefined;
+                            // fips-exempt: non-security ML embedding weight initialization (not cryptographic)
                             compat_fillRandom(&_rf);
                             const _ri = std.mem.readInt(u32, &_rf, .little);
                             break :blk @as(f32, @floatFromInt(_ri >> 8)) / @as(f32, @floatFromInt(@as(u32, 1) << 24));

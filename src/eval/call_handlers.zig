@@ -533,6 +533,7 @@ pub fn evalMathFunction(
     if (std.mem.eql(u8, function_name, "random")) {
         if (args.len != 0) return Value{ .Null = {} };
         var rand_bytes: [8]u8 = undefined;
+        // fips-exempt: non-security GQL random() function (query evaluation, not cryptographic)
         // Zig 0.16: std.posix.getrandom removed; branch on OS.
         if (comptime builtin.os.tag == .linux) {
             const rc = std.os.linux.getrandom(&rand_bytes, rand_bytes.len, 0);

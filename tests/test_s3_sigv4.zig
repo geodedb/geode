@@ -109,7 +109,7 @@ test "SigV4 KAT: PUT object with payload (AWS docs example)" {
     const allocator = testing.allocator;
 
     const payload = "Welcome to Amazon S3.";
-    const payload_hash = sigv4.hashPayloadHex(payload);
+    const payload_hash = try sigv4.hashPayloadHex(payload);
     try testing.expectEqualStrings(
         "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072",
         &payload_hash,
@@ -224,7 +224,7 @@ test "SigV4 KAT: GET list objects (multi-param query, AWS docs example)" {
 // ("Examples of how to derive a signing key"): note this older example uses
 // the `+` variant of the example secret (…MDENG+bPx…), unlike the S3 vectors.
 test "SigV4 KAT: signing key derivation chain (kSecret->kDate->kRegion->kService->kSigning)" {
-    const key = sigv4.signingKey(
+    const key = try sigv4.signingKey(
         "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
         "20120215",
         "us-east-1",

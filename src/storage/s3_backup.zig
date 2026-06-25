@@ -284,6 +284,7 @@ pub const S3BackupManager = struct {
         const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
         const jitter = blk: {
             var rng_buf: [8]u8 = undefined;
+            // fips-exempt: non-security retry backoff jitter (timing only, not cryptographic)
             compat_fillRandom(&rng_buf);
             break :blk std.mem.readInt(u64, &rng_buf, .little) % @max(delay / 2, 1);
         };
@@ -397,7 +398,7 @@ pub const S3BackupManager = struct {
         const amz_date = try allocator.dupe(u8, &amz_date_buf);
         errdefer allocator.free(amz_date);
 
-        const payload_hash_buf = sigv4.hashPayloadHex(payload);
+        const payload_hash_buf = try sigv4.hashPayloadHex(payload);
         const payload_hash = try allocator.dupe(u8, &payload_hash_buf);
         errdefer allocator.free(payload_hash);
 

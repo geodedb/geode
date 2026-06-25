@@ -88,6 +88,17 @@
         "error",
         "--gpu-acceleration"
       ]
+    },
+    {
+      "path": "Dockerfile.release.fips",
+      "title": "FIPS-validated production release image (amd64 only)",
+      "manual": true,
+      "notes": [
+        "Multi-stage: copies validated OpenSSL FIPS provider from ci-catalog/zig-fips image.",
+        "MANUALLY MAINTAINED — do not run release_dockerfile_manifest.py sync on this file.",
+        "amd64-only: FIPS-validated OpenSSL provider is x86_64 Linux.",
+        "The geode binary must be built with -Dfips=true -Dopenssl_path=/usr/local/ssl."
+      ]
     }
   ]
 }

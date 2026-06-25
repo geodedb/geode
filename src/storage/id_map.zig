@@ -435,6 +435,7 @@ pub fn generateUuidV7() u128 {
 
     // 62 bits of randomness for the lower portion
     var rand_bytes: [8]u8 = undefined;
+    // fips-exempt: non-security UUID v7 random bits (not key/nonce material)
     compat_fillRandom(&rand_bytes);
     const rand_bits: u64 = @bitCast(rand_bytes);
 

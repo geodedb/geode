@@ -46,7 +46,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 }
 
 const builtin = @import("builtin");
-const crypto = std.crypto;
+const cb = @import("crypto_backend");
 
 /// Credential storage for local session management
 pub const Credentials = struct {
@@ -71,7 +71,7 @@ pub const SessionToken = struct {
 
     pub fn generate(allocator: std.mem.Allocator, username: []const u8) !SessionToken {
         var token: [32]u8 = undefined;
-        crypto.random.bytes(&token);
+        try cb.Csprng.bytes(&token);
 
         const now = compat_timestamp();
         const fingerprint = try getSystemFingerprint(allocator);

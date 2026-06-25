@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 const fle_aead = @import("fle_aead");
@@ -480,6 +481,12 @@ pub fn encryptFieldIfNeeded(
     defer ctx.allocator.free(aad);
 
     // 6. Encrypt using AEAD
+    // FIPS fail-close: ChaCha20-Poly1305 is not an approved AEAD under FIPS 140-3.
+    // AES-256-GCM is the only permitted path. Reject ChaCha selection at runtime.
+    // CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-001; FEATURE="FIPSFailClose"; ASPECT=FLEEncrypt; STATUS=IMPL; OWNER=security; UPDATED=2026-06-24
+    if (build_options.fips and field_meta.encryption.algorithm == .chacha20_poly1305) {
+        return error.FipsUnsupported;
+    }
     const alg = switch (field_meta.encryption.algorithm) {
         .aes256_gcm => fle_aead.Alg.aes256_gcm,
         .chacha20_poly1305 => fle_aead.Alg.chacha20_poly1305,
@@ -567,6 +574,14 @@ pub fn decryptFieldIfNeeded(
         return err;
     };
     defer envelope.deinit(ctx.allocator);
+
+    // FIPS fail-close: reject decryption of ChaCha20-Poly1305 ciphertext under FIPS.
+    // alg_id=2 corresponds to chacha20_poly1305 in the fle envelope format.
+    // AES-256-GCM (alg_id=1) is the only approved AEAD path.
+    // CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-002; FEATURE="FIPSFailClose"; ASPECT=FLEDecrypt; STATUS=IMPL; OWNER=security; UPDATED=2026-06-24
+    if (build_options.fips and envelope.alg_id == @intFromEnum(fle_aead.Alg.chacha20_poly1305)) {
+        return error.FipsUnsupported;
+    }
 
     // 5. Get FEK from key manager
     const key_manager = try getGlobalKeyManager(ctx.allocator);
@@ -1071,5 +1086,130 @@ test "GAP-0515: thread reuse isolates FLE context across connections" {
         defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try testing.expect(per_thread_roles.get(tid) == null);
         try testing.expect(per_thread_tenants.get(tid) == null);
+    }
+}
+
+// =============================================================================
+// FIPS FAIL-CLOSE TESTS (Task 8)
+//
+// These tests assert the fail-close invariant for ChaCha20-Poly1305 under FIPS:
+//   - Under -Dfips=true:  selecting ChaCha20-Poly1305 returns error.FipsUnsupported
+//   - Under -Dfips=false: ChaCha20-Poly1305 compiles and is reachable (no gate)
+//   - AES-256-GCM works in both modes
+//
+// CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-001; FEATURE="FIPSFailClose"; ASPECT=FLETests; STATUS=TESTED; OWNER=security; UPDATED=2026-06-24
+// =============================================================================
+
+// Helper: configure a field with the given algorithm in an isolated catalog, set up a
+// minimal key-manager env, and call encryptFieldIfNeeded. Returns the error (or void on
+// success). Caller owns cleanup of catalog state.
+fn configureAndEncrypt(
+    allocator: std.mem.Allocator,
+    alg: fle_annotations.EncryptionConfig.Algorithm,
+) !void {
+    // Point to a tmp data dir to avoid polluting the real catalog on disk.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    if (@as(isize, @bitCast(cwd_rc)) < 0) return error.GetCwdFailed;
+    var cwd_len: usize = cwd_rc;
+    while (cwd_len > 0 and cwd_buf[cwd_len - 1] == 0) : (cwd_len -= 1) {}
+    const data_dir = try std.fmt.allocPrint(
+        allocator,
+        "{s}/.zig-cache/tmp/{s}",
+        .{ cwd_buf[0..cwd_len], &tmp.sub_path },
+    );
+    defer allocator.free(data_dir);
+    const data_dir_z = try allocator.dupeZ(u8, data_dir);
+    defer allocator.free(data_dir_z);
+    _ = setenvForTest("GEODE_DATA_DIR", data_dir_z.ptr);
+    defer _ = unsetenvForTest("GEODE_DATA_DIR");
+
+    // Reset global catalog + key-manager state for isolation.
+    fle_catalog.resetGlobalCatalog(allocator);
+    setHasEncryptedFields(false);
+    resetGlobalKeyStateForTesting();
+    defer {
+        fle_catalog.resetGlobalCatalog(allocator);
+        setHasEncryptedFields(false);
+        resetGlobalKeyStateForTesting();
+    }
+
+    // Configure the catalog with the requested algorithm.
+    const catalog = try fle_catalog.globalCatalog(allocator);
+    try catalog.configureField("FipsTestType", .{
+        .field_name = "secret",
+        .encryption = .{ .enabled = true, .algorithm = alg },
+    });
+    setHasEncryptedFields(true);
+
+    // Point key manager at a dummy env (no real KMS needed — we expect
+    // failure before the key-fetch for the ChaCha path under FIPS).
+    _ = setenvForTest("GEODE_MASTER_KEY", "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb");
+    defer _ = unsetenvForTest("GEODE_MASTER_KEY");
+
+    const ctx = EncryptionContext{
+        .tenant_id = "test_tenant",
+        .schema_name = "FipsTestType",
+        .allocator = allocator,
+    };
+
+    // encryptFieldIfNeeded will fail-close with FipsUnsupported before key fetch.
+    const result = encryptFieldIfNeeded(ctx, "FipsTestType", "secret", "plaintext_value", "rec_1");
+    if (result) |ciphertext| {
+        // On success (non-FIPS path), free the allocated ciphertext.
+        // encryptFieldIfNeeded returns the original plaintext slice (no alloc)
+        // when the field is not in the catalog, but returns an allocated envelope
+        // when encryption succeeds. Free only if it differs from the input.
+        if (ciphertext.ptr != "plaintext_value".ptr) {
+            allocator.free(ciphertext);
+        }
+    } else |err| {
+        return err;
+    }
+}
+
+// Task 8: Under FIPS, selecting ChaCha20-Poly1305 for FLE must return FipsUnsupported.
+// CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-001; FEATURE="FIPSFailClose"; ASPECT=FLEEncryptRejectChaCha; STATUS=TESTED; OWNER=security; UPDATED=2026-06-24
+test "FIPS-Task8: ChaCha20-Poly1305 FLE encrypt returns FipsUnsupported under FIPS" {
+    if (!build_options.fips) return error.SkipZigTest; // FIPS gate: only runs under -Dfips=true
+
+    const err = configureAndEncrypt(std.testing.allocator, .chacha20_poly1305);
+    try std.testing.expectError(error.FipsUnsupported, err);
+}
+
+// Task 8: Under FIPS, AES-256-GCM FLE must still be reachable (no false positive).
+// The key-manager env is minimal (dummy key), so the test will fail at key fetch —
+// but NOT at the FIPS gate. The absence of FipsUnsupported confirms AES-GCM is
+// approved and passes the FIPS check.
+// CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-001; FEATURE="FIPSFailClose"; ASPECT=FLEEncryptAesGcmAllowed; STATUS=TESTED; OWNER=security; UPDATED=2026-06-24
+test "FIPS-Task8: AES-256-GCM FLE encrypt is NOT blocked by FIPS gate" {
+    if (!build_options.fips) return error.SkipZigTest; // FIPS gate: only runs under -Dfips=true
+
+    const err = configureAndEncrypt(std.testing.allocator, .aes256_gcm);
+    // AES-GCM must NOT produce FipsUnsupported. It may produce other errors
+    // (key-fetch, catalog) but the FIPS fail-close must NOT trigger.
+    if (err) |_| {
+        // Succeeded without error — fine.
+    } else |e| {
+        try std.testing.expect(e != error.FipsUnsupported);
+    }
+}
+
+// Task 8: Under non-FIPS (-Dfips=false), ChaCha20-Poly1305 path is reachable and
+// must NOT be blocked by the FIPS gate.
+// CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-001; FEATURE="FIPSFailClose"; ASPECT=FLEEncryptChaChaAllowedNonFips; STATUS=TESTED; OWNER=security; UPDATED=2026-06-24
+test "FIPS-Task8: ChaCha20-Poly1305 FLE is NOT gated under non-FIPS build" {
+    if (build_options.fips) return error.SkipZigTest; // Non-FIPS gate: only runs under -Dfips=false
+
+    const err = configureAndEncrypt(std.testing.allocator, .chacha20_poly1305);
+    // Under non-FIPS, ChaCha20 must NOT be blocked. It may produce other errors
+    // (key-fetch) but the FIPS gate must not fire.
+    if (err) |_| {
+        // Succeeded without error — fine.
+    } else |e| {
+        // Must not be FipsUnsupported.
+        try std.testing.expect(e != error.FipsUnsupported);
     }
 }

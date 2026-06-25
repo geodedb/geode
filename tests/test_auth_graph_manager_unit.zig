@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const build_options = @import("build_options");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
 const auth_graph_manager_mod = @import("auth_graph_manager");
@@ -132,6 +133,7 @@ fn bridgePassword(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64,
 }
 
 test "SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing (createUserDetailed) for test setup
     var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
     var mgr = try AuthGraphManager.init(testing.allocator, &store);

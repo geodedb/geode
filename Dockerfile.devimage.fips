@@ -1,0 +1,59 @@
+# Dockerfile.devimage.fips — FIPS dev runtime image (amd64 only).
+#
+# Built by the `dev-image-fips` CI job on every main-branch push.  Publishes
+# rolling tags (dev-fips / main-fips / main-<short-sha>-fips) to the GitLab
+# Container Registry and docker.io/geodedb/geode.  NEVER tagged `latest` or
+# `dev` — those belong to the standard (non-FIPS) dev image and releases.
+#
+# Like Dockerfile.devimage this copies a pre-cross-compiled FIPS binary
+# (zig -Dtarget=x86_64-linux-gnu -Dfips=true -Dopenssl_path=/usr/local/ssl,
+# ReleaseSafe) placed at dist/linux-fips-amd64/geode by dev-image-build-fips.
+#
+# Design constraint: the FIPS binary dynamically loads the validated OpenSSL
+# FIPS provider (fips.so) from /usr/local/ssl at startup.  Debian's libssl3 is
+# NOT the validated provider.  We stage-copy /usr/local/ssl from the zig-fips
+# ci-catalog image, which has the validated FIPS OpenSSL built and installed.
+#
+# amd64-only: the validated FIPS provider is x86_64 Linux only.
+
+# Stage 1: source the validated OpenSSL FIPS provider.
+FROM registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0 AS fipsprov
+
+# Stage 2: runtime image
+FROM debian:bookworm-slim
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Docker sets TARGETARCH; for FIPS this is always amd64.
+ARG TARGETARCH=amd64
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 10000 geode \
+    && mkdir -p /data /certs /var/log/geode \
+    && chown -R geode:geode /data /certs /var/log/geode
+
+# Copy the validated OpenSSL FIPS provider tree from the zig-fips build image.
+COPY --from=fipsprov /usr/local/ssl /usr/local/ssl
+
+# Point OpenSSL at the FIPS-enabled configuration.
+ENV OPENSSL_CONF=/usr/local/ssl/ssl/openssl.cnf
+
+# Copy the pre-built FIPS binary from the dev-image-build-fips job artifact.
+COPY dist/linux-fips-amd64/geode /usr/local/bin/geode
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh
+
+USER geode
+WORKDIR /home/geode
+ENV LOG_LEVEL=error
+
+EXPOSE 3141/udp 50051/tcp 9090/tcp
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD /usr/local/bin/health-check.sh
+
+ENTRYPOINT ["/usr/local/bin/geode"]
+CMD ["serve", "--data-dir", "/data", "--log-level", "error"]

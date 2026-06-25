@@ -8,6 +8,7 @@
 //! - `generateSecurePassword` — generate a cryptographically secure random password
 
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -111,9 +112,9 @@ pub fn isPasswordStrong(password: []const u8) bool {
 
 /// Generate a cryptographically secure random password.
 /// Returns a 32-character hex string (16 random bytes converted to hex).
-pub fn generateSecurePassword() [32]u8 {
+pub fn generateSecurePassword() ![32]u8 {
     var random_bytes: [16]u8 = undefined;
-    compat_fillRandom(&random_bytes);
+    try cb.Csprng.bytes(&random_bytes);
     return std.fmt.bytesToHex(random_bytes, .lower);
 }
 
@@ -182,6 +183,6 @@ test "isPasswordStrong accepts valid passwords" {
 }
 
 test "generateSecurePassword returns 32 chars" {
-    const pw = generateSecurePassword();
+    const pw = try generateSecurePassword();
     try std.testing.expectEqual(@as(usize, 32), pw.len);
 }

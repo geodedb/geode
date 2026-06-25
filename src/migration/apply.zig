@@ -52,7 +52,7 @@ pub fn applyUpMigrations(alloc: std.mem.Allocator, cfg: MigrationConfig, names: 
             return error.ApplyFailed;
         };
         const prefix = root.checksumPrefix(script);
-        const sha256 = root.computeContentSha256(script);
+        const sha256 = root.computeContentSha256(script) catch return error.ApplyFailed;
         const new_name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
         ledger.rows.append(alloc, .{ .version = entry.version, .name = new_name, .applied = true, .checksum_prefix = prefix, .content_sha256 = sha256 }) catch {
             alloc.free(new_name);

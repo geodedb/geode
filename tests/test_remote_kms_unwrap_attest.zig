@@ -8,7 +8,7 @@ const kms = @import("../src/security/kms_remote.zig");
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xA1B2C3D4);
+    var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xA1B2C3D4);
     try server.start(8890);
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {

@@ -3,6 +3,7 @@
 /// Handles routing for `tde.*`, `cdc.*`, `geode.fle.*`, `geode.storage.*`, and `geode.backup.*` procedures.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -481,7 +482,7 @@ fn handleTdeTestKeyRotation(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 
         // Generate new master key
         var new_master: [32]u8 = undefined;
-        compat_fillRandom(&new_master);
+        try cb.Csprng.bytes(&new_master);
 
         // Create new key hierarchy
         // const new_hierarchy = tde_hierarchy.KeyHierarchy.init(new_master); // Commented to avoid module conflict
@@ -714,6 +715,7 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
     const auth_token = if (enable_auth) blk: {
         var buf: [128]u8 = undefined;
         var rand_buf: [4]u8 = undefined;
+        // fips-exempt: non-security mock test-token for test harness
         compat_fillRandom(&rand_buf);
         const rand_val = std.mem.readInt(u32, &rand_buf, .little);
         const token_str = try std.fmt.bufPrint(&buf, "mock-token-{x}", .{rand_val});

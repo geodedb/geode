@@ -1158,6 +1158,7 @@ pub fn exp_val(val: Value) EvaluatorError!Value {
 pub fn random_val(allocator: std.mem.Allocator) EvaluatorError!Value {
     _ = allocator;
     var seed: [32]u8 = undefined;
+    // fips-exempt: non-security query-eval PRNG seed (GQL random() function)
     getRandomBytes(&seed);
     var rng = std.Random.DefaultCsprng.init(seed);
     return Value{ .Double = rng.random().float(f64) };

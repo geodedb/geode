@@ -13,7 +13,7 @@ test "remote kms generate envelope and registry rotateWithRemoteKms" {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Start server
-    var server = kms_remote.RemoteKmsServer.init(alloc, 0xDEADBEEF);
+    var server = try kms_remote.RemoteKmsServer.init(alloc, 0xDEADBEEF);
     try server.start(8770);
     // Give transport moment to bind
     sleep(50);

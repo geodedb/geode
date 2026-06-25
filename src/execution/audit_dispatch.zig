@@ -3,6 +3,7 @@
 /// Handles routing for all `audit.*` procedure calls.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -472,10 +473,11 @@ fn handleAuditVerifyHashChain(allocator: std.mem.Allocator, _: ast.CallProcedure
             events_checked += 1;
 
             // Compute hash of current event + previous hash
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            hasher.update(&prev_hash);
-            hasher.update(line);
-            hasher.final(&prev_hash);
+            var hasher = try cb.Hash.Stream.init(.sha256);
+            defer hasher.deinit();
+            try hasher.update(&prev_hash);
+            try hasher.update(line);
+            _ = try hasher.final(&prev_hash);
 
             // In a real implementation, we would compare with stored hash
             // For now, just verify we can compute hashes
@@ -513,9 +515,8 @@ fn handleAuditTestSignatureVerification(allocator: std.mem.Allocator, _: ast.Cal
     var failures: i64 = 0;
     var verified = true;
 
-    // Generate a test keypair
-    const seed: [32]u8 = [_]u8{42} ** 32;
-    const keypair = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch {
+    // Generate a test keypair via the FIPS seam
+    var keypair = cb.Sig.generate(.ed25519) catch {
         // Return error if keypair generation fails
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "verified");
@@ -535,6 +536,7 @@ fn handleAuditTestSignatureVerification(allocator: std.mem.Allocator, _: ast.Cal
             .flags = std.ArrayList([]const u8).empty,
         };
     };
+    defer keypair.deinit();
 
     // Create test messages and sign them
     const messages = [_][]const u8{
@@ -544,23 +546,28 @@ fn handleAuditTestSignatureVerification(allocator: std.mem.Allocator, _: ast.Cal
     };
 
     for (messages) |msg| {
-        // Sign the message
-        const signature = try keypair.sign(msg, null);
+        // Sign the message via the FIPS seam
+        var sig_buf: [128]u8 = undefined;
+        const sig_len = cb.Sig.sign(.ed25519, &keypair, msg, &sig_buf) catch {
+            failures += 1;
+            verified = false;
+            continue;
+        };
         signatures_checked += 1;
 
-        // Verify the signature
-        signature.verify(msg, keypair.public_key) catch {
+        // Verify the signature via the FIPS seam
+        cb.Sig.verify(.ed25519, &keypair, msg, sig_buf[0..sig_len]) catch {
             failures += 1;
             verified = false;
         };
 
-        // Test invalid signature detection
-        var bad_sig_bytes = signature.toBytes();
-        bad_sig_bytes[0] ^= 0xFF; // Corrupt first byte
-        const bad_sig = std.crypto.sign.Ed25519.Signature.fromBytes(bad_sig_bytes);
+        // Test invalid signature detection: corrupt the first byte
+        var bad_sig_buf: [128]u8 = undefined;
+        @memcpy(bad_sig_buf[0..sig_len], sig_buf[0..sig_len]);
+        bad_sig_buf[0] ^= 0xFF;
         signatures_checked += 1;
 
-        bad_sig.verify(msg, keypair.public_key) catch {
+        cb.Sig.verify(.ed25519, &keypair, msg, bad_sig_buf[0..sig_len]) catch {
             // This should fail - expected behavior
             continue;
         };
@@ -612,9 +619,9 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
         while (lines_iter.next()) |line| {
             if (line.len == 0) continue;
 
-            // Hash each event to create a leaf
+            // Hash each event to create a leaf via the FIPS seam
             var leaf_hash: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash(line, &leaf_hash, .{});
+            _ = try cb.Hash.digest(.sha256, line, &leaf_hash);
             try leaves.append(allocator, leaf_hash);
         }
     } else |_| {
@@ -649,15 +656,16 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
                 i += 2;
                 j += 1;
             }) {
-                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-                hasher.update(&current_level[i]);
+                var hasher = try cb.Hash.Stream.init(.sha256);
+                defer hasher.deinit();
+                try hasher.update(&current_level[i]);
                 if (i + 1 < current_level.len) {
-                    hasher.update(&current_level[i + 1]);
+                    try hasher.update(&current_level[i + 1]);
                 } else {
                     // Odd number of nodes - duplicate the last one
-                    hasher.update(&current_level[i]);
+                    try hasher.update(&current_level[i]);
                 }
-                hasher.final(&next_level[j]);
+                _ = try hasher.final(&next_level[j]);
             }
 
             allocator.free(current_level);

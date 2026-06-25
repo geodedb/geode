@@ -43,12 +43,11 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+const cb = @import("crypto_backend");
 const rls = @import("rls");
 const audit_formatter = @import("audit_formatter.zig");
 const audit_sink = @import("audit_sink.zig");
 const Allocator = std.mem.Allocator;
-const crypto = std.crypto;
-const Ed25519 = std.crypto.sign.Ed25519;
 const pooled = @import("transport/thread_pool");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -215,7 +214,7 @@ pub const AuditLogger = struct {
     digest_interval_events: u32,
 
     // Signing keys
-    signing_key: ?Ed25519.KeyPair,
+    signing_key: ?cb.Sig.KeyPair,
 
     // Heap-allocated file path owned by this logger (set by `initForGraph`).
     // When non-null, freed in `deinit`. Avoids @constCast on Config.file_path.
@@ -323,6 +322,7 @@ pub const AuditLogger = struct {
         if (self.owned_path) |p| {
             self.allocator.free(p);
         }
+        if (self.signing_key) |*kp| kp.deinit();
     }
 
     fn loadKeys(self: *AuditLogger) !void {
@@ -339,18 +339,22 @@ pub const AuditLogger = struct {
         defer if (sec_hex) |s| self.allocator.free(s);
 
         if (pub_hex != null and sec_hex != null) {
-            var kp: Ed25519.KeyPair = undefined;
-            if (pub_hex.?.len != 64 or sec_hex.?.len != 128) {
+            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
                 log.err("Invalid key length in env vars", &.{
                     Attr.int("pub_key_len", @intCast(pub_hex.?.len)),
                     Attr.int("sec_key_len", @intCast(sec_hex.?.len)),
                     Attr.int("expected_pub_len", 64),
-                    Attr.int("expected_sec_len", 128),
+                    Attr.int("expected_sec_len", 64),
                 });
                 return error.ConfigError;
             }
-            _ = try std.fmt.hexToBytes(&kp.public_key.bytes, pub_hex.?);
-            _ = try std.fmt.hexToBytes(&kp.secret_key.bytes, sec_hex.?);
+            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
+                log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
+                break :blk sec_hex.?[0..64];
+            } else sec_hex.?;
+            var seed: [32]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&seed, seed_hex);
+            const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
             self.signing_key = kp;
             return;
         }
@@ -380,19 +384,27 @@ pub const AuditLogger = struct {
         const sec_hex: ?[]const u8 = if (sec_hex_raw) |b| std.mem.trim(u8, b, " \t\r\n") else null;
 
         if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or sec_hex.?.len != 128) {
+            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
                 return error.ConfigError;
             }
-            var kp: Ed25519.KeyPair = undefined;
-            _ = try std.fmt.hexToBytes(&kp.public_key.bytes, pub_hex.?);
-            _ = try std.fmt.hexToBytes(&kp.secret_key.bytes, sec_hex.?);
+            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
+                log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
+                break :blk sec_hex.?[0..64];
+            } else sec_hex.?;
+            var seed: [32]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&seed, seed_hex);
+            const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
             self.signing_key = kp;
             return;
         }
 
-        const kp = Ed25519.KeyPair.generate(io_rf);
-        const generated_pub = std.fmt.bytesToHex(kp.public_key.bytes, .lower);
-        const generated_sec = std.fmt.bytesToHex(kp.secret_key.bytes, .lower);
+        var kp = try cb.Sig.generate(.ed25519);
+        var pub_bytes: [32]u8 = undefined;
+        _ = try kp.publicBytes(&pub_bytes);
+        var seed_bytes: [32]u8 = undefined;
+        _ = try kp.privateSeed(&seed_bytes);
+        const generated_pub = std.fmt.bytesToHex(pub_bytes, .lower);
+        const generated_sec = std.fmt.bytesToHex(seed_bytes, .lower);
 
         const pub_file = try std.Io.Dir.cwd().createFile(io_rf, pub_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
         defer pub_file.close(io_rf);
@@ -496,24 +508,27 @@ pub const AuditLogger = struct {
         ev.seq_no = self.last_seq;
 
         var new_prev_hash: [32]u8 = undefined;
-        crypto.hash.sha2.Sha256.hash(&self.last_hash, &new_prev_hash, .{});
+        _ = try cb.Hash.digest(.sha256, &self.last_hash, &new_prev_hash);
         ev.prev_hash = new_prev_hash;
 
         // Compute Event Hash (Hash of content excluding signatures)
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&ev.prev_hash);
-        hasher.update(@tagName(ev.event_type));
-        hasher.update(ev.resource.id);
-        hasher.update(ev.action);
+        var hasher = try cb.Hash.Stream.init(.sha256);
+        defer hasher.deinit();
+        try hasher.update(&ev.prev_hash);
+        try hasher.update(@tagName(ev.event_type));
+        try hasher.update(ev.resource.id);
+        try hasher.update(ev.action);
         var eh: [32]u8 = undefined;
-        hasher.final(&eh);
+        _ = try hasher.final(&eh);
         ev.event_hash = eh;
 
         self.last_hash = ev.event_hash;
 
         // Sign if it is a DIGEST
         if (ev.event_type == .DIGEST and self.signing_key != null) {
-            ev.signature = (try self.signing_key.?.sign(ev.event_hash[0..], null)).toBytes();
+            var sig_out: [64]u8 = undefined;
+            _ = try cb.Sig.sign(.ed25519, &self.signing_key.?, ev.event_hash[0..], &sig_out);
+            ev.signature = sig_out;
         }
 
         if (self.file) |f| {
@@ -551,12 +566,13 @@ pub const AuditLogger = struct {
     /// GAP-0512: Renamed from emitDigest and calls appendEventLocked instead of
     /// appendAuditEvent to avoid recursive mutex acquisition.
     fn emitDigestLocked(self: *AuditLogger) anyerror!void {
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
+        var hasher = try cb.Hash.Stream.init(.sha256);
+        defer hasher.deinit();
         for (self.digest_buf.items) |h| {
-            hasher.update(&h);
+            try hasher.update(&h);
         }
         var digest: [32]u8 = undefined;
-        hasher.final(&digest);
+        _ = try hasher.final(&digest);
 
         self.digest_buf.clearRetainingCapacity();
 
@@ -1908,7 +1924,7 @@ pub const AuditLogger = struct {
 
         // Calculate hash (simplified)
         var hash_bytes: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &hash_bytes, .{});
+        _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &hash_bytes);
         const hash_hex = std.fmt.bytesToHex(hash_bytes, .lower);
         const hash = try allocator.dupe(u8, &hash_hex);
 
@@ -1989,7 +2005,7 @@ pub const AuditLogger = struct {
 
         // Calculate checksum using SHA-256 (replacing MD5 per security audit #437)
         var checksum_bytes: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &checksum_bytes, .{});
+        _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &checksum_bytes);
         const checksum_hex = std.fmt.bytesToHex(checksum_bytes, .lower);
         const checksum = try allocator.dupe(u8, &checksum_hex);
 
