@@ -1226,69 +1226,6 @@ fn shardLocalTxnForNode(stmt_txn_id: gs.TxnId, node_id: u64) ?gs.TxnId {
     return shardedTxnLocal(stmt_txn_id);
 }
 
-/// Cross-shard edge removal — adapter-level mirror of the vendor's
-/// `crossShardAddEdge` (sharded_engine.zig).  The vendored
-/// `ShardedGraphEngine.removeEdge` short-circuits to
-/// `error.CrossShardEdgeUnsupported` when the endpoints live on
-/// different shards (each per-shard `removeEdgeTxn` does both
-/// `node_store.getNode(from)` and `node_store.getNode(to)` against its
-/// own shard, which fails for the off-shard endpoint).  Cross-shard
-/// edges are written by `crossShardAddEdge` with src.adj_out +
-/// src.edge_index on the source shard and dst.adj_in on the target
-/// shard, so we tear those down symmetrically:
-///
-///   src shard : adj_out.removeEdge(from_rec.out_head, edge_id)
-///               edge_index.remove(edge_id)
-///               manifest.edge_count -= 1
-///   dst shard : adj_in .removeEdge(to_rec.in_head, edge_id)
-///
-/// Each shard's mutation runs inside its own `beginTxn`/`commitTxn` so
-/// the per-shard WAL records the change atomically; we cannot piggyback
-/// on a stmt-txn here because by definition the stmt-txn lives on at
-/// most one of the two shards.
-fn removeCrossShardEdge(mg: *ManagedGraph, from_id: u64, to_id: u64, edge_id: u64) !void {
-    const src = mg.shardEngineForNode(from_id);
-    const dst = mg.shardEngineForNode(to_id);
-
-    // Source shard: drop the outgoing entry + edge_index entry.
-    const src_txn = try src.beginTxn();
-    var src_done = false;
-    // error-policy: A — best-effort rollback on an already-failing path; the
-    // primary error propagates and WAL recovery supersedes a failed abort.
-    errdefer if (!src_done) src.abortTxn(src_txn) catch {};
-
-    const from_rec = (try src.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-    if (from_rec.out_head != 0) {
-        try src.adj_out.removeEdge(from_rec.out_head, edge_id);
-    }
-    _ = src.edge_index.remove(edge_id);
-    src.edge_index_dirty = true;
-    if (src.manifest.edge_count > 0) {
-        src.manifest.edge_count -= 1;
-    }
-    try src.commitTxn(src_txn);
-    src_done = true;
-
-    // Target shard: drop the incoming entry.  If this fails, the source
-    // shard has already committed — the in-memory `edges` map is still
-    // cleaned up by `graph_store.deleteEdgeNoSave`, so a stale adj_in
-    // entry would surface only as a dangling ref during future MATCH
-    // expansion on `to`.  We bubble the error up so the caller can log;
-    // there is no clean recovery without the missing
-    // `crossShardRemoveEdge` symmetric-2PC primitive in the vendor.
-    const dst_txn = try dst.beginTxn();
-    var dst_done = false;
-    // error-policy: A — best-effort rollback (see src_txn errdefer above).
-    errdefer if (!dst_done) dst.abortTxn(dst_txn) catch {};
-
-    const to_rec = (try dst.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-    if (to_rec.in_head != 0) {
-        try dst.adj_in.removeEdge(to_rec.in_head, edge_id);
-    }
-    try dst.commitTxn(dst_txn);
-    dst_done = true;
-}
-
 fn addIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) !void {
     return addIndexedNodePropertyEx(mg, label_id, node_id, property_key, value, false);
 }
@@ -3671,19 +3608,22 @@ pub const StorageAdapter = struct {
 
     /// Delete an edge by its endpoints and edge ID.
     ///
-    /// 2026-04-27 cross-shard fix: `ShardedGraphEngine.removeEdge` returns
-    /// `error.CrossShardEdgeUnsupported` when from/to live on different
-    /// shards, mirroring the equivalent `addEdge` gap fixed in commit
-    /// 79c145de via `crossShardAddEdge`.  Cross-shard edges are produced
-    /// any time `BEGIN; CREATE (a)-[r]->(b); ROLLBACK` (or any direct
-    /// delete path) lands the two endpoints on shards picked by
-    /// `shardOfNode`.  Without this branch the rollback's undo-log
-    /// replay surfaced the cross-shard error, `graph_store.deleteEdge`
-    /// swallowed it via `catch |err| return;`, and the in-memory
-    /// `edges` / `edge_type_index` were never cleaned — a follow-up
-    /// `MATCH ()-[r]->() RETURN count(r)` returned 1 instead of 0
-    /// (regression test: `2pc-rollback-edge-create-undone` in
-    /// `geodetestlab-cli/specs/distributed_2pc_undo.yml`).
+    /// Edge co-location (graph-storage Phase C): an edge `(from)-[r]->(to)` now
+    /// lives ENTIRELY on shard(from) — out-adjacency, edge_index, the existence
+    /// index AND the incoming adjacency (shard(from).adj_in_remote keyed by
+    /// `to`). So removal is a SINGLE-shard delete on shard(from) for BOTH
+    /// same-shard and cross-endpoint edges; `ShardedGraphEngine.removeEdge` no
+    /// longer returns `error.CrossShardEdgeUnsupported`. The old adapter-level
+    /// `removeCrossShardEdge` workaround (which tore down the legacy `dst.adj_in`
+    /// in-entry) was removed: with co-location that store is empty for the edge,
+    /// so it would have left a dangling reverse-traversal entry. Routing keys on
+    /// shard(from) regardless of where `to` lives.
+    ///
+    /// R10: join the active session/statement engine txn when it lives on
+    /// shard(from) (the edge's shard); otherwise auto-commit via the engine. This
+    /// preserves the `2pc-rollback-edge-create-undone` regression (a rollback's
+    /// undo-log replay deletes the edge so a follow-up
+    /// `MATCH ()-[r]->() RETURN count(r)` returns 0).
     pub fn deleteEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) !void {
         // OTel Task 13: graph data model mutation counter (delete edge).
         const _om13de = @import("otel_metrics");
@@ -3694,21 +3634,16 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        const same_shard = gs.shard_count.shardOfNode(from_id) == gs.shard_count.shardOfNode(to_id);
-        // R10: join active session/statement engine txn if on the same shard.
-        if (same_shard) {
-            if (currentStatementTxnForGraph(graph_name)) |s| {
-                if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                    try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
-                    _ok_13de = true;
-                    return;
-                }
+        // The edge is co-located on shard(from). Join an active stmt-txn iff it
+        // is on shard(from); else single-shard auto-commit.
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
+                try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
+                _ok_13de = true;
+                return;
             }
-            try mg.engine.removeEdge(from_id, to_id, edge_id);
-            _ok_13de = true;
-            return;
         }
-        try removeCrossShardEdge(mg, from_id, to_id, edge_id);
+        try mg.engine.removeEdge(from_id, to_id, edge_id);
         _ok_13de = true;
     }
 

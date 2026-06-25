@@ -384,3 +384,78 @@ test "P1-edge: eviction + hydrate + delete are leak-free under the testing alloc
     // deinit (in defer) frees all resident + retired edges via freeEdgeValue;
     // the testing allocator asserts no leak at the end of the test.
 }
+
+// Edge co-location (graph-storage Phase C) — geode cross-endpoint delete.
+//
+// A cross-ENDPOINT edge `(from)-[r]->(to)` (endpoints on different shards) now
+// lives ENTIRELY on shard(from), including its incoming adjacency
+// (shard(from).adj_in_remote keyed by `to`). The adapter's `deleteEdge` routes
+// cross-endpoint removes through the single-shard `ShardedGraphEngine.removeEdge`
+// (the old adapter-level `removeCrossShardEdge` workaround — which tore down the
+// now-EMPTY legacy `dst.adj_in` and left the real in-entry dangling — was
+// removed). This pins: a cross-endpoint delete removes the edge from BOTH
+// directions and never returns `error.CrossShardEdgeUnsupported`; reverse
+// traversal reflects exactly the survivors; re-delete is a no-op.
+test "co-location: cross-endpoint deleteEdge clears reverse traversal (no CrossShardEdgeUnsupported)" {
+    var h = try EdgeHarness.init(testing.allocator, "0", "0"); // unbounded caches
+    defer h.deinit();
+
+    // One hot dst, many sources. With 16 shards and 32 sources, the edge set is
+    // guaranteed to include cross-endpoint (from/to on different shards) edges.
+    const to = try h.createNode();
+    const N: usize = 32;
+    var ids: std.ArrayList(u64) = .empty;
+    defer ids.deinit(testing.allocator);
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const from = try h.createNode();
+        const eid = try h.createEdge(from, to);
+        try ids.append(testing.allocator, eid);
+    }
+
+    // All N reverse-reachable to begin with.
+    {
+        const inc = try h.store.getIncomingEdges(testing.allocator, to);
+        defer testing.allocator.free(inc);
+        try testing.expectEqual(N, inc.len);
+    }
+    try testing.expectEqual(N, h.store.getEdgeCount());
+
+    // Delete all but the last edge — each delete is a cross-endpoint single-shard
+    // remove (for the cross-shard ones); none may error.
+    var d: usize = 0;
+    while (d < N - 1) : (d += 1) {
+        h.store.deleteEdge(ids.items[d]);
+    }
+
+    // Exactly one survivor reverse-reachable, and it is the right edge.
+    {
+        const inc = try h.store.getIncomingEdges(testing.allocator, to);
+        defer testing.allocator.free(inc);
+        try testing.expectEqual(@as(usize, 1), inc.len);
+    }
+    {
+        const inc_ids = h.store.getIncomingEdgeIds(to) orelse &[_]u64{};
+        try testing.expectEqual(@as(usize, 1), inc_ids.len);
+        try testing.expectEqual(ids.items[N - 1], inc_ids[0]);
+    }
+    try testing.expectEqual(@as(usize, 1), h.store.getEdgeCount());
+
+    // Delete the survivor → reverse traversal empty, edge count 0.
+    h.store.deleteEdge(ids.items[N - 1]);
+    {
+        const inc = try h.store.getIncomingEdges(testing.allocator, to);
+        defer testing.allocator.free(inc);
+        try testing.expectEqual(@as(usize, 0), inc.len);
+    }
+    try testing.expectEqual(@as(usize, 0), h.store.getEdgeCount());
+
+    // Idempotent re-delete is a no-op (must not error or corrupt the count).
+    h.store.deleteEdge(ids.items[N - 1]);
+    try testing.expectEqual(@as(usize, 0), h.store.getEdgeCount());
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const c = try h.runCount(arena.allocator(), "MATCH ()-[r]->() RETURN count(r) AS c");
+    try testing.expectEqual(@as(i64, 0), c);
+}
