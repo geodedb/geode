@@ -286,6 +286,324 @@ pub fn shouldIndexProperty(key: []const u8) bool {
     return false;
 }
 
+// ============================================================================
+// COMPOSITE merge keys (caveat "B": from-dump edge endpoint resolution).
+//
+// The from-dump NODE phase MERGEs taxa on the {source, source_id} COMPOSITE
+// (`MERGE (t:Taxon {source, source_id})`), and the EDGE phase resolves both
+// endpoints by the SAME composite (`MATCH (a:Taxon {source, source_id})`).
+//
+// The single-key `merge_prop_index` is keyed per (graph,label,prop,value) and
+// is a 1:1 map, so it CANNOT resolve a composite directly: it must SEED on one
+// component then VERIFY the rest via `getNodeProperty` (an engine PropertyChain
+// read → BufferPool.pin). At a buffer-pool-exceeding scale that one verify read
+// per endpoint THRASHES the pool (~12 edges/s). And `source_id` is NOT globally
+// unique across sources (ITIS/GBIF collide), so the 1:1 seed index overwrites
+// colliding entries → the seed can resolve the wrong-source node and the
+// remaining-filter verify then fails → the edge is SILENTLY DROPPED.
+//
+// The fix registers an ORDERED set of composite key prop-names; a node carrying
+// ALL of them gets ONE additional resident entry in the SAME `merge_prop_index`
+// under a COMPOSITE key ("graph\0label\0prop1\0val1\0prop2\0val2", props sorted
+// by name for determinism). Endpoint resolution whose filter set EXACTLY matches
+// a registered composite then probes that entry directly — one resident lookup,
+// zero `getNodeProperty`, collision-correct.
+//
+// The registry mirrors the single-key lean-index registry: a tiny, append-only,
+// process-wide set guarded by the same leaf mutex. Real workloads register a
+// handful of composites once at startup (here just {source, source_id}). Bounded
+// by `composite_index_max_keys` composites of up to `composite_index_max_props`
+// props each; overflow simply skips registration (safe — the seed+verify path
+// still resolves the key correctly, just slower).
+const composite_index_max_keys: usize = 16;
+const composite_index_max_props: usize = 8;
+const composite_index_prop_cap: usize = 64;
+
+const CompositeKeySpec = struct {
+    prop_bufs: [composite_index_max_props][composite_index_prop_cap]u8 = undefined,
+    prop_lens: [composite_index_max_props]usize = [_]usize{0} ** composite_index_max_props,
+    prop_count: usize = 0,
+
+    fn props(self: *const CompositeKeySpec) PropNameIter {
+        return .{ .spec = self, .i = 0 };
+    }
+};
+
+const PropNameIter = struct {
+    spec: *const CompositeKeySpec,
+    i: usize,
+    fn next(self: *PropNameIter) ?[]const u8 {
+        if (self.i >= self.spec.prop_count) return null;
+        const s = self.spec.prop_bufs[self.i][0..self.spec.prop_lens[self.i]];
+        self.i += 1;
+        return s;
+    }
+};
+
+var g_composite_keys: [composite_index_max_keys]CompositeKeySpec = undefined;
+var g_composite_key_count: usize = 0;
+
+/// Compare two prop-name sets for set-equality (order-insensitive). Used to test
+/// whether a filter set matches a registered composite key.
+fn propNameSetsEqual(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    // Each name in `a` must appear exactly once in `b`. Composite key sets are
+    // tiny (<= composite_index_max_props) and contain no duplicate prop names
+    // (a MERGE pattern never repeats a key), so an O(n^2) membership check is
+    // both correct and cheap.
+    outer: for (a) |an| {
+        for (b) |bn| {
+            if (std.mem.eql(u8, an, bn)) continue :outer;
+        }
+        return false;
+    }
+    return true;
+}
+
+/// Register an ORDERED set of prop names as a composite merge key. Idempotent
+/// (set-equality dedup). Bounded; overflow is tolerated (the seed+verify path
+/// remains correct). The stored order is normalized (sorted by name) so the
+/// composite index key is deterministic regardless of caller filter order.
+pub fn registerCompositeMergeKey(prop_names: []const []const u8) void {
+    registerCompositeMergeKeyInner(prop_names, true);
+}
+
+fn registerCompositeMergeKeyInner(prop_names: []const []const u8, persist: bool) void {
+    if (prop_names.len < 2 or prop_names.len > composite_index_max_props) return;
+    for (prop_names) |n| {
+        if (n.len == 0 or n.len > composite_index_prop_cap) return;
+    }
+
+    const newly_registered = blk: {
+        g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        // Dedup against existing composites (set-equality).
+        var k: usize = 0;
+        while (k < g_composite_key_count) : (k += 1) {
+            var existing_names: [composite_index_max_props][]const u8 = undefined;
+            const spec = &g_composite_keys[k];
+            for (0..spec.prop_count) |i| existing_names[i] = spec.prop_bufs[i][0..spec.prop_lens[i]];
+            if (propNameSetsEqual(existing_names[0..spec.prop_count], prop_names)) break :blk false;
+        }
+        if (g_composite_key_count >= composite_index_max_keys) break :blk false; // overflow: tolerate
+
+        var spec = &g_composite_keys[g_composite_key_count];
+        spec.prop_count = prop_names.len;
+        for (prop_names, 0..) |n, i| {
+            @memcpy(spec.prop_bufs[i][0..n.len], n);
+            spec.prop_lens[i] = n.len;
+        }
+        // Normalize to a deterministic order (sorted by name). The index key is
+        // always built from this order, and lookups sort their filters the same
+        // way, so caller filter order never matters.
+        sortCompositeSpec(spec);
+        g_composite_key_count += 1;
+        break :blk true;
+    };
+
+    if (!newly_registered) return;
+
+    // Composite keys also keep their component props indexed in lean mode (the
+    // GAP-0334 single-key fallback and node MERGE still need them). Idempotent.
+    for (prop_names) |n| registerMergeIndexKeyInner(n, persist);
+
+    if (newly_registered) {
+        // Backfill the composite entry for already-loaded nodes (a reopen
+        // registers the composite AFTER nodes were hydrated; without this the
+        // edges-only run after a separate node-load run would find no composite
+        // entry and fall back to seed+verify). Mirrors the single-key
+        // backfillMergeIndexForKey.
+        if (getCurrentGlobalStore()) |store| {
+            store.backfillCompositeMergeEntries();
+        }
+        // Persist so a fresh process (the from-dump EDGE phase runs separately
+        // from the NODE phase) re-registers it on reopen and the rebuild/backfill
+        // repopulates the composite entries. Best-effort.
+        if (persist) {
+            if (getGlobalAdapter()) |adapter| {
+                persistCompositeMergeKey(adapter.allocator, adapter.data_dir, prop_names);
+            }
+        }
+    }
+}
+
+/// Sidecar (inside `data_dir`) recording registered COMPOSITE merge keys so they
+/// survive a restart. Append-only, line-oriented: one composite per line, prop
+/// names comma-joined (e.g. "source,source_id").
+const composite_merge_keys_filename = "composite_merge_keys.dat";
+
+/// Append a composite (its prop names, comma-joined) to the composite-key
+/// sidecar. Best-effort; no-op when `data_dir` is empty (ad-hoc unit stores).
+pub fn persistCompositeMergeKey(alloc: std.mem.Allocator, data_dir: []const u8, prop_names: []const []const u8) void {
+    if (data_dir.len == 0) return;
+    if (prop_names.len < 2) return;
+
+    var line_buf: [composite_index_max_props * (composite_index_prop_cap + 1)]u8 = undefined;
+    var pos: usize = 0;
+    for (prop_names, 0..) |n, i| {
+        if (n.len == 0 or n.len > composite_index_prop_cap) return;
+        if (i > 0) {
+            if (pos + 1 > line_buf.len) return;
+            line_buf[pos] = ',';
+            pos += 1;
+        }
+        if (pos + n.len > line_buf.len) return;
+        @memcpy(line_buf[pos..][0..n.len], n);
+        pos += n.len;
+    }
+    const line = line_buf[0..pos];
+
+    const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ data_dir, composite_merge_keys_filename }) catch return;
+    defer alloc.free(path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().createFile(io, path, .{ .truncate = false }) catch |err| {
+        log.warn("failed to open composite merge-key sidecar for append", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    defer file.close(io);
+    const st = file.stat(io) catch return;
+    file.writePositionalAll(io, line, st.size) catch return;
+    file.writePositionalAll(io, "\n", st.size + line.len) catch return;
+}
+
+/// Load the persisted composite-key set and re-register each (WITHOUT
+/// re-persisting). MUST run before any graph opens on reopen (the adapter calls
+/// this from `init`), so the per-node index rebuild repopulates composite
+/// entries. No-op when the sidecar is missing or `data_dir` is empty.
+pub fn loadPersistedCompositeMergeKeys(alloc: std.mem.Allocator, data_dir: []const u8) void {
+    if (data_dir.len == 0) return;
+
+    const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ data_dir, composite_merge_keys_filename }) catch return;
+    defer alloc.free(path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => {
+            log.warn("failed to open composite merge-key sidecar for load", &.{
+                Attr.string("path", path),
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        },
+    };
+    defer file.close(io);
+
+    const max_bytes: usize = composite_index_max_keys * (composite_index_max_props * (composite_index_prop_cap + 1) + 1) * 4;
+    const st = file.stat(io) catch return;
+    const want: usize = @min(@as(usize, @intCast(st.size)), max_bytes);
+    if (want == 0) return;
+    const contents = alloc.alloc(u8, want) catch return;
+    defer alloc.free(contents);
+
+    var rbuf: [512]u8 = undefined;
+    var file_reader = file.reader(io, &rbuf);
+    const reader = &file_reader.interface;
+    reader.readSliceAll(contents) catch |err| {
+        log.warn("failed to read composite merge-key sidecar", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+
+    var line_it = std.mem.splitScalar(u8, contents, '\n');
+    while (line_it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r\t");
+        if (line.len == 0) continue;
+        var names_buf: [composite_index_max_props][]const u8 = undefined;
+        var count: usize = 0;
+        var name_it = std.mem.splitScalar(u8, line, ',');
+        while (name_it.next()) |name| {
+            const trimmed = std.mem.trim(u8, name, " \r\t");
+            if (trimmed.len == 0) continue;
+            if (count >= names_buf.len) break;
+            names_buf[count] = trimmed;
+            count += 1;
+        }
+        if (count >= 2) registerCompositeMergeKeyInner(names_buf[0..count], false);
+    }
+}
+
+/// Sort a composite spec's prop names lexicographically (in place). Tiny n —
+/// insertion sort keeps it allocation-free.
+fn sortCompositeSpec(spec: *CompositeKeySpec) void {
+    var i: usize = 1;
+    while (i < spec.prop_count) : (i += 1) {
+        var j = i;
+        while (j > 0) : (j -= 1) {
+            const a = spec.prop_bufs[j - 1][0..spec.prop_lens[j - 1]];
+            const b = spec.prop_bufs[j][0..spec.prop_lens[j]];
+            if (std.mem.order(u8, a, b) != .gt) break;
+            // swap entries j-1 and j
+            var tmp_buf: [composite_index_prop_cap]u8 = undefined;
+            const tmp_len = spec.prop_lens[j - 1];
+            @memcpy(tmp_buf[0..tmp_len], spec.prop_bufs[j - 1][0..tmp_len]);
+            @memcpy(spec.prop_bufs[j - 1][0..spec.prop_lens[j]], spec.prop_bufs[j][0..spec.prop_lens[j]]);
+            spec.prop_lens[j - 1] = spec.prop_lens[j];
+            @memcpy(spec.prop_bufs[j][0..tmp_len], tmp_buf[0..tmp_len]);
+            spec.prop_lens[j] = tmp_len;
+        }
+    }
+}
+
+/// If `filter_keys` (the prop-name set of a lookup's filters) EXACTLY matches a
+/// registered composite key, return that composite's index (else null). Cheap;
+/// composite registry is tiny.
+fn matchRegisteredCompositeKey(filter_keys: []const []const u8) ?usize {
+    if (filter_keys.len < 2 or filter_keys.len > composite_index_max_props) return null;
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    var k: usize = 0;
+    while (k < g_composite_key_count) : (k += 1) {
+        const spec = &g_composite_keys[k];
+        var names: [composite_index_max_props][]const u8 = undefined;
+        for (0..spec.prop_count) |i| names[i] = spec.prop_bufs[i][0..spec.prop_lens[i]];
+        if (propNameSetsEqual(names[0..spec.prop_count], filter_keys)) return k;
+    }
+    return null;
+}
+
+/// True if `key` is a component of ANY registered composite merge key. Used by
+/// the single-property mutation path to know whether a value change can
+/// invalidate a composite entry (and must re-assert it). Cheap; tiny registry.
+fn isCompositeComponentKey(key: []const u8) bool {
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    var k: usize = 0;
+    while (k < g_composite_key_count) : (k += 1) {
+        const spec = &g_composite_keys[k];
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            if (std.mem.eql(u8, spec.prop_bufs[i][0..spec.prop_lens[i]], key)) return true;
+        }
+    }
+    return false;
+}
+
+/// If the prop-name set of `filters` EXACTLY matches a registered composite
+/// merge key, return that composite's registry index (else null). The
+/// adapter's endpoint resolver calls this to decide whether to take the
+/// zero-read composite path. Order-insensitive.
+pub fn compositeKeyIndexForFilters(filters: []const graph_storage_adapter.StorageAdapter.PropKV) ?usize {
+    if (filters.len < 2 or filters.len > composite_index_max_props) return null;
+    var names: [composite_index_max_props][]const u8 = undefined;
+    for (filters, 0..) |f, i| names[i] = f.key;
+    return matchRegisteredCompositeKey(names[0..filters.len]);
+}
+
+/// Test-only: clear the composite-key registry (mirrors setLeanIndexingForTest).
+pub fn clearCompositeMergeKeysForTest() void {
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    g_composite_key_count = 0;
+}
+
 const node_id_sequence_mask: u64 = 0x0fff;
 const node_id_version_bits: u64 = 0x7000;
 const node_id_timestamp_mask: u64 = 0x0000_ffff_ffff_ffff;
@@ -4091,6 +4409,20 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Caveat "B": backfill the COMPOSITE merge entry for every RESIDENT node.
+    /// Called when a composite key is registered AFTER nodes were already
+    /// loaded into the cache (the in-process register-then-merge order, and as a
+    /// best-effort top-up). The authoritative full-graph rebuild on reopen runs
+    /// in `loadOneGraphFromAdapter` (covers ALL nodes, resident or not); this
+    /// covers the resident set when registration happens mid-process. No-op when
+    /// no composite key is registered.
+    pub fn backfillCompositeMergeEntries(self: *GraphStore) void {
+        var node_iter = self.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            self.addNodeCompositeMergeEntries(entry.value_ptr);
+        }
+    }
+
     /// Remove entries from the merge property index for each label on the node.
     fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue) void {
         var buf: [1024]u8 = undefined;
@@ -4162,6 +4494,207 @@ pub const GraphStore = struct {
             }
         }
         return .not_found;
+    }
+
+    /// Build a COMPOSITE merge-index key into `buf` from a registered composite
+    /// spec and the values resolved for each of its (sorted) prop names.
+    /// `values[i]` MUST correspond to `spec` prop name `i` (already in the spec's
+    /// normalized sorted order). Format:
+    ///   "graph\0label\0prop0\0val0\0prop1\0val1\0..."
+    /// Returns the slice, or null if any value is non-indexable / the key
+    /// overflows `buf`. Mirrors `buildMergeIndexKey` for a single prop.
+    fn buildCompositeMergeIndexKey(
+        buf: []u8,
+        graph_name: []const u8,
+        label: []const u8,
+        spec: *const CompositeKeySpec,
+        values: []const PropertyValue,
+    ) ?[]const u8 {
+        if (values.len != spec.prop_count) return null;
+        var pos: usize = 0;
+
+        const writeField = struct {
+            fn f(b: []u8, p: *usize, bytes: []const u8) bool {
+                if (p.* + bytes.len + 1 > b.len) return false;
+                @memcpy(b[p.*..][0..bytes.len], bytes);
+                p.* += bytes.len;
+                b[p.*] = 0;
+                p.* += 1;
+                return true;
+            }
+        }.f;
+
+        if (!writeField(buf, &pos, graph_name)) return null;
+        if (!writeField(buf, &pos, label)) return null;
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            const name = spec.prop_bufs[i][0..spec.prop_lens[i]];
+            if (!writeField(buf, &pos, name)) return null;
+            // Value: serialize then write its 0-terminator.
+            const vlen = serializePropValueForIndex(buf[pos..], values[i]) orelse return null;
+            pos += vlen;
+            if (pos + 1 > buf.len) return null;
+            buf[pos] = 0;
+            pos += 1;
+        }
+        // Trim the trailing terminator off the final field so the key is a clean
+        // prefix-free encoding (the per-field 0 already delimits each field).
+        return buf[0 .. pos - 1];
+    }
+
+    /// COMPOSITE-key resolver: probe the resident `merge_prop_index` for the
+    /// single entry keyed on ALL of `composite_idx`'s props at the supplied
+    /// `filters` values. Returns `.found` (with the public node id),
+    /// `.not_found` (authoritative — the index holds no such composite), or
+    /// `.not_indexable` (a value type can't be encoded — caller falls back).
+    ///
+    /// `filters` need NOT be in the spec's sorted order; values are gathered by
+    /// matching each spec prop name against `filters`. Existence + graph are
+    /// validated via the eviction-INDEPENDENT IdMap (same as the single-key
+    /// `lookupMergeCandidate`), so an evicted-but-live node is still `.found`
+    /// and NO `getNodeProperty` / node-page read happens.
+    pub fn lookupCompositeMergeCandidate(
+        self: *GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        composite_idx: usize,
+        filters: []const graph_storage_adapter.StorageAdapter.PropKV,
+        out_node_id: *u64,
+    ) MergeLookupResult {
+        const spec = blk: {
+            g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            if (composite_idx >= g_composite_key_count) break :blk null;
+            break :blk &g_composite_keys[composite_idx];
+        } orelse return .not_indexable;
+
+        if (filters.len != spec.prop_count) return .not_indexable;
+
+        // Gather values in the spec's (sorted) prop order by matching names.
+        var values: [composite_index_max_props]PropertyValue = undefined;
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            const name = spec.prop_bufs[i][0..spec.prop_lens[i]];
+            const v = findFilterValue(filters, name) orelse return .not_indexable;
+            values[i] = v;
+        }
+
+        var buf: [1024]u8 = undefined;
+        const probe = buildCompositeMergeIndexKey(&buf, graph_name, label, spec, values[0..spec.prop_count]) orelse return .not_indexable;
+        const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
+
+        // Eviction-independent existence + graph validation (mirrors
+        // lookupMergeCandidate); no node-page read.
+        if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            if (std.mem.eql(u8, gs.graph_name, graph_name)) {
+                out_node_id.* = node_id;
+                return .found;
+            }
+            return .not_found;
+        }
+        if (self.nodes.get(node_id)) |node| {
+            if (std.mem.eql(u8, node.graph_name, graph_name)) {
+                out_node_id.* = node_id;
+                return .found;
+            }
+        }
+        return .not_found;
+    }
+
+    fn findFilterValue(filters: []const graph_storage_adapter.StorageAdapter.PropKV, key: []const u8) ?PropertyValue {
+        for (filters) |f| {
+            if (std.mem.eql(u8, f.key, key)) return f.value;
+        }
+        return null;
+    }
+
+    /// Add the COMPOSITE merge-index entry/entries for a fully-populated node.
+    /// For each registered composite key whose props are ALL present on the
+    /// node, write ONE entry (composite key → node.id) per label. Called once
+    /// per node after all its properties are set (the node carries the whole
+    /// composite by then). No-op when no composite keys are registered (the
+    /// default for non-from-dump workloads), so plain ingest is unchanged.
+    fn addNodeCompositeMergeEntries(self: *GraphStore, node: *const Node) void {
+        const n_composites = blk: {
+            g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk g_composite_key_count;
+        };
+        if (n_composites == 0) return;
+
+        var k: usize = 0;
+        while (k < n_composites) : (k += 1) {
+            // Snapshot the spec under the leaf mutex into a local (the registry
+            // is append-only and specs are immutable once registered, but copy
+            // for safety against a concurrent register growing the array).
+            var spec_copy: CompositeKeySpec = undefined;
+            {
+                g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+                if (k >= g_composite_key_count) break;
+                spec_copy = g_composite_keys[k];
+            }
+
+            // Resolve each composite prop value on the node (sorted order).
+            var values: [composite_index_max_props]PropertyValue = undefined;
+            var have_all = true;
+            var i: usize = 0;
+            while (i < spec_copy.prop_count) : (i += 1) {
+                const name = spec_copy.prop_bufs[i][0..spec_copy.prop_lens[i]];
+                const v = node.properties.get(name) orelse {
+                    have_all = false;
+                    break;
+                };
+                values[i] = v;
+            }
+            if (!have_all) continue;
+
+            var buf: [1024]u8 = undefined;
+            for (node.labels) |label| {
+                const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
+                self.merge_prop_index.putOrUpdate(probe, node.id) catch {};
+            }
+        }
+    }
+
+    /// Remove the COMPOSITE merge-index entry/entries for a node (node deletion /
+    /// property-value change of a composite component). Symmetric with
+    /// `addNodeCompositeMergeEntries`; no-op when no composite keys registered.
+    fn removeNodeCompositeMergeEntries(self: *GraphStore, node: *const Node) void {
+        const n_composites = blk: {
+            g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk g_composite_key_count;
+        };
+        if (n_composites == 0) return;
+
+        var k: usize = 0;
+        while (k < n_composites) : (k += 1) {
+            var spec_copy: CompositeKeySpec = undefined;
+            {
+                g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+                if (k >= g_composite_key_count) break;
+                spec_copy = g_composite_keys[k];
+            }
+            var values: [composite_index_max_props]PropertyValue = undefined;
+            var have_all = true;
+            var i: usize = 0;
+            while (i < spec_copy.prop_count) : (i += 1) {
+                const name = spec_copy.prop_bufs[i][0..spec_copy.prop_lens[i]];
+                const v = node.properties.get(name) orelse {
+                    have_all = false;
+                    break;
+                };
+                values[i] = v;
+            }
+            if (!have_all) continue;
+            var buf: [1024]u8 = undefined;
+            for (node.labels) |label| {
+                const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
+                self.merge_prop_index.remove(probe);
+            }
+        }
     }
 
     /// Eviction-INDEPENDENT existence check for an edge endpoint by PUBLIC id.
@@ -4447,6 +4980,9 @@ pub const GraphStore = struct {
             while (prop_iter.next()) |prop_entry| {
                 self.addToMergePropertyIndex(node.graph_name, node.labels, prop_entry.key_ptr.*, prop_entry.value_ptr.*, node.id) catch {};
             }
+            // Rebuild COMPOSITE merge entries too (caveat "B") so endpoint
+            // resolution stays zero-read after a reopen/rebuild.
+            self.addNodeCompositeMergeEntries(node);
         }
 
         // Rebuild adjacency index, edge-type index, and ensure graph registry entries for edges
@@ -4533,6 +5069,15 @@ pub const GraphStore = struct {
             const value_copy = try copyPropertyValue(self, effective_value);
             errdefer freePropertyValue(self, value_copy);
 
+            // Caveat "B": if `key` is a composite component and its value is
+            // CHANGING, the existing composite merge entry (built from the OLD
+            // value) is now stale — remove it BEFORE overwriting so we don't leak
+            // a dangling composite entry. Re-asserted from current values below.
+            // (The from-dump path never mutates composite components, so this is
+            // a robustness guard, not a hot path.)
+            const composite_component = isCompositeComponentKey(key);
+            if (composite_component) self.removeNodeCompositeMergeEntries(node);
+
             // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
             const result = try node.properties.getOrPut(key);
             const was_new = !result.found_existing;
@@ -4548,6 +5093,10 @@ pub const GraphStore = struct {
 
             // Update merge property index with new value
             self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
+            // Re-assert the composite merge entry from the node's CURRENT values
+            // (now including the new value for `key`). No-op if the node doesn't
+            // carry all composite props yet, or no composite is registered.
+            if (composite_component) self.addNodeCompositeMergeEntries(node);
 
             // PERF-C (issue #814): only bump the label-property counter on
             // the new-key transition. Value updates do not change the set of
@@ -4683,6 +5232,16 @@ pub const GraphStore = struct {
                     }
                 }
             }
+            // COMPOSITE merge entry (caveat "B"): the node now carries all the
+            // properties from this batch — the from-dump NODE phase sets the
+            // whole {source, source_id} composite in one batch — so register the
+            // composite entry once here (no-op when no composite keys are
+            // registered, i.e. all non-from-dump workloads). A re-MERGE that sets
+            // a NEW value for a composite component would leave a stale entry; we
+            // re-assert from the current property values, and changing a
+            // composite component is not part of the from-dump path (the
+            // component values ARE the merge key).
+            self.addNodeCompositeMergeEntries(node);
             self.dirty.store(true, .release);
             incrementMutationEpoch();
         }
@@ -8009,6 +8568,14 @@ pub const GraphStore = struct {
                             stored_node_ptr.id,
                         ) catch {};
                     }
+                    // Caveat "B": rebuild the COMPOSITE merge entry for this
+                    // hydrated node so the from-dump EDGE phase (which runs as a
+                    // SEPARATE process after the NODE load) resolves endpoints by
+                    // {source, source_id} in ONE zero-read probe. No extra engine
+                    // read — uses the already-loaded property map. No-op unless a
+                    // composite key is registered (loaded from the sidecar in
+                    // adapter init, before this load runs).
+                    self.addNodeCompositeMergeEntries(stored_node_ptr);
                 }
 
                 var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
@@ -8478,6 +9045,8 @@ pub const GraphStore = struct {
 
         // Remove all merge property index entries for this node
         self.removeAllMergePropertyIndexEntries(node_ptr);
+        // ...including the COMPOSITE merge entry (caveat "B").
+        self.removeNodeCompositeMergeEntries(node_ptr);
 
         // Free labels
         for (node_ptr.labels) |label| {

@@ -42,6 +42,17 @@ var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).ini
 // pin), is the edge-phase wedge. This counter makes the fix wall-clock-
 // independent: an authoritative unique-key miss examines ZERO candidates.
 var g_lookup_all_props_candidates_scanned: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Engine-direct single-property reads performed by `getNodeProperty` (each is a
+// PropertyChain walk → `BufferPool.pin`, the page buffer pool). The from-dump
+// EDGE phase resolves each endpoint by the {source, source_id} COMPOSITE; the
+// pre-composite path SEEDS on the unique `source_id` via the resident merge
+// index (no engine read) but then VERIFIES the remaining `source` filter with
+// `getNodeProperty` (one engine read PER ENDPOINT). At a pool-exceeding scale
+// that single verify read THRASHES the buffer pool (83% of CPU in pin) →
+// ~12 edges/s. The composite merge entry resolves the WHOLE key in one resident
+// probe with NO `getNodeProperty`, so this counter must NOT grow per endpoint on
+// the composite path. Wall-clock-independent regression instrumentation.
+var g_node_property_engine_reads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
 // CANARY: REQ=REQ-QUIC-HC-122; FEATURE="HighConcurrencyMutations"; ASPECT=ExactPropertyIndexSharding; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
 pub const exact_node_property_index_shard_count: usize = 64;
@@ -61,6 +72,15 @@ pub fn resetLookupCounters() void {
     g_exact_node_property_lookup_count.store(0, .release);
     g_label_scan_lookup_count.store(0, .release);
     g_lookup_all_props_candidates_scanned.store(0, .release);
+    g_node_property_engine_reads.store(0, .release);
+}
+
+/// Engine-direct single-property reads (`getNodeProperty` → PropertyChain →
+/// `BufferPool.pin`) since the last `resetLookupCounters`. The composite
+/// endpoint-resolution path must NOT grow this per endpoint (zero node-page
+/// reads); the pre-composite seed+verify path grows it ~1 per endpoint.
+pub fn getNodePropertyEngineReads() u64 {
+    return g_node_property_engine_reads.load(.acquire);
 }
 
 pub fn getExactNodePropertyLookupCount() u64 {
@@ -1559,6 +1579,15 @@ pub const StorageAdapter = struct {
         // (everything is always indexed) or when the sidecar is absent.
         graph_store.loadPersistedMergeIndexKeys(self.allocator, self.data_dir);
 
+        // Caveat "B": re-register persisted COMPOSITE merge keys (e.g.
+        // {source, source_id}) BEFORE any graph opens, so the per-node load
+        // rebuild (`loadOneGraphFromAdapter`) repopulates the resident composite
+        // merge entries for the WHOLE graph. The from-dump EDGE phase runs as a
+        // separate process from the NODE phase, so without this the edges-only
+        // run would find no composite entries and fall back to the slow
+        // seed+verify path. No-op when the sidecar is absent (fresh data dir).
+        graph_store.loadPersistedCompositeMergeKeys(self.allocator, self.data_dir);
+
         return self;
     }
 
@@ -2904,6 +2933,20 @@ pub const StorageAdapter = struct {
         // lean mode (no-op when off). Idempotent.
         for (merge_props) |mp| graph_store.registerMergeIndexKey(mp.key);
 
+        // Caveat "B": a multi-prop MERGE defines a COMPOSITE dedup key. Register
+        // it so node-create writes the resident composite merge entry and the
+        // from-dump EDGE phase resolves endpoints by the SAME composite in ONE
+        // zero-read probe. Idempotent; auto-registers {source, source_id} the
+        // first time a from-dump Taxon is MERGEd — symmetric with the single-key
+        // registration above and exactly the key the edge MATCH probes.
+        if (merge_props.len >= 2) {
+            var key_names_buf: [16][]const u8 = undefined;
+            if (merge_props.len <= key_names_buf.len) {
+                for (merge_props, 0..) |mp, i| key_names_buf[i] = mp.key;
+                graph_store.registerCompositeMergeKey(key_names_buf[0..merge_props.len]);
+            }
+        }
+
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -3908,6 +3951,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // Count the engine-direct property read (PropertyChain → BufferPool.pin).
+        // The composite endpoint-resolution path must NOT reach here per endpoint.
+        _ = g_node_property_engine_reads.fetchAdd(1, .monotonic);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         if (rec.prop_head == 0) {
@@ -4287,6 +4333,38 @@ pub const StorageAdapter = struct {
     ) !u64 {
         if (filters.len == 0) return missing_err;
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+        // COMPOSITE fast path (caveat "B"): if the filter set EXACTLY matches a
+        // registered composite merge key (the from-dump {source, source_id}
+        // endpoint key), resolve the WHOLE key in ONE resident merge-index probe
+        // — NO getNodeProperty / NO node-page read — and verify existence via the
+        // eviction-INDEPENDENT IdMap only. This is the zero-buffer-pool-pin hot
+        // path that makes the from-dump edge phase run at enterprise speed at any
+        // scale, and is collision-correct (source_id is not globally unique).
+        if (graph_store.compositeKeyIndexForFilters(filters)) |composite_idx| {
+            var cid: u64 = 0;
+            switch (store.lookupCompositeMergeCandidate(graph_name, label, composite_idx, filters, &cid)) {
+                .found => {
+                    // Existence already validated against the IdMap inside
+                    // lookupCompositeMergeCandidate (resolveNodeGraphSlot); the
+                    // composite key encodes ALL filters, so no per-filter verify.
+                    // This is the from-dump hot path: ZERO getNodeProperty.
+                    return cid;
+                },
+                // Composite-index MISS. For the from-dump flow EVERY Taxon carries
+                // the full composite (node-create + reopen-load both write the
+                // entry), so a miss almost always means a genuinely-dangling
+                // endpoint. But to PRESERVE the GAP-0334 CREATE-seeded fallback
+                // (a node created via a path that didn't populate the composite
+                // entry), DON'T treat this as authoritative — fall through to the
+                // generic seed+verify path below. That path verifies ALL filters
+                // (so it stays collision-CORRECT: it never returns a wrong-source
+                // node), just without the zero-read fast path. Dangling endpoints
+                // are rare, and the seed path's own unique-key authoritative-miss
+                // keeps that case from scanning.
+                .not_found, .not_indexable => {},
+            }
+        }
 
         // Seed selection + authoritative-miss (same contract as
         // lookupNodeIdByLabelAndAllProps — see its comment).

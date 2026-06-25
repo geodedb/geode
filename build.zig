@@ -7298,6 +7298,19 @@ pub fn build(b: *std.Build) void {
     const edge_evicted_ep_step = b.step("test-edge-evicted-endpoint", "Run from-dump edge-phase evicted-endpoint silent-loss regression (every present-endpoint edge created + observable at small cache; ground-truthed via probeEdge)");
     edge_evicted_ep_step.dependOn(&run_edge_evicted_ep_tests.step);
 
+    // Caveat "B": from-dump edge endpoint resolution by the {source, source_id}
+    // COMPOSITE must do ZERO engine property reads (resident composite merge
+    // entry — no per-endpoint BufferPool.pin thrash) AND be cross-source
+    // collision-correct (source_id is not globally unique).
+    const edge_composite_ep_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_composite_endpoint_resolution.zig"), .target = target, .optimize = optimize });
+    edge_composite_ep_mod.addImport("geode", root_mod);
+    edge_composite_ep_mod.addImport("graph_storage", graph_storage_dep.module("graph_storage"));
+    const edge_composite_ep_tests = b.addTest(.{ .root_module = edge_composite_ep_mod });
+    const run_edge_composite_ep_tests = b.addRunArtifact(edge_composite_ep_tests);
+    shardDep(test_step, &run_edge_composite_ep_tests.step, 5, test_shard_loads, test_shard_index);
+    const edge_composite_ep_step = b.step("test-edge-composite-endpoint", "Run from-dump composite endpoint-resolution regression (zero engine property reads + cross-source collision correctness)");
+    edge_composite_ep_step.dependOn(&run_edge_composite_ep_tests.step);
+
     // PHASE 4 (edge-engine-direct): popular-parent EDGE throughput A/B +
     // re-shard correctness. The headline bench measures edges/sec for one hot
     // parent (PARENT_OF) and one hot target (ACCEPTED_AS) ingested via the
