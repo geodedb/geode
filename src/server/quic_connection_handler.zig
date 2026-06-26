@@ -6506,6 +6506,26 @@ fn handleClientMessage(
                     updateTxnStateFromProgram(state, &parse_result.program);
                     return;
                 }
+
+                // GAP-ENT-0002: O(1) count(r) fast path (untyped directed shape).
+                const edge_fast_result_opt = try execution.countEdgesFastPath(gpa, target.Query, query_graph_name, fast_count_tenant);
+                if (edge_fast_result_opt) |edge_fast_result| {
+                    var exec_result = edge_fast_result;
+                    defer exec_result.deinit(gpa);
+
+                    graph_store.releaseGraphLock(count_lock);
+                    count_lock_held = false;
+
+                    for (flags.items) |flag| {
+                        try appendFlagToResult(gpa, &exec_result, flag);
+                    }
+
+                    try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
+                    auditQueryExecution(state, query_text, is_mutation);
+                    syncGraphFromSession(state);
+                    updateTxnStateFromProgram(state, &parse_result.program);
+                    return;
+                }
             }
 
             // Task 11 (enterprise-ingest-throughput): bulk-ingest fast path.

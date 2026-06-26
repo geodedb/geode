@@ -1637,6 +1637,12 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         if (try match_operations.countNodesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
             return fast_result;
         }
+        // GAP-ENT-0002: O(1) edge-count fast path for untyped directed
+        // `MATCH ()-[r]->() RETURN count(r|*)`. Mirrors countNodesFastPath —
+        // intercept before planned_read_runtime materializes ~14M rows.
+        if (try match_operations.countEdgesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
         // GAP-0811 Task 2.2: property-aggregate fast-path
         // (`sum/avg/min/max(p.<key>)`) — skips materializeNode and reads only
         // the aggregated property (plus optional WHERE property).

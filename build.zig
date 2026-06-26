@@ -7187,6 +7187,17 @@ pub fn build(b: *std.Build) void {
     const traversal_composite_seed_step = b.step("test-traversal-composite-seed", "Traversal composite-start index seed (GAP-ENT-0001 Bug A)");
     traversal_composite_seed_step.dependOn(&run_traversal_composite_seed_tests.step);
 
+    // GAP-ENT-0002 count(r) edge-count fast path regression.
+    // Pre-fix: getPathRowsMaterialized() == N_edges (each materialized).
+    // Post-fix: == 0 (O(1) from IdMap.edgeCount, executePatternQuery never runs).
+    const count_edges_fastpath_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_count_edges_fastpath.zig"), .target = target, .optimize = optimize });
+    count_edges_fastpath_test_mod.addImport("geode", root_mod);
+    const count_edges_fastpath_tests = b.addTest(.{ .root_module = count_edges_fastpath_test_mod });
+    const run_count_edges_fastpath_tests = b.addRunArtifact(count_edges_fastpath_tests);
+    shardDep(test_step, &run_count_edges_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
+    const count_edges_fastpath_step = b.step("test-count-edges-fastpath", "Run GAP-ENT-0002 count(r) edge-count fast path regression (O(1) from IdMap.edgeCount, no row materialization)");
+    count_edges_fastpath_step.dependOn(&run_count_edges_fastpath_tests.step);
+
     // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
     // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
     // PARENT_OF children.  Counter assertions (label-scan == 0, exact >= 1) are

@@ -5862,6 +5862,29 @@ pub const GraphStore = struct {
         return total;
     }
 
+    // GAP-ENT-0002: Per-graph O(1) edge count for the untyped count(r) fast path.
+    // Mirrors countNodesForGraph for the edge side.
+    // Bounded cache: the resident map is incomplete — count from the per-graph
+    // IdMap (fully resident). O(1) via IdMap.edgeCount().
+    // Unbounded cache: the resident edge map IS complete — O(graph-edges) scan
+    // filtering by graph_name.
+    // Tenantless only — the fast-path caller refuses any concrete tenant before
+    // calling this method (see countEdgesFastPath in match_operations.zig).
+    pub fn countEdgesForGraph(self: *const GraphStore, graph_name: []const u8) usize {
+        if (self.edges.effectiveCap() != 0) {
+            // Bounded: IdMap is always fully resident.
+            const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
+            return id_map.edgeCount();
+        }
+        // Unbounded: iterate the resident edge map.
+        var count: usize = 0;
+        var iter = @constCast(self).edges.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.graph_name, graph_name)) count += 1;
+        }
+        return count;
+    }
+
     /// PHASE 1 (edge-engine-direct): a COMPLETE, bounded-cache-safe list of every
     /// public edge id (caller owns the returned slice). Full-edge-scan paths
     /// (algorithms, introspection, index build, DELETE collection) must use this

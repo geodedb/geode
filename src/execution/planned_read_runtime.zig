@@ -29,6 +29,19 @@ inline fn scratchOr(fallback: std.mem.Allocator) std.mem.Allocator {
     return query_arena.currentScratchAllocator() orelse fallback;
 }
 
+// GAP-ENT-0002: TDD observable gate. Counts path/node rows materialized by
+// materializePathRow + materializeNodeOnlyRow. Pre-fix, `MATCH ()-[r]->()
+// RETURN count(r)` increments once per edge; post-fix the count(r) fast path
+// serves the answer without calling either function, so this stays at 0.
+// Test-only; not exported through execution.zig (use lib.zig planned_read_runtime).
+var g_path_rows_materialized: std.atomic.Value(u64) = .init(0);
+pub fn getPathRowsMaterialized() u64 {
+    return g_path_rows_materialized.load(.monotonic);
+}
+pub fn resetPathRowsMaterialized() void {
+    g_path_rows_materialized.store(0, .release);
+}
+
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionResult = execution.ExecutionResult;
 const OwnedGraphEntities = execution.OwnedGraphEntities;
@@ -697,6 +710,7 @@ fn materializeNodeOnlyRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |tracked_node| {
         try owned_entities.trackNode(tracked_node);
@@ -1191,6 +1205,7 @@ fn materializePathRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |node| {
         try owned_entities.trackNode(node);

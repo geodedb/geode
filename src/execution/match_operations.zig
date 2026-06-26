@@ -686,6 +686,123 @@ pub fn countNodesLabelRefcountFastPath(
     return try buildCountFastPathResult(allocator, plan.column_name, n);
 }
 
+// GAP-ENT-0002: O(1) fast path for untyped `MATCH ()-[r]->() RETURN count(r)`.
+// Shape gate: single chain; exactly 1 hop; rel is directed (not undirected);
+// rel has no types (untyped — typed deferred to P2b); both endpoints anonymous
+// (no labels, no props); no WHERE/WITH/GROUP BY/HAVING/ORDER BY/DISTINCT/SET/
+// path-var/optional/shortest; RETURN is exactly one count(r)/count(*), no DISTINCT.
+const EdgeCountFastPathPlan = struct {
+    column_name: []const u8,
+};
+
+fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
+    // Shape: single chain with exactly one hop.
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 1) return null;
+    if (chain.is_optional) return null;
+    if (chain.is_shortest) return null;
+    if (chain.name != null) return null; // path variable bound to chain
+    if (q.path_variable != null) return null;
+    const hop = chain.hops[0];
+
+    // Rel gate: directed, untyped, no var-length quantifier.
+    if (hop.rel.dir == .undirected) return null; // exclude undirected (semantics mismatch)
+    if (hop.rel.types.len != 0) return null; // typed deferred to P2b
+    if (hop.rel.min_len != null or hop.rel.max_len != null) return null; // no var-len
+    if (hop.rel.props != null) return null;
+
+    // Endpoint gate: both anonymous (no labels, no props). Name is OK (it's the
+    // rel variable `r` we aggregate over — the node names are irrelevant).
+    if (hop.left.labels.len != 0) return null;
+    if (hop.left.props != null) return null;
+    if (hop.right.labels.len != 0) return null;
+    if (hop.right.props != null) return null;
+
+    // No WHERE, WITH, GROUP BY, ORDER BY, HAVING, SET, LIMIT 0.
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+
+    // No DISTINCT (count(DISTINCT r) is a different shape — leave on the slow path).
+    if (q.ret.distinct) return null;
+
+    // RETURN: exactly one item that is count(r), count(*), or count(<rel_var>).
+    if (q.ret.items.len != 1) return null;
+    const item = q.ret.items[0];
+
+    const call = switch (item.expr) {
+        .Call => |c| c,
+        else => return null,
+    };
+    if (call.callee.* != .Ident) return null;
+    const fname = call.callee.Ident.orig;
+    if (!std.ascii.eqlIgnoreCase(fname, "count")) return null;
+    if (call.args.len != 1) return null;
+    const arg = call.args[0].*;
+
+    const is_star = switch (arg) {
+        .Ident => |id| std.mem.eql(u8, id.orig, "*"),
+        else => false,
+    };
+    // count(r) where r is the rel variable — equivalent to count(*) for a simple
+    // directed hop (r is never null in a matched path).
+    const is_rel_var = switch (arg) {
+        .Ident => |id| blk: {
+            if (hop.rel.name) |v| {
+                break :blk std.mem.eql(u8, id.orig, v);
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+    if (!is_star and !is_rel_var) return null;
+
+    return .{ .column_name = item.alias orelse "count(r)" };
+}
+
+// CANARY: REQ=GAP-ENT-0002; FEATURE="EdgeCountFastPath"; ASPECT=FastPath; STATUS=TESTED; TEST=tests/test_count_edges_fastpath.zig; OWNER=execution; UPDATED=2026-06-26
+/// O(1) fast path for `MATCH ()-[r]->() RETURN count(r)` / `count(*)`.
+/// Returns null when the query is NOT this shape, or when RLS/tenant constraints
+/// require the per-row executor.
+pub fn countEdgesFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    const plan = analyzeEdgeCountFastPath(q) orelse return null;
+    if (!countFastPathRlsAllowed()) return null;
+    // RLS/tenant invariant: the unfiltered O(1) edge count MUST NOT serve a
+    // tenant-scoped or hierarchy-active read (would over-count across tenants).
+    // Bail → legacy executor which is hierarchy-aware and per-row RLS-aware.
+    if (filter_tenant != null) return null;
+
+    // Resolve the active read store (same as countNodesFastPath).
+    var fallback_read_view: graph_store.ReadView = undefined;
+    var fallback_read_view_active = false;
+    defer if (fallback_read_view_active) fallback_read_view.deinit();
+
+    const store = if (graph_store.getActiveQueryReadStore()) |active_read_store| blk: {
+        break :blk active_read_store;
+    } else blk: {
+        const writable_store = graph_store.getGlobalStore(allocator);
+        fallback_read_view = graph_store.ReadView.init(allocator, writable_store);
+        fallback_read_view_active = true;
+        break :blk fallback_read_view.getReadStore();
+    };
+
+    const n = store.countEdgesForGraph(filter_graph);
+    return try buildCountFastPathResult(allocator, plan.column_name, n);
+}
+
 // GAP-0811 Task 2.2: property-aggregate fast-path shared types.
 const AggKind = enum { sum, avg, min, max };
 
@@ -6364,6 +6481,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // Handle shortestPath assignment using helper function
     if (try handleShortestPathAssignment(allocator, q, param_names, param_values)) |result| {
         return result;
+    }
+
+    // GAP-ENT-0002: O(1) edge-count fast path for untyped directed `MATCH ()-[r]->() RETURN count(r|*)`.
+    // Must run BEFORE the multi-chain dispatch (which would route to
+    // executeMultiChainRelationshipMatch and materialize all edges).
+    if (try countEdgesFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
     }
 
     // Check if all chains are simple node patterns and dispatch accordingly

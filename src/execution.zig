@@ -211,6 +211,7 @@ pub const executeMultiNodeMatch = match_operations.executeMultiNodeMatch;
 pub const executeMatchQueryImpl = match_operations.executeMatchQueryImpl;
 pub const countNodesFastPath = match_operations.countNodesFastPath;
 pub const countNodesLabelRefcountFastPath = match_operations.countNodesLabelRefcountFastPath;
+pub const countEdgesFastPath = match_operations.countEdgesFastPath;
 pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 
