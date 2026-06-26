@@ -7198,6 +7198,17 @@ pub fn build(b: *std.Build) void {
     const count_edges_fastpath_step = b.step("test-count-edges-fastpath", "Run GAP-ENT-0002 count(r) edge-count fast path regression (O(1) from IdMap.edgeCount, no row materialization)");
     count_edges_fastpath_step.dependOn(&run_count_edges_fastpath_tests.step);
 
+    // GAP-ENT-0002 streaming GROUP BY / DISTINCT fast path regression.
+    // Pre-fix: getPathRowsMaterialized() == N_nodes (each materialized by planned_read_runtime).
+    // Post-fix: == 0 (O(groups) accumulator, executePatternQuery never runs).
+    const groupby_streaming_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_ent0002_groupby_streaming.zig"), .target = target, .optimize = optimize });
+    groupby_streaming_test_mod.addImport("geode", root_mod);
+    const groupby_streaming_tests = b.addTest(.{ .root_module = groupby_streaming_test_mod });
+    const run_groupby_streaming_tests = b.addRunArtifact(groupby_streaming_tests);
+    shardDep(test_step, &run_groupby_streaming_tests.step, 2, test_shard_loads, test_shard_index);
+    const groupby_streaming_step = b.step("test-groupby-streaming", "Run streaming GROUP BY/DISTINCT regression (no row materialization, O(groups) not O(nodes))");
+    groupby_streaming_step.dependOn(&run_groupby_streaming_tests.step);
+
     // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
     // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
     // PARENT_OF children.  Counter assertions (label-scan == 0, exact >= 1) are
