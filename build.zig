@@ -7104,6 +7104,18 @@ pub fn build(b: *std.Build) void {
     const rls_clone_gate_step = b.step("test-rls-clone-gate", "Run P3a RLS clone-gate regression (RLS reads skip the whole-graph snapshot, isolation preserved)");
     rls_clone_gate_step.dependOn(&run_rls_clone_gate_tests.step);
 
+    // P3b: multi-chain comma-MATCH hash-join regression tests.
+    // Verifies that all-simple-node multi-chain MATCH is served engine-direct
+    // via hash-join (no whole-graph clone, no legacy cartesian OOM).
+    const multichain_hj_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_multichain_hashjoin.zig"), .target = target, .optimize = optimize });
+    multichain_hj_test_mod.addImport("geode", root_mod);
+    multichain_hj_test_mod.addImport("rls_types", rls_types_mod);
+    const multichain_hj_tests = b.addTest(.{ .root_module = multichain_hj_test_mod });
+    const run_multichain_hj_tests = b.addRunArtifact(multichain_hj_tests);
+    shardDep(test_step, &run_multichain_hj_tests.step, 1, test_shard_loads, test_shard_index);
+    const multichain_hj_step = b.step("test-multichain-hashjoin", "Run P3b multi-chain hash-join regression (no clone, engine-direct, hash-join for comma-MATCH)");
+    multichain_hj_step.dependOn(&run_multichain_hj_tests.step);
+
     // GAP-0901 bounded-cache hydrate/reclaim regression: under a SMALL node
     // cache cap (most nodes evicted to the engine), hydrating an evicted
     // DEFAULT-tenant node from the engine and then reclaiming it must NOT free

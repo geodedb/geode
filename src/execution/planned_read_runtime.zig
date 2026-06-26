@@ -210,6 +210,17 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
     if (execution_mode == .storage_native) {
         if (q.match.chains.len == 0) {
             try ops.append(allocator, .{ .kind = .ConstProjection, .est_rows = 1 });
+        } else if (q.match.chains.len > 1) {
+            // Multi-chain hash-join: register each chain's root node binding in order.
+            // root_index stays null — executeMultiChainHashJoin uses per-chain indices.
+            for (q.match.chains, 0..) |chain, ci| {
+                const root = if (chain.head) |head| head else chain.hops[0].left;
+                _ = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, root.name, "node", ci);
+                try ops.append(allocator, .{
+                    .kind = if (root.labels.len > 0) .LabelScan else .AllNodesScan,
+                    .est_rows = try estimateScanRows(allocator, graph_name, root),
+                });
+            }
         } else {
             const chain = q.match.chains[0];
             const first_node = if (chain.head) |head| head else chain.hops[0].left;
@@ -538,6 +549,9 @@ fn buildInitialResult(
         };
     }
 
+    if (q.match.chains.len > 1) {
+        return executeMultiChainHashJoin(allocator, q, context, plan, param_names, param_values, trace);
+    }
     return executePatternQuery(allocator, q, context, plan, param_names, param_values, trace);
 }
 
@@ -797,6 +811,316 @@ fn materializeNodeOnlyRow(
     for (local_nodes.items) |tracked_node| {
         try owned_entities.trackNode(tracked_node);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-chain hash-join support (P3b).
+//
+// isAllSimpleNodeMultiChain verifies all chains are bare node patterns (no
+// hops, not optional, not shortest, walk mode).  extractJoinPredicate finds
+// a cross-chain equality in the WHERE clause for hash-join keying.
+// executeMultiChainHashJoin collects one slot list per chain, builds a hash
+// map on chain[0]'s join-key property, probes with chain[1] (or falls back
+// to true-cartesian when no join key), and materializes matched pairs without
+// any whole-graph snapshot clone.
+// ---------------------------------------------------------------------------
+
+const JoinPredicate = struct {
+    var_a: []const u8,
+    prop_a: []const u8,
+    var_b: []const u8,
+    prop_b: []const u8,
+};
+
+fn propertyAccessVar(expr: ast.Expr) ?struct { obj: []const u8, prop: []const u8 } {
+    switch (expr) {
+        .Member => |m| {
+            if (m.target.* != .Ident) return null;
+            return .{ .obj = m.target.*.Ident.orig, .prop = m.field };
+        },
+        .PropertyAccess => |pa| return .{ .obj = pa.object, .prop = pa.property },
+        else => return null,
+    }
+}
+
+fn extractJoinPredicate(expr: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+    switch (expr) {
+        .Binary => |b| {
+            switch (b.op) {
+                .And => return extractJoinPredicate(b.left.*, chain_vars) orelse
+                    extractJoinPredicate(b.right.*, chain_vars),
+                .Eq => {
+                    const left_pa = propertyAccessVar(b.left.*) orelse return null;
+                    const right_pa = propertyAccessVar(b.right.*) orelse return null;
+                    var left_chain: ?usize = null;
+                    var right_chain: ?usize = null;
+                    for (chain_vars, 0..) |cv, ci| {
+                        if (cv) |name| {
+                            if (std.mem.eql(u8, name, left_pa.obj)) left_chain = ci;
+                            if (std.mem.eql(u8, name, right_pa.obj)) right_chain = ci;
+                        }
+                    }
+                    const lc = left_chain orelse return null;
+                    const rc = right_chain orelse return null;
+                    if (lc == rc) return null;
+                    return JoinPredicate{
+                        .var_a = left_pa.obj,
+                        .prop_a = left_pa.prop,
+                        .var_b = right_pa.obj,
+                        .prop_b = right_pa.prop,
+                    };
+                },
+                else => return null,
+            }
+        },
+        else => return null,
+    }
+}
+
+// Get a node property as a comparable string key using an arena allocator so
+// no explicit cleanup is needed — the arena frees everything at once.
+fn slotPropertyAsHashKey(
+    arena: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    slot_id: u64,
+    prop_name: []const u8,
+) !?[]const u8 {
+    const maybe_val = adapter.getNodeProperty(graph_name, slot_id, prop_name, arena) catch return null;
+    const val = maybe_val orelse return null;
+    return switch (val) {
+        .string => |s| s,
+        .int => |i| try std.fmt.allocPrint(arena, "i:{d}", .{i}),
+        .bool => |b| @as([]const u8, if (b) "b:1" else "b:0"),
+        .float => |f| try std.fmt.allocPrint(arena, "f:{d}", .{f}),
+        else => null,
+    };
+}
+
+fn materializeMultiChainRow(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    slot_ids: []const u64,
+    binding_indices: []const usize,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    rows: *std.ArrayList([]Value),
+    owned_entities: *OwnedGraphEntities,
+) !void {
+    var local_nodes = std.ArrayList(*graph_store.Node).empty;
+    defer local_nodes.deinit(allocator);
+
+    const binding_values = try allocator.alloc(Value, plan.binding_names.len);
+    defer allocator.free(binding_values);
+    for (binding_values) |*v| v.* = .{ .Null = {} };
+
+    for (slot_ids, binding_indices) |slot_id, bind_idx| {
+        const node = try materializeNode(allocator, plan.graph_name, slot_id);
+        try local_nodes.append(allocator, node);
+        if (bind_idx < binding_values.len) {
+            binding_values[bind_idx] = .{ .Node = node };
+        }
+    }
+
+    const env = Env{
+        .names = plan.binding_names,
+        .values = binding_values,
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+        .exec_context = @constCast(&context),
+    };
+
+    const row = try buildBindingRow(allocator, q, env, binding_values);
+    _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
+    try rows.append(allocator, row);
+    for (local_nodes.items) |n| {
+        try owned_entities.trackNode(n);
+    }
+}
+
+fn nestedLoopCartesian(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    all_slots: []const []u64,
+    chain_binding_indices: []const usize,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    rows: *std.ArrayList([]Value),
+    owned_entities: *OwnedGraphEntities,
+    slot_combo: []u64,
+    depth: usize,
+) !void {
+    if (depth == all_slots.len) {
+        try materializeMultiChainRow(allocator, q, context, plan, slot_combo, chain_binding_indices, param_names, param_values, rows, owned_entities);
+        return;
+    }
+    for (all_slots[depth]) |slot_id| {
+        slot_combo[depth] = slot_id;
+        try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, rows, owned_entities, slot_combo, depth + 1);
+    }
+}
+
+fn executeMultiChainHashJoin(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    trace: *RuntimeTrace,
+) !ExecutionResult {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+
+    var rows = std.ArrayList([]Value).empty;
+    defer rows.deinit(allocator);
+    var owned_entities = try OwnedGraphEntities.init(allocator);
+    errdefer owned_entities.deinit();
+
+    if (!adapter.graphExists(plan.graph_name)) {
+        const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+        owned_entities.deinit();
+        return ExecutionResult{
+            .columns = col_result.columns,
+            .rows = try rows.toOwnedSlice(allocator),
+            .flags = std.ArrayList([]const u8).empty,
+            .column_buffer = col_result.buffer,
+        };
+    }
+
+    const n_chains = q.match.chains.len;
+
+    // Collect chain variables (may be null for anonymous patterns).
+    const chain_vars = try allocator.alloc(?[]const u8, n_chains);
+    defer allocator.free(chain_vars);
+    const chain_binding_indices = try allocator.alloc(usize, n_chains);
+    defer allocator.free(chain_binding_indices);
+
+    for (q.match.chains, 0..) |chain, ci| {
+        const root = if (chain.head) |head| head else chain.hops[0].left;
+        chain_vars[ci] = root.name;
+        // Find this chain's binding index in the plan. Bindings are added in
+        // chain order by buildPlanIfSupported, so the index is ci unless an
+        // anonymous name was generated.
+        chain_binding_indices[ci] = blk: {
+            if (root.name) |name| {
+                for (plan.binding_names, 0..) |bn, bi| {
+                    if (std.mem.eql(u8, bn, name)) break :blk bi;
+                }
+            }
+            break :blk ci;
+        };
+    }
+
+    // Collect start slots for each chain (pass null for where_clause: cross-chain
+    // predicates can't be applied per-chain; the outer WHERE filter handles them).
+    var all_slots_list = try std.ArrayList([]u64).initCapacity(allocator, n_chains);
+    defer {
+        for (all_slots_list.items) |slots| allocator.free(slots);
+        all_slots_list.deinit(allocator);
+    }
+
+    for (q.match.chains, 0..) |chain, ci| {
+        const root = if (chain.head) |head| head else chain.hops[0].left;
+        const scan_start_ns = nowNs();
+        const slots = try collectStartSlots(
+            allocator,
+            adapter,
+            plan.graph_name,
+            root,
+            null,
+            param_names,
+            param_values,
+            context,
+            null,
+        );
+        all_slots_list.appendAssumeCapacity(slots);
+        if (ci < trace.ops.len) {
+            trace.ops[ci].rows = @intCast(slots.len);
+            trace.ops[ci].time_ns = elapsedSince(scan_start_ns);
+        }
+    }
+
+    const all_slots = all_slots_list.items;
+
+    // Extract a cross-chain join predicate from the WHERE clause (if any).
+    const join_pred: ?JoinPredicate = if (q.where_clause) |wc|
+        extractJoinPredicate(wc, chain_vars)
+    else
+        null;
+
+    if (n_chains == 2) {
+        // Two-chain case: hash join on join key, or true-cartesian fallback.
+        const slots_a = all_slots[0];
+        const slots_b = all_slots[1];
+        const bind_a = chain_binding_indices[0];
+        const bind_b = chain_binding_indices[1];
+
+        if (join_pred) |jp| {
+            // Determine which side of the predicate corresponds to chain[0] (build)
+            // and chain[1] (probe).
+            const a_var = chain_vars[0];
+            const a_is_left = a_var != null and std.mem.eql(u8, a_var.?, jp.var_a);
+            const prop_build = if (a_is_left) jp.prop_a else jp.prop_b;
+            const prop_probe = if (a_is_left) jp.prop_b else jp.prop_a;
+
+            var key_arena = std.heap.ArenaAllocator.init(allocator);
+            defer key_arena.deinit();
+
+            var build_map = std.StringHashMap(std.ArrayList(u64)).init(allocator);
+            defer {
+                var it = build_map.iterator();
+                while (it.next()) |entry| entry.value_ptr.deinit(allocator);
+                build_map.deinit();
+            }
+
+            for (slots_a) |slot_a| {
+                const key = (try slotPropertyAsHashKey(key_arena.allocator(), adapter, plan.graph_name, slot_a, prop_build)) orelse continue;
+                const gop = try build_map.getOrPut(key);
+                if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(u64).empty;
+                try gop.value_ptr.append(allocator, slot_a);
+            }
+
+            for (slots_b) |slot_b| {
+                const probe_key = (try slotPropertyAsHashKey(key_arena.allocator(), adapter, plan.graph_name, slot_b, prop_probe)) orelse continue;
+                const matching = build_map.get(probe_key) orelse continue;
+                for (matching.items) |slot_a| {
+                    const slot_ids = [2]u64{ slot_a, slot_b };
+                    const bind_ids = [2]usize{ bind_a, bind_b };
+                    try materializeMultiChainRow(allocator, q, context, plan, &slot_ids, &bind_ids, param_names, param_values, &rows, owned_entities);
+                }
+            }
+        } else {
+            // True-cartesian: N×M nested loop.
+            for (slots_a) |slot_a| {
+                for (slots_b) |slot_b| {
+                    const slot_ids = [2]u64{ slot_a, slot_b };
+                    const bind_ids = [2]usize{ bind_a, bind_b };
+                    try materializeMultiChainRow(allocator, q, context, plan, &slot_ids, &bind_ids, param_names, param_values, &rows, owned_entities);
+                }
+            }
+        }
+    } else {
+        // N-chain (>2): recursive nested-loop cartesian.
+        const slot_combo = try allocator.alloc(u64, n_chains);
+        defer allocator.free(slot_combo);
+        try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, &rows, owned_entities, slot_combo, 0);
+    }
+
+    const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+    const result = ExecutionResult{
+        .columns = col_result.columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .column_buffer = col_result.buffer,
+        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
+    };
+    if (result.owned_graph_entities == null) owned_entities.deinit();
+    return result;
 }
 
 // GAP-0813: per-binding projection plan for multi-hop path materialization.
@@ -2576,6 +2900,15 @@ fn appendLegacyPlanOps(
     try ops.append(allocator, .{ .kind = .LegacyExecute });
 }
 
+fn isAllSimpleNodeMultiChain(q: *const ast.Query) bool {
+    if (q.match.chains.len < 2) return false;
+    for (q.match.chains) |chain| {
+        if (chain.is_optional or chain.is_shortest or chain.path_mode != .walk) return false;
+        if (chain.hops.len > 0) return false;
+    }
+    return true;
+}
+
 /// GAP-0902: pure-AST predicate — true iff this read is served ENGINE-DIRECT by
 /// the storage-native planned-read path (single-chain MATCH reads incl. ORDER
 /// BY / DISTINCT / aggregates, no mutations / RLS-needing shapes / multi-chain
@@ -2597,7 +2930,7 @@ fn isStorageNativeQuery(q: *const ast.Query) bool {
     if (q.call_clause != null or q.initial_call_subquery != null or q.merge_statement != null) return false;
     if (q.path_variable != null or q.has_recursive_cte) return false;
     if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
-    if (q.match.chains.len > 1) return false;
+    if (q.match.chains.len > 1) return isAllSimpleNodeMultiChain(q);
     if (q.match.chains.len == 0) return true;
 
     const chain = q.match.chains[0];

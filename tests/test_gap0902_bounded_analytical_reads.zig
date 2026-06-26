@@ -345,8 +345,8 @@ test "GAP-0902: analytical shapes are recognized as engine-direct (skip snapshot
     // NOT engine-direct (must KEEP the snapshot clone / full executor):
     //   - mutation embedded in the read program (SET) → not a pure read shape
     try testing.expect(!try isEngineDirectShape(aa, "MATCH (n:Taxon) SET n.x = 1 RETURN n.source_id"));
-    //   - multi-chain (comma-separated patterns) → planned-read declines
-    try testing.expect(!try isEngineDirectShape(aa, "MATCH (n:Taxon), (m:Taxon) RETURN n.source_id"));
+    //   - multi-chain all-simple-node (P3b: now engine-direct via hash-join)
+    try testing.expect(try isEngineDirectShape(aa, "MATCH (n:Taxon), (m:Taxon) RETURN n.source_id"));
     //   - OPTIONAL MATCH → planned-read declines
     try testing.expect(!try isEngineDirectShape(aa, "OPTIONAL MATCH (n:Taxon) RETURN n.source_id"));
 }
