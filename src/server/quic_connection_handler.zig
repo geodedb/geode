@@ -5599,6 +5599,10 @@ fn readServedEngineDirect(
     analysis: *const query_traits.ProgramAnalysis,
     query_graph_name: []const u8,
 ) bool {
+    // `state` is unused now that the RLS clone-force gate below is lifted (P3a);
+    // retained in the signature for P3a-step2, which will re-gate on RLS once
+    // per-candidate passesRLSFilter is added to node_scan_stream / planned_read.
+    _ = state;
     if (graph_store.getGlobalAdapter() == null) return false;
     if (analysis.kind != .rows) return false;
     // P3a (read-path OOM): RLS-active reads no longer force the O(graph)
