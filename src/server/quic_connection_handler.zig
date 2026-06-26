@@ -5558,7 +5558,7 @@ fn readWillStreamEngineSide(
     return node_scan_stream.isEligible(&target.Query);
 }
 
-/// GAP-0902: true iff this read will be served ENGINE-DIRECT (no whole-graph
+/// GAP-0902 / P3a: true iff this read will be served ENGINE-DIRECT (no whole-graph
 /// snapshot clone) by EITHER the `node_scan_stream` fast path OR the
 /// storage-native planned-read path (single-chain ORDER BY / DISTINCT /
 /// aggregate / WHERE-count reads). When true the handler skips
@@ -5568,13 +5568,32 @@ fn readWillStreamEngineSide(
 /// reads, NEVER the cache map) instead of materializing an O(all-nodes)-resident
 /// snapshot (81 GB at 14.27M, the RSS-balloon source under the bounded cache).
 ///
-/// SAFETY: gated by the SAME RLS / preamble / adapter checks as the streaming
-/// path. RLS-evaluating reads, multi-chain traversal, and any shape that is NOT
-/// storage-native keep the snapshot (so per-candidate RLS / the legacy executor
-/// still see a consistent clone). `isStorageNativeReadShape` is exactly the
-/// predicate that makes `executeIfSupported` run storage_native (engine-direct)
-/// and NEVER fall back to the legacy resident-only executor, so a skipped
-/// snapshot can never strand such a read on the resident-only path.
+/// SAFETY (P3a): RLS-active reads are no longer blocked here.  Two secondary
+/// gates maintain isolation without the O(graph) snapshot clone:
+///
+///   QCH:7040  `if (!rls_active and preamblePermitsStreaming(...))`
+///             → blocks node_scan_stream under RLS (node_scan_stream.zig has no
+///               per-candidate passesRLSFilter; until it does, RLS reads bypass
+///               this path and fall through to executeProgramWithContext).
+///
+///   query_execution.zig:1673  `if (!wouldEvaluateRLS()) executeIfSupported(...)`
+///             → blocks planned_read_runtime under RLS (no per-candidate RLS).
+///
+/// Both secondaries route RLS reads to the legacy executor on the LIVE store.
+/// The legacy executor applies passesRLSFilter per candidate node
+/// (match_operations.zig:2644, 2694, 3097, 3157, …).  The visible row set is
+/// byte-identical to the pre-fix clone path.
+///
+/// INVARIANT: if either secondary gate is removed (P3a-step2: add per-candidate
+/// RLS to node_scan_stream / planned_read_runtime, then lift QCH:7040 /
+/// QE:1673), this function must be updated to handle the corresponding path
+/// correctly — otherwise lifting the secondary gate while the path still lacks
+/// passesRLSFilter leaks policy-denied rows.
+///
+/// `isStorageNativeReadShape` is exactly the predicate that makes
+/// `executeIfSupported` run storage_native (engine-direct) and NEVER fall back
+/// to the legacy resident-only executor, so a skipped snapshot can never strand
+/// a storage-native read on a partial (resident-only) view.
 fn readServedEngineDirect(
     state: *const ServerState,
     analysis: *const query_traits.ProgramAnalysis,
@@ -5582,7 +5601,20 @@ fn readServedEngineDirect(
 ) bool {
     if (graph_store.getGlobalAdapter() == null) return false;
     if (analysis.kind != .rows) return false;
-    if (authenticatedReadNeedsRlsSnapshot(state)) return false;
+    // P3a (read-path OOM): RLS-active reads no longer force the O(graph)
+    // snapshot clone here.  The secondary gates at QCH:7040 (!rls_active) and
+    // query_execution.zig:1673 (!wouldEvaluateRLS()) route RLS reads to the
+    // legacy executor on the LIVE store, which applies passesRLSFilter per
+    // candidate node — the visible row set is identical to the clone path.
+    //
+    // INVARIANT: if either secondary gate is removed without first adding
+    // per-candidate RLS to the corresponding fast path (node_scan_stream /
+    // planned_read_runtime), this line must be reinstated as a conditional
+    // gate — otherwise lifting the secondary gate while the fast path still
+    // lacks passesRLSFilter leaks policy-denied rows.
+    //
+    // if (authenticatedReadNeedsRlsSnapshot(state)) return false; // P3a: lifted
+    // (authenticatedReadNeedsRlsSnapshot is still used at QCH:7026; not dead.)
     if (!preamblePermitsStreaming(analysis, query_graph_name)) return false;
     const target = analysis.target orelse return false;
     if (target.* != .Query) return false;
@@ -6761,8 +6793,12 @@ fn handleClientMessage(
                     // reading, so isolation against concurrent ingest is the same
                     // fuzzy-live semantics they already have for the scan shape.
                     // FLE decrypt-on-read and tenant filtering are unaffected;
-                    // RLS-evaluating reads are excluded by `readServedEngineDirect`
-                    // (kept on the snapshot path so per-candidate RLS runs), and
+                    // P3a: RLS-evaluating reads are NO LONGER excluded by
+                    // `readServedEngineDirect` — the secondary gate at QCH:7040
+                    // (!rls_active) keeps them off node_scan_stream, routing them
+                    // to executeProgramWithContext (legacy executor, live store)
+                    // which applies passesRLSFilter per candidate.  The snapshot
+                    // clone is therefore NOT needed for isolation.
                     // `isStorageNativeReadShape` guarantees these analytical reads
                     // run engine-direct (never the legacy resident-only executor),
                     // so a skipped snapshot can never strand them on a partial
