@@ -13,6 +13,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+const rls_types = @import("rls_types");
 
 const execution = geode.execution;
 const graph_store = geode.graph_store;
@@ -88,6 +89,22 @@ const Harness = struct {
             var r = try self.runQuery(q);
             r.deinit(aa);
         }
+    }
+
+    /// Seed a single Taxon node with integer `value` and `rank` properties.
+    pub fn seedWithIntValue(self: *Harness, id: []const u8, rank: []const u8, value: i64) !void {
+        const aa = self.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "MERGE (n:Taxon {{source_id: '{s}', rank: '{s}', value: {d}}})", .{ id, rank, value });
+        var r = try self.runQuery(q);
+        r.deinit(aa);
+    }
+
+    /// Seed a single Taxon node with both rank and kingdom properties.
+    pub fn seedRankKingdom(self: *Harness, id: []const u8, rank: []const u8, kingdom: []const u8) !void {
+        const aa = self.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "MERGE (n:Taxon {{source_id: '{s}', rank: '{s}', kingdom: '{s}'}})", .{ id, rank, kingdom });
+        var r = try self.runQuery(q);
+        r.deinit(aa);
     }
 };
 
@@ -286,4 +303,237 @@ test "GROUP BY + ORDER BY declines to legacy path (expected materialization)" {
     // decline check, this test fails alerting us to a correctness risk.
     const materialized = planned_read_runtime.getPathRowsMaterialized();
     try testing.expect(materialized > 0);
+}
+
+// ── I3: dual-path parity ─────────────────────────────────────────────────────
+
+test "GROUP BY parity: fast path and legacy produce identical group->count maps" {
+    // I3: run the same GROUP BY through the fast path (no ORDER BY) and the
+    // legacy path (ORDER BY c DESC forces decline via order_by gate), then compare
+    // group→count maps order-insensitively to prove both paths are semantically equivalent.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedRanks("species", 10);
+    try h.seedRanks("genus", 5);
+    try h.seedRanks("family", 3);
+
+    const aa = h.arena.allocator();
+
+    // Fast path: no ORDER BY → groupByAggregateFastPath fires.
+    planned_read_runtime.resetPathRowsMaterialized();
+    var fast = try h.runQuery("MATCH (n:Taxon) RETURN n.rank AS r, count(*) AS c GROUP BY n.rank");
+    defer fast.deinit(aa);
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+
+    // Legacy path: ORDER BY c DESC forces the fast path to decline.
+    planned_read_runtime.resetPathRowsMaterialized();
+    var legacy = try h.runQuery("MATCH (n:Taxon) RETURN n.rank AS r, count(*) AS c GROUP BY n.rank ORDER BY c DESC");
+    defer legacy.deinit(aa);
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+
+    // Same number of groups.
+    try testing.expectEqual(fast.rows.len, legacy.rows.len);
+
+    // Build rank→count maps and compare entry-by-entry (order-insensitive).
+    var fast_map = std.StringHashMap(i64).init(aa);
+    var legacy_map = std.StringHashMap(i64).init(aa);
+    for (fast.rows) |row| {
+        const key = switch (row[0]) {
+            .Str => |s| s,
+            else => continue,
+        };
+        const cnt: i64 = switch (row[1]) {
+            .Int => |v| v,
+            .BigInt => |v| @intCast(v),
+            else => continue,
+        };
+        try fast_map.put(key, cnt);
+    }
+    for (legacy.rows) |row| {
+        const key = switch (row[0]) {
+            .Str => |s| s,
+            else => continue,
+        };
+        const cnt: i64 = switch (row[1]) {
+            .Int => |v| v,
+            .BigInt => |v| @intCast(v),
+            else => continue,
+        };
+        try legacy_map.put(key, cnt);
+    }
+    var it = fast_map.iterator();
+    while (it.next()) |entry| {
+        const legacy_cnt = legacy_map.get(entry.key_ptr.*) orelse return error.MissingGroupInLegacy;
+        try testing.expectEqual(entry.value_ptr.*, legacy_cnt);
+    }
+}
+
+// ── I4: RLS/tenant-active decline test ───────────────────────────────────────
+
+test "GROUP BY declines when RLS user+policy context active, legacy returns correct result" {
+    // I4: install a label deny policy (for a label absent from our data) to make
+    // activeRlsPoliciesConfigured() = true.  With ctx.user set, countFastPathRlsAllowed()
+    // returns false → fast path declines → legacy executor runs and returns correct result.
+    //
+    // Signal for decline: execution.wouldEvaluateRLS() is the direct predicate that
+    // countFastPathRlsAllowed() tests.  When wouldEvaluateRLS() is true, planned_read_runtime
+    // is also bypassed (see query_execution.zig), so getPathRowsMaterialized() is NOT the
+    // right signal here — it stays 0 because the RLS-aware legacy executor runs directly.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedRanks("species", 4);
+    try h.seedRanks("genus", 3);
+
+    // Install a deny policy for a label NOT in our data (HiddenLabel) so that
+    // activeRlsPoliciesConfigured() is true while the legacy GROUP BY result is unchanged.
+    var label_engine = rls_types.RLSFilterEngine.init(testing.allocator);
+    defer label_engine.deinit();
+    try label_engine.addDenyPolicy("default", "HiddenLabel", "");
+    rls_types.setGlobalRLSFilterEngine(&label_engine);
+    defer rls_types.setGlobalRLSFilterEngine(null);
+
+    // Set a non-null user on the context; combined with the policy above this
+    // makes countFastPathRlsAllowed() = false.
+    h.ctx.user = "testuser";
+    defer {
+        h.ctx.user = null;
+    }
+
+    // Verify the RLS gate is armed: this is the direct predicate that makes the
+    // GROUP BY fast path decline.  Push context so wouldEvaluateRLS() sees it.
+    {
+        const prev_ctx = execution.pushActiveContext(&h.ctx);
+        defer execution.popActiveContext(prev_ctx);
+        try testing.expect(execution.wouldEvaluateRLS());
+        try testing.expect(execution.activeRlsPoliciesConfigured());
+    }
+
+    // Run the query — fast path declines, RLS-aware legacy executor produces
+    // the correct GROUP BY result for the Taxon data.
+    var r = try h.runQuery("MATCH (n:Taxon) RETURN n.rank AS r, count(*) AS c GROUP BY n.rank");
+    defer r.deinit(h.arena.allocator());
+
+    // Legacy result is still correct.
+    try testing.expectEqual(@as(usize, 2), r.rows.len);
+    try testing.expectEqual(@as(usize, 4), findGroupByRank(r.rows, "species") orelse return error.MissingSpecies);
+    try testing.expectEqual(@as(usize, 3), findGroupByRank(r.rows, "genus") orelse return error.MissingGenus);
+}
+
+// ── I5: avg / min / max type-tag correctness and multi-key GROUP BY ──────────
+
+test "GROUP BY avg integer group emits Int (parity with legacy)" {
+    // I5: pure-integer avg inputs must emit Value{ .Int } (integer divide),
+    // matching the legacy computeGroupAggregation in execution.zig.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    // Seed: rank="a", values 10 and 20 → avg = 15 (integer divide).
+    try h.seedWithIntValue("avg_a0", "a", 10);
+    try h.seedWithIntValue("avg_a1", "a", 20);
+    // rank="b", values 10 and 21 → avg = @divTrunc(31, 2) = 15.
+    try h.seedWithIntValue("avg_b0", "b", 10);
+    try h.seedWithIntValue("avg_b1", "b", 21);
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery("MATCH (n:Taxon) RETURN n.rank AS r, avg(n.value) AS a GROUP BY n.rank");
+    defer r.deinit(h.arena.allocator());
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    try testing.expectEqual(@as(usize, 2), r.rows.len);
+
+    for (r.rows) |row| {
+        // avg column is index 1; must be .Int (not .Double) for pure-integer inputs.
+        const rank_str = switch (row[0]) {
+            .Str => |s| s,
+            else => return error.ExpectedStr,
+        };
+        const avg_val = row[1];
+        const expected_int: i64 = if (std.mem.eql(u8, rank_str, "a")) 15 else 15; // both 15
+        switch (avg_val) {
+            .Int => |v| try testing.expectEqual(expected_int, v),
+            else => return error.ExpectedIntTagForAvg,
+        }
+    }
+}
+
+test "GROUP BY min/max integer group emits Int (type-tag correctness)" {
+    // I5: min and max over pure-integer inputs must emit Value{ .Int }.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedWithIntValue("mm0", "g", 3);
+    try h.seedWithIntValue("mm1", "g", 10);
+    try h.seedWithIntValue("mm2", "g", 5);
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery("MATCH (n:Taxon) RETURN n.rank AS r, min(n.value) AS mn, max(n.value) AS mx GROUP BY n.rank");
+    defer r.deinit(h.arena.allocator());
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    try testing.expectEqual(@as(usize, 1), r.rows.len);
+
+    const row = r.rows[0];
+    try testing.expect(row.len >= 3);
+    // min should be 3 as Int
+    switch (row[1]) {
+        .Int => |v| try testing.expectEqual(@as(i64, 3), v),
+        else => return error.ExpectedIntTagForMin,
+    }
+    // max should be 10 as Int
+    switch (row[2]) {
+        .Int => |v| try testing.expectEqual(@as(i64, 10), v),
+        else => return error.ExpectedIntTagForMax,
+    }
+}
+
+test "GROUP BY multi-key: rank + kingdom produces correct group counts" {
+    // I5: multi-key GROUP BY `RETURN n.rank, n.kingdom, count(*)`.
+    // The fast path must correctly handle multiple GROUP BY keys.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+    // 3 nodes: (species, Animalia), (species, Animalia), (genus, Plantae)
+    for ([_]struct { id: []const u8, rank: []const u8, kingdom: []const u8 }{
+        .{ .id = "mk0", .rank = "species", .kingdom = "Animalia" },
+        .{ .id = "mk1", .rank = "species", .kingdom = "Animalia" },
+        .{ .id = "mk2", .rank = "genus", .kingdom = "Plantae" },
+    }) |node| {
+        const q = try std.fmt.allocPrint(aa, "MERGE (n:Taxon {{source_id: '{s}', rank: '{s}', kingdom: '{s}'}})", .{ node.id, node.rank, node.kingdom });
+        var res = try h.runQuery(q);
+        res.deinit(aa);
+    }
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery("MATCH (n:Taxon) RETURN n.rank AS r, n.kingdom AS k, count(*) AS c GROUP BY n.rank, n.kingdom");
+    defer r.deinit(aa);
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+
+    // 2 distinct (rank, kingdom) groups
+    try testing.expectEqual(@as(usize, 2), r.rows.len);
+
+    // Find the (species, Animalia) group and verify count = 2
+    var found_species: bool = false;
+    var found_genus: bool = false;
+    for (r.rows) |row| {
+        if (row.len < 3) continue;
+        const rank_s = switch (row[0]) {
+            .Str => |s| s,
+            else => continue,
+        };
+        const kingdom_s = switch (row[1]) {
+            .Str => |s| s,
+            else => continue,
+        };
+        const cnt: i64 = switch (row[2]) {
+            .Int => |v| v,
+            .BigInt => |v| @intCast(v),
+            else => continue,
+        };
+        if (std.mem.eql(u8, rank_s, "species") and std.mem.eql(u8, kingdom_s, "Animalia")) {
+            try testing.expectEqual(@as(i64, 2), cnt);
+            found_species = true;
+        }
+        if (std.mem.eql(u8, rank_s, "genus") and std.mem.eql(u8, kingdom_s, "Plantae")) {
+            try testing.expectEqual(@as(i64, 1), cnt);
+            found_genus = true;
+        }
+    }
+    try testing.expect(found_species);
+    try testing.expect(found_genus);
 }

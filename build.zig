@@ -7203,6 +7203,8 @@ pub fn build(b: *std.Build) void {
     // Post-fix: == 0 (O(groups) accumulator, executePatternQuery never runs).
     const groupby_streaming_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_ent0002_groupby_streaming.zig"), .target = target, .optimize = optimize });
     groupby_streaming_test_mod.addImport("geode", root_mod);
+    // I4: RLS/tenant-active decline test needs rls_types to install a label deny policy.
+    groupby_streaming_test_mod.addImport("rls_types", rls_types_mod);
     const groupby_streaming_tests = b.addTest(.{ .root_module = groupby_streaming_test_mod });
     const run_groupby_streaming_tests = b.addRunArtifact(groupby_streaming_tests);
     shardDep(test_step, &run_groupby_streaming_tests.step, 2, test_shard_loads, test_shard_index);
