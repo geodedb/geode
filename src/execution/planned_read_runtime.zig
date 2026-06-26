@@ -541,6 +541,49 @@ fn buildInitialResult(
     return executePatternQuery(allocator, q, context, plan, param_names, param_values, trace);
 }
 
+/// Estimate the minimum posting-list length for a NodePattern's indexed inline props.
+/// Returns std.math.maxInt(usize) when the pattern has no indexed prop (label-only
+/// or no props at all) — meaning a full label scan would be needed. Safe to call as a
+/// selectivity probe: uses countCandidateNodesByLabelAndProperty which does NOT
+/// increment g_exact_node_property_lookup_count.
+fn estimatePatternSelectivity(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    pattern: ast.NodePattern,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    allocator: std.mem.Allocator,
+) usize {
+    if (pattern.labels.len != 1) return std.math.maxInt(usize);
+    const props = pattern.props orelse return std.math.maxInt(usize);
+    if (props.len == 0) return std.math.maxInt(usize);
+    const prop_env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+    var best_len: usize = std.math.maxInt(usize);
+    for (props) |prop| {
+        if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
+        if (!graph_store.shouldIndexProperty(prop.key)) continue;
+        const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+        const pv: graph_store.PropertyValue = switch (expected_val) {
+            .Str => |s| .{ .String = s },
+            .Int => |i| .{ .Int = i },
+            .Bool => |b| .{ .Bool = b },
+            else => continue,
+        };
+        const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
+        if (plen < best_len) {
+            best_len = plen;
+            if (plen <= 1) break;
+        }
+    }
+    return best_len;
+}
+
 fn executePatternQuery(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -569,7 +612,29 @@ fn executePatternQuery(
         return empty_result;
     }
 
-    const start_pattern = if (chain.head) |head| head else chain.hops[0].left;
+    // Bug B fix: for single-hop directed queries, probe both endpoints'
+    // selectivity and seed the more-selective one.  Gate is strict:
+    //   - chain.hops.len == 1 (multi-hop deferred)
+    //   - hop.rel.dir != .undirected (undirected: unchanged path)
+    //   - tail strictly more selective than head
+    // All other cases take the existing seeded_from_tail==false path unchanged.
+    const seeded_from_tail: bool = sel: {
+        if (chain.hops.len == 1) {
+            const hop = chain.hops[0];
+            if (hop.rel.dir != .undirected) {
+                const head_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.left, param_names, param_values, allocator);
+                const tail_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.right, param_names, param_values, allocator);
+                if (tail_sel < head_sel) break :sel true;
+            }
+        }
+        break :sel false;
+    };
+    const start_pattern = if (seeded_from_tail)
+        chain.hops[0].right
+    else if (chain.head) |head|
+        head
+    else
+        chain.hops[0].left;
     const scan_op_index = 0;
     const scan_start_ns = nowNs();
     const start_slots = try collectStartSlots(
@@ -606,8 +671,25 @@ fn executePatternQuery(
         defer if (projection_plan) |pp| freeProjectionPlan(allocator, pp);
 
         for (start_slots) |start_slot| {
-            current_nodes[0] = start_slot;
-            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0, projection_plan);
+            if (seeded_from_tail) {
+                // Bug B single-hop reverse walk: start_slot is the terminal c.
+                // Expand backwards (flipped direction) to find the head p.
+                // Populate current_nodes in logical chain order: [0]=p, [1]=c.
+                const hop = chain.hops[0];
+                const rev_candidates = try collectHopEdges(allocator, adapter, plan.graph_name, start_slot, flipRelDir(hop.rel.dir));
+                defer allocator.free(rev_candidates);
+                for (rev_candidates) |edge| {
+                    if (!try edgeMatchesPattern(allocator, adapter, plan.graph_name, edge, hop.rel, param_names, param_values, context)) continue;
+                    if (!try nodeMatchesPatternBySlot(allocator, adapter, plan.graph_name, edge.next_slot, hop.left, param_names, param_values, context)) continue;
+                    current_nodes[0] = edge.next_slot; // p — logical position 0
+                    current_nodes[1] = start_slot; // c — logical position 1
+                    current_edges[0] = edge;
+                    try materializePathRow(allocator, q, context, plan, plan.graph_name, current_nodes, current_edges, param_names, param_values, &rows, owned_entities, projection_plan);
+                }
+            } else {
+                current_nodes[0] = start_slot;
+                try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0, projection_plan);
+            }
         }
     }
 
@@ -1489,6 +1571,14 @@ fn scanAndFilterStartSlots(
     }
 
     return try filtered.toOwnedSlice(allocator);
+}
+
+fn flipRelDir(dir: ast.RelDir) ast.RelDir {
+    return switch (dir) {
+        .right => .left,
+        .left => .right,
+        .undirected => .undirected,
+    };
 }
 
 fn collectHopEdges(
