@@ -7187,6 +7187,18 @@ pub fn build(b: *std.Build) void {
     const traversal_composite_seed_step = b.step("test-traversal-composite-seed", "Traversal composite-start index seed (GAP-ENT-0001 Bug A)");
     traversal_composite_seed_step.dependOn(&run_traversal_composite_seed_tests.step);
 
+    // Traversal reverse-seed regression (GAP-ENT-0001 Bug B): a reverse single-hop
+    // traversal `(p)-[:PARENT_OF]->(c {source, source_id})` must seed from the bound
+    // terminal c (O(degree)) not from a label scan on p (O(graph)).
+    // Pre-fix: getLabelScanLookupCount() >= 1; post-fix: == 0 and exact >= 1.
+    const traversal_reverse_seed_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_traversal_reverse_seed.zig"), .target = target, .optimize = optimize });
+    traversal_reverse_seed_test_mod.addImport("geode", root_mod);
+    const traversal_reverse_seed_tests = b.addTest(.{ .root_module = traversal_reverse_seed_test_mod });
+    const run_traversal_reverse_seed_tests = b.addRunArtifact(traversal_reverse_seed_tests);
+    shardDep(test_step, &run_traversal_reverse_seed_tests.step, 1, test_shard_loads, test_shard_index);
+    const traversal_reverse_seed_step = b.step("test-traversal-reverse-seed", "Traversal reverse-seed index fix (GAP-ENT-0001 Bug B)");
+    traversal_reverse_seed_step.dependOn(&run_traversal_reverse_seed_tests.step);
+
     // GAP-ENT-0002 count(r) edge-count fast path regression.
     // Pre-fix: getPathRowsMaterialized() == N_edges (each materialized).
     // Post-fix: == 0 (O(1) from IdMap.edgeCount, executePatternQuery never runs).
