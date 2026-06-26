@@ -7187,6 +7187,19 @@ pub fn build(b: *std.Build) void {
     const traversal_composite_seed_step = b.step("test-traversal-composite-seed", "Traversal composite-start index seed (GAP-ENT-0001 Bug A)");
     traversal_composite_seed_step.dependOn(&run_traversal_composite_seed_tests.step);
 
+    // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
+    // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
+    // PARENT_OF children.  Counter assertions (label-scan == 0, exact >= 1) are
+    // the deterministic core; a 200 ms wall-clock guard catches catastrophic
+    // O(graph) regressions without flapping on loaded CI.
+    const traversal_seed_perf_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_traversal_seed_perf.zig"), .target = target, .optimize = optimize });
+    traversal_seed_perf_test_mod.addImport("geode", root_mod);
+    const traversal_seed_perf_tests = b.addTest(.{ .root_module = traversal_seed_perf_test_mod });
+    const run_traversal_seed_perf_tests = b.addRunArtifact(traversal_seed_perf_tests);
+    shardDep(test_step, &run_traversal_seed_perf_tests.step, 4, test_shard_loads, test_shard_index);
+    const traversal_seed_perf_step = b.step("test-traversal-seed-perf", "Traversal-seed perf micro-benchmark: O(degree) seed over 8000-node filler graph (counter + wall-clock gate)");
+    traversal_seed_perf_step.dependOn(&run_traversal_seed_perf_tests.step);
+
     // Multi-pattern index-seek regression (from-dump EDGE phase, KNOWN BUG #2):
     // a comma-separated MATCH `(a:L {indexed}), (b:L {indexed})` resolves each
     // endpoint via the exact-property index seek (O(matching)) instead of
