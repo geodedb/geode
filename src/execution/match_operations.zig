@@ -806,6 +806,15 @@ pub fn countEdgesFastPath(
 // GAP-0811 Task 2.2: property-aggregate fast-path shared types.
 const AggKind = enum { sum, avg, min, max };
 
+// GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast-path types.
+// GbItemKind classifies each RETURN item as a group key or an aggregate.
+// GroupAcc holds per-group state during the slot scan.
+const GbItemKind = enum { group_key, count_star, count_prop, sum, avg, min, max };
+const GroupAcc = struct {
+    key_values: []Value, // one per GROUP BY key, arena-owned
+    accs: []AggAcc, // one per aggregate item, arena-owned
+};
+
 // GAP-0902: sum/avg/min/max accumulator shared by the unbounded-cache and
 // bounded-cache scan branches of `propertyAggregateFastPath`. Keeps both an
 // int and a float path so a pure-integer input yields an Int result (matching
@@ -1262,6 +1271,411 @@ pub fn propertyAggregateFastPath(
 
     var rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+// CANARY: REQ=GAP-ENT-0002; FEATURE="GroupByStreamingFastPath"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_gap_ent0002_groupby_streaming.zig; OWNER=execution; UPDATED=2026-06-26
+/// Streaming GROUP BY / DISTINCT fast path.
+/// Handles:
+///   (a) MATCH (n:L) [WHERE p OP lit] RETURN <keys>, <aggs> GROUP BY <keys>
+///   (b) MATCH (n:L) [WHERE p OP lit] RETURN DISTINCT <props>
+/// Accumulates per-group AggAcc during the slot scan: O(nodes) time, O(groups) space.
+/// Gate: getPathRowsMaterialized() == 0 when this path fires.
+pub fn groupByAggregateFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // ---- Shape gates on MATCH ----
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // ---- Shape gates on clauses ----
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| if (lim == 0) return null;
+
+    // Must be GROUP BY or RETURN DISTINCT (at least one)
+    const is_distinct_only = q.ret.distinct and q.group_by == null;
+    if (!is_distinct_only and q.group_by == null) return null;
+
+    // ---- RLS bypass for correctness ----
+    if (!countFastPathRlsAllowed()) return null;
+
+    // ---- Adapter check ----
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+
+    // ---- Optional WHERE ----
+    const where_pred: ?SimpleWhere = if (q.where_clause) |w|
+        extractSimpleWhere(w, match_var) orelse return null
+    else
+        null;
+
+    // ---- Analysis phase (stack arrays, no heap alloc before all gates pass) ----
+    const MAX_KEYS = 16;
+    const MAX_ITEMS = 32;
+    const n_items = q.ret.items.len;
+    if (n_items == 0 or n_items > MAX_ITEMS) return null;
+
+    var gb_key_props: [MAX_KEYS][]const u8 = undefined;
+    var n_gb_keys: usize = 0;
+
+    var item_kinds: [MAX_ITEMS]GbItemKind = undefined;
+    var item_key_idx: [MAX_ITEMS]usize = undefined;
+    var item_agg_prop: [MAX_ITEMS]?[]const u8 = undefined;
+    var item_acc_idx: [MAX_ITEMS]usize = undefined;
+    var n_aggs: usize = 0;
+
+    if (is_distinct_only) {
+        if (n_items > MAX_KEYS) return null;
+        for (q.ret.items, 0..) |item, i| {
+            gb_key_props[i] = extractBoundVarProperty(item.expr, match_var) orelse return null;
+            item_kinds[i] = .group_key;
+            item_key_idx[i] = i;
+            item_agg_prop[i] = null;
+        }
+        n_gb_keys = n_items;
+    } else {
+        const gb = q.group_by.?;
+        if (gb.keys.len == 0 or gb.keys.len > MAX_KEYS) return null;
+        for (gb.keys, 0..) |key_expr, ki| {
+            gb_key_props[ki] = extractBoundVarProperty(key_expr, match_var) orelse return null;
+        }
+        n_gb_keys = gb.keys.len;
+
+        for (q.ret.items, 0..) |item, i| {
+            if (item.expr == .Call) {
+                const call = item.expr.Call;
+                if (call.callee.* != .Ident) return null;
+                const fname = call.callee.Ident.orig;
+                if (std.ascii.eqlIgnoreCase(fname, "count")) {
+                    const is_star_or_var = call.args.len == 1 and switch (call.args[0].*) {
+                        .Ident => |id| std.mem.eql(u8, id.orig, "*") or std.mem.eql(u8, id.orig, match_var),
+                        else => false,
+                    };
+                    if (is_star_or_var) {
+                        item_kinds[i] = .count_star;
+                        item_agg_prop[i] = null;
+                    } else if (call.args.len == 1) {
+                        const prop = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                        item_kinds[i] = .count_prop;
+                        item_agg_prop[i] = prop;
+                    } else return null;
+                    item_acc_idx[i] = n_aggs;
+                    n_aggs += 1;
+                } else if (std.ascii.eqlIgnoreCase(fname, "sum")) {
+                    if (call.args.len != 1) return null;
+                    item_kinds[i] = .sum;
+                    item_agg_prop[i] = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                    item_acc_idx[i] = n_aggs;
+                    n_aggs += 1;
+                } else if (std.ascii.eqlIgnoreCase(fname, "avg")) {
+                    if (call.args.len != 1) return null;
+                    item_kinds[i] = .avg;
+                    item_agg_prop[i] = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                    item_acc_idx[i] = n_aggs;
+                    n_aggs += 1;
+                } else if (std.ascii.eqlIgnoreCase(fname, "min")) {
+                    if (call.args.len != 1) return null;
+                    item_kinds[i] = .min;
+                    item_agg_prop[i] = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                    item_acc_idx[i] = n_aggs;
+                    n_aggs += 1;
+                } else if (std.ascii.eqlIgnoreCase(fname, "max")) {
+                    if (call.args.len != 1) return null;
+                    item_kinds[i] = .max;
+                    item_agg_prop[i] = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                    item_acc_idx[i] = n_aggs;
+                    n_aggs += 1;
+                } else {
+                    return null; // unsupported function — decline to legacy
+                }
+            } else {
+                const prop = extractBoundVarProperty(item.expr, match_var) orelse return null;
+                var key_idx: ?usize = null;
+                for (gb_key_props[0..n_gb_keys], 0..) |kp, ki| {
+                    if (std.mem.eql(u8, kp, prop)) {
+                        key_idx = ki;
+                        break;
+                    }
+                }
+                if (key_idx == null) return null; // not a GROUP BY key — decline
+                item_kinds[i] = .group_key;
+                item_key_idx[i] = key_idx.?;
+                item_agg_prop[i] = null;
+            }
+        }
+    }
+
+    // ---- Scan phase: stream slots, build group hash map ----
+    var group_arena = std.heap.ArenaAllocator.init(allocator);
+    defer group_arena.deinit();
+    const ga = group_arena.allocator();
+
+    var groups = std.StringHashMap(GroupAcc).init(ga);
+    var group_keys_list = try std.ArrayList([]const u8).initCapacity(ga, 16);
+
+    const writable_store = graph_store.getGlobalStore(allocator);
+    const tenant_active = filter_tenant != null;
+
+    if (writable_store.nodes.effectiveCap() == 0) {
+        // ---- Unbounded: in-memory posting + resident reads ----
+        var read_view = graph_store.ReadView.init(allocator, writable_store);
+        defer read_view.deinit();
+        const read_store = read_view.getReadStore();
+        const prop_store: *graph_store.GraphStore = @constCast(read_store);
+        const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+        if (posting) |slots| {
+            for (slots) |node_id| {
+                const node = read_store.nodes.get(node_id) orelse continue;
+                if (!passesTenantFilter(node, filter_tenant)) continue;
+
+                if (where_pred) |p| {
+                    const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                    if (!comparePvLit(w_val, p.op, p.lit)) continue;
+                }
+
+                // Build group key string and capture first-seen key values
+                var key_val_captures: [MAX_KEYS]Value = undefined;
+                var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
+                const key_w = &key_aw.writer;
+                for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
+                    if (ki > 0) try key_w.writeAll("|");
+                    const pv_opt = prop_store.getNodeProperty(node_id, kprop);
+                    if (pv_opt) |pv| {
+                        switch (pv) {
+                            .Int => |iv| try key_w.print("{d}", .{iv}),
+                            .String => |s| try key_w.writeAll(s),
+                            .Bool => |bv| try key_w.writeAll(if (bv) "true" else "false"),
+                            .Null => try key_w.writeAll("null"),
+                            else => try key_w.writeAll("?"),
+                        }
+                        key_val_captures[ki] = switch (pv) {
+                            .Int => |iv| Value{ .Int = iv },
+                            .String => |s| Value{ .Str = try ga.dupe(u8, s) },
+                            .Bool => |bv| Value{ .Bool = bv },
+                            .Float => |fv| Value{ .Double = fv },
+                            .Null => Value{ .Null = {} },
+                            else => Value{ .Null = {} },
+                        };
+                    } else {
+                        try key_w.writeAll("null");
+                        key_val_captures[ki] = Value{ .Null = {} };
+                    }
+                }
+                var key_list = key_aw.toArrayList();
+                const group_key = try key_list.toOwnedSlice(ga);
+
+                // Upsert group
+                if (groups.getPtr(group_key) == null) {
+                    const key_values = try ga.alloc(Value, n_gb_keys);
+                    for (0..n_gb_keys) |ki| key_values[ki] = key_val_captures[ki];
+                    const accs = try ga.alloc(AggAcc, @max(n_aggs, 1));
+                    for (accs[0..n_aggs]) |*a| a.* = AggAcc{};
+                    try groups.put(group_key, GroupAcc{ .key_values = key_values, .accs = accs });
+                    try group_keys_list.append(ga, group_key);
+                }
+
+                // Update group accumulators
+                const group = groups.getPtr(group_key).?;
+                for (0..n_items) |i| {
+                    switch (item_kinds[i]) {
+                        .group_key => {},
+                        .count_star => group.accs[item_acc_idx[i]].count += 1,
+                        .count_prop => {
+                            if (prop_store.getNodeProperty(node_id, item_agg_prop[i].?) != null) {
+                                group.accs[item_acc_idx[i]].count += 1;
+                            }
+                        },
+                        .sum, .avg, .min, .max => {
+                            const t_val = prop_store.getNodeProperty(node_id, item_agg_prop[i].?) orelse continue;
+                            const maybe_f = propToF64(t_val) orelse continue;
+                            group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
+                        },
+                    }
+                }
+            }
+        }
+    } else {
+        // ---- Bounded: engine-direct slot scan ----
+        const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
+        defer allocator.free(slots);
+
+        for (slots) |slot_id| {
+            if (tenant_active) {
+                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
+                    .string => |s| s,
+                    else => graph_store.DEFAULT_TENANT_ID,
+                } else graph_store.DEFAULT_TENANT_ID;
+                defer if (tprop) |tp| switch (tp) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                };
+                if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
+            }
+
+            if (where_pred) |p| {
+                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator) catch continue) orelse continue;
+                defer switch (w_val) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                };
+                if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
+            }
+
+            // Build group key string and capture first-seen key values
+            var key_val_captures: [MAX_KEYS]Value = undefined;
+            var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
+            const key_w = &key_aw.writer;
+            for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
+                if (ki > 0) try key_w.writeAll("|");
+                const pv = adapter.getNodeProperty(filter_graph, slot_id, kprop, allocator) catch null;
+                if (pv) |pval| {
+                    switch (pval) {
+                        .int => |iv| try key_w.print("{d}", .{iv}),
+                        .string => |s| try key_w.writeAll(s),
+                        .bool => |bv| try key_w.writeAll(if (bv) "true" else "false"),
+                        .null => try key_w.writeAll("null"),
+                        else => try key_w.writeAll("?"),
+                    }
+                    // Capture: dupe strings to ga BEFORE freeing pval below
+                    key_val_captures[ki] = switch (pval) {
+                        .int => |iv| Value{ .Int = iv },
+                        .string => |s| Value{ .Str = try ga.dupe(u8, s) },
+                        .bool => |bv| Value{ .Bool = bv },
+                        .float => |fv| Value{ .Double = fv },
+                        .null => Value{ .Null = {} },
+                        else => Value{ .Null = {} },
+                    };
+                    switch (pval) {
+                        .string => |s| allocator.free(s),
+                        else => {},
+                    }
+                } else {
+                    try key_w.writeAll("null");
+                    key_val_captures[ki] = Value{ .Null = {} };
+                }
+            }
+            var key_list = key_aw.toArrayList();
+            const group_key = try key_list.toOwnedSlice(ga);
+
+            // Upsert group
+            if (groups.getPtr(group_key) == null) {
+                const key_values = try ga.alloc(Value, n_gb_keys);
+                for (0..n_gb_keys) |ki| key_values[ki] = key_val_captures[ki];
+                const accs = try ga.alloc(AggAcc, @max(n_aggs, 1));
+                for (accs[0..n_aggs]) |*a| a.* = AggAcc{};
+                try groups.put(group_key, GroupAcc{ .key_values = key_values, .accs = accs });
+                try group_keys_list.append(ga, group_key);
+            }
+
+            // Update group accumulators
+            const group = groups.getPtr(group_key).?;
+            for (0..n_items) |i| {
+                switch (item_kinds[i]) {
+                    .group_key => {},
+                    .count_star => group.accs[item_acc_idx[i]].count += 1,
+                    .count_prop => {
+                        const pv = adapter.getNodeProperty(filter_graph, slot_id, item_agg_prop[i].?, allocator) catch null;
+                        if (pv) |pval| {
+                            switch (pval) {
+                                .string => |s| allocator.free(s),
+                                else => {},
+                            }
+                            group.accs[item_acc_idx[i]].count += 1;
+                        }
+                    },
+                    .sum, .avg, .min, .max => {
+                        const t_val = (adapter.getNodeProperty(filter_graph, slot_id, item_agg_prop[i].?, allocator) catch continue) orelse continue;
+                        defer switch (t_val) {
+                            .string => |s| allocator.free(s),
+                            else => {},
+                        };
+                        const maybe_f = storagePropToF64(t_val) orelse continue;
+                        group.accs[item_acc_idx[i]].update(storagePropToI64(t_val), maybe_f);
+                    },
+                }
+            }
+        }
+    }
+
+    // ---- Output phase: build result rows (insertion-order) ----
+    const n_groups = groups.count();
+    const rows = try allocator.alloc([]Value, n_groups);
+    const columns = try allocator.alloc([]const u8, n_items);
+
+    // Column names: prefer alias, then synthesize
+    for (q.ret.items, 0..) |item, i| {
+        columns[i] = if (item.alias) |a|
+            try allocator.dupe(u8, a)
+        else switch (item_kinds[i]) {
+            .group_key => try allocator.dupe(u8, execution.getExpressionNameFromAst(item.expr)),
+            .count_star => try allocator.dupe(u8, "count(*)"),
+            .count_prop => try std.fmt.allocPrint(allocator, "count({s}.{s})", .{ match_var, item_agg_prop[i].? }),
+            .sum => try std.fmt.allocPrint(allocator, "sum({s}.{s})", .{ match_var, item_agg_prop[i].? }),
+            .avg => try std.fmt.allocPrint(allocator, "avg({s}.{s})", .{ match_var, item_agg_prop[i].? }),
+            .min => try std.fmt.allocPrint(allocator, "min({s}.{s})", .{ match_var, item_agg_prop[i].? }),
+            .max => try std.fmt.allocPrint(allocator, "max({s}.{s})", .{ match_var, item_agg_prop[i].? }),
+        };
+    }
+
+    // One row per group in insertion order
+    for (group_keys_list.items, 0..) |key, ri| {
+        const group = groups.getPtr(key).?;
+        const row = try allocator.alloc(Value, n_items);
+        for (0..n_items) |i| {
+            row[i] = switch (item_kinds[i]) {
+                .group_key => blk: {
+                    const kv = group.key_values[item_key_idx[i]];
+                    break :blk switch (kv) {
+                        .Str => |s| Value{ .Str = try allocator.dupe(u8, s) },
+                        else => kv,
+                    };
+                },
+                .count_star, .count_prop => Value{ .Int = @intCast(group.accs[item_acc_idx[i]].count) },
+                .sum => blk: {
+                    const a = group.accs[item_acc_idx[i]];
+                    break :blk if (a.has_float) Value{ .Double = a.sum_float } else Value{ .Int = a.sum_int };
+                },
+                .avg => blk: {
+                    const a = group.accs[item_acc_idx[i]];
+                    if (a.count == 0) break :blk Value{ .Null = {} };
+                    const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
+                    break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
+                },
+                .min => blk: {
+                    const a = group.accs[item_acc_idx[i]];
+                    if (a.count == 0) break :blk Value{ .Null = {} };
+                    break :blk if (a.has_float) Value{ .Double = a.min_float.? } else Value{ .Int = a.min_int.? };
+                },
+                .max => blk: {
+                    const a = group.accs[item_acc_idx[i]];
+                    if (a.count == 0) break :blk Value{ .Null = {} };
+                    break :blk if (a.has_float) Value{ .Double = a.max_float.? } else Value{ .Int = a.max_int.? };
+                },
+            };
+        }
+        rows[ri] = row;
+    }
 
     return ExecutionResult{
         .columns = columns,
@@ -6513,6 +6927,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // See `propertyAggregateFastPath` for preconditions — all unsupported
     // shapes fall through to the regular executor below.
     if (try propertyAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —
+    // accumulates per-group AggAcc during the label scan, O(groups) space.
+    if (try groupByAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
     // GAP-0812 Task 3.1: bounded-heap streaming top-K for

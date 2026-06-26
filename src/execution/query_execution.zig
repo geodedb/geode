@@ -1649,6 +1649,12 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         if (try match_operations.propertyAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
             return fast_result;
         }
+        // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —
+        // accumulates per-group AggAcc during the label scan, O(groups) space.
+        // Intercepts before planned_read_runtime materializes O(nodes) rows.
+        if (try match_operations.groupByAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
         // GAP-0812 Task 3.1: bounded-heap streaming top-K for
         // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> LIMIT K` — walks the
         // label posting list once with a K-bounded heap over the ordered
