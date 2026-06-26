@@ -1341,8 +1341,9 @@ fn collectStartSlots(
         // prop's posting length via countCandidateNodesByLabelAndProperty, and
         // seed from the smallest (most selective). Non-indexed props are left to
         // per-candidate verification by nodeMatchesPatternBySlot (invariant 2).
-        var seed_key: ?[]const u8 = null;
-        var seed_pv: graph_store.PropertyValue = undefined;
+        // Seed key+value are set atomically so neither is ever valid without
+        // the other — eliminates the `undefined` field and the dead `orelse`.
+        var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
 
         if (pattern.props) |props| {
             if (props.len == 0) break :fp;
@@ -1371,12 +1372,13 @@ fn collectStartSlots(
                 const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
                 if (plen < best_len) {
                     best_len = plen;
-                    seed_key = prop.key;
-                    seed_pv = pv;
-                    if (plen <= 1) break; // unique hit cannot be beaten
+                    seed = .{ .key = prop.key, .pv = pv };
+                    // zero postings = authoritative miss for an indexed key;
+                    // one posting = unique hit — neither can be beaten by any other prop.
+                    if (plen <= 1) break;
                 }
             }
-            if (seed_key == null) break :fp; // no indexed prop → fall to label-scan path
+            if (seed == null) break :fp; // no indexed prop → fall to label-scan path
         } else if (where_clause) |wc| {
             const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse break :fp;
             // GAP-0900 Layer-3 (Fix 2): same lean-index guard as the props arm above.
@@ -1389,18 +1391,19 @@ fn collectStartSlots(
                 .allocator = allocator,
             };
             const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
-            seed_pv = switch (expected_val) {
+            const seed_pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| graph_store.PropertyValue{ .String = s },
                 .Int => |i| graph_store.PropertyValue{ .Int = i },
                 .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                 else => break :fp,
             };
-            seed_key = extracted.key;
+            seed = .{ .key = extracted.key, .pv = seed_pv };
         } else {
             break :fp;
         }
 
-        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], seed_key orelse break :fp, seed_pv, allocator) catch break :fp;
+        const s = seed orelse break :fp;
+        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
