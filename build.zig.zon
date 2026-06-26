@@ -414,10 +414,10 @@
         //   .url  = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.8#<sha>",
         //   .hash = "graph_storage-0.2.8-<...>",
         .graph_storage = .{
-            // v0.2.11 = FIPS v0.2.10 + edge co-location (Phases 3/A/B/C), rebased
-            // on the FIPS stack so transitive deps (wal/otel/tls) match → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#v0.2.11",
-            .hash = "graph_storage-0.2.11-9UyJS8KeEwAxQETtuojVtSXFM4ybgc7uJBEzfEMkV5f8",
+            // v0.2.12 = v0.2.11 + buffer-pool pin deadlock/lost-wakeup fix
+            // (edge-ingest wedge FIX #2). Same FIPS transitive deps → no diamond.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#v0.2.12",
+            .hash = "graph_storage-0.2.12-9UyJSy26EwCRgAV_HYQl7klHJEiEzhsx_BCDJUBC0Wvq",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
