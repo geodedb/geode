@@ -7175,6 +7175,18 @@ pub fn build(b: *std.Build) void {
     const inline_seek_step = b.step("test-inline-key-index-seek", "Run inline-key index-seek regression (indexed inline-property reads seek the index, not a full scan)");
     inline_seek_step.dependOn(&run_inline_seek_tests.step);
 
+    // Traversal composite-seed regression (GAP-ENT-0001 Bug A): a composite-key
+    // start node `(p:Taxon {source, source_id})` must seed from the most-selective
+    // indexed property (O(degree)) not from a full label scan (O(graph)).
+    // Pre-fix: getLabelScanLookupCount() >= 1; post-fix: == 0 and exact >= 1.
+    const traversal_composite_seed_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_traversal_composite_seed.zig"), .target = target, .optimize = optimize });
+    traversal_composite_seed_test_mod.addImport("geode", root_mod);
+    const traversal_composite_seed_tests = b.addTest(.{ .root_module = traversal_composite_seed_test_mod });
+    const run_traversal_composite_seed_tests = b.addRunArtifact(traversal_composite_seed_tests);
+    shardDep(test_step, &run_traversal_composite_seed_tests.step, 1, test_shard_loads, test_shard_index);
+    const traversal_composite_seed_step = b.step("test-traversal-composite-seed", "Traversal composite-start index seed (GAP-ENT-0001 Bug A)");
+    traversal_composite_seed_step.dependOn(&run_traversal_composite_seed_tests.step);
+
     // Multi-pattern index-seek regression (from-dump EDGE phase, KNOWN BUG #2):
     // a comma-separated MATCH `(a:L {indexed}), (b:L {indexed})` resolves each
     // endpoint via the exact-property index seek (O(matching)) instead of
