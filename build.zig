@@ -7090,6 +7090,20 @@ pub fn build(b: *std.Build) void {
     const scan_no_clone_step = b.step("test-gap0900-scan-no-clone", "Run GAP-0900 scan-no-clone regression (bounded scan is O(result), no whole-graph deep clone)");
     scan_no_clone_step.dependOn(&run_scan_no_clone_tests.step);
 
+    // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
+    // force the O(graph) snapshot clone.  The secondary gates at QCH:7040
+    // (!rls_active) and query_execution.zig:1673 (!wouldEvaluateRLS()) route
+    // RLS reads to the legacy executor on the live store, which applies
+    // passesRLSFilter per candidate — isolation is preserved without the clone.
+    const rls_clone_gate_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0903_rls_clone_gate.zig"), .target = target, .optimize = optimize });
+    rls_clone_gate_test_mod.addImport("geode", root_mod);
+    rls_clone_gate_test_mod.addImport("rls_types", rls_types_mod);
+    const rls_clone_gate_tests = b.addTest(.{ .root_module = rls_clone_gate_test_mod });
+    const run_rls_clone_gate_tests = b.addRunArtifact(rls_clone_gate_tests);
+    shardDep(test_step, &run_rls_clone_gate_tests.step, 1, test_shard_loads, test_shard_index);
+    const rls_clone_gate_step = b.step("test-rls-clone-gate", "Run P3a RLS clone-gate regression (RLS reads skip the whole-graph snapshot, isolation preserved)");
+    rls_clone_gate_step.dependOn(&run_rls_clone_gate_tests.step);
+
     // GAP-0901 bounded-cache hydrate/reclaim regression: under a SMALL node
     // cache cap (most nodes evicted to the engine), hydrating an evicted
     // DEFAULT-tenant node from the engine and then reclaiming it must NOT free
