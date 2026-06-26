@@ -1333,49 +1333,74 @@ fn collectStartSlots(
     fp: {
         if (pattern.labels.len != 1) break :fp;
 
-        var fp_key: []const u8 = undefined;
-        var fp_value_expr: *const ast.Expr = undefined;
+        // GAP-ENT-0001 Bug A fix: pick the most-selective indexed inline prop
+        // (mirrors node_scan_stream.seekIndexedCandidates). Previously the block
+        // required exactly ONE inline prop and bailed for composite patterns —
+        // `(p:Taxon {source, source_id})` has two, so the fp: fired the O(graph)
+        // label scan at 14.27M nodes. Now we loop ALL props, probe each indexed
+        // prop's posting length via countCandidateNodesByLabelAndProperty, and
+        // seed from the smallest (most selective). Non-indexed props are left to
+        // per-candidate verification by nodeMatchesPatternBySlot (invariant 2).
+        var seed_key: ?[]const u8 = null;
+        var seed_pv: graph_store.PropertyValue = undefined;
 
         if (pattern.props) |props| {
-            if (props.len != 1) break :fp;
-            if (pattern_helpers.containsVariableReference(props[0].value.*)) break :fp;
-            fp_key = props[0].key;
-            fp_value_expr = props[0].value;
+            if (props.len == 0) break :fp;
+            const prop_env = Env{
+                .names = &.{},
+                .values = &.{},
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            var best_len: usize = std.math.maxInt(usize);
+            for (props) |prop| {
+                if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
+                // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared
+                // keys are present in the exact property index. An empty result from
+                // a non-indexed key is meaningless — skip it and try the next prop.
+                // No-op when lean mode is off (shouldIndexProperty is then true for all).
+                if (!graph_store.shouldIndexProperty(prop.key)) continue;
+                const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+                const pv: graph_store.PropertyValue = switch (expected_val) {
+                    .Str => |s| .{ .String = s },
+                    .Int => |i| .{ .Int = i },
+                    .Bool => |b| .{ .Bool = b },
+                    else => continue,
+                };
+                const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
+                if (plen < best_len) {
+                    best_len = plen;
+                    seed_key = prop.key;
+                    seed_pv = pv;
+                    if (plen <= 1) break; // unique hit cannot be beaten
+                }
+            }
+            if (seed_key == null) break :fp; // no indexed prop → fall to label-scan path
         } else if (where_clause) |wc| {
             const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse break :fp;
-            fp_key = extracted.key;
-            fp_value_expr = extracted.value;
+            // GAP-0900 Layer-3 (Fix 2): same lean-index guard as the props arm above.
+            if (!graph_store.shouldIndexProperty(extracted.key)) break :fp;
+            const prop_env = Env{
+                .names = &.{},
+                .values = &.{},
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
+            seed_pv = switch (expected_val) {
+                .Str => |s| graph_store.PropertyValue{ .String = s },
+                .Int => |i| graph_store.PropertyValue{ .Int = i },
+                .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                else => break :fp,
+            };
+            seed_key = extracted.key;
         } else {
             break :fp;
         }
 
-        // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared keys
-        // are present in the exact property index. The fast path below treats an
-        // empty exact-index result as authoritative ("no such node"), which is
-        // correct only when the key is actually indexed. For a non-indexed key
-        // an empty result is meaningless, so we MUST NOT use the fast path —
-        // fall through to the label-scan-and-filter path, which reads each
-        // node's properties from the store and filters correctly. No-op when
-        // lean mode is off (shouldIndexProperty is then always true).
-        if (!graph_store.shouldIndexProperty(fp_key)) break :fp;
-
-        const prop_env = Env{
-            .names = &.{},
-            .values = &.{},
-            .param_names = param_names,
-            .param_values = param_values,
-            .allocator = allocator,
-        };
-        const expected_val = eval.evalExpr(allocator, fp_value_expr.*, prop_env) catch break :fp;
-        const pv_opt: ?graph_store.PropertyValue = switch (expected_val) {
-            .Str => |s| graph_store.PropertyValue{ .String = s },
-            .Int => |i| graph_store.PropertyValue{ .Int = i },
-            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-            else => null,
-        };
-        const pv = pv_opt orelse break :fp;
-
-        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], fp_key, pv, allocator) catch break :fp;
+        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], seed_key orelse break :fp, seed_pv, allocator) catch break :fp;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
