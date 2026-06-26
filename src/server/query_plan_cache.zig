@@ -642,13 +642,17 @@ pub const SharedQueryOptimizer = struct {
         self.lruInsertHeadUnlocked(key);
         _ = self.inflight_misses.remove(key);
         _ = self.miss_generation.fetchAdd(1, .release);
-        const cached_ptr = self.plan_cache.getPtr(key).?;
+        // Capture the plan value WHILE HOLDING the lock: getPtr returns an interior
+        // pointer into the plan_cache AutoHashMap backing store, which a concurrent
+        // unique-miss put() can rehash and free the instant we unlock. Reading the
+        // field after unlock is a use-after-free (concurrent optimizeQuery race).
+        const published_plan = self.plan_cache.getPtr(key).?.plan;
         self.lock.unlock(io);
         io.futexWake(u32, &self.miss_generation.raw, std.math.maxInt(u32));
         return SharedPlanHandle{
             .cache = self,
             .key = key,
-            .plan = cached_ptr.plan,
+            .plan = published_plan,
         };
     }
 
