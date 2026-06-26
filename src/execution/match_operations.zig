@@ -1286,6 +1286,9 @@ pub fn propertyAggregateFastPath(
 ///   (b) MATCH (n:L) [WHERE p OP lit] RETURN DISTINCT <props>
 /// Accumulates per-group AggAcc during the slot scan: O(nodes) time, O(groups) space.
 /// Gate: getPathRowsMaterialized() == 0 when this path fires.
+///
+/// m2: LIMIT N is NOT applied here — the caller (executeMatchQueryImpl) applies
+/// post-return LIMIT on the ExecutionResult, matching propertyAggregateFastPath.
 pub fn groupByAggregateFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -1453,7 +1456,11 @@ pub fn groupByAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
 
-                // Build group key string and capture first-seen key values
+                // I2: Group-key serialization — must stay in sync with the legacy
+                // GROUP BY serialization in execution.zig (computeGroupAggregation /
+                // evaluateGroupAggregation). Types handled: Int ("{d}"), String (raw
+                // bytes), Bool ("true"/"false"), Null ("null"); Node/Edge/other falls
+                // to "?" (safe: shape gate rejects non-property RETURN exprs earlier).
                 var key_val_captures: [MAX_KEYS]Value = undefined;
                 var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
                 const key_w = &key_aw.writer;
@@ -1542,7 +1549,10 @@ pub fn groupByAggregateFastPath(
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
 
-            // Build group key string and capture first-seen key values
+            // I2: Group-key serialization (bounded path) — must stay in sync with
+            // the legacy GROUP BY serialization in execution.zig. Types: int ("{d}"),
+            // string (raw bytes), bool ("true"/"false"), null ("null"); other → "?"
+            // (safe: shape gate rejects non-property RETURN exprs before reaching here).
             var key_val_captures: [MAX_KEYS]Value = undefined;
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
             const key_w = &key_aw.writer;
@@ -1550,6 +1560,12 @@ pub fn groupByAggregateFastPath(
                 if (ki > 0) try key_w.writeAll("|");
                 const pv = adapter.getNodeProperty(filter_graph, slot_id, kprop, allocator) catch null;
                 if (pv) |pval| {
+                    // m1: defer frees the engine-owned string when this block exits
+                    // (success or error), so a ga.dupe OOM below cannot leak it.
+                    defer switch (pval) {
+                        .string => |s| allocator.free(s),
+                        else => {},
+                    };
                     switch (pval) {
                         .int => |iv| try key_w.print("{d}", .{iv}),
                         .string => |s| try key_w.writeAll(s),
@@ -1557,7 +1573,7 @@ pub fn groupByAggregateFastPath(
                         .null => try key_w.writeAll("null"),
                         else => try key_w.writeAll("?"),
                     }
-                    // Capture: dupe strings to ga BEFORE freeing pval below
+                    // Capture: dupe strings to ga before pval is freed by defer above.
                     key_val_captures[ki] = switch (pval) {
                         .int => |iv| Value{ .Int = iv },
                         .string => |s| Value{ .Str = try ga.dupe(u8, s) },
@@ -1566,10 +1582,6 @@ pub fn groupByAggregateFastPath(
                         .null => Value{ .Null = {} },
                         else => Value{ .Null = {} },
                     };
-                    switch (pval) {
-                        .string => |s| allocator.free(s),
-                        else => {},
-                    }
                 } else {
                     try key_w.writeAll("null");
                     key_val_captures[ki] = Value{ .Null = {} };
@@ -1621,7 +1633,26 @@ pub fn groupByAggregateFastPath(
     // ---- Output phase: build result rows (insertion-order) ----
     const n_groups = groups.count();
     const rows = try allocator.alloc([]Value, n_groups);
+    // C1: errdefer to free completed rows (and the slice shell) on any inner OOM.
+    var n_rows_filled: usize = 0;
+    errdefer {
+        for (rows[0..n_rows_filled]) |row| {
+            for (row) |v| switch (v) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            };
+            allocator.free(row);
+        }
+        allocator.free(rows);
+    }
+
     const columns = try allocator.alloc([]const u8, n_items);
+    // C1: errdefer to free completed column strings (and the slice shell) on any inner OOM.
+    var n_cols_filled: usize = 0;
+    errdefer {
+        for (columns[0..n_cols_filled]) |col| allocator.free(col);
+        allocator.free(columns);
+    }
 
     // Column names: prefer alias, then synthesize
     for (q.ret.items, 0..) |item, i| {
@@ -1636,12 +1667,24 @@ pub fn groupByAggregateFastPath(
             .min => try std.fmt.allocPrint(allocator, "min({s}.{s})", .{ match_var, item_agg_prop[i].? }),
             .max => try std.fmt.allocPrint(allocator, "max({s}.{s})", .{ match_var, item_agg_prop[i].? }),
         };
+        n_cols_filled += 1;
     }
 
     // One row per group in insertion order
     for (group_keys_list.items, 0..) |key, ri| {
         const group = groups.getPtr(key).?;
         const row = try allocator.alloc(Value, n_items);
+        // C1: errdefer for this row: free any string values already written and
+        // the row slice itself.  Fires only if an inner try below fails before
+        // `rows[ri] = row` and `n_rows_filled` are committed.
+        var n_vals_filled: usize = 0;
+        errdefer {
+            for (row[0..n_vals_filled]) |v| switch (v) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            };
+            allocator.free(row);
+        }
         for (0..n_items) |i| {
             row[i] = switch (item_kinds[i]) {
                 .group_key => blk: {
@@ -1659,8 +1702,11 @@ pub fn groupByAggregateFastPath(
                 .avg => blk: {
                     const a = group.accs[item_acc_idx[i]];
                     if (a.count == 0) break :blk Value{ .Null = {} };
-                    const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
-                    break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
+                    // I1: match legacy GROUP BY parity — pure-integer inputs emit
+                    // Int (integer divide, same as execution.zig computeGroupAggregation
+                    // ~line 2896); any float input in the group promotes to Double.
+                    if (!a.has_float) break :blk Value{ .Int = @divTrunc(a.sum_int, @as(i64, @intCast(a.count))) };
+                    break :blk Value{ .Double = a.sum_float / @as(f64, @floatFromInt(a.count)) };
                 },
                 .min => blk: {
                     const a = group.accs[item_acc_idx[i]];
@@ -1673,8 +1719,10 @@ pub fn groupByAggregateFastPath(
                     break :blk if (a.has_float) Value{ .Double = a.max_float.? } else Value{ .Int = a.max_int.? };
                 },
             };
+            n_vals_filled += 1;
         }
         rows[ri] = row;
+        n_rows_filled += 1;
     }
 
     return ExecutionResult{
