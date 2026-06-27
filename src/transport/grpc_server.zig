@@ -3255,3 +3255,42 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
     };
     return encodeMessage(allocator, resp);
 }
+
+// ============================================================================
+// SEC-002 (#849): gRPC CDC handler auth unit tests
+// ============================================================================
+
+test "unauthenticated gRPC cdc_ctrl is rejected (SEC-002 live-engine path)" {
+    const a = std.testing.allocator;
+    user_mgmt.setAuthEnabled(true);
+    defer user_mgmt.setAuthEnabled(true); // restore default
+    // Encode a CdcControlRequest with NO session_id (unauthenticated caller).
+    const req = schema.CdcControlRequest{ .action = "RESET_GUARDRAILS" };
+    const req_bytes = try encodeMessage(a, req);
+    defer a.free(req_bytes);
+    const resp_bytes = try handleCdcCtrl(req_bytes, a);
+    defer a.free(resp_bytes);
+    var reader: std.Io.Reader = .fixed(resp_bytes);
+    var resp = try protobuf.decode(schema.CdcControlResponse, &reader, a);
+    defer resp.deinit(a);
+    // POST-fix: gate fires before engine logic -> "AUTH_REQUIRED".
+    // PRE-fix: never returns AUTH_REQUIRED (returns OK / NO_ENGINE / UNSUPPORTED).
+    try std.testing.expectEqualStrings("AUTH_REQUIRED", resp.status);
+}
+
+test "auth-disabled gRPC cdc_ctrl bypasses the gate (no over-block)" {
+    const a = std.testing.allocator;
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(true);
+    const req = schema.CdcControlRequest{ .action = "RESET_GUARDRAILS" };
+    const req_bytes = try encodeMessage(a, req);
+    defer a.free(req_bytes);
+    const resp_bytes = try handleCdcCtrl(req_bytes, a);
+    defer a.free(resp_bytes);
+    var reader: std.Io.Reader = .fixed(resp_bytes);
+    var resp = try protobuf.decode(schema.CdcControlResponse, &reader, a);
+    defer resp.deinit(a);
+    // When auth is disabled, authorizeAdminSession returns .ok -> gate does NOT fire.
+    // With no engine running, status is "NO_ENGINE" (not "AUTH_REQUIRED").
+    try std.testing.expect(!std.mem.eql(u8, "AUTH_REQUIRED", resp.status));
+}

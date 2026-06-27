@@ -6356,6 +6356,37 @@ pub fn build(b: *std.Build) void {
     const sec002_cdc_step = b.step("test-sec002-cdc-preauth", "SEC-002: unauthenticated CDC arm access regression (#849)");
     sec002_cdc_step.dependOn(&run_sec002_cdc_tests.step);
 
+    // SEC-002 (#849) gRPC CDC handler auth — in-file unit tests in grpc_server.zig.
+    //
+    // grpc_server.zig uses @import("../server/rls_filter.zig") / auth_rate_limiter.zig
+    // which are outside src/transport/ (the module path when grpc_server.zig is
+    // used as a test root directly). We use a thin shim at src/ level so the
+    // module path is src/ and all relative imports resolve correctly.  The
+    // inline test blocks in grpc_server.zig are discovered transitively because
+    // the shim imports grpc_server.zig via a direct file path.
+    const sec002_grpc_cdc_mod = b.createModule(.{
+        .root_source_file = b.path("src/grpc_server_test_shim.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sec002_grpc_cdc_mod.link_libc = true;
+    sec002_grpc_cdc_mod.addImport("crypto_backend", crypto_backend_mod);
+    sec002_grpc_cdc_mod.addImport("geode", root_mod);
+    sec002_grpc_cdc_mod.addImport("schema", schema_mod);
+    sec002_grpc_cdc_mod.addImport("protobuf", protobuf_mod);
+    sec002_grpc_cdc_mod.addImport("grpc_server", grpc_server_mod);
+    sec002_grpc_cdc_mod.addImport("geode_auth", auth_mod);
+    sec002_grpc_cdc_mod.addImport("logging", logging_mod);
+    sec002_grpc_cdc_mod.addImport("build_options", build_options_mod);
+    sec002_grpc_cdc_mod.addOptions("openssl_config", openssl_options);
+    const sec002_grpc_cdc_tests = b.addTest(.{
+        .root_module = sec002_grpc_cdc_mod,
+        .filters = &.{"SEC-002 live-engine path"},
+    });
+    const run_sec002_grpc_cdc_tests = b.addRunArtifact(sec002_grpc_cdc_tests);
+    const sec002_grpc_cdc_step = b.step("test-sec002-grpc-cdc", "SEC-002: gRPC CDC handler auth gate unit tests (#849)");
+    sec002_grpc_cdc_step.dependOn(&run_sec002_grpc_cdc_tests.step);
+
     // GAP-0883: server-level coverage for the documented `CALL algo.*` graph
     // algorithm procedures through the real parse → dispatch → executor path
     // over a real GraphStore (two directed triangles + bridge, plus the
