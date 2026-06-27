@@ -62,6 +62,22 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 // User management system with Argon2id password hashing and role-based access control
 
+// CANARY: REQ=REQ-NEW8-RESERVED-USERNAME; FEATURE="GeodeClusterReserved"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_new8_envelope_trust.zig; OWNER=security; UPDATED=2026-06-26
+// Reserved usernames that MUST NOT be created via normal user management (CREATE USER DDL,
+// geode.auth.user_create procedure, or any other user-creation path).
+//
+// "geode-cluster" is the federation node identity. The envelope trust gate in
+// quic_connection_handler.zig uses state.authenticated_user == "geode-cluster" as the
+// SOLE discriminant for federation connections (set at HELLO time only via
+// validateFederationAuth, which requires GEODE_CLUSTER_TOKEN). If a regular user could
+// be created with this name, they could authenticate through the normal user_mgmt path
+// (validateFederationAuth fails, falls through to authenticate(), succeeds), set
+// state.authenticated_user = "geode-cluster", and forge any principal envelope
+// (Admin roles, foreign tenant_id) — completely bypassing NEW-8's fix.
+//
+// This reservation is therefore a SECURITY INVARIANT, not a convenience policy.
+pub const RESERVED_USERNAMES: []const []const u8 = &.{"geode-cluster"};
+
 pub const Role = enum {
     Admin, // Full access: read, write, schema changes
     User, // Limited access: read only
@@ -618,6 +634,13 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
     var store = &user_store.?;
     const store_allocator = store.allocator;
 
+    // NEW-8 / #860: Reject reserved usernames. "geode-cluster" is the federation
+    // node identity and the SOLE discriminant for the envelope trust gate; allowing
+    // it as a regular user credential would let an attacker bypass the gate entirely.
+    for (RESERVED_USERNAMES) |reserved| {
+        if (std.mem.eql(u8, username, reserved)) return error.ReservedUsername;
+    }
+
     // Check if user already exists
     if (store.entries.contains(username)) {
         return error.UserAlreadyExists;
@@ -662,6 +685,11 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
 
     var store = &user_store.?;
     const store_allocator = store.allocator;
+
+    // NEW-8 / #860: Reject reserved usernames (see createUser for rationale).
+    for (RESERVED_USERNAMES) |reserved| {
+        if (std.mem.eql(u8, username, reserved)) return error.ReservedUsername;
+    }
 
     // Skip if user already exists
     if (store.entries.contains(username)) {

@@ -6254,18 +6254,35 @@ fn handleClientMessage(
             // requests and the server falls back to the connection-level Principal.
             const principal_for_request = blk: {
                 const envelope_bytes = exec_req.principal_envelope_bytes;
-                if (envelope_bytes) |env_bytes| {
-                    if (env_bytes.len > 0) {
-                        if (geode.distributed.principal_envelope.deserialize(env_bytes)) |env| {
-                            var forwarded = geode.distributed.principal_envelope.toPrincipal(&env);
-                            // Stamp the source as distributed_worker so GPS rules
-                            // can distinguish forwarded requests from direct ones.
-                            forwarded.source = .distributed_worker;
-                            break :blk forwarded;
-                        } else |_| {
-                            // Malformed envelope — fall back to connection identity.
-                            // We do not reject the request: the authenticated user
-                            // still gets their connection-level principal.
+                // NEW-8 / #860 FIX: only trust principal_envelope_bytes (field 4) on a
+                // federation connection. A federation connection is the one where HELLO
+                // authenticated via validateFederationAuth() — username "geode-cluster" +
+                // GEODE_CLUSTER_TOKEN — setting state.authenticated_user = "geode-cluster".
+                //
+                // On ANY other connection (ReadWrite, Admin, Viewer, …) field 4 is ignored
+                // entirely: the attacker-supplied envelope bytes are never decoded and the
+                // handler falls through to derivePrincipal() from the session identity.
+                // This also closes NEW-10 (#868): the envelope's source field is attacker-
+                // controlled and must not be decoded on non-federation connections.
+                //
+                // FOLLOW-UP (separate PR): add HMAC-SHA256 over the envelope bytes
+                // (key = GEODE_CLUSTER_TOKEN + rotation via validateTokenWithRotation)
+                // via serializeAndSign / deserializeAndVerify in principal_envelope.zig.
+                // CANARY: REQ=REQ-NEW8-ENVELOPE-TRUST; FEATURE="EnvelopeTrustGate"; ASPECT=HandlerWiring; STATUS=TESTED; TEST=tests/test_new8_envelope_trust.zig; OWNER=security; UPDATED=2026-06-26
+                if (geode.distributed.principal_envelope.shouldTrustEnvelope(state.authenticated_user)) {
+                    if (envelope_bytes) |env_bytes| {
+                        if (env_bytes.len > 0) {
+                            if (geode.distributed.principal_envelope.deserialize(env_bytes)) |env| {
+                                var forwarded = geode.distributed.principal_envelope.toPrincipal(&env);
+                                // Stamp the source as distributed_worker so GPS rules
+                                // can distinguish forwarded requests from direct ones.
+                                forwarded.source = .distributed_worker;
+                                break :blk forwarded;
+                            } else |_| {
+                                // Malformed envelope — fall back to connection identity.
+                                // We do not reject the request: the federation node
+                                // still gets its connection-level principal.
+                            }
                         }
                     }
                 }

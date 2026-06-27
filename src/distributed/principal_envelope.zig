@@ -240,6 +240,34 @@ fn sourceFromOrdinal(ord: u8) ?principal_mod.PrincipalSource {
 }
 
 // ---------------------------------------------------------------------------
+// NEW-8 / #860 — Envelope trust gate
+// ---------------------------------------------------------------------------
+
+/// Returns true ONLY when the connection was authenticated as the federation
+/// cluster identity ("geode-cluster"), meaning the other end proved possession
+/// of GEODE_CLUSTER_TOKEN through validateFederationAuth().
+///
+/// On ANY other connection — including ReadWrite or Admin users — field 4
+/// (principal_envelope_bytes) MUST be ignored entirely; the handler falls
+/// through to derivePrincipal() from the session-authenticated identity.
+///
+/// The "geode-cluster" username is RESERVED in user_management.zig (returns
+/// error.ReservedUsername on CREATE USER attempts) so a regular user cannot
+/// claim this identity through normal authentication paths. That reservation
+/// is the security invariant that makes this name check sufficient.
+///
+/// FOLLOW-UP (separate PR, do NOT change here): add HMAC-SHA256 over the
+/// envelope bytes (key = GEODE_CLUSTER_TOKEN / GEODE_CLUSTER_TOKEN_PREVIOUS
+/// rotation via validateTokenWithRotation) so the envelope is cryptographically
+/// verified, not just connection-identity-based.
+/// Design: serializeAndSign(allocator, env, token) / deserializeAndVerify(bytes, token).
+// CANARY: REQ=REQ-NEW8-ENVELOPE-TRUST; FEATURE="EnvelopeTrustGate"; ASPECT=PureFunction; STATUS=TESTED; TEST=tests/test_new8_envelope_trust.zig; OWNER=security; UPDATED=2026-06-26
+pub fn shouldTrustEnvelope(authenticated_user: ?[]const u8) bool {
+    const u = authenticated_user orelse return false;
+    return std.mem.eql(u8, u, "geode-cluster");
+}
+
+// ---------------------------------------------------------------------------
 // Conversion helpers: Principal → PrincipalEnvelope and back
 // ---------------------------------------------------------------------------
 
