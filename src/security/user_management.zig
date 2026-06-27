@@ -1054,6 +1054,21 @@ fn loadAllUsersFromResolver() !void {
     }
 
     for (loaded) |user| {
+        // NEW-8 residual (#860): skip reserved usernames so geode-cluster cannot
+        // be seeded into user_store through the bulk-load resolver path.
+        // Uses the module-level RESERVED_USERNAMES constant as the single source
+        // of truth; byte-exact comparison, consistent with the createUser gate.
+        const is_reserved = blk: {
+            for (RESERVED_USERNAMES) |reserved| {
+                if (std.mem.eql(u8, user.username, reserved)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (is_reserved) {
+            var owned = user;
+            owned.deinit(cache_allocator);
+            continue;
+        }
         _ = user_store.?.putOrUpdate(user) catch |err| {
             var owned = user;
             owned.deinit(cache_allocator);

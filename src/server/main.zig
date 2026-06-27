@@ -285,6 +285,14 @@ fn duplicatePersistentUser(allocator: std.mem.Allocator, store: *geode.graph_sto
 }
 
 fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?geode.user_management.User {
+    // NEW-8 residual (#860): block reserved usernames at the resolver boundary.
+    // Returning null here means ensureUserCached / authenticate treat the
+    // principal as "not found", preventing geode-cluster from being seeded into
+    // user_store via the persistent-lookup path regardless of what is stored in
+    // the auth graph.  Uses RESERVED_USERNAMES as the single source of truth.
+    for (geode.user_management.RESERVED_USERNAMES) |reserved| {
+        if (std.mem.eql(u8, username, reserved)) return null;
+    }
     // The store lock may already be held by the calling thread (e.g., QUIC
     // handler executing a CALL query or MFA setup for a non-existent user).
     // Use tryAcquire to avoid deadlock; if the lock can't be acquired, return
@@ -339,11 +347,28 @@ fn listPersistentAuthUsers(_: ?*anyopaque, allocator: std.mem.Allocator) anyerro
         allocator.free(users);
     }
 
-    for (records, 0..) |record, i| {
-        users[i] = try duplicatePersistentUser(allocator, store, record);
+    for (records) |record| {
+        // NEW-8 residual (#860): skip reserved usernames at the bulk-list boundary
+        // so geode-cluster cannot be injected into user_store via the list path.
+        // Uses RESERVED_USERNAMES as the single source of truth.
+        const is_reserved = blk: {
+            for (geode.user_management.RESERVED_USERNAMES) |reserved| {
+                if (std.mem.eql(u8, record.getUsername(), reserved)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (is_reserved) continue;
+        users[initialized] = try duplicatePersistentUser(allocator, store, record);
         initialized += 1;
     }
-    return users;
+
+    if (initialized == records.len) return users;
+    // Some reserved records were skipped — trim the allocation to the actual count.
+    // On trim-alloc failure, the errdefer above cleans up users[0..initialized].
+    const trimmed = try allocator.alloc(geode.user_management.User, initialized);
+    @memcpy(trimmed, users[0..initialized]);
+    allocator.free(users); // free the over-allocated array frame; strings are in trimmed
+    return trimmed;
 }
 
 // CANARY: REQ=REQ-PERF-ASYNC-CONN-001; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPool; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=server; UPDATED=2026-06-11

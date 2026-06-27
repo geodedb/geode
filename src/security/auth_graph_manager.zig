@@ -703,6 +703,21 @@ pub const AuthGraphManager = struct {
         // 1. Resolve admin username
         const username = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
 
+        // NEW-8 residual (#860): Reject reserved usernames.  If GEODE_ADMIN_USERNAME
+        // is misconfigured to a reserved name (e.g. "geode-cluster"), the bootstrap
+        // would silently persist the federation-node identity as a real admin, re-
+        // enabling the envelope-trust bypass on every subsequent restart.  Failing
+        // explicitly here surfaces the misconfiguration loudly at startup time.
+        // We return error.ReservedUsername (not a silent fallback) because a fallback
+        // would obscure the operator mistake; the default username "geode" is already
+        // safe, so there is no valid reason to set this env var to a reserved name.
+        for (geode.user_management.RESERVED_USERNAMES) |reserved| {
+            if (std.mem.eql(u8, username, reserved)) {
+                self.allocator.free(username);
+                return error.ReservedUsername;
+            }
+        }
+
         // 2. Resolve seed password from env (widened to honour both the
         //    historical `GEODE_ADMIN_PASSWORD` and the documented
         //    `GEODE_DEFAULT_PASSWORD`).  Precedence: when both are set,
