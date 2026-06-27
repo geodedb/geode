@@ -5906,6 +5906,45 @@ fn handleClientMessage(
                                         Attr.string("graph", requested_graph),
                                         Attr.string("error", @errorName(err)),
                                     });
+                                    // NEW-1 (#861) race-recovery guard: createGraph errored but graph already
+                                    // exists (concurrent create). Before binding, apply the SAME GPS gate as
+                                    // the existing-graph path to prevent a ReadWrite user from binding a graph
+                                    // they don't hold a per-graph grant for.
+                                    const race_rbac_allowed = blk: {
+                                        if (!user_mgmt.isAuthEnabled()) break :blk true;
+                                        if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :blk true;
+                                        const gps_mod = geode.security.gps;
+                                        const role_names_race: []const []const u8 = if (state.authenticated_role) |r|
+                                            &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
+                                        else
+                                            &.{};
+                                        const race_principal = geode.security.principal_derive.derivePrincipal(.{
+                                            .username = state.authenticated_user,
+                                            .role_names = role_names_race,
+                                            .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                                            .active_graph = requested_graph,
+                                            .auth_version = state.authenticated_auth_version,
+                                            .auth_method = .password,
+                                            .source = .quic_handler,
+                                        });
+                                        const gps_req_race = gps_mod.DecisionRequest{
+                                            .principal = &race_principal,
+                                            .action = .bind_graph,
+                                            .resource = .{ .graph = requested_graph },
+                                        };
+                                        const decision = gps_mod.decide(gpa, &gps_req_race) catch break :blk false;
+                                        break :blk (decision.kind == .allow);
+                                    };
+                                    if (!race_rbac_allowed) {
+                                        const resp = schema.QuicServerMessage{ .hello = .{
+                                            .success = false,
+                                            .session_id = try gpa.dupe(u8, ""),
+                                            .error_message = try gpa.dupe(u8, "Access denied: insufficient permissions for graph"),
+                                            .capabilities = caps,
+                                        } };
+                                        try sendQuicMessage(gpa, stream, resp);
+                                        return;
+                                    }
                                     if (state.exec_session) |*sess| {
                                         if (sess.graph) |old| gpa.free(old);
                                         sess.graph = try gpa.dupe(u8, requested_graph);
