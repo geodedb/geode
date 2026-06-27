@@ -1056,7 +1056,12 @@ pub const RollbackToResponse = struct {
 // CDC
 // ============================================================================
 pub const CdcDiagnosticsRequest = struct {
-    pub const _desc_table = .{};
+    session_id: []const u8 = "",
+
+    pub const _desc_table = .{
+        .session_id = fd(1, .{ .scalar = .string }),
+    };
+
     pub fn deinit(self: *CdcDiagnosticsRequest, allocator: std.mem.Allocator) void {
         protobuf.deinit(allocator, self);
     }
@@ -1186,9 +1191,11 @@ pub const CdcDiagnosticsResponse = struct {
 
 pub const CdcControlRequest = struct {
     action: []const u8 = "",
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .action = fd(1, .{ .scalar = .string }),
+        .session_id = fd(2, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *CdcControlRequest, allocator: std.mem.Allocator) void {
