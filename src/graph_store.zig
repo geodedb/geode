@@ -9796,10 +9796,17 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         }
     }
 
+    // Operator page-cache sizing knob (read-path performance enablement).
+    // Default 1024 pages (8 MB at the default 8 KB page size). auto_size grows
+    // the pool up to 512 MB based on graph size; set GEODE_BUFFER_POOL_PAGES
+    // above 65536 to exceed that cap for very large working sets in RAM-rich
+    // environments. Bad/missing values fall back to the 1024 default.
+    const buffer_pool_pages: u32 = @intCast(envU64("GEODE_BUFFER_POOL_PAGES", 1024));
     const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
         .data_dir = data_dir,
         .encryption_key = tde_key,
         .sync_mode = sync_mode,
+        .buffer_pool_pages = buffer_pool_pages,
     });
     global_adapter = adapter;
 
