@@ -978,6 +978,16 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
     // 5. Per-graph grant check function for execution.zig fallback path.
     geode.execution.graph_grant_check_fn = &graphGrantCheck;
 
+    // 5b. NEW-1 (#861): create + register the per-graph RBAC policy so graph-bind
+    // authorization is actually enforced. Without this the policy is null and
+    // every grant check fails open (the BOLA). Process-lifetime singleton.
+    const policy = allocator.create(multi_graph_security.GraphRBACPolicy) catch |err| {
+        log.err("Auth DDL startup: failed to allocate GraphRBACPolicy", &.{Attr.string("error", @errorName(err))});
+        return;
+    };
+    policy.* = multi_graph_security.GraphRBACPolicy.init(allocator);
+    multi_graph_security.setGlobalPolicy(policy);
+
     // 6. Hydrate custom roles (best-effort).
     auth_dispatch.hydrateCustomRolesFromGraph(allocator);
 
