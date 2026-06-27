@@ -7649,6 +7649,23 @@ fn handleClientMessage(
             }
         },
         .cdc_diag => {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing, .invalidated => {
+                    try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
+                    return;
+                },
+            }
+            if (user_mgmt.isAuthEnabled()) {
+                const is_admin = if (state.authenticated_role) |r|
+                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
+                else
+                    false;
+                if (state.authenticated_user == null or !is_admin) {
+                    try sendExecuteError(gpa, stream, "42000", "Permission denied: Admin role required for CDC diagnostics", &.{}, &.{});
+                    return;
+                }
+            }
             if (state.cdc_engine) |eng| {
                 const payload = try eng.exportDiagnostics(gpa);
                 try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
@@ -7665,6 +7682,23 @@ fn handleClientMessage(
             }
         },
         .cdc_ctrl => |ctrl| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing, .invalidated => {
+                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "AUTH_REQUIRED"), .guardrail_epoch = 0 } });
+                    return;
+                },
+            }
+            if (user_mgmt.isAuthEnabled()) {
+                const is_admin = if (state.authenticated_role) |r|
+                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
+                else
+                    false;
+                if (state.authenticated_user == null or !is_admin) {
+                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "PERMISSION_DENIED"), .guardrail_epoch = 0 } });
+                    return;
+                }
+            }
             if (state.cdc_engine) |eng| {
                 if (std.ascii.eqlIgnoreCase(ctrl.action, "RESET_GUARDRAILS")) {
                     eng.resetGuardrailState();
