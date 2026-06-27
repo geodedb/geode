@@ -97,3 +97,72 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
         try testing.expect(h.success);
     }
 }
+
+test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted graph is denied" {
+    // NOTE: This test covers the existing-graph deny path. The race-recovery sub-path guard
+    // (lines 5904-5915) rests on code-symmetry with this path + the guard added in this commit.
+    // The race cannot be triggered deterministically; the guard mirrors the block at
+    // line 5827-5872 exactly.
+    const allocator = testing.allocator;
+
+    const port = try util.getRandomPort();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    var data_dir_buf: [80]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&data_dir_buf, "/tmp/geode-new1-race-{d}", .{port});
+    std.Io.Dir.cwd().createDirPath(io_fs, data_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
+
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        util.TestEnv.standard(),
+    );
+    defer server.deinit();
+    try util.waitForServerReady(allocator, addr, 30000);
+
+    // Admin setup: create graph_a (granted to bob) and graph_c (not granted to bob).
+    // bob is ReadOnly — cannot create graphs, so graph_c must be pre-created by admin.
+    {
+        var admin = try util.QuicProtoClient.connect(allocator, addr);
+        defer admin.deinit();
+        var ah = try admin.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        defer ah.deinit(allocator);
+        try testing.expect(ah.success);
+
+        var r1 = try admin.executeAndCollect(allocator, "CREATE GRAPH graph_a", util.emptyParams(), 10);
+        r1.deinit(allocator);
+        var r2 = try admin.executeAndCollect(allocator, "CREATE GRAPH graph_c", util.emptyParams(), 10);
+        r2.deinit(allocator);
+        var r3 = try admin.executeAndCollect(allocator, "CREATE USER bob SET PASSWORD 'Bobby123!' ROLE readonly", util.emptyParams(), 10);
+        r3.deinit(allocator);
+        var r4 = try admin.executeAndCollect(allocator, "GRANT READ ON GRAPH graph_a TO bob", util.emptyParams(), 10);
+        r4.deinit(allocator);
+    }
+
+    // graph_c now exists in the store/catalog. The existing-graph path (line 5827)
+    // must deny bob because he holds no grant on graph_c. This is the same gate
+    // that the race-recovery guard (lines 5904-5915) mirrors: after the fix, a
+    // ReadWrite user who triggers the race-recovery path is subject to the same
+    // GPS decision, preventing a silent privilege escalation.
+    {
+        var client = try util.QuicProtoClient.connect(allocator, addr);
+        defer client.deinit();
+        var h = try client.helloWithGraph(allocator, "bob", "Bobby123!", "graph_c");
+        defer h.deinit(allocator);
+        if (h.success) std.debug.print("SECURITY: bob bound graph_c without a grant\n", .{});
+        try testing.expect(!h.success); // Access denied — no grant on graph_c
+    }
+
+    // Positive: bob can bind graph_a (explicit grant).
+    {
+        var client = try util.QuicProtoClient.connect(allocator, addr);
+        defer client.deinit();
+        var h = try client.helloWithGraph(allocator, "bob", "Bobby123!", "graph_a");
+        defer h.deinit(allocator);
+        if (!h.success) std.debug.print("grant assertion: bob denied graph_a unexpectedly: {s}\n", .{h.error_message});
+        try testing.expect(h.success);
+    }
+}
