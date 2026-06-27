@@ -6341,6 +6341,22 @@ pub fn build(b: *std.Build) void {
     const gap0514_quic_step = b.step("test-gap0514-quic", "GAP-0514: quic_connection_handler e2e CANARY regression (savepoint/rollback_to, HELLO graph binding)");
     gap0514_quic_step.dependOn(&run_gap0514_quic_tests.step);
 
+    // NEW-1 (#861): QUIC HELLO cross-graph BOLA regression — non-Admin user must
+    // not bind a graph for which they hold no grant. Spawns a real server with a
+    // persistent data-dir, issues CREATE GRAPH / CREATE USER / GRANT DDL, then
+    // asserts alice cannot bind the ungranted graph_b.
+    const new1_bola_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_new1_cross_graph_bola.zig"), .target = target, .optimize = optimize });
+    new1_bola_test_mod.addImport("geode", root_mod);
+    new1_bola_test_mod.addImport("protobuf", protobuf_mod);
+    new1_bola_test_mod.addImport("schema", schema_mod);
+    new1_bola_test_mod.addImport("transport/quic", transport_quic_mod);
+    new1_bola_test_mod.link_libc = true;
+    const new1_bola_tests = b.addTest(.{ .root_module = new1_bola_test_mod });
+    const run_new1_bola_tests = b.addRunArtifact(new1_bola_tests);
+    run_new1_bola_tests.step.dependOn(&install_geode_exe.step);
+    const new1_bola_step = b.step("test-new1-cross-graph-bola", "NEW-1: QUIC HELLO cross-graph BOLA regression (non-admin binds ungranted graph, #861)");
+    new1_bola_step.dependOn(&run_new1_bola_tests.step);
+
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
     // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,
     // sends .cdc_ctrl and .cdc_diag, and asserts both are rejected.
