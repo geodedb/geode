@@ -1502,6 +1502,12 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     // Phase 3 will rewire enforcement so principal threading is uniform across handlers.
                     // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
                     const rbac_allowed = rbac_blk: {
+                        // Compatibility invariant (#861): any authenticated user may always bind
+                        // the default graph by name — parity with the QUIC HELLO handler.
+                        // Auth-off is already handled: this entire block is nested under
+                        // `if (user_mgmt.isAuthEnabled())` above, so we only need the
+                        // default-graph short-circuit here.
+                        if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :rbac_blk true;
                         const gps = geode.security.gps;
                         const role_names_hello = [_][]const u8{@tagName(auth_result.role)};
                         const hello_principal = geode.security.principal_derive.derivePrincipal(.{

@@ -171,6 +171,28 @@ fn compat_sleep(ns: u64) void {
     _ = std.os.linux.nanosleep(&ts, null);
 }
 
+/// Wait for the gRPC server to be ready by attempting a raw TCP connection.
+/// Does NOT do a full QUIC handshake — use for gRPC-only server instances.
+pub fn waitForGrpcServerReady(allocator: std.mem.Allocator, addr: []const u8, timeout_ms: u64) !void {
+    _ = allocator;
+    const parsed = try parseAddr(addr);
+    const start = compat_milliTimestamp();
+    const deadline = start + @as(i64, @intCast(timeout_ms));
+    const io = std.Io.Threaded.global_single_threaded.io();
+    while (compat_milliTimestamp() < deadline) {
+        const ip_addr = std.Io.net.IpAddress.parse(parsed.host, parsed.port) catch |err| {
+            return err;
+        };
+        const stream = std.Io.net.IpAddress.connect(&ip_addr, io, .{ .mode = .stream }) catch {
+            compat_sleep(100 * std.time.ns_per_ms);
+            continue;
+        };
+        stream.close(io);
+        return;
+    }
+    return error.ServerStartupTimeout;
+}
+
 /// Wait for server to be ready by attempting to connect
 pub fn waitForServerReady(allocator: std.mem.Allocator, addr: []const u8, timeout_ms: u64) !void {
     const start = compat_milliTimestamp();
@@ -1400,17 +1422,17 @@ pub const QuicProtoClient = struct {
 
 pub const GrpcProtoClient = struct {
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     session_id: []const u8 = "",
 
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !GrpcProtoClient {
         const parsed = try parseAddr(addr);
-        const deadline = std.time.milliTimestamp() + 10_000;
+        const deadline = compat_milliTimestamp() + 10_000;
         var last_err: anyerror = error.ConnectionRefused;
-        while (std.time.milliTimestamp() < deadline) {
+        while (compat_milliTimestamp() < deadline) {
             const stream = grpc_query_transport.connectPlaintext(allocator, parsed.host, parsed.port, 5, .{}) catch |err| {
                 last_err = err;
-                std.time.sleep(100 * std.time.ns_per_ms);
+                compat_sleep(100 * std.time.ns_per_ms);
                 continue;
             };
             return .{
@@ -1422,7 +1444,7 @@ pub const GrpcProtoClient = struct {
     }
 
     pub fn deinit(self: *GrpcProtoClient) void {
-        self.stream.close();
+        self.stream.close(std.Io.Threaded.global_single_threaded.io());
         if (self.session_id.len > 0) {
             self.allocator.free(self.session_id);
         }
@@ -1442,6 +1464,50 @@ pub const GrpcProtoClient = struct {
             .{
                 .username = username,
                 .password = password,
+            },
+            .{},
+        );
+        defer {
+            var resp_copy = resp;
+            resp_copy.deinit(allocator);
+        }
+
+        grpc_query_transport.drainUnaryStream(allocator, self.stream, .{});
+
+        const session_id = try allocator.dupe(u8, resp.session_id);
+        if (self.session_id.len > 0) allocator.free(self.session_id);
+        self.session_id = try allocator.dupe(u8, resp.session_id);
+
+        var caps = try allocator.alloc([]const u8, resp.capabilities.items.len);
+        for (resp.capabilities.items, 0..) |cap, i| {
+            caps[i] = try allocator.dupe(u8, cap);
+        }
+
+        return .{
+            .success = resp.success,
+            .session_id = session_id,
+            .error_message = try allocator.dupe(u8, resp.error_message),
+            .capabilities = caps,
+        };
+    }
+
+    /// gRPC HELLO carrying a graph binding — mirrors QuicProtoClient.helloWithGraph
+    /// for transport-parity tests. Connects with username/password and requests the
+    /// named graph in the HelloRequest.
+    pub fn helloWithGraph(
+        self: *GrpcProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        graph: []const u8,
+    ) !HelloResult {
+        const resp = try grpc_query_transport.hello(
+            allocator,
+            self.stream,
+            .{
+                .username = username,
+                .password = password,
+                .graph = graph,
             },
             .{},
         );

@@ -2,6 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const gps = geode.security.gps;
 const principal_mod = geode.security.principal;
+const graph_store = geode.graph_store;
 
 // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=AdminAllowed; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
 test "decide(.bind_graph) allows Admin to bind any graph" {
@@ -163,4 +164,57 @@ test "decide(.bind_graph) denies non-admin when no graph_grant_check_fn is set" 
     };
     const d = try gps.decide(std.testing.allocator, &req);
     try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d.kind);
+}
+
+// REQ-MULTI-GRAPH-RBAC-WIRE-003 / #861 transport-parity invariant:
+// The gRPC HELLO handler must bypass gps.decide for the default graph — not
+// because the default graph is privileged, but to match the QUIC HELLO
+// short-circuit (quic_connection_handler.zig:5846) that preserves backwards
+// compatibility for single-graph deployments that never issue per-graph grants.
+//
+// This test is at the GPS decision layer. It proves that WITHOUT the short-circuit
+// a ReadOnly user with no graph_grant_check_fn would be DENIED "default" by
+// gps.decide(.bind_graph) — exactly the wrong outcome the grpc_server.zig fix
+// prevents by breaking before reaching gps.decide when graph == DEFAULT_GRAPH_NAME.
+//
+// Level: GPS unit test. Full gRPC e2e was not added because the gRPC server
+// requires TLS by default and the plaintext fallback path has HTTP/2 SETTINGS
+// handshake issues (server does not send SETTINGS in Debug/plaintext mode,
+// causing an EAGAIN panic in the Zig 0.16 IO read path).
+test "decide(.bind_graph) would deny non-admin on default graph without the handler short-circuit (#861)" {
+    const execution = geode.execution;
+    const prev = execution.graph_grant_check_fn;
+    execution.graph_grant_check_fn = null; // no grant registered — raw GPS decision
+    defer execution.graph_grant_check_fn = prev;
+
+    const role_names = [_][]const u8{"ReadOnly"};
+    const p = principal_mod.Principal{
+        .user_id = 99,
+        .username = "testuser",
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = graph_store.DEFAULT_GRAPH_NAME,
+        .roles = &role_names,
+        .custom_roles = &.{},
+        .auth_method = .password,
+        .auth_version = 1,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = principal_mod.RiskContext.unknown,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+        .source = .test_harness,
+    };
+
+    // Without the handler short-circuit, GPS denies a ReadOnly user with no grant.
+    const req = gps.DecisionRequest{
+        .principal = &p,
+        .action = .bind_graph,
+        .resource = .{ .graph = graph_store.DEFAULT_GRAPH_NAME },
+    };
+    const d = try gps.decide(std.testing.allocator, &req);
+    // Confirm the denial: this is the outcome the grpc_server.zig short-circuit
+    // avoids by breaking :rbac_blk true BEFORE calling gps.decide.
+    try std.testing.expect(d.kind != .allow);
 }
