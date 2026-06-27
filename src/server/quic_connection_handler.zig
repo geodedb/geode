@@ -5636,6 +5636,22 @@ fn handleClientMessage(
     memcurve_profile: bool,
     peer_ip: []const u8,
 ) !void {
+    // NEW-9 (#867): connection-level default-deny. Until a connection has
+    // authenticated, only the handshake (.hello) and the dataless liveness
+    // probe (.ping) may be dispatched. Every other arm re-checks auth itself
+    // (defense-in-depth), but this gate guarantees no future arm can ship
+    // reachable pre-auth by omission (the SEC-002 #849 root cause). Skipped
+    // when auth is disabled (no authentication concept to enforce).
+    if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
+        const pre_auth_allowed = switch (msg) {
+            .hello, .ping => true,
+            else => false,
+        };
+        if (!pre_auth_allowed) {
+            try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
+            return;
+        }
+    }
     switch (msg) {
         .hello => |hello_req| {
             var caps = std.ArrayList([]const u8).initCapacity(gpa, 3) catch return error.OutOfMemory;

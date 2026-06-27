@@ -69,3 +69,40 @@ test "unauthenticated connection cannot read cdc_diag (SEC-002)" {
         else => {}, // error reply == rejected, good
     }
 }
+
+// NEW-9 (#867): connection-level default-deny gate — allow-list guard-rails.
+// These tests verify that the gate does NOT over-block legitimate pre-auth
+// traffic (.ping) and does NOT break authenticated paths.
+
+test "unauthenticated ping is allowed (liveness allow-list)" {
+    const allocator = testing.allocator;
+    var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch {
+        util.testSkip();
+        return;
+    };
+    defer server.deinit();
+    var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
+    defer client.deinit();
+    // ping is on the pre-auth allow-list — must still succeed without hello.
+    try testing.expect(try client.ping(allocator));
+}
+
+test "authenticated admin CDC path reaches handler (gate positive control)" {
+    const allocator = testing.allocator;
+    const env = &[_][]const u8{"GEODE_CDC_ENABLE=1"};
+    var server = util.spawnServerRandom(allocator, env) catch {
+        util.testSkip();
+        return;
+    };
+    defer server.deinit();
+    var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
+    defer client.deinit();
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    defer hello.deinit(allocator);
+    // cdcControl returns error.InvalidMessage if the gate blocks with an execute error.
+    // A cdc_ctrl response (success or NO_ENGINE) proves the gate passed the request through.
+    var ctrl = try client.cdcControl(allocator, "RESET_GUARDRAILS");
+    defer ctrl.deinit(allocator);
+    // Gate let it through — status must not be AUTH_REQUIRED (that would mean gate failed).
+    try testing.expect(!std.mem.eql(u8, ctrl.status, "AUTH_REQUIRED"));
+}
