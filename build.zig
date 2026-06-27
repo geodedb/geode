@@ -6341,6 +6341,21 @@ pub fn build(b: *std.Build) void {
     const gap0514_quic_step = b.step("test-gap0514-quic", "GAP-0514: quic_connection_handler e2e CANARY regression (savepoint/rollback_to, HELLO graph binding)");
     gap0514_quic_step.dependOn(&run_gap0514_quic_tests.step);
 
+    // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
+    // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,
+    // sends .cdc_ctrl and .cdc_diag, and asserts both are rejected.
+    const sec002_cdc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec002_cdc_preauth.zig"), .target = target, .optimize = optimize });
+    sec002_cdc_test_mod.addImport("geode", root_mod);
+    sec002_cdc_test_mod.addImport("protobuf", protobuf_mod);
+    sec002_cdc_test_mod.addImport("schema", schema_mod);
+    sec002_cdc_test_mod.addImport("transport/quic", transport_quic_mod);
+    sec002_cdc_test_mod.link_libc = true;
+    const sec002_cdc_tests = b.addTest(.{ .root_module = sec002_cdc_test_mod });
+    const run_sec002_cdc_tests = b.addRunArtifact(sec002_cdc_tests);
+    run_sec002_cdc_tests.step.dependOn(&install_geode_exe.step);
+    const sec002_cdc_step = b.step("test-sec002-cdc-preauth", "SEC-002: unauthenticated CDC arm access regression (#849)");
+    sec002_cdc_step.dependOn(&run_sec002_cdc_tests.step);
+
     // GAP-0883: server-level coverage for the documented `CALL algo.*` graph
     // algorithm procedures through the real parse → dispatch → executor path
     // over a real GraphStore (two directed triangles + bridge, plus the

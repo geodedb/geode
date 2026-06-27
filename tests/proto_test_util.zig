@@ -712,7 +712,7 @@ pub const QuicProtoClient = struct {
         if (!hello_result.success) return error.AuthenticationFailed;
     }
 
-    fn writeMessage(self: *QuicProtoClient, msg: schema.QuicClientMessage) !void {
+    pub fn writeMessage(self: *QuicProtoClient, msg: schema.QuicClientMessage) !void {
         try self.writeMessageTimed(msg, null);
     }
 
@@ -846,7 +846,7 @@ pub const QuicProtoClient = struct {
         if (compat_monoNs() >= deadline_ns) return error.Timeout;
     }
 
-    fn readPacket(self: *QuicProtoClient, allocator: std.mem.Allocator, timeout_ms: u32) !schema.ServerPacket {
+    pub fn readPacket(self: *QuicProtoClient, allocator: std.mem.Allocator, timeout_ms: u32) !schema.ServerPacket {
         var len_buf: [4]u8 = undefined;
         var total_read: usize = 0;
         const deadline_ns = compat_monoNs() + @as(u64, timeout_ms) * std.time.ns_per_ms;
