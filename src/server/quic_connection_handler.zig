@@ -5072,6 +5072,13 @@ fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mut
 /// PULL materialisation) falls back to DEFAULT_GRAPH_NAME — which is wrong when
 /// the session has been switched to a different graph.
 fn syncGraphFromSession(state: *ServerState) void {
+    // Graph-authorization invariant (NEW-1 #861): sess.graph is ONLY ever set
+    // after a gps.decide(.bind_graph) authorization succeeds — at the QUIC HELLO
+    // bind path, the race-recovery bind path (both guarded in this file), and the
+    // mid-session USE GRAPH path (gated in execution.zig). Therefore current_graph,
+    // copied from sess.graph below, is always an already-authorized graph. We do
+    // NOT re-check RBAC here: there is no principal in scope at sync time, and a
+    // re-check would only duplicate the gate that already ran at bind time.
     const new_graph: ?[]const u8 = if (state.exec_session) |sess| sess.graph else null;
 
     // If session graph hasn't changed, nothing to do.
