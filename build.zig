@@ -8373,6 +8373,19 @@ pub fn build(b: *std.Build) void {
     const gps_distributed_envelope_step = b.step("test-gps-distributed-envelope", "Run GPS distributed Principal envelope tests (Phase 6 Task 6-3)");
     gps_distributed_envelope_step.dependOn(&run_gps_distributed_envelope_tests.step);
 
+    // NEW-8 / #860: Principal envelope auth-bypass — envelope trust gate tests.
+    // Source-audit tests (RED until gate/function/reserved-username are wired) plus
+    // @hasDecl-guarded unit tests for shouldTrustEnvelope (skip until function lands,
+    // then become real assertions). Run via `zig build test-new8-envelope-trust`.
+    const new8_envelope_trust_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_new8_envelope_trust.zig"), .target = target, .optimize = optimize });
+    new8_envelope_trust_test_mod.addImport("geode", root_mod);
+    new8_envelope_trust_test_mod.link_libc = true;
+    const new8_envelope_trust_tests = b.addTest(.{ .root_module = new8_envelope_trust_test_mod });
+    const run_new8_envelope_trust_tests = b.addRunArtifact(new8_envelope_trust_tests);
+    shardDep(test_step, &run_new8_envelope_trust_tests.step, 0, test_shard_loads, test_shard_index);
+    const new8_envelope_trust_step = b.step("test-new8-envelope-trust", "Run NEW-8 envelope trust gate tests (auth-bypass fix + reserved-username guard)");
+    new8_envelope_trust_step.dependOn(&run_new8_envelope_trust_tests.step);
+
     // GPS Phase 6 Task 6-4: Grant migration tests — one-shot conversion of
     // legacy (:GraphGrant) nodes to first-class (:Policy) rows.
     const gps_grant_migration_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_grant_migration.zig"), .target = target, .optimize = optimize });
