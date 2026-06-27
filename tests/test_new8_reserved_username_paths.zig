@@ -112,6 +112,32 @@ test "security(NEW-8-residual, site-3): loadAllUsersFromResolver skips geode-clu
     try testing.expect(user_mgmt.getUser("geode-cluster") == null);
 }
 
+// CANARY: REQ=REQ-NEW8-RESERVED-PATHS; FEATURE="GeodeClusterReservedPaths"; ASPECT=DirectCreateUser; STATUS=TESTED; OWNER=security; UPDATED=2026-06-26
+// Site 5: AuthGraphManager.createUser called directly with a reserved username must fail.
+// Defense-in-depth guard: closes the latent risk that a future caller bypasses the
+// wrappers (user_management.createUser -> persistent_writer.create_fn -> writerCreateUser)
+// and invokes agm.createUser(...) directly, re-opening the graph-persistence half of
+// the NEW-8 bypass.
+test "security(NEW-8-residual, site-5): AuthGraphManager.createUser rejects geode-cluster directly" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var mgr = try AuthGraphManager.init(testing.allocator, &store);
+    defer mgr.deinit();
+
+    const hmac_key = [_]u8{0xcd} ** 32;
+
+    // Call createUser directly — bypassing all wrapper guards — with a reserved username.
+    const result = mgr.createUser(&hmac_key, "geode-cluster", "gc@localhost", "fake-hash", false);
+    if (result) |_| {
+        // Fix not yet applied: createUser persisted the reserved user without error.
+        return error.TestExpectedReservedUsernameError; // RED: guard missing
+    } else |err| {
+        // GREEN: guard added — verify we got the expected error, not some other failure.
+        try testing.expect(err == error.ReservedUsername);
+    }
+}
+
 // CANARY: REQ=REQ-NEW8-RESERVED-PATHS; FEATURE="GeodeClusterReservedPaths"; ASPECT=Bootstrap; STATUS=TESTED; OWNER=security; UPDATED=2026-06-26
 // Site 4: bootstrapDefaultAdmin with GEODE_ADMIN_USERNAME=geode-cluster must fail
 test "security(NEW-8-residual, site-4): bootstrapDefaultAdmin rejects geode-cluster as admin username" {

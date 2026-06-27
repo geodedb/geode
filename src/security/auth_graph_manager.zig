@@ -812,6 +812,17 @@ pub const AuthGraphManager = struct {
 
     /// Create a new user with HMAC and reseal the chain.
     pub fn createUser(self: *Self, hmac_key: *const [32]u8, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool) !u64 {
+        // NEW-8 residual (#860): Defense-in-depth guard.  All current call sites reach
+        // this function through guarded wrappers (user_management.createUser ->
+        // persistent_writer.create_fn -> writerCreateUser), but this is a public
+        // function on a public struct.  A future direct call site would re-open the
+        // graph-persistence half of the bypass without this check at the function level.
+        for (geode.user_management.RESERVED_USERNAMES) |reserved| {
+            if (std.mem.eql(u8, username, reserved)) {
+                return error.ReservedUsername;
+            }
+        }
+
         const user_id = self.next_user_id;
         self.next_user_id += 1;
 
