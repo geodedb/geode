@@ -2999,12 +2999,13 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     // AND the legacy handleLegacyPacket shim which calls this handler directly.
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.CdcControlRequest, &reader, allocator) catch {
-        const resp = schema.CdcControlResponse{
+        var inval_resp = schema.CdcControlResponse{
             .success = false,
             .status = try allocator.dupe(u8, "INVALID_REQUEST"),
             .guardrail_epoch = 0,
         };
-        return encodeMessage(allocator, resp);
+        defer inval_resp.deinit(allocator);
+        return try encodeMessage(allocator, inval_resp);
     };
     defer req.deinit(allocator);
 
@@ -3029,28 +3030,31 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     if (execution.getGlobalCdcEngine()) |eng| {
         if (std.ascii.eqlIgnoreCase(req.action, "RESET_GUARDRAILS")) {
             eng.resetGuardrailState();
-            const resp = schema.CdcControlResponse{
+            var ok_resp = schema.CdcControlResponse{
                 .success = true,
                 .status = try allocator.dupe(u8, "OK"),
                 .guardrail_epoch = eng.guardrail_epoch,
             };
-            return encodeMessage(allocator, resp);
+            defer ok_resp.deinit(allocator);
+            return try encodeMessage(allocator, ok_resp);
         } else {
-            const resp = schema.CdcControlResponse{
+            var unsup_resp = schema.CdcControlResponse{
                 .success = false,
                 .status = try allocator.dupe(u8, "UNSUPPORTED"),
                 .guardrail_epoch = eng.guardrail_epoch,
             };
-            return encodeMessage(allocator, resp);
+            defer unsup_resp.deinit(allocator);
+            return try encodeMessage(allocator, unsup_resp);
         }
     }
     // No CDC engine running — return NO_ENGINE
-    const resp = schema.CdcControlResponse{
+    var no_eng_resp = schema.CdcControlResponse{
         .success = false,
         .status = try allocator.dupe(u8, "NO_ENGINE"),
         .guardrail_epoch = 0,
     };
-    return encodeMessage(allocator, resp);
+    defer no_eng_resp.deinit(allocator);
+    return try encodeMessage(allocator, no_eng_resp);
 }
 
 fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {

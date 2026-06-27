@@ -6381,7 +6381,7 @@ pub fn build(b: *std.Build) void {
     sec002_grpc_cdc_mod.addOptions("openssl_config", openssl_options);
     const sec002_grpc_cdc_tests = b.addTest(.{
         .root_module = sec002_grpc_cdc_mod,
-        .filters = &.{"SEC-002 live-engine path"},
+        .filters = &.{ "SEC-002 live-engine path", "no over-block" },
     });
     const run_sec002_grpc_cdc_tests = b.addRunArtifact(sec002_grpc_cdc_tests);
     const sec002_grpc_cdc_step = b.step("test-sec002-grpc-cdc", "SEC-002: gRPC CDC handler auth gate unit tests (#849)");
