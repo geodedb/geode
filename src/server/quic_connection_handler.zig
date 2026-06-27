@@ -5825,44 +5825,39 @@ fn handleClientMessage(
                     const in_catalog = cat.hasGraph(requested_graph);
 
                     if (in_store or in_catalog) {
-                        // GAP-0283: Graph-scoped RBAC authorization check before binding.
-                        // Admin bypass: admins always have access to all graphs.
-                        // If RBAC policy has graph-specific assignments, check them.
-                        // Fall back to user's global role (backward compatible).
-                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=security; UPDATED=2026-06-11
+                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_new1_cross_graph_bola.zig; OWNER=security; UPDATED=2026-06-27
+                        // NEW-1 (#861) + NEW-11 (#869): route QUIC HELLO graph-bind through
+                        // gps.decide(.bind_graph) — the same fail-closed gate used by mid-session
+                        // USE GRAPH and (post-Task-4) the gRPC HELLO handler. Deletes the
+                        // Wyhash(username) uid derivation (closing NEW-11; GPS resolves uid via
+                        // agm.findUserIdByName inside graphGrantCheck). Fail-closed on GPS error.
                         const rbac_allowed = blk: {
-                            if (!user_mgmt.isAuthEnabled()) break :blk true; // No auth = allow
-                            const role_val = state.authenticated_role;
-                            if (role_val) |r| {
-                                const role = @as(user_mgmt.Role, @enumFromInt(r));
-                                if (role == .Admin) break :blk true; // Admin bypass
-                            }
-                            // Check graph RBAC policy if available
-                            if (multi_graph_security.getGlobalPolicy()) |rbac| {
-                                // Resolve user_id from username for RBAC lookup
-                                if (state.authenticated_user) |username| {
-                                    const uid = std.hash.Wyhash.hash(0, username);
-                                    // Check if user has any graph-specific permission (read access suffices for binding)
-                                    if (rbac.hasPermission(uid, requested_graph, "graph", .read)) break :blk true;
-                                    // If RBAC has no entry for this user+graph, fall through to global role
-                                    const key = multi_graph_security.GraphRoleKey.init(uid, requested_graph);
-                                    if (rbac.graph_user_roles.get(key)) |_| {
-                                        // Explicit graph assignment exists but no read permission via role.
-                                        // A per-graph READ grant (GRANT READ ON GRAPH) widens access here.
-                                        if (rbac.hasGraphGrant(uid, requested_graph, 0)) {
-                                            log.info("bind permitted by per-graph READ grant", &.{
-                                                Attr.string("graph", requested_graph),
-                                                Attr.string("user", username),
-                                            });
-                                            break :blk true;
-                                        }
-                                        // Explicit graph assignment exists but no read permission — deny
-                                        break :blk false;
-                                    }
-                                }
-                            }
-                            // No graph-specific RBAC policy or no explicit denial — allow based on global role
-                            break :blk true;
+                            if (!user_mgmt.isAuthEnabled()) break :blk true; // auth-off = allow
+                            // Compatibility invariant: any authenticated user may always bind the
+                            // default graph by name (belt-and-suspenders; preserves single-graph
+                            // deployments that never issue per-graph grants).
+                            if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :blk true;
+                            const gps_mod = geode.security.gps;
+                            const role_names_hello: []const []const u8 = if (state.authenticated_role) |r|
+                                &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
+                            else
+                                &.{};
+                            const hello_principal = geode.security.principal_derive.derivePrincipal(.{
+                                .username = state.authenticated_user,
+                                .role_names = role_names_hello,
+                                .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                                .active_graph = requested_graph,
+                                .auth_version = state.authenticated_auth_version,
+                                .auth_method = .password,
+                                .source = .quic_handler,
+                            });
+                            const gps_req = gps_mod.DecisionRequest{
+                                .principal = &hello_principal,
+                                .action = .bind_graph,
+                                .resource = .{ .graph = requested_graph },
+                            };
+                            const decision = gps_mod.decide(gpa, &gps_req) catch break :blk false;
+                            break :blk (decision.kind == .allow);
                         };
 
                         if (!rbac_allowed) {
