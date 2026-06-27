@@ -1516,7 +1516,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                         });
                         const gps_req = gps.DecisionRequest{
                             .principal = &hello_principal,
-                            .action = .read,
+                            .action = .bind_graph,
                             .resource = .{ .graph = requested_graph },
                         };
                         const decision = try gps.decide(std.heap.smp_allocator, &gps_req);
