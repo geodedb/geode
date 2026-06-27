@@ -8596,4 +8596,20 @@ pub fn build(b: *std.Build) void {
     const fips_seam_step = b.step("test-fips-seam", "Task 11: FIPS seam gate — parity KATs + fail-closed assertions (run under both -Dfips=false and -Dfips=true)");
     fips_seam_step.dependOn(&run_fips_parity.step);
     fips_seam_step.dependOn(&run_fips_failclosed.step);
+
+    // Read-path performance enablement: GEODE_BUFFER_POOL_PAGES lets operators
+    // size the engine page cache to available RAM for large working sets.
+    // Run via `zig build test-buffer-pool-env`.
+    const buffer_pool_env_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_buffer_pool_env.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    buffer_pool_env_test_mod.addImport("geode", root_mod);
+    const buffer_pool_env_tests = b.addTest(.{ .root_module = buffer_pool_env_test_mod });
+    const run_buffer_pool_env_tests = b.addRunArtifact(buffer_pool_env_tests);
+    shardDep(test_step, &run_buffer_pool_env_tests.step, 1, test_shard_loads, test_shard_index);
+    const buffer_pool_env_step = b.step("test-buffer-pool-env", "Run GEODE_BUFFER_POOL_PAGES env-knob regression (default=1024, explicit=N, bad-value=1024)");
+    buffer_pool_env_step.dependOn(&run_buffer_pool_env_tests.step);
 }
