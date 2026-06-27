@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -9,28 +11,27 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/logging"
-	"github.com/quic-go/quic-go/qlog"
+	"github.com/quic-go/quic-go/qlogwriter"
 )
 
 func main() {
-	// Enable detailed logging
-	qlogger := qlog.DefaultTracer(func(p logging.Perspective, connID []byte) qlog.WriteCloser {
-		filename := fmt.Sprintf("client_%x.qlog", connID)
-		f, err := os.Create(filename)
-		if err != nil {
-			log.Fatal(err)
-		}
-		return qlog.NewWriter(f)
-	})
-
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"h3"},
 	}
 
 	qConfig := &quic.Config{
-		Tracer:               qlogger,
+		// quic-go v0.60: Tracer uses qlogwriter.Trace; logging/qlog subpkg removed.
+		Tracer: func(_ context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace {
+			filename := fmt.Sprintf("client_%x.qlog", connID)
+			f, err := os.Create(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			t := qlogwriter.NewConnectionFileSeq(f, isClient, connID, nil)
+			go t.Run()
+			return t
+		},
 		HandshakeIdleTimeout: 10 * time.Second,
 		MaxIdleTimeout:       30 * time.Second,
 		KeepAlivePeriod:      10 * time.Second,
@@ -46,7 +47,7 @@ func main() {
 		fmt.Printf("Failed to connect: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
+	defer conn.CloseWithError(0, "done") // quic-go v0.60: Close() removed, use CloseWithError
 
 	fmt.Println("Connection established successfully!")
 	fmt.Printf("Remote address: %v\n", conn.RemoteAddr())

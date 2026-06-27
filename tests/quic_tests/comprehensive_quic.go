@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -325,7 +327,7 @@ func testMultipleStreams(config TestConfig) {
 	// Open multiple streams
 	const numStreams = 5
 	type streamWrapper struct {
-		s quic.Stream
+		s *quic.Stream // quic-go v0.60: Stream is a concrete struct; use pointer
 	}
 	streams := make([]streamWrapper, 0, numStreams)
 

@@ -1,3 +1,5 @@
+//go:build ignore
+
 // GAP-60 Regression Test: quic-go interop
 //
 // Verifies that quic-go (v0.54+) can complete TLS handshake and open

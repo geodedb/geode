@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Minimal handshake debug test
 package main
 
