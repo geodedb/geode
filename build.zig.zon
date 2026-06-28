@@ -414,13 +414,17 @@
         //   .url  = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.8#<sha>",
         //   .hash = "graph_storage-0.2.8-<...>",
         .graph_storage = .{
-            // v0.2.13 = v0.2.12 + parallel shard-open recovery (open the 16 shard
-            // engines concurrently on dedicated std.Thread workers → fast restart
-            // for large sharded graphs; recovery+rebuild makes no thread-pool calls
-            // so it cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive
-            // deps → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.13#0f0eb4e23cbb60c17d0cbe965b1da0bb0d28a1c7",
-            .hash = "graph_storage-0.2.13-9UyJS_3aEwBdyWP3wCRRLdYsdjzwGCBO2pptDiUy6Y-X",
+            // v0.2.14 = v0.2.13 + Lever B: a CLEAN restart LOADS the persisted
+            // derived index snapshots (O(snapshot)) instead of the O(graph)
+            // rebuildDerivedIndexes — a full checkpoint now persists dirty derived
+            // indexes even when pages are clean. Crash restarts still rebuild
+            // (manifest.counter gate + recovery bump unchanged → stale snapshots
+            // rejected). v0.2.13 = v0.2.12 + parallel 16-shard open recovery
+            // (concurrent shard opens; recovery makes no thread-pool calls so it
+            // cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive deps
+            // → no diamond.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.14#8163188292e1641a6d0f91a3e72be9df72c9a514",
+            .hash = "graph_storage-0.2.14-9UyJS-bmEwAVBsuH7ij-Ny4kxIiCC5VhlKiYmYIwUzNu",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
