@@ -7591,6 +7591,22 @@ pub fn build(b: *std.Build) void {
     const adapter_registry_restart_step = b.step("test-adapter-registry-restart", "Regression: NodePropertyExactIndex.loadFromFile self-deadlock on adapter reopen");
     adapter_registry_restart_step.dependOn(&run_adapter_registry_restart_tests.step);
 
+    // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
+    // exact node-property index rebuild that the parallel rebuild must preserve.
+    const parallel_index_rebuild_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_parallel_index_rebuild.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    parallel_index_rebuild_test_mod.addImport("geode", root_mod);
+    parallel_index_rebuild_test_mod.addImport("graph_storage", graph_storage_mod);
+    const parallel_index_rebuild_tests = b.addTest(.{ .root_module = parallel_index_rebuild_test_mod });
+    const run_parallel_index_rebuild_tests = b.addRunArtifact(parallel_index_rebuild_tests);
+    shardDep(test_step, &run_parallel_index_rebuild_tests.step, 1, test_shard_loads, test_shard_index);
+    const parallel_index_rebuild_step = b.step("test-parallel-index-rebuild", "Correctness + coverage guard for the restart property-index rebuild (serial baseline -> parallel)");
+    parallel_index_rebuild_step.dependOn(&run_parallel_index_rebuild_tests.step);
+
     // Edge data-integrity under churn: an idempotent GNC2 edge re-apply must NOT
     // orphan a durable edge slot (createEdgeWithIdInternal mints the adapter slot
     // BEFORE the in-memory dedup check), and hydration must self-heal an

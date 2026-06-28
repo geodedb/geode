@@ -701,6 +701,13 @@ pub const ManagedGraph = struct {
     exact_node_property_index: NodePropertyExactIndex,
     name: []const u8, // owned
     uuid: [16]u8,
+    /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
+    /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
+    /// start of each rebuild and incremented once per live node the per-shard
+    /// scans visit. ATOMIC because the parallel rebuild (one worker per engine
+    /// shard) increments it concurrently. After a successful rebuild it equals
+    /// the live-node count, letting tests assert every node was processed.
+    exact_index_rebuild_iters: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
     /// May be null if audit init failed (soft failure — graph still usable).
     audit_logger: ?*audit.AuditLogger = null,
@@ -1327,6 +1334,7 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
 
 fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
     mg.exact_node_property_index.clear();
+    mg.exact_index_rebuild_iters.store(0, .monotonic);
 
     const Ctx = struct {
         mg: *ManagedGraph,
@@ -1334,6 +1342,9 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
 
         fn callback(self: *@This(), node_id: gs.NodeId, rec: gs.node.NodeRec) void {
             if (self.err != null) return;
+            // Coverage counter: count every live node the scan presents (atomic
+            // so the parallel rebuild's per-shard workers compose correctly).
+            _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
             if (rec.label_head == 0 or rec.prop_head == 0) return;
 
             const shard = self.mg.shardEngineForNode(node_id);
@@ -4194,6 +4205,35 @@ pub const StorageAdapter = struct {
         }
 
         return try result.toOwnedSlice(allocator);
+    }
+
+    /// Test-only: force a full rebuild of the exact node-property index for
+    /// `graph_name`, exactly as restart recovery does (clear + rescan every
+    /// engine shard). Exposed so `test-parallel-index-rebuild` can drive the
+    /// rebuild directly and assert correctness + coverage. Takes the whole-graph
+    /// exclusive lock so it mirrors the no-concurrent-mutation invariant the
+    /// real restart-time rebuild relies on. See `rebuildExactNodePropertyIndex`.
+    pub fn rebuildExactPropertyIndexForTesting(self: *StorageAdapter, graph_name: []const u8) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        acquireWholeGraphExclusive(mg);
+        defer releaseWholeGraphExclusive(mg);
+        try rebuildExactNodePropertyIndex(mg);
+    }
+
+    /// Test-only: read the coverage counter from the most recent
+    /// `rebuildExactNodePropertyIndex` pass on `graph_name` (equals the
+    /// live-node count after a successful rebuild).
+    pub fn exactIndexRebuildItersForTesting(self: *StorageAdapter, graph_name: []const u8) !u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.exact_index_rebuild_iters.load(.monotonic);
     }
 
     /// FIX #3: resolve a node id matching a label and ALL the given property
