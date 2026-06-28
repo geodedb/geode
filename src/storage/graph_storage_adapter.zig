@@ -1332,23 +1332,55 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
     }
 }
 
+// GAP-ENT-0008 Fix B: parallel restart-time rebuild of the exact node-property
+// index. The serial version of this (a single-core cross-shard O(graph) scan,
+// ~57M hashmap inserts) dominated restart recovery (~hours at 14.27M nodes).
+//
+// Safety invariant that makes the per-shard scans race-free in parallel:
+//   * The 16 engine shards own DISJOINT node-id ranges (shardOfNode(id) == idx)
+//     and their OWN stores — node_store, label_store, buffer_pool are per-shard
+//     instances (only the thread pool is shared). Each worker scans exactly one
+//     shard and, since a node's properties/labels live on that same shard,
+//     touches ONLY that shard's stores. No two workers touch the same store.
+//   * The single shared destination is `mg.exact_node_property_index`, which is
+//     64-way mutex-sharded: every insert (`addEx`) takes the per-shard
+//     `std.Io.Mutex`, which gives REAL cross-thread mutual exclusion (atomic CAS
+//     fast path + OS futex on contention — the "single_threaded" io handle only
+//     scopes the async executor, not the mutex's atomics/futex), so concurrent
+//     inserts from different workers are safe.
+//   * The exact-index allocator (== `mg.engine.allocator`, the adapter
+//     allocator) is thread-safe in every entrypoint: the server uses
+//     `std.heap.smp_allocator` (sharded per-core) and tests/CLI use
+//     `std.heap.DebugAllocator`, which is thread-safe in multi-threaded builds.
+//     The codebase already runs concurrent engine work (e.g. parallel buffer
+//     -pool flush) through this same allocator, so its thread-safety is an
+//     existing invariant.
+//   * The coverage counter is atomic.
+// Hence the parallel rebuild produces a posting-for-posting identical index to
+// the serial one. If only one shard exists (or any other degenerate case) we
+// fall back to a straight serial loop.
 fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
     mg.exact_node_property_index.clear();
     mg.exact_index_rebuild_iters.store(0, .monotonic);
 
-    const Ctx = struct {
+    const shards = mg.engine.shards;
+
+    // Per-shard scan context: shares only `mg` (whose exact-property index is
+    // mutex-sharded) and writes its OWN `err` slot — no shared mutable scratch.
+    const ShardCtx = struct {
         mg: *ManagedGraph,
+        shard: *gs.GraphEngine,
         err: ?anyerror = null,
 
-        fn callback(self: *@This(), node_id: gs.NodeId, rec: gs.node.NodeRec) void {
+        fn scanCallback(self: *@This(), node_id: gs.NodeId, rec: gs.node.NodeRec) void {
             if (self.err != null) return;
             // Coverage counter: count every live node the scan presents (atomic
-            // so the parallel rebuild's per-shard workers compose correctly).
+            // so the parallel per-shard workers compose correctly).
             _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
             if (rec.label_head == 0 or rec.prop_head == 0) return;
 
-            const shard = self.mg.shardEngineForNode(node_id);
-            const label_ids = shard.label_store.getLabels(rec.label_head, self.mg.engine.allocator) catch |err| {
+            const node_shard = self.mg.shardEngineForNode(node_id);
+            const label_ids = node_shard.label_store.getLabels(rec.label_head, self.mg.engine.allocator) catch |err| {
                 self.err = err;
                 return;
             };
@@ -1358,16 +1390,62 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
                 self.err = err;
             };
         }
+
+        fn run(self: *@This()) void {
+            // Each shard owns nodes with ids satisfying shardOfNode(id) == idx.
+            self.shard.node_store.scanNodes(self.shard.manifest.next_node_id, self, scanCallback) catch |err| {
+                if (self.err == null) self.err = err;
+            };
+        }
     };
 
-    // Scan all shards sequentially; each shard owns nodes with ids
-    // satisfying shardOfNode(id) == shard_idx.
-    var ctx = Ctx{ .mg = mg };
-    for (mg.engine.shards) |shard| {
-        shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, Ctx.callback) catch |err| {
-            return err;
-        };
-        if (ctx.err) |err| return err;
+    var ctxs: [gs.sharded_engine.SHARD_COUNT]ShardCtx = undefined;
+    for (shards, 0..) |shard, idx| {
+        ctxs[idx] = .{ .mg = mg, .shard = shard };
+    }
+
+    // Serial fallback: a single shard gains nothing from the pool, and keeps a
+    // straightforward path for any degenerate engine layout.
+    if (shards.len <= 1) {
+        for (ctxs[0..shards.len]) |*c| {
+            c.run();
+            if (c.err) |err| return err;
+        }
+        return;
+    }
+
+    // Parallel: dispatch one scan task per shard on the engine's shared thread
+    // pool, then join. Derive the pool's TaskContext type from the pool itself
+    // (rather than importing it) so the task signature matches regardless of how
+    // the thread_pool module is wired into the build graph.
+    const pool = mg.engine.shared_thread_pool;
+    const TaskFnT = @typeInfo(@TypeOf(@TypeOf(pool.*).submit)).@"fn".params[1].type.?;
+    const TaskCtxPtr = @typeInfo(@typeInfo(TaskFnT).pointer.child).@"fn".params[1].type.?;
+    const Task = struct {
+        fn run(ctx_ptr: *anyopaque, _: TaskCtxPtr) void {
+            const c: *ShardCtx = @ptrCast(@alignCast(ctx_ptr));
+            c.run();
+        }
+    };
+
+    var wg = pool.waitGroup();
+    var submitted: usize = 0;
+    for (ctxs[0..shards.len]) |*c| {
+        // Default backpressure (.return_error) is deadlock-safe; the wait_group
+        // auto-adds on submit and auto-dones on completion.
+        _ = pool.submit(Task.run, c, .{ .wait_group = &wg }) catch break;
+        submitted += 1;
+    }
+    // Any task that failed to submit runs inline on this (non-worker) thread
+    // BEFORE wg.wait(), so it still completes and is not double-counted by wg.
+    for (ctxs[submitted..shards.len]) |*c| {
+        c.run();
+    }
+    wg.wait();
+
+    // Aggregate errors: first non-null shard error wins (don't swallow).
+    for (ctxs[0..shards.len]) |*c| {
+        if (c.err) |err| return err;
     }
 }
 
