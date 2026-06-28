@@ -7607,6 +7607,28 @@ pub fn build(b: *std.Build) void {
     const parallel_index_rebuild_step = b.step("test-parallel-index-rebuild", "Correctness + coverage guard for the restart property-index rebuild (serial baseline -> parallel)");
     parallel_index_rebuild_step.dependOn(&run_parallel_index_rebuild_tests.step);
 
+    // TSan companion: same test file compiled with -fsanitize-thread so the
+    // adversarial repeated-rebuild case runs under the thread sanitizer.
+    // Wired as an opt-in step (not part of the default test_step) because TSan
+    // adds ~5-8x overhead and requires libtsan at runtime.
+    // Run via: zig build test-parallel-index-rebuild-tsan
+    const parallel_index_rebuild_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_parallel_index_rebuild.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    parallel_index_rebuild_tsan_mod.addImport("geode", root_mod);
+    parallel_index_rebuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const parallel_index_rebuild_tsan_tests = b.addTest(.{ .root_module = parallel_index_rebuild_tsan_mod });
+    const run_parallel_index_rebuild_tsan_tests = b.addRunArtifact(parallel_index_rebuild_tsan_tests);
+    const parallel_index_rebuild_tsan_step = b.step(
+        "test-parallel-index-rebuild-tsan",
+        "TSan companion: parallel-index-rebuild tests under -fsanitize-thread (race detection)",
+    );
+    parallel_index_rebuild_tsan_step.dependOn(&run_parallel_index_rebuild_tsan_tests.step);
+
     // Edge data-integrity under churn: an idempotent GNC2 edge re-apply must NOT
     // orphan a durable edge slot (createEdgeWithIdInternal mints the adapter slot
     // BEFORE the in-memory dedup check), and hydration must self-heal an
