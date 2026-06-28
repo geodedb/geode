@@ -414,10 +414,13 @@
         //   .url  = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.8#<sha>",
         //   .hash = "graph_storage-0.2.8-<...>",
         .graph_storage = .{
-            // v0.2.12 = v0.2.11 + buffer-pool pin deadlock/lost-wakeup fix
-            // (edge-ingest wedge FIX #2). Same FIPS transitive deps → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#v0.2.12",
-            .hash = "graph_storage-0.2.12-9UyJSy26EwCRgAV_HYQl7klHJEiEzhsx_BCDJUBC0Wvq",
+            // v0.2.13 = v0.2.12 + parallel shard-open recovery (open the 16 shard
+            // engines concurrently on dedicated std.Thread workers → fast restart
+            // for large sharded graphs; recovery+rebuild makes no thread-pool calls
+            // so it cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive
+            // deps → no diamond.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.13#0f0eb4e23cbb60c17d0cbe965b1da0bb0d28a1c7",
+            .hash = "graph_storage-0.2.13-9UyJS_3aEwBdyWP3wCRRLdYsdjzwGCBO2pptDiUy6Y-X",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
