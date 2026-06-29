@@ -7190,6 +7190,19 @@ pub fn build(b: *std.Build) void {
     const optional_match_step = b.step("test-optional-match-engine-direct", "Run covered OPTIONAL MATCH left-outer engine-direct regression (no whole-graph clone, correct left-outer rows)");
     optional_match_step.dependOn(&run_optional_match_tests.step);
 
+    // GAP residual: bounded var-length traversal engine-direct.
+    // Verifies the covered shape MATCH (p {bound})-[:R*a..b]->(c) RETURN c is
+    // served storage-native (engine-direct, no whole-graph clone) via a
+    // depth-bounded acyclic per-path expand, byte-identical to the clone-path
+    // oracle, while every uncovered shape falls back to the clone path.
+    const varlength_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_varlength_engine_direct.zig"), .target = target, .optimize = optimize });
+    varlength_test_mod.addImport("geode", root_mod);
+    const varlength_tests = b.addTest(.{ .root_module = varlength_test_mod });
+    const run_varlength_tests = b.addRunArtifact(varlength_tests);
+    shardDep(test_step, &run_varlength_tests.step, 1, test_shard_loads, test_shard_index);
+    const varlength_step = b.step("test-varlength-engine-direct", "Run covered bounded var-length traversal engine-direct regression (no whole-graph clone, rows match clone-path oracle)");
+    varlength_step.dependOn(&run_varlength_tests.step);
+
     // GAP residual: multi-chain comma-MATCH LIMIT pushdown.
     // Verifies the pure-cartesian emission loops stop materializing at
     // offset+limit, while ORDER BY / DISTINCT / WHERE-join paths are unchanged.

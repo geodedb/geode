@@ -105,6 +105,19 @@ pub const OptionalJoin = struct {
     right_index: usize,
 };
 
+/// Binding indices for the single covered bounded var-length endpoint shape
+/// (`MATCH (p {bound})-[:R*a..b]->(c) RETURN c`). The seed (`p`) and endpoint
+/// (`c`) each get a node binding slot; the bare pattern carries no rel/path
+/// binding (gate enforces). When set, `buildInitialResult` routes to
+/// `executeVarLengthEndpoint`. min/max/dir/rel-type are read from the chain at
+/// execution time. `seed_index`/`endpoint_index` may name anonymous patterns
+/// (a generated binding name); both are always present (ensureBinding never
+/// fails to allocate a slot).
+pub const VarLengthEndpoint = struct {
+    seed_index: usize,
+    endpoint_index: usize,
+};
+
 const ExecutionMode = enum {
     storage_native,
     legacy,
@@ -122,6 +135,11 @@ pub const Plan = struct {
     /// for every other plan. When set, `buildInitialResult` routes to
     /// `executeOptionalLeftOuter` instead of the single/multi-chain path.
     optional_join: ?OptionalJoin = null,
+    /// Set only for the covered bounded var-length endpoint shape; null for
+    /// every other plan. When set, `buildInitialResult` routes to
+    /// `executeVarLengthEndpoint` (depth-bounded acyclic per-path expand, no
+    /// whole-graph clone).
+    var_length_endpoint: ?VarLengthEndpoint = null,
 
     pub fn deinit(self: *Plan, allocator: std.mem.Allocator) void {
         allocator.free(self.graph_name);
@@ -222,6 +240,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
 
     var root_index: ?usize = null;
     var optional_join: ?OptionalJoin = null;
+    var var_length_endpoint: ?VarLengthEndpoint = null;
     if (execution_mode == .storage_native) {
         if (q.match.chains.len == 0) {
             try ops.append(allocator, .{ .kind = .ConstProjection, .est_rows = 1 });
@@ -262,6 +281,34 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const opt_rel_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .edge, opt_hop.rel.name, "edge", main_chain.hops.len);
             const opt_right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, opt_hop.right.name, "node", main_chain.hops.len + 1);
             optional_join = .{ .rel_index = opt_rel_index, .right_index = opt_right_index };
+        } else if (coveredVarLengthEndpoint(q)) {
+            // Covered bounded var-length endpoint shape: register a node
+            // binding for the seed (p) and the endpoint (c), a scan op for the
+            // seed, and one expand op (the depth-bounded acyclic per-path walk
+            // is folded into executeVarLengthEndpoint). root_index stays null —
+            // the seed/endpoint are addressed via var_length_endpoint indices.
+            const chain = q.match.chains[0];
+            const hop = chain.hops[0];
+            const vle_seed_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.left.name, "node", 0);
+            const scan_kind: OpKind = if (nodeCanUseIndex(context, hop.left, q.where_clause))
+                .IndexSeek
+            else if (hop.left.labels.len > 0)
+                .LabelScan
+            else
+                .AllNodesScan;
+            try ops.append(allocator, .{
+                .kind = scan_kind,
+                .est_rows = try estimateScanRows(allocator, graph_name, hop.left),
+            });
+            const vle_endpoint_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", 1);
+            try ops.append(allocator, .{
+                .kind = switch (hop.rel.dir) {
+                    .right => .ExpandOut,
+                    .left => .ExpandIn,
+                    .undirected => .ExpandEither,
+                },
+            });
+            var_length_endpoint = .{ .seed_index = vle_seed_index, .endpoint_index = vle_endpoint_index };
         } else if (q.match.chains.len > 1) {
             // Multi-chain hash-join: register each chain's root node binding in order.
             // root_index stays null — executeMultiChainHashJoin uses per-chain indices.
@@ -356,6 +403,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         .root_index = root_index,
         .hops = try hop_bindings.toOwnedSlice(allocator),
         .optional_join = optional_join,
+        .var_length_endpoint = var_length_endpoint,
     };
 }
 
@@ -604,6 +652,10 @@ fn buildInitialResult(
 
     if (plan.optional_join != null) {
         return executeOptionalLeftOuter(allocator, q, context, plan, param_names, param_values, trace);
+    }
+
+    if (plan.var_length_endpoint != null) {
+        return executeVarLengthEndpoint(allocator, q, context, plan, param_names, param_values, trace);
     }
 
     if (q.match.chains.len > 1) {
@@ -1223,6 +1275,266 @@ fn emitOptionalLeftOuterRow(
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try rows.append(allocator, row);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Covered bounded var-length endpoint support.
+//
+// Serves the covered shape (see `coveredVarLengthEndpoint`):
+//   MATCH (p {bound})-[:R*a..b]->(c) RETURN c        // finite b, directed,
+//                                                    // bare/acyclic, endpoint
+// ENGINE-DIRECT with NO whole-graph clone. The traversal is a faithful,
+// engine-direct port of the clone-path oracle's BFS
+// (execution.PathIterator, driven by
+// match_operations.executeVariableLengthPathTraversal): a breadth-first expand
+// with ACYCLIC per-path semantics (no repeated node per path), a (node,depth)
+// expansion dedup (only the FIRST path to reach a (node,depth) state expands
+// further — emission of already-discovered paths is unaffected), and the same
+// 10_000-iteration / 5_000-queue safety caps. Emission is ONE ROW PER
+// QUALIFYING PATH (duplicates allowed; downstream DISTINCT dedups); min_len==0
+// emits the seed as a 0-length path; the endpoint label/prop filter restricts
+// emitted rows but NOT expansion. Edges are read via the storage adapter
+// (`collectHopEdges`) instead of a snapshot store, so no node is deep-cloned.
+// ---------------------------------------------------------------------------
+
+const VarLenBfsItem = struct {
+    last: u64,
+    depth: u32,
+    node_set: std.AutoHashMapUnmanaged(u64, void),
+};
+
+const VarLenExec = struct {
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    vle: VarLengthEndpoint,
+    hop: ast.Hop,
+    min_len: u32,
+    max_len: u32,
+    dir: ast.RelDir,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    rows: *std.ArrayList([]Value),
+    owned_entities: *OwnedGraphEntities,
+
+    const max_iterations: u64 = 10_000;
+    const max_queue_size: usize = 5_000;
+
+    /// Emit one endpoint row for a qualifying path, applying the endpoint
+    /// label/prop filter first (mirrors the oracle's right-node filter at
+    /// emission time). The shared seed node is bound once per seed; the
+    /// endpoint node is materialized per row.
+    fn emit(self: *VarLenExec, seed_node: *graph_store.Node, endpoint_slot: u64) !void {
+        if (!try nodeMatchesPatternBySlot(self.allocator, self.adapter, self.graph_name, endpoint_slot, self.hop.right, self.param_names, self.param_values, self.context)) {
+            return;
+        }
+        const endpoint_node = try materializeNode(self.allocator, self.graph_name, endpoint_slot);
+        try self.owned_entities.trackNode(endpoint_node);
+
+        const binding_values = try self.allocator.alloc(Value, self.plan.binding_names.len);
+        defer self.allocator.free(binding_values);
+        for (binding_values) |*v| v.* = Value{ .Null = {} };
+        binding_values[self.vle.seed_index] = Value{ .Node = seed_node };
+        binding_values[self.vle.endpoint_index] = Value{ .Node = endpoint_node };
+
+        const env = Env{
+            .names = self.plan.binding_names,
+            .values = binding_values,
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+            .allocator = self.allocator,
+            .exec_context = @constCast(&self.context),
+        };
+        const row = try buildBindingRow(self.allocator, self.q, env, binding_values);
+        _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
+        try self.rows.append(self.allocator, row);
+    }
+
+    fn cloneNodeSet(self: *VarLenExec, src: *const std.AutoHashMapUnmanaged(u64, void)) !std.AutoHashMapUnmanaged(u64, void) {
+        var dst: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        errdefer dst.deinit(self.allocator);
+        try dst.ensureTotalCapacity(self.allocator, src.count() + 1);
+        var it = src.keyIterator();
+        while (it.next()) |k| dst.putAssumeCapacity(k.*, {});
+        return dst;
+    }
+
+    /// Faithful engine-direct port of PathIterator.next() drained to
+    /// completion, emitting endpoint rows for one seed.
+    fn runSeed(self: *VarLenExec, seed_slot: u64) !void {
+        const seed_node = try materializeNode(self.allocator, self.graph_name, seed_slot);
+        try self.owned_entities.trackNode(seed_node);
+
+        var queue: std.ArrayList(VarLenBfsItem) = .empty;
+        var front: usize = 0;
+        defer {
+            for (queue.items[front..]) |*it| it.node_set.deinit(self.allocator);
+            queue.deinit(self.allocator);
+        }
+        var visited: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer visited.deinit(self.allocator);
+
+        var seed_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        {
+            errdefer seed_set.deinit(self.allocator);
+            try seed_set.put(self.allocator, seed_slot, {});
+            try queue.append(self.allocator, .{ .last = seed_slot, .depth = 0, .node_set = seed_set });
+        }
+
+        // pending_zero_path: min_len==0 emits the seed itself (0-length path).
+        if (self.min_len == 0) {
+            try self.emit(seed_node, seed_slot);
+        }
+
+        var iteration_count: u64 = 0;
+        while (front < queue.items.len) {
+            iteration_count += 1;
+            const queue_len = queue.items.len - front;
+            if (iteration_count > max_iterations or queue_len > max_queue_size) break;
+
+            var current = queue.items[front];
+            front += 1;
+            const depth = current.depth;
+
+            // At max depth: never expand further. Emit if depth>=min_len
+            // (mirrors the oracle's dequeue early-return branch; for max>=1 this
+            // is unreachable since queued items always have depth<max, but it
+            // keeps parity for the degenerate max==0 / min>max cases).
+            if (depth >= self.max_len) {
+                if (depth >= self.min_len) {
+                    try self.emit(seed_node, current.last);
+                }
+                current.node_set.deinit(self.allocator);
+                continue;
+            }
+
+            // (node, depth) expansion dedup: only the FIRST path to reach this
+            // state expands. Already-emitted paths are unaffected.
+            const state_key: u64 = current.last + (@as(u64, depth) << 32);
+            if (visited.contains(state_key)) {
+                current.node_set.deinit(self.allocator);
+                continue;
+            }
+            try visited.put(self.allocator, state_key, {});
+
+            const edges = try collectHopEdges(self.allocator, self.adapter, self.graph_name, current.last, self.dir);
+            defer self.allocator.free(edges);
+            for (edges) |edge| {
+                // rel-type filter (gate guarantees <=1 type and null rel props,
+                // so edgeMatchesPattern is a pure type check == oracle types[0]).
+                if (!try edgeMatchesPattern(self.allocator, self.adapter, self.graph_name, edge, self.hop.rel, self.param_names, self.param_values, self.context)) continue;
+                const next = edge.next_slot;
+                // ACYCLIC: skip a node already on this path.
+                if (current.node_set.contains(next)) continue;
+
+                const new_depth = depth + 1;
+                const meets_min = new_depth >= self.min_len;
+                const reached_max = new_depth >= self.max_len;
+                if (meets_min) {
+                    try self.emit(seed_node, next);
+                }
+                if (!reached_max) {
+                    var new_set = try self.cloneNodeSet(&current.node_set);
+                    errdefer new_set.deinit(self.allocator);
+                    try new_set.put(self.allocator, next, {});
+                    try queue.append(self.allocator, .{ .last = next, .depth = new_depth, .node_set = new_set });
+                }
+            }
+            current.node_set.deinit(self.allocator);
+        }
+    }
+};
+
+fn executeVarLengthEndpoint(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    trace: *RuntimeTrace,
+) !ExecutionResult {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    const chain = q.match.chains[0];
+    const hop = chain.hops[0];
+    const vle = plan.var_length_endpoint orelse return error.Unsupported;
+    const min_len: u32 = hop.rel.min_len orelse 0;
+    const max_len: u32 = hop.rel.max_len orelse return error.Unsupported;
+
+    var rows = std.ArrayList([]Value).empty;
+    defer rows.deinit(allocator);
+    var owned_entities = try OwnedGraphEntities.init(allocator);
+    errdefer owned_entities.deinit();
+
+    if (!adapter.graphExists(plan.graph_name)) {
+        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+        const empty_result = ExecutionResult{
+            .columns = column_result.columns,
+            .rows = try rows.toOwnedSlice(allocator),
+            .flags = std.ArrayList([]const u8).empty,
+            .column_buffer = column_result.buffer,
+        };
+        owned_entities.deinit();
+        return empty_result;
+    }
+
+    // Seed the start nodes from the bound seed pattern (where_clause is null by
+    // gate). The endpoint filter is applied per emitted row, not here.
+    const scan_start_ns = nowNs();
+    const start_slots = try collectStartSlots(
+        allocator,
+        adapter,
+        plan.graph_name,
+        hop.left,
+        null,
+        param_names,
+        param_values,
+        context,
+        null,
+    );
+    defer allocator.free(start_slots);
+    if (trace.ops.len > 0) {
+        trace.ops[0].rows = @intCast(start_slots.len);
+        trace.ops[0].time_ns = elapsedSince(scan_start_ns);
+    }
+
+    var exec = VarLenExec{
+        .allocator = allocator,
+        .adapter = adapter,
+        .graph_name = plan.graph_name,
+        .q = q,
+        .context = context,
+        .plan = plan,
+        .vle = vle,
+        .hop = hop,
+        .min_len = min_len,
+        .max_len = max_len,
+        .dir = hop.rel.dir,
+        .param_names = param_names,
+        .param_values = param_values,
+        .rows = &rows,
+        .owned_entities = owned_entities,
+    };
+
+    for (start_slots) |seed_slot| {
+        try exec.runSeed(seed_slot);
+    }
+
+    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+    const result = ExecutionResult{
+        .columns = column_result.columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .column_buffer = column_result.buffer,
+        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
+    };
+    if (result.owned_graph_entities == null) {
+        owned_entities.deinit();
+    }
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -3369,6 +3681,14 @@ fn isStorageNativeQuery(q: *const ast.Query) bool {
     // every uncovered optional shape falls through to the rejects.
     if (coveredOptionalLeftOuter(q)) return true;
 
+    // Covered bounded var-length endpoint shape: admitted BEFORE the
+    // single-chain var-length reject (isStorageNativeSingleChain rejects any
+    // hop with min_len/max_len). Served engine-direct by
+    // executeVarLengthEndpoint with no whole-graph clone; the gate is strict
+    // (see coveredVarLengthEndpoint), every uncovered var-length shape falls
+    // through to the rejects.
+    if (coveredVarLengthEndpoint(q)) return true;
+
     if (q.optional_match) return false;
     if (q.match.chains.len > 1) return isAllSimpleNodeMultiChain(q);
     if (q.match.chains.len == 0) return true;
@@ -3543,6 +3863,81 @@ fn coveredOptionalLeftOuter(q: *const ast.Query) bool {
             if (std.mem.eql(u8, wn, rn)) return false;
         }
     }
+
+    return true;
+}
+
+/// STRICT gate for the single covered bounded var-length endpoint shape:
+///   MATCH (p {bound})-[:R*a..b]->(c) RETURN c   // finite b, directed, bare,
+///                                                // no edge/path binding, no
+///                                                // WHERE/WITH
+///
+/// Served engine-direct by `executeVarLengthEndpoint` via a depth-bounded
+/// acyclic per-path expand whose emission is byte-identical to the clone-path
+/// oracle (`match_operations.executeVariableLengthPathTraversal`, which drives
+/// the same `PathIterator` BFS with the effective ACYCLIC mode of a bare
+/// pattern). ALL conditions must hold, else fall back to the (correct) clone
+/// path. When in doubt: false.
+fn coveredVarLengthEndpoint(q: *const ast.Query) bool {
+    // Structural rejects (mirror coveredOptionalLeftOuter so this predicate is
+    // self-contained and safe to call standalone).
+    if (q.next_query != null) return false;
+    if (q.unwind_clause != null or q.create_pattern != null) return false;
+    if (q.call_clause != null or q.initial_call_subquery != null or q.merge_statement != null) return false;
+    if (q.path_variable != null or q.has_recursive_cte) return false;
+    if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
+    if (q.cte_list != null or q.for_statement != null) return false;
+    if (q.let_bindings.len != 0) return false;
+
+    // v1 scope: no WHERE / FILTER / WITH / OPTIONAL.
+    if (q.where_clause != null or q.filter_clause != null) return false;
+    if (q.with_clause != null) return false;
+    if (q.optional_match) return false;
+
+    // Exactly one non-optional chain.
+    if (q.match.chains.len != 1) return false;
+    const chain = q.match.chains[0];
+    if (chain.is_optional) return false;
+    if (chain.is_shortest) return false;
+
+    // Bare pattern only: `path_mode == .walk` AND not explicitly spelled. A bare
+    // pattern's EFFECTIVE traversal mode is ACYCLIC (effectivePathMode), which
+    // `executeVarLengthEndpoint` implements; any explicit mode keyword falls
+    // back to the clone path.
+    if (chain.path_mode != .walk) return false;
+    if (chain.path_mode_explicit) return false;
+
+    // Endpoint shape, not a path variable; a hop chain (not a bare node).
+    if (chain.name != null) return false;
+    if (chain.head != null) return false;
+    if (chain.hops.len != 1) return false;
+
+    const hop = chain.hops[0];
+    const rel = hop.rel;
+
+    // Variable-length present AND a FINITE upper bound (reject unbounded).
+    if (rel.min_len == null and rel.max_len == null) return false;
+    if (rel.max_len == null) return false;
+
+    // Directed only (v1); no edge-list binding; single rel type (the oracle's
+    // PathIterator filters by types[0] only); no rel props (the oracle ignores
+    // them for var-length — gating them out avoids any divergence).
+    if (rel.dir == .undirected) return false;
+    if (rel.name != null) return false;
+    if (rel.types.len > 1) return false;
+    if (rel.props != null) return false;
+
+    // Seed and endpoint vars (if both named) must be distinct.
+    if (hop.left.name) |ln| {
+        if (hop.right.name) |rn| {
+            if (std.mem.eql(u8, ln, rn)) return false;
+        }
+    }
+
+    // Inline seed/endpoint props must be literal/param constants (empty-Env
+    // safe for propsMatch / nodeMatchesPatternBySlot).
+    if (!allPropsLiteralOrParam(hop.left.props)) return false;
+    if (!allPropsLiteralOrParam(hop.right.props)) return false;
 
     return true;
 }
