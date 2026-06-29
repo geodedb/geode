@@ -95,6 +95,16 @@ pub const HopBinding = struct {
     right_index: usize,
 };
 
+/// Binding indices for the single covered OPTIONAL-MATCH chain's hop
+/// (`OPTIONAL MATCH (p)-[r:R]->(c)`). The shared seed var (`p`) is already
+/// bound by the main chain; only the optional rel (`r`) and optional
+/// endpoint (`c`) get fresh binding slots, filled per left-outer match and
+/// left at NULL for the zero-match row. See `executeOptionalLeftOuter`.
+pub const OptionalJoin = struct {
+    rel_index: usize,
+    right_index: usize,
+};
+
 const ExecutionMode = enum {
     storage_native,
     legacy,
@@ -108,6 +118,10 @@ pub const Plan = struct {
     execution_mode: ExecutionMode = .legacy,
     root_index: ?usize = null,
     hops: []HopBinding,
+    /// Set only for the covered single OPTIONAL-MATCH left-outer shape; null
+    /// for every other plan. When set, `buildInitialResult` routes to
+    /// `executeOptionalLeftOuter` instead of the single/multi-chain path.
+    optional_join: ?OptionalJoin = null,
 
     pub fn deinit(self: *Plan, allocator: std.mem.Allocator) void {
         allocator.free(self.graph_name);
@@ -207,9 +221,47 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
     }
 
     var root_index: ?usize = null;
+    var optional_join: ?OptionalJoin = null;
     if (execution_mode == .storage_native) {
         if (q.match.chains.len == 0) {
             try ops.append(allocator, .{ .kind = .ConstProjection, .est_rows = 1 });
+        } else if (coveredOptionalLeftOuter(q)) {
+            // Covered OPTIONAL MATCH left-outer: register the MAIN chain's
+            // bindings + scan/expand ops exactly as the single-chain branch
+            // below, then add fresh binding slots for the optional hop's rel
+            // and endpoint. The optional hop is NOT given an expand op — it is
+            // folded into the per-main-row left-outer join in
+            // executeOptionalLeftOuter.
+            const main_chain = q.match.chains[0];
+            const first_node = if (main_chain.head) |head| head else main_chain.hops[0].left;
+            root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
+            const scan_kind: OpKind = if (nodeCanUseIndex(context, first_node, q.where_clause))
+                .IndexSeek
+            else if (first_node.labels.len > 0)
+                .LabelScan
+            else
+                .AllNodesScan;
+            try ops.append(allocator, .{
+                .kind = scan_kind,
+                .est_rows = try estimateScanRows(allocator, graph_name, first_node),
+            });
+            for (main_chain.hops, 0..) |hop, hop_idx| {
+                try hop_bindings.append(allocator, .{
+                    .rel_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .edge, hop.rel.name, "edge", hop_idx),
+                    .right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", hop_idx + 1),
+                });
+                try ops.append(allocator, .{
+                    .kind = switch (hop.rel.dir) {
+                        .right => .ExpandOut,
+                        .left => .ExpandIn,
+                        .undirected => .ExpandEither,
+                    },
+                });
+            }
+            const opt_hop = q.match.chains[1].hops[0];
+            const opt_rel_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .edge, opt_hop.rel.name, "edge", main_chain.hops.len);
+            const opt_right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, opt_hop.right.name, "node", main_chain.hops.len + 1);
+            optional_join = .{ .rel_index = opt_rel_index, .right_index = opt_right_index };
         } else if (q.match.chains.len > 1) {
             // Multi-chain hash-join: register each chain's root node binding in order.
             // root_index stays null — executeMultiChainHashJoin uses per-chain indices.
@@ -303,6 +355,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         .execution_mode = execution_mode,
         .root_index = root_index,
         .hops = try hop_bindings.toOwnedSlice(allocator),
+        .optional_join = optional_join,
     };
 }
 
@@ -547,6 +600,10 @@ fn buildInitialResult(
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
         };
+    }
+
+    if (plan.optional_join != null) {
+        return executeOptionalLeftOuter(allocator, q, context, plan, param_names, param_values, trace);
     }
 
     if (q.match.chains.len > 1) {
@@ -810,6 +867,338 @@ fn materializeNodeOnlyRow(
     try rows.append(allocator, row);
     for (local_nodes.items) |tracked_node| {
         try owned_entities.trackNode(tracked_node);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Covered OPTIONAL MATCH left-outer support.
+//
+// Serves the covered shape (see `coveredOptionalLeftOuter`):
+//   MATCH (<main storage-native single chain>)
+//   OPTIONAL MATCH (<main-bound var>)-[r?:R?]->(c?)
+//   RETURN ...
+// ENGINE-DIRECT with correct openCypher left-outer semantics and NO
+// whole-graph clone. The main chain is enumerated exactly as
+// `executePatternQuery` does; for each complete main path the single optional
+// hop is expanded from the shared seed slot. >=1 optional match → one row per
+// match; 0 matches → one row with the optional bindings NULL (the differential
+// oracle is `match_operations.executeMatchWithOptionalPatterns`).
+// ---------------------------------------------------------------------------
+
+fn executeOptionalLeftOuter(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    trace: *RuntimeTrace,
+) !ExecutionResult {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    const main_chain = q.match.chains[0];
+    const opt_hop = q.match.chains[1].hops[0];
+    const oj = plan.optional_join orelse return error.Unsupported;
+
+    var rows = std.ArrayList([]Value).empty;
+    defer rows.deinit(allocator);
+    var owned_entities = try OwnedGraphEntities.init(allocator);
+    errdefer owned_entities.deinit();
+
+    if (!adapter.graphExists(plan.graph_name)) {
+        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+        const empty_result = ExecutionResult{
+            .columns = column_result.columns,
+            .rows = try rows.toOwnedSlice(allocator),
+            .flags = std.ArrayList([]const u8).empty,
+            .column_buffer = column_result.buffer,
+        };
+        owned_entities.deinit();
+        return empty_result;
+    }
+
+    // Position of the shared seed var within the main chain's node-slot array
+    // (node 0 = root, node i+1 = hop[i].right). The gate guarantees this var
+    // is a main-bound node, so the lookup always resolves.
+    const seed_name = opt_hop.left.name orelse return error.Unsupported;
+    const shared_pos: usize = blk: {
+        const root = if (main_chain.head) |head| head else main_chain.hops[0].left;
+        if (root.name) |n| {
+            if (std.mem.eql(u8, n, seed_name)) break :blk 0;
+        }
+        for (main_chain.hops, 0..) |hop, i| {
+            if (hop.right.name) |n| {
+                if (std.mem.eql(u8, n, seed_name)) break :blk i + 1;
+            }
+        }
+        return error.Unsupported;
+    };
+
+    // Seed the MAIN chain's start nodes (no tail-selectivity flip — correctness
+    // over the micro-optimization; the covered shape is dominated by the bound
+    // point-read seed anyway). where_clause is null by gate.
+    const start_pattern = if (main_chain.head) |head| head else main_chain.hops[0].left;
+    const scan_start_ns = nowNs();
+    const start_slots = try collectStartSlots(
+        allocator,
+        adapter,
+        plan.graph_name,
+        start_pattern,
+        null,
+        param_names,
+        param_values,
+        context,
+        null,
+    );
+    defer allocator.free(start_slots);
+    if (trace.ops.len > 0) {
+        trace.ops[0].rows = @intCast(start_slots.len);
+        trace.ops[0].time_ns = elapsedSince(scan_start_ns);
+    }
+
+    const projection_plan = try buildProjectionPlan(allocator, q, plan);
+    defer if (projection_plan) |pp| freeProjectionPlan(allocator, pp);
+
+    if (main_chain.hops.len == 0) {
+        // Bare main node: shared_pos is necessarily 0.
+        for (start_slots) |start_slot| {
+            var node_slots = [_]u64{start_slot};
+            try emitOptionalLeftOuterRow(
+                allocator,
+                q,
+                context,
+                plan,
+                plan.graph_name,
+                node_slots[0..],
+                &.{},
+                start_slot,
+                oj,
+                opt_hop,
+                adapter,
+                param_names,
+                param_values,
+                &rows,
+                owned_entities,
+                projection_plan,
+            );
+        }
+    } else {
+        var current_nodes = try allocator.alloc(u64, main_chain.hops.len + 1);
+        defer allocator.free(current_nodes);
+        const current_edges = try allocator.alloc(PathEdge, main_chain.hops.len);
+        defer allocator.free(current_edges);
+
+        for (start_slots) |start_slot| {
+            current_nodes[0] = start_slot;
+            try exploreMainHopsForOptional(
+                allocator,
+                adapter,
+                plan.graph_name,
+                q,
+                context,
+                plan,
+                param_names,
+                param_values,
+                &rows,
+                owned_entities,
+                trace,
+                current_nodes,
+                current_edges,
+                0,
+                projection_plan,
+                shared_pos,
+                oj,
+                opt_hop,
+            );
+        }
+    }
+
+    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+    const result = ExecutionResult{
+        .columns = column_result.columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .column_buffer = column_result.buffer,
+        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
+    };
+    if (result.owned_graph_entities == null) {
+        owned_entities.deinit();
+    }
+    return result;
+}
+
+/// Depth-first enumeration of the MAIN chain (mirrors `exploreHops`); at the
+/// leaf (all main hops walked) it performs the optional left-outer join from
+/// the shared seed slot rather than materializing a plain path row.
+fn exploreMainHopsForOptional(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    rows: *std.ArrayList([]Value),
+    owned_entities: *OwnedGraphEntities,
+    trace: *RuntimeTrace,
+    current_nodes: []u64,
+    current_edges: []PathEdge,
+    hop_index: usize,
+    projection_plan: ?[]const BindingProjection,
+    shared_pos: usize,
+    oj: OptionalJoin,
+    opt_hop: ast.Hop,
+) !void {
+    const chain = q.match.chains[0];
+    if (hop_index == chain.hops.len) {
+        const seed_slot = current_nodes[shared_pos];
+        try emitOptionalLeftOuterRow(
+            allocator,
+            q,
+            context,
+            plan,
+            graph_name,
+            current_nodes,
+            current_edges,
+            seed_slot,
+            oj,
+            opt_hop,
+            adapter,
+            param_names,
+            param_values,
+            rows,
+            owned_entities,
+            projection_plan,
+        );
+        return;
+    }
+
+    const hop = chain.hops[hop_index];
+    const op_index = 1 + hop_index;
+    trace.ops[op_index].input_rows += 1;
+    const start_ns = nowNs();
+
+    const candidates = try collectHopEdges(allocator, adapter, graph_name, current_nodes[hop_index], hop.rel.dir);
+    defer allocator.free(candidates);
+
+    var produced: u64 = 0;
+    for (candidates) |edge| {
+        if (!try edgeMatchesPattern(allocator, adapter, graph_name, edge, hop.rel, param_names, param_values, context)) {
+            continue;
+        }
+        if (!try nodeMatchesPatternBySlot(allocator, adapter, graph_name, edge.next_slot, hop.right, param_names, param_values, context)) {
+            continue;
+        }
+        current_edges[hop_index] = edge;
+        current_nodes[hop_index + 1] = edge.next_slot;
+        produced += 1;
+        try exploreMainHopsForOptional(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1, projection_plan, shared_pos, oj, opt_hop);
+    }
+
+    trace.ops[op_index].rows += produced;
+    trace.ops[op_index].time_ns += elapsedSince(start_ns);
+}
+
+/// Materialize one complete main path's bindings, then expand the single
+/// optional hop from `seed_slot`. Emits one row per optional match; if there
+/// are ZERO optional matches, emits exactly one row with the optional bindings
+/// left NULL (openCypher left-outer). Main-chain entities are materialized once
+/// and shared across the emitted rows (each entity is tracked exactly once in
+/// `owned_entities`; the result keeps `owns_value_memory == false`, so row
+/// slices are freed without touching the shared pointers, which are freed once
+/// via OwnedGraphEntities).
+fn emitOptionalLeftOuterRow(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    plan: *const Plan,
+    graph_name: []const u8,
+    node_slots: []const u64,
+    edge_steps: []const PathEdge,
+    seed_slot: u64,
+    oj: OptionalJoin,
+    opt_hop: ast.Hop,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    rows: *std.ArrayList([]Value),
+    owned_entities: *OwnedGraphEntities,
+    projection_plan: ?[]const BindingProjection,
+) !void {
+    // Materialize the MAIN chain bindings once (shared across emitted rows).
+    var main_values = try allocator.alloc(Value, plan.binding_names.len);
+    defer allocator.free(main_values);
+    for (main_values) |*v| v.* = Value{ .Null = {} };
+
+    if (plan.root_index) |idx| {
+        const root_node = try materializeNodeForBinding(allocator, graph_name, node_slots[0], projection_plan, idx);
+        try owned_entities.trackNode(root_node);
+        main_values[idx] = Value{ .Node = root_node };
+    }
+    for (plan.hops, 0..) |hop_binding, hop_idx| {
+        const edge = try materializeEdge(allocator, graph_name, edge_steps[hop_idx]);
+        try owned_entities.trackEdge(edge);
+        main_values[hop_binding.rel_index] = Value{ .Edge = edge };
+
+        const right_node = try materializeNodeForBinding(allocator, graph_name, node_slots[hop_idx + 1], projection_plan, hop_binding.right_index);
+        try owned_entities.trackNode(right_node);
+        main_values[hop_binding.right_index] = Value{ .Node = right_node };
+    }
+
+    // Expand the single optional hop from the shared seed slot.
+    const candidates = try collectHopEdges(allocator, adapter, graph_name, seed_slot, opt_hop.rel.dir);
+    defer allocator.free(candidates);
+
+    var emitted: usize = 0;
+    for (candidates) |edge| {
+        if (!try edgeMatchesPattern(allocator, adapter, graph_name, edge, opt_hop.rel, param_names, param_values, context)) {
+            continue;
+        }
+        if (!try nodeMatchesPatternBySlot(allocator, adapter, graph_name, edge.next_slot, opt_hop.right, param_names, param_values, context)) {
+            continue;
+        }
+
+        const opt_edge = try materializeEdge(allocator, graph_name, edge);
+        try owned_entities.trackEdge(opt_edge);
+        const opt_node = try materializeNodeForBinding(allocator, graph_name, edge.next_slot, projection_plan, oj.right_index);
+        try owned_entities.trackNode(opt_node);
+
+        const binding_values = try allocator.alloc(Value, plan.binding_names.len);
+        defer allocator.free(binding_values);
+        @memcpy(binding_values, main_values);
+        binding_values[oj.rel_index] = Value{ .Edge = opt_edge };
+        binding_values[oj.right_index] = Value{ .Node = opt_node };
+
+        const env = Env{
+            .names = plan.binding_names,
+            .values = binding_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+            .exec_context = @constCast(&context),
+        };
+        const row = try buildBindingRow(allocator, q, env, binding_values);
+        _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
+        try rows.append(allocator, row);
+        emitted += 1;
+    }
+
+    if (emitted == 0) {
+        // Zero optional matches → exactly one row, optional bindings NULL.
+        const binding_values = try allocator.alloc(Value, plan.binding_names.len);
+        defer allocator.free(binding_values);
+        @memcpy(binding_values, main_values); // oj.rel_index/right_index stay Null
+        const env = Env{
+            .names = plan.binding_names,
+            .values = binding_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+            .exec_context = @constCast(&context),
+        };
+        const row = try buildBindingRow(allocator, q, env, binding_values);
+        _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
+        try rows.append(allocator, row);
     }
 }
 
@@ -2945,17 +3334,36 @@ pub fn isStorageNativeReadShape(q: *const ast.Query) bool {
 }
 
 fn isStorageNativeQuery(q: *const ast.Query) bool {
-    if (q.next_query != null or q.optional_match) return false;
+    if (q.next_query != null) return false;
     if (q.unwind_clause != null or q.create_pattern != null) return false;
     if (q.call_clause != null or q.initial_call_subquery != null or q.merge_statement != null) return false;
     if (q.path_variable != null or q.has_recursive_cte) return false;
     if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
+
+    // Covered OPTIONAL MATCH left-outer shape: admitted BEFORE the optional
+    // rejects below, served engine-direct by executeOptionalLeftOuter with no
+    // whole-graph clone. The gate is strict (see coveredOptionalLeftOuter);
+    // every uncovered optional shape falls through to the rejects.
+    if (coveredOptionalLeftOuter(q)) return true;
+
+    if (q.optional_match) return false;
     if (q.match.chains.len > 1) return isAllSimpleNodeMultiChain(q);
     if (q.match.chains.len == 0) return true;
 
     const chain = q.match.chains[0];
-    if (chain.is_optional or chain.is_shortest or chain.path_mode != .walk) return false;
+    if (chain.is_optional) return false;
+    return isStorageNativeSingleChain(chain);
+}
+
+/// True iff `chain` is a single non-optional storage-native walk chain (head
+/// node or directed/undirected hops, no var-length, no shortest, no non-walk
+/// path mode, and uniquely-nameable bindings). Extracted from
+/// isStorageNativeQuery so coveredOptionalLeftOuter can reuse it for the main
+/// chain. Does NOT check `chain.is_optional` — callers decide that.
+fn isStorageNativeSingleChain(chain: ast.Chain) bool {
+    if (chain.is_shortest or chain.path_mode != .walk) return false;
     if (chain.head != null and chain.hops.len > 0) return false;
+    if (chain.head == null and chain.hops.len == 0) return false;
 
     var names: [32][]const u8 = undefined;
     var name_count: usize = 0;
@@ -3003,6 +3411,95 @@ fn isStorageNativeQuery(q: *const ast.Query) bool {
             if (name_count >= names.len) return false;
             names[name_count] = name;
             name_count += 1;
+        }
+    }
+
+    return true;
+}
+
+/// Does the main (non-optional) chain bind a NODE variable named `name`?
+/// Node vars are: the root, and each hop's right endpoint. (A non-first
+/// hop's left endpoint is the previous hop's right — already covered.)
+fn mainChainBindsNodeVar(chain: ast.Chain, name: []const u8) bool {
+    const root = if (chain.head) |head| head else chain.hops[0].left;
+    if (root.name) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    for (chain.hops) |hop| {
+        if (hop.right.name) |n| {
+            if (std.mem.eql(u8, n, name)) return true;
+        }
+    }
+    return false;
+}
+
+/// Does the main chain bind ANY variable (node OR relationship) named `name`?
+fn mainChainBindsAnyVar(chain: ast.Chain, name: []const u8) bool {
+    if (mainChainBindsNodeVar(chain, name)) return true;
+    for (chain.hops) |hop| {
+        if (hop.rel.name) |n| {
+            if (std.mem.eql(u8, n, name)) return true;
+        }
+    }
+    return false;
+}
+
+/// STRICT gate for the single covered OPTIONAL MATCH left-outer shape:
+///   MATCH (<main storage-native single chain>)
+///   OPTIONAL MATCH (<main-bound var>)-[r?:R?]->(c?)   // exactly one walk hop
+///   RETURN ...                                         // no WHERE / WITH
+///
+/// ALL conditions must hold, else return false (the caller falls back to the
+/// clone path, which is correct for every shape). When in doubt: false.
+fn coveredOptionalLeftOuter(q: *const ast.Query) bool {
+    // Structural rejects (mirror isStorageNativeQuery's early guards so this
+    // predicate is self-contained and safe to call standalone).
+    if (q.next_query != null) return false;
+    if (q.unwind_clause != null or q.create_pattern != null) return false;
+    if (q.call_clause != null or q.initial_call_subquery != null or q.merge_statement != null) return false;
+    if (q.path_variable != null or q.has_recursive_cte) return false;
+    if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
+    if (q.cte_list != null or q.for_statement != null) return false;
+    if (q.let_bindings.len != 0) return false;
+
+    // v1 scope: no WHERE / FILTER / WITH (avoid optional-var correctness risk).
+    if (q.where_clause != null or q.filter_clause != null) return false;
+    if (q.with_clause != null) return false;
+
+    // Exactly two chains: a non-optional main, then one optional.
+    if (q.match.chains.len != 2) return false;
+    const main_chain = q.match.chains[0];
+    const opt_chain = q.match.chains[1];
+    if (main_chain.is_optional) return false;
+    if (!opt_chain.is_optional) return false;
+    if (!isStorageNativeSingleChain(main_chain)) return false;
+
+    // Optional chain: exactly one walk hop, no var-length, no shortest, a hop
+    // chain (not a bare node).
+    if (opt_chain.is_shortest) return false;
+    if (opt_chain.path_mode != .walk) return false;
+    if (opt_chain.head != null) return false;
+    if (opt_chain.hops.len != 1) return false;
+    const hop = opt_chain.hops[0];
+    if (hop.rel.min_len != null or hop.rel.max_len != null) return false;
+
+    // The optional hop's seed (left) must be a variable already bound as a
+    // NODE by the main chain (the shared join var). Anonymous seed → fall back.
+    const seed_name = hop.left.name orelse return false;
+    if (!mainChainBindsNodeVar(main_chain, seed_name)) return false;
+
+    // The optional rel / endpoint vars must be fresh — they must not collide
+    // with any main-chain var (nor with the seed or each other). A collision
+    // would re-bind an already-bound slot; reject conservatively.
+    if (hop.rel.name) |rn| {
+        if (std.mem.eql(u8, rn, seed_name)) return false;
+        if (mainChainBindsAnyVar(main_chain, rn)) return false;
+    }
+    if (hop.right.name) |wn| {
+        if (std.mem.eql(u8, wn, seed_name)) return false;
+        if (mainChainBindsAnyVar(main_chain, wn)) return false;
+        if (hop.rel.name) |rn| {
+            if (std.mem.eql(u8, wn, rn)) return false;
         }
     }
 
