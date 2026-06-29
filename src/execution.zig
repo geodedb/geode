@@ -1519,6 +1519,30 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return err;
             };
 
+            // H3-P2: a plain btree/hash property index is also made
+            // value-ORDER-seekable. The exact (hash) index is always-on, so
+            // CREATE INDEX has no exact-registration chokepoint; we register a
+            // value-ordered secondary index here for the SAME (label,key) so
+            // ORDER BY ... LIMIT on the column can later be served by
+            // `orderedScan` (a 16-shard k-way merge) instead of a full sort.
+            // Best-effort and additive: the catalog row above is the SHOW source
+            // of truth, and the exact index already answers equality — a failure
+            // to build the ordered tree must not fail the DDL.
+            if (ci.index_type == .btree or ci.index_type == .hash) {
+                if (graph_store.getGlobalAdapter()) |adapter| {
+                    const target_graph = graph_store.DEFAULT_GRAPH_NAME;
+                    for (ci.properties) |prop| {
+                        adapter.createOrderedIndex(target_graph, ci.label, prop) catch |err| {
+                            log.warn("CREATE INDEX: ordered index build failed", &.{
+                                Attr.string("label", ci.label),
+                                Attr.string("property", prop),
+                                Attr.string("error", @errorName(err)),
+                            });
+                        };
+                    }
+                }
+            }
+
             // A4a: fulltext index → create the NAMED fts-storage engine and
             // backfill existing matching nodes. Routes through the current graph
             // (CLI/server default = "default"). The catalog row above is the SHOW

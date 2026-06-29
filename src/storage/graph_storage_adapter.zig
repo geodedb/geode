@@ -4359,6 +4359,39 @@ pub const StorageAdapter = struct {
         return try result.toOwnedSlice(allocator);
     }
 
+    /// H3-P2: register + build a value-ordered secondary index on `(label,key)`
+    /// across all 16 engine shards, so ORDER BY on an indexed property can be
+    /// answered by a k-way merge of the per-shard ordered cursors
+    /// (`orderedScan`). Mirrors the always-on exact (hash) index: after this an
+    /// indexed property is BOTH equality- and order-seekable. Idempotent per
+    /// shard (the engine call no-ops re-registration and rebuilds the tree from
+    /// the shard's current live nodes).
+    ///
+    /// The label is interned if it does not yet exist, so CREATE INDEX may run
+    /// before the first node of `label` is written (the registration then
+    /// maintains the tree as nodes arrive, exactly like the exact index).
+    pub fn createOrderedIndex(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const mg = try self.getOrCreateGraph(graph_name);
+        const label_id = mg.label_dict.getId(label) orelse try mg.label_dict.getOrCreate(label);
+
+        // Per-shard registration + build-from-live-scan. The engine call
+        // MUTATES the shard (registers the pair, rebuilds the tree, marks it
+        // dirty for the next checkpoint), so take that shard's adapter EXCLUSIVE
+        // lock — the same writer discipline every other per-shard adapter write
+        // uses (e.g. createNode/mergeNode).
+        for (mg.engine.shards, 0..) |shard, i| {
+            mg.shard_locks[i].lockUncancelable(io);
+            defer mg.shard_locks[i].unlock(io);
+            try shard.createOrderedIndex(label_id, key);
+        }
+    }
+
     /// Test-only: force a full rebuild of the exact node-property index for
     /// `graph_name`, exactly as restart recovery does (clear + rescan every
     /// engine shard). Exposed so `test-parallel-index-rebuild` can drive the

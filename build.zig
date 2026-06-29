@@ -7601,6 +7601,22 @@ pub fn build(b: *std.Build) void {
     const adapter_registry_restart_step = b.step("test-adapter-registry-restart", "Regression: NodePropertyExactIndex.loadFromFile self-deadlock on adapter reopen");
     adapter_registry_restart_step.dependOn(&run_adapter_registry_restart_tests.step);
 
+    // H3-P2: value-ordered scan (16-shard k-way merge) + ordered-index
+    // registration on CREATE INDEX. See tests/test_ordered_scan.zig.
+    const ordered_scan_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_scan.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    ordered_scan_test_mod.addImport("geode", root_mod);
+    ordered_scan_test_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_scan_tests = b.addTest(.{ .root_module = ordered_scan_test_mod });
+    const run_ordered_scan_tests = b.addRunArtifact(ordered_scan_tests);
+    shardDep(test_step, &run_ordered_scan_tests.step, 1, test_shard_loads, test_shard_index);
+    const ordered_scan_step = b.step("test-ordered-scan", "Run H3-P2 ordered-index registration + 16-shard k-way orderedScan tests");
+    ordered_scan_step.dependOn(&run_ordered_scan_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{
