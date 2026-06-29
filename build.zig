@@ -7658,6 +7658,22 @@ pub fn build(b: *std.Build) void {
     const ordered_scan_fastpath_step = b.step("test-ordered-scan-fastpath", "Run H3-P3 planner orderedScanFastPath + heap-fallback tests");
     ordered_scan_fastpath_step.dependOn(&run_ordered_scan_fastpath_tests.step);
 
+    // H3-P3 BENCH REPRO: CREATE INDEX before nodes (synthseed ordering) must
+    // still serve ORDER BY ... LIMIT from the ordered index. See
+    // tests/test_h3_fastpath_bench_repro.zig.
+    const h3_fastpath_repro_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_h3_fastpath_bench_repro.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    h3_fastpath_repro_test_mod.addImport("geode", root_mod);
+    h3_fastpath_repro_test_mod.addImport("graph_storage", graph_storage_mod);
+    const h3_fastpath_repro_tests = b.addTest(.{ .root_module = h3_fastpath_repro_test_mod });
+    const run_h3_fastpath_repro_tests = b.addRunArtifact(h3_fastpath_repro_tests);
+    const h3_fastpath_repro_step = b.step("test-h3-fastpath-repro", "Run H3-P3 bench repro (CREATE INDEX before nodes)");
+    h3_fastpath_repro_step.dependOn(&run_h3_fastpath_repro_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{
