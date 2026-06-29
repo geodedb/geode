@@ -230,7 +230,12 @@ test "DISTINCT does not cap: correct distinct rows under LIMIT" {
 }
 
 // ---------------------------------------------------------------------------
-// safety: aggregate (count) must NOT cap -- materialize all then aggregate.
+// safety: aggregate (count) must NOT cap -- it counts ALL edges, never a
+// limit-capped subset. The directed single-typed count(r:TYPE) shape is now
+// served O(1) from the per-(graph,type) counter, so it materializes ZERO
+// per-edge rows while still reporting the full count. The "does not cap"
+// guarantee is therefore proven by the full count (N-1) AND by the fast
+// path's zero-materialization (no rows to cap).
 // N-1 = 29 R edges.
 // ---------------------------------------------------------------------------
 test "count aggregate does not cap: counts all edges" {
@@ -244,5 +249,6 @@ test "count aggregate does not cap: counts all edges" {
 
     try testing.expectEqual(@as(usize, 1), r.rows.len);
     try testing.expectEqual(@as(i64, @intCast(N - 1)), r.rows[0][0].Int);
-    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 10);
+    // Typed count fast path: O(1) from the per-type counter, no row materialized.
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
 }

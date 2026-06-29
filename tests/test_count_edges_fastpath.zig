@@ -140,6 +140,61 @@ test "count(*) on directed edge pattern uses the fast path" {
     try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
 }
 
+test "DURABILITY: typed count(r:TYPE) survives checkpoint + reopen" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedParentChildren("col", "D", 9); // 9 PARENT_OF edges
+
+    // Pre-reopen: typed fast-path count is correct.
+    try testing.expectEqual(@as(usize, 9), try h.runQueryScalarUsize("MATCH ()-[r:PARENT_OF]->() RETURN count(r)"));
+
+    // Checkpoint then reopen — drives loadFromAdapter -> loadOneGraphFromAdapter,
+    // the mandatory per-(graph,type) durability rebuild hook (replay-on-load).
+    const store = graph_store.getGlobalStore(h.allocator);
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+    try store.loadFromFile();
+
+    // The counter was rebuilt on the open edge-scan: typed count survives reopen
+    // and the fast path still materializes zero per-edge rows.
+    planned_read_runtime.resetPathRowsMaterialized();
+    try testing.expectEqual(@as(usize, 9), try h.runQueryScalarUsize("MATCH ()-[r:PARENT_OF]->() RETURN count(r)"));
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+}
+
+test "fallback: multi-type count(r:A|B) does NOT use the fast path" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedParentChildren("col", "M", 4); // 4 PARENT_OF edges
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    const n = try h.runQueryScalarUsize("MATCH ()-[r:PARENT_OF|CHILD_OF]->() RETURN count(r)");
+    try testing.expectEqual(@as(usize, 4), n); // correct via legacy path
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0); // multi-type → legacy
+}
+
+test "fallback: undirected typed -[r:R]- does NOT use the fast path" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedParentChildren("col", "U", 4);
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery("MATCH ()-[r:PARENT_OF]-() RETURN count(r)");
+    r.deinit(h.arena.allocator());
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0); // undirected → legacy
+}
+
+test "fallback: typed count with WHERE does NOT use the fast path" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedParentChildren("col", "W", 4);
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    const n = try h.runQueryScalarUsize("MATCH ()-[r:PARENT_OF]->() WHERE 1 = 1 RETURN count(r)");
+    try testing.expectEqual(@as(usize, 4), n); // correct via legacy path
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0); // WHERE → legacy
+}
+
 test "count(DISTINCT r) does NOT use the fast path (falls to legacy path)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
