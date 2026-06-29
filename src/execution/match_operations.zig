@@ -698,13 +698,19 @@ pub fn countNodesLabelRefcountFastPath(
     return try buildCountFastPathResult(allocator, plan.column_name, n);
 }
 
-// GAP-ENT-0002: O(1) fast path for untyped `MATCH ()-[r]->() RETURN count(r)`.
-// Shape gate: single chain; exactly 1 hop; rel is directed (not undirected);
-// rel has no types (untyped — typed deferred to P2b); both endpoints anonymous
+// GAP-ENT-0002: O(1) fast path for `MATCH ()-[r]->() RETURN count(r)` and the
+// single-typed `MATCH ()-[r:TYPE]->() RETURN count(r)` (served from the
+// per-(graph,type) counter). Shape gate: single chain; exactly 1 hop; rel is
+// directed (not undirected); rel has 0 or 1 types (multi-type [r:A|B] falls
+// back to the legacy executor); both endpoints anonymous
 // (no labels, no props); no WHERE/WITH/GROUP BY/HAVING/ORDER BY/DISTINCT/SET/
 // path-var/optional/shortest; RETURN is exactly one count(r)/count(*), no DISTINCT.
 const EdgeCountFastPathPlan = struct {
     column_name: []const u8,
+    // When the single hop carries exactly one rel type (`[r:TYPE]`), this is
+    // that type and the count is served O(1) from the per-(graph,type) counter.
+    // null = untyped `[r]` → served from the untyped per-graph edge count.
+    edge_type: ?[]const u8 = null,
 };
 
 fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
@@ -720,7 +726,7 @@ fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
 
     // Rel gate: directed, untyped, no var-length quantifier.
     if (hop.rel.dir == .undirected) return null; // exclude undirected (semantics mismatch)
-    if (hop.rel.types.len != 0) return null; // typed deferred to P2b
+    if (hop.rel.types.len > 1) return null; // multi-type [r:A|B] → fall back to legacy
     if (hop.rel.min_len != null or hop.rel.max_len != null) return null; // no var-len
     if (hop.rel.props != null) return null;
 
@@ -777,7 +783,10 @@ fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
     };
     if (!is_star and !is_rel_var) return null;
 
-    return .{ .column_name = item.alias orelse "count(r)" };
+    return .{
+        .column_name = item.alias orelse "count(r)",
+        .edge_type = if (hop.rel.types.len == 1) hop.rel.types[0] else null,
+    };
 }
 
 // CANARY: REQ=GAP-ENT-0002; FEATURE="EdgeCountFastPath"; ASPECT=FastPath; STATUS=TESTED; TEST=tests/test_count_edges_fastpath.zig; OWNER=execution; UPDATED=2026-06-26
@@ -811,7 +820,10 @@ pub fn countEdgesFastPath(
         break :blk fallback_read_view.getReadStore();
     };
 
-    const n = store.countEdgesForGraph(filter_graph);
+    const n = if (plan.edge_type) |t|
+        store.countEdgesByTypeForGraph(filter_graph, t)
+    else
+        store.countEdgesForGraph(filter_graph);
     return try buildCountFastPathResult(allocator, plan.column_name, n);
 }
 

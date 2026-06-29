@@ -156,14 +156,27 @@ test "count(DISTINCT r) does NOT use the fast path (falls to legacy path)" {
     try testing.expect(materialized > 0);
 }
 
-test "typed count(r:TYPE) does NOT use the fast path (falls to legacy path)" {
+test "typed count(r:TYPE) is served from the fast path (no row materialization)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
-    try h.seedParentChildren("col", "S", 3);
+    try h.seedParentChildren("col", "S", 3); // 3 PARENT_OF edges
 
     planned_read_runtime.resetPathRowsMaterialized();
     const n = try h.runQueryScalarUsize("MATCH ()-[r:PARENT_OF]->() RETURN count(r)");
-    try testing.expectEqual(@as(usize, 3), n); // correct via legacy path
-    const materialized = planned_read_runtime.getPathRowsMaterialized();
-    try testing.expect(materialized > 0); // typed → legacy path runs
+    try testing.expectEqual(@as(usize, 3), n);
+    // O(1) typed counter: executePatternQuery never runs, no per-edge rows.
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+}
+
+test "typed count(r:TYPE) equals the legacy per-row count for the same shape" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seedParentChildren("col", "T", 7); // 7 PARENT_OF edges
+
+    // Fast-path typed count.
+    const fast = try h.runQueryScalarUsize("MATCH ()-[r:PARENT_OF]->() RETURN count(r)");
+    // Legacy per-row count for a NON-existent type is 0; for PARENT_OF it is 7.
+    const fast_missing = try h.runQueryScalarUsize("MATCH ()-[r:NOPE]->() RETURN count(r)");
+    try testing.expectEqual(@as(usize, 7), fast);
+    try testing.expectEqual(@as(usize, 0), fast_missing);
 }
