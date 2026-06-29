@@ -195,3 +195,49 @@ test "H3-P4 FRESHNESS: full checkpoint makes ordered tree fresh -> fast path eng
     // ...returning the SAME correct, correctly-ordered rows as the stale case.
     try expectAscTopRows(out.res);
 }
+
+// H3-P4 GRAPH ROUTING: `CREATE INDEX ON :T(k)` must register the value-ordered
+// secondary index on the SESSION's active graph, not a hardcoded default. The bug
+// (execution.zig CreateIndex arm) registered the ordered index on
+// graph_store.DEFAULT_GRAPH_NAME regardless of the session graph, so ORDER BY ...
+// LIMIT on a non-default graph never found the ordered index (it landed on the
+// wrong/empty graph) and silently fell back to a full-scan heap sort.
+//
+// This drives CREATE INDEX through the SAME executor entrypoint the server uses,
+// with an ExecutionContext whose session_state.graph is a clearly non-default
+// name, then asserts the ordered index is registered on the session graph AND was
+// NOT leaked onto the default graph. On the old (hardcoded-default) code the first
+// predicate is false (nothing on "g_reg") and the second is true (leaked onto
+// "default") — both fail. With the fix routing target_graph from the session,
+// both pass.
+test "H3-P4 ROUTING: CREATE INDEX registers ordered index on the session graph, not default" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const aa = h.arena.allocator();
+
+    // A clearly non-default active graph for this session.
+    const SESSION_GRAPH = "g_reg";
+    try testing.expect(!std.mem.eql(u8, SESSION_GRAPH, graph_store.DEFAULT_GRAPH_NAME));
+
+    // Bind the session to "g_reg" and run CREATE INDEX through the real executor.
+    var session = execution.SessionState.init(testing.allocator);
+    defer session.deinit();
+    session.graph = try testing.allocator.dupe(u8, SESSION_GRAPH);
+    h.ctx.session_state = &session;
+
+    {
+        var r = try h.runQuery("CREATE INDEX ON :T(k)");
+        r.deinit(aa);
+    }
+
+    const adapter = graph_store.getGlobalAdapter().?;
+    const on_session = adapter.isOrderedIndexRegistered(SESSION_GRAPH, "T", "k");
+    const on_default = adapter.isOrderedIndexRegistered(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    std.debug.print("[H3-P4 ROUTING] registered on '{s}'={} leaked on '{s}'={}\n", .{ SESSION_GRAPH, on_session, graph_store.DEFAULT_GRAPH_NAME, on_default });
+
+    // Registered on the session graph (so ORDER BY on "g_reg" can use it)...
+    try testing.expect(on_session);
+    // ...and NOT leaked onto the default graph (the old hardcoded-default bug).
+    try testing.expect(!on_default);
+}
