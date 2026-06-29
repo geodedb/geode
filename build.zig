@@ -7178,6 +7178,17 @@ pub fn build(b: *std.Build) void {
     const multichain_hj_step = b.step("test-multichain-hashjoin", "Run P3b multi-chain hash-join regression (no clone, engine-direct, hash-join for comma-MATCH)");
     multichain_hj_step.dependOn(&run_multichain_hj_tests.step);
 
+    // GAP residual: multi-chain comma-MATCH LIMIT pushdown.
+    // Verifies the pure-cartesian emission loops stop materializing at
+    // offset+limit, while ORDER BY / DISTINCT / WHERE-join paths are unchanged.
+    const multichain_limit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_multichain_limit_pushdown.zig"), .target = target, .optimize = optimize });
+    multichain_limit_test_mod.addImport("geode", root_mod);
+    const multichain_limit_tests = b.addTest(.{ .root_module = multichain_limit_test_mod });
+    const run_multichain_limit_tests = b.addRunArtifact(multichain_limit_tests);
+    shardDep(test_step, &run_multichain_limit_tests.step, 1, test_shard_loads, test_shard_index);
+    const multichain_limit_step = b.step("test-multichain-limit-pushdown", "Run multi-chain comma-MATCH LIMIT pushdown regression (cap pure-cartesian materialization at offset+limit)");
+    multichain_limit_step.dependOn(&run_multichain_limit_tests.step);
+
     // GAP-0901 bounded-cache hydrate/reclaim regression: under a SMALL node
     // cache cap (most nodes evicted to the engine), hydrating an evicted
     // DEFAULT-tenant node from the engine and then reclaiming it must NOT free
