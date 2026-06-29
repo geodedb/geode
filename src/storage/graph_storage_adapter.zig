@@ -4594,6 +4594,49 @@ pub const StorageAdapter = struct {
         return try result.toOwnedSlice(allocator);
     }
 
+    /// H3-P3: report whether a value-ordered index is registered for
+    /// `(label,key)` on EVERY engine shard. The planner serves
+    /// `ORDER BY <key> LIMIT` from `orderedScan` (a global 16-shard k-way merge)
+    /// only when this is true — a single shard missing the ordered tree would
+    /// silently drop that shard's rows from the merge, so registration must be
+    /// global (ALL-shards AND). False when the graph or label is unknown.
+    pub fn isOrderedIndexRegistered(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) bool {
+        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
+            return false;
+        for (ctx.mg.engine.shards) |shard| {
+            if (!shard.hasOrderedIndex(ctx.label_id, key)) return false;
+        }
+        return true;
+    }
+
+    /// H3-P3: report whether `ORDER BY (label,key) LIMIT` can be SAFELY served
+    /// from the ordered index with full parity to the heap full-scan — i.e. the
+    /// ordered index is registered AND eligible on EVERY shard. Eligibility is
+    /// per-(label,key) per shard `GraphEngine` and reflects the shard's CURRENT
+    /// data: a single ineligible shard (decimal/ext/NaN, bool/null, or mixed
+    /// int+float in its subset) would make the global value-ordered merge drop
+    /// or mis-order rows, so the gate is ALL-shards AND. On ANY doubt the caller
+    /// falls back to the proven heap path. False when graph/label is unknown.
+    pub fn isOrderedIndexEligible(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) bool {
+        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
+            return false;
+        for (ctx.mg.engine.shards) |shard| {
+            if (!shard.hasOrderedIndex(ctx.label_id, key)) return false;
+            if (!shard.isOrderedIndexEligible(ctx.label_id, key)) return false;
+        }
+        return true;
+    }
+
     /// Test-only: force a full rebuild of the exact node-property index for
     /// `graph_name`, exactly as restart recovery does (clear + rescan every
     /// engine shard). Exposed so `test-parallel-index-rebuild` can drive the
