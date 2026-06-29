@@ -7617,6 +7617,29 @@ pub fn build(b: *std.Build) void {
     const ordered_scan_step = b.step("test-ordered-scan", "Run H3-P2 ordered-index registration + 16-shard k-way orderedScan tests");
     ordered_scan_step.dependOn(&run_ordered_scan_tests.step);
 
+    // H3-P2 Task 3: TSan companion for the ordered-scan adversarial concurrency
+    // test.  Same test file compiled with -fsanitize-thread so the concurrent
+    // writer + orderedScan reader case runs under the thread sanitizer.
+    // Opt-in step (not part of the default test_step) — TSan adds ~5-8x
+    // overhead and requires libtsan at runtime.
+    // Run via: zig build test-ordered-scan-tsan
+    const ordered_scan_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_scan.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    ordered_scan_tsan_mod.addImport("geode", root_mod);
+    ordered_scan_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_scan_tsan_tests = b.addTest(.{ .root_module = ordered_scan_tsan_mod });
+    const run_ordered_scan_tsan_tests = b.addRunArtifact(ordered_scan_tsan_tests);
+    const ordered_scan_tsan_step = b.step(
+        "test-ordered-scan-tsan",
+        "H3-P2 Task 3 TSan: orderedScan adversarial concurrency under -fsanitize-thread (race detection)",
+    );
+    ordered_scan_tsan_step.dependOn(&run_ordered_scan_tsan_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{

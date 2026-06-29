@@ -8,6 +8,12 @@
 //   returns node ids in global value order (ASC/DESC) up to `limit`, with
 //   liveness-skip of deleted-but-still-posted nodes and early termination.
 //
+// Task 3 — adversarial concurrency: a concurrent writer thread mutates the
+//   same (label,key) via insert/remove/delete while the reader runs orderedScan
+//   in a loop.  Asserts no crash, no wedge, no torn reads (duplicate node_ids
+//   within a single scan result).  Also compiled under -fsanitize-thread via
+//   the `test-ordered-scan-tsan` build step.
+//
 // These exercise the public adapter surface end-to-end against a real on-disk
 // engine in a tmpDir (no system geode instance is touched).
 
@@ -210,5 +216,157 @@ test "orderedScan skips deleted nodes and still reaches limit" {
         try testing.expectEqual(asc[deleted + i].node_id, nid);
         var j: usize = 0;
         while (j < deleted) : (j += 1) try testing.expect(nid != asc[j].node_id);
+    }
+}
+
+// ============================================================================
+// Task 3: adversarial concurrency — orderedScan under concurrent mutations
+// ============================================================================
+//
+// A writer thread drives the three mutation paths specified by the brief:
+//
+//   INSERT: createNode (no label) + setNodeProperty("k") + addNodeLabel("T")
+//   REMOVE: removeNodeLabel("T")     — node lives but leaves the index
+//   DELETE: deleteNode               — node permanently gone
+//
+// The reader (main test thread) calls orderedScan in a loop while the writer
+// is live.  Per-scan invariants:
+//   1. got.len <= limit                (no over-read)
+//   2. no duplicate node_id            (torn-read guard)
+//
+// TSan (step test-ordered-scan-tsan) detects raw races.
+//
+// Determinism: writer uses a monotonic counter for values; no Math.random /
+// argless Date.
+
+/// Context shared between the reader (main test thread) and the writer thread.
+/// All cross-thread state is either read-only after init or accessed via
+/// atomics; `err` is written only by the writer before it exits and read by
+/// the main thread only after join() — which provides the happens-before
+/// guarantee, so no atomic is needed for `err` itself.
+const WriterCtx = struct {
+    adapter: *StorageAdapter,
+    graph: []const u8,
+    /// Set by the reader when it wants the writer to stop early.
+    stop: std.atomic.Value(bool),
+    /// Populated by the writer on the first unrecoverable error; nil on success.
+    err: ?anyerror,
+};
+
+/// Writer thread body.  Runs 200 insert→(remove|delete) cycles, each with a
+/// unique, deterministic property value (1000..1199).
+fn concurrentWriter(ctx: *WriterCtx) void {
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        if (ctx.stop.load(.acquire)) break;
+
+        // Deterministic value — unique per iteration, no randomness.
+        const value: i64 = @intCast(1000 + i);
+
+        // INSERT path: createNode (no label) → setNodeProperty → addNodeLabel.
+        const node_id = ctx.adapter.createNode(ctx.graph, &[_][]const u8{}) catch |e| {
+            ctx.err = e;
+            return;
+        };
+        ctx.adapter.setNodeProperty(ctx.graph, node_id, "k", .{ .Int = value }) catch |e| {
+            ctx.err = e;
+            return;
+        };
+        ctx.adapter.addNodeLabel(ctx.graph, node_id, "T") catch |e| {
+            ctx.err = e;
+            return;
+        };
+
+        // REMOVE (even) / DELETE (odd) — alternating so both paths fire.
+        if (i % 2 == 0) {
+            // REMOVE: node stays alive but leaves label T (and the ordered index).
+            ctx.adapter.removeNodeLabel(ctx.graph, node_id, "T") catch |e| {
+                ctx.err = e;
+                return;
+            };
+        } else {
+            // DELETE: hard-delete; the liveness check in orderedScan skips it.
+            ctx.adapter.deleteNode(ctx.graph, node_id) catch |e| {
+                ctx.err = e;
+                return;
+            };
+        }
+    }
+}
+
+test "orderedScan: adversarial concurrency — no crash/wedge, no torn reads" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    // Larger buffer pool: 96 seed nodes + up to 200 in-flight writer nodes.
+    const cfg = gs.GraphConfig{ .page_size = 4096, .buffer_pool_pages = 512 };
+
+    const adapter = try StorageAdapter.init(allocator, path, cfg);
+    defer adapter.deinit();
+
+    const graph = "g";
+
+    // Seed 96 nodes with label "T" and property "k".  The permutation
+    // (i*7)%96 distributes values so node-id order != value order, ensuring
+    // a real k-way merge is needed.  96 sequential IDs hit all 16 shards.
+    const pairs = try seed(allocator, adapter, graph, "T", "k", 96);
+    defer allocator.free(pairs);
+
+    try adapter.createOrderedIndex(graph, "T", "k");
+
+    // Sanity: at least half the shards are populated (node_id % 16).
+    {
+        var shard_set = std.AutoHashMap(usize, void).init(allocator);
+        defer shard_set.deinit();
+        for (pairs) |p| try shard_set.put(gs.shard_count.shardOfNode(p.node_id), {});
+        try testing.expect(shard_set.count() >= 8);
+    }
+
+    var ctx = WriterCtx{
+        .adapter = adapter,
+        .graph = graph,
+        .stop = std.atomic.Value(bool).init(false),
+        .err = null,
+    };
+
+    const writer_thread = try std.Thread.spawn(.{}, concurrentWriter, .{&ctx});
+
+    // Reader: 50 orderedScan passes while the writer is live.  Each pass
+    // checks the two torn-read invariants.
+    const limit: usize = 20;
+    var scan_iter: usize = 0;
+    while (scan_iter < 50) : (scan_iter += 1) {
+        const got = try adapter.orderedScan(graph, "T", "k", .asc, limit, allocator);
+        defer allocator.free(got);
+
+        // Invariant 1: never more than `limit` results.
+        try testing.expect(got.len <= limit);
+
+        // Invariant 2: no duplicate node_id in a single scan (torn-read guard).
+        var seen_ids = std.AutoHashMap(u64, void).init(allocator);
+        defer seen_ids.deinit();
+        for (got) |nid| {
+            const gop = try seen_ids.getOrPut(nid);
+            if (gop.found_existing) {
+                std.debug.print(
+                    "orderedScan: duplicate node_id={d} in scan #{d} (torn read!)\n",
+                    .{ nid, scan_iter },
+                );
+                try testing.expect(false);
+            }
+        }
+    }
+
+    // Signal stop and join — happens-before ctx.err.
+    ctx.stop.store(true, .release);
+    writer_thread.join();
+
+    // Writer must have completed without error.
+    if (ctx.err) |e| {
+        std.debug.print("writer thread error: {}\n", .{e});
+        try testing.expect(false);
     }
 }
