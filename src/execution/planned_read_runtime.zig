@@ -3474,6 +3474,13 @@ fn coveredOptionalLeftOuter(q: *const ast.Query) bool {
     if (!opt_chain.is_optional) return false;
     if (!isStorageNativeSingleChain(main_chain)) return false;
 
+    // FIX 2 (review): the clone-path oracle (executeMatchWithOptionalPatterns)
+    // only traverses hops[0] of the main chain, so a multi-hop main breaks
+    // differential equivalence with the engine-direct path and is untested.
+    // Restrict the main chain to bare-node (0 hops) or single-hop (1 hop);
+    // multi-hop main falls back to the (correct) clone path.
+    if (main_chain.hops.len > 1) return false;
+
     // Optional chain: exactly one walk hop, no var-length, no shortest, a hop
     // chain (not a bare node).
     if (opt_chain.is_shortest) return false;
@@ -3482,6 +3489,17 @@ fn coveredOptionalLeftOuter(q: *const ast.Query) bool {
     if (opt_chain.hops.len != 1) return false;
     const hop = opt_chain.hops[0];
     if (hop.rel.min_len != null or hop.rel.max_len != null) return false;
+
+    // FIX 1 (review): `propsMatch` evaluates inline prop VALUES with an EMPTY
+    // binding Env, so a correlated value (e.g. `(c {k: p.k})`) or any value
+    // referencing a variable silently drops the candidate -> engine-direct
+    // emits the NULL row regardless of data, while the clone oracle matches
+    // correctly. Only literal/param-constant inline props are safe; otherwise
+    // fall back to the (correct) clone path. Cover the optional endpoint node,
+    // the re-stated seed node, and the optional relationship.
+    if (!allPropsLiteralOrParam(hop.left.props)) return false;
+    if (!allPropsLiteralOrParam(hop.rel.props)) return false;
+    if (!allPropsLiteralOrParam(hop.right.props)) return false;
 
     // The optional hop's seed (left) must be a variable already bound as a
     // NODE by the main chain (the shared join var). Anonymous seed → fall back.
@@ -3503,6 +3521,54 @@ fn coveredOptionalLeftOuter(q: *const ast.Query) bool {
         }
     }
 
+    return true;
+}
+
+/// True only when `expr` is a constant literal or a query parameter — i.e. a
+/// value `propsMatch` can evaluate correctly against an EMPTY binding Env.
+/// Anything that references a variable (Ident / Member / PropertyAccess), a
+/// function call, an arithmetic/logical expression, or a composite (List /
+/// ArrayLit) is NOT safe and returns false (conservative).
+fn exprIsLiteralOrParam(expr: ast.Expr) bool {
+    return switch (expr) {
+        .String,
+        .Int,
+        .Decimal,
+        .Bool,
+        .Null,
+        .Date,
+        .DateTime,
+        .Time,
+        .LocalDateTime,
+        .SmallIntLit,
+        .BigIntLit,
+        .RealLit,
+        .DoubleLit,
+        .CharLit,
+        .VarcharLit,
+        .TextLit,
+        .ByteaLit,
+        .JsonLit,
+        .JsonbLit,
+        .XmlLit,
+        .UrlLit,
+        .DomainLit,
+        .UuidLit,
+        .EnumLit,
+        .BitLit,
+        .VarBitLit,
+        .Param,
+        => true,
+        else => false,
+    };
+}
+
+/// Every inline property VALUE in `props` (if any) is a literal/param constant.
+fn allPropsLiteralOrParam(props: ?[]ast.Property) bool {
+    const list = props orelse return true;
+    for (list) |prop| {
+        if (!exprIsLiteralOrParam(prop.value.*)) return false;
+    }
     return true;
 }
 

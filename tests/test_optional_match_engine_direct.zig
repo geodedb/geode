@@ -354,3 +354,107 @@ test "uncovered OPTIONAL MATCH shapes fall back to the clone path" {
         try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test 8 (gate-tightening FIX 1): a CORRELATED inline prop on the optional
+// endpoint ({k: p.k}) must NOT take the engine-direct path. propsMatch
+// evaluates inline values with an EMPTY binding Env, so the correlated value
+// silently drops the candidate -> engine-direct would emit a NULL row even
+// when a child actually matches. The gate must fall back to the clone-path
+// oracle (path-rows == 0) AND return the correct row.
+// ---------------------------------------------------------------------------
+test "correlated optional inline prop falls back to clone path and rows correct" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+    // Parent selected by a UNIQUE `id` (so only px matches the main pattern),
+    // with a child cx whose `k` equals px.k -> the correlated prop {k: p.k}
+    // matches cx. cx carries no `id`, so it is NOT matched by the main pattern.
+    try h.exec("CREATE (px:T {id:'P1', k:'KK'}), (cx:T {k:'KK'}), (px)-[:R]->(cx)");
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery("MATCH (p:T {id:'P1'}) OPTIONAL MATCH (p)-[:R]->(c:T {k: p.k}) RETURN p.k, c.k");
+    defer r.deinit(h.arena.allocator());
+
+    // NOT engine-direct: correlated inline prop is unsafe for empty-Env propsMatch.
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+
+    // Correct left-outer rows: cx.k == px.k -> exactly one (KK, KK) row.
+    // (The buggy engine-direct path would drop cx and emit (KK, NULL).)
+    try testing.expectEqual(@as(usize, 1), r.rows.len);
+    try testing.expect(strEq(r.rows[0][0], "KK"));
+    try testing.expect(strEq(r.rows[0][1], "KK"));
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 (gate-tightening FIX 2): a MULTI-HOP main chain must NOT take the
+// engine-direct path. The clone-path oracle (executeMatchWithOptionalPatterns)
+// only traverses hops[0] of the main chain, so multi-hop main breaks
+// differential equivalence and is untested. The gate must fall back to the
+// clone path (path-rows == 0).
+//
+// NOTE on rows: the legacy clone-path executor itself only traverses hops[0]
+// of the main chain, so for a 2-hop main it binds only (a,b) and leaves the
+// hop[1]+ node `c` (and therefore the optional `d`) NULL. That is a
+// PRE-EXISTING legacy limitation, OUTSIDE the scope of this gate-tightening.
+// The job of FIX 2 is purely to stop the engine-direct path from silently
+// disagreeing with that oracle: after the fix the shape routes to the legacy
+// path (path-rows == 0) and returns exactly the legacy result.
+// ---------------------------------------------------------------------------
+test "multi-hop main chain falls back to clone path (not engine-direct)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    // a -> b -> c -> d linear chain.
+    try h.exec(
+        "CREATE (a:T {k:'a'}), (b:T {k:'b'}), (c:T {k:'c'}), (d:T {k:'d'}), " ++
+            "(a)-[:R]->(b), (b)-[:R]->(c), (c)-[:R]->(d)",
+    );
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery(
+        "MATCH (a:T {k:'a'})-[:R]->(b:T)-[:R]->(c:T) OPTIONAL MATCH (c)-[:R]->(d:T) RETURN a.k, b.k, c.k, d.k",
+    );
+    defer r.deinit(h.arena.allocator());
+
+    // Load-bearing FIX 2 assertion: NOT engine-direct -> clone-path fallback.
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+
+    // Result is exactly the legacy clone-path output (hops[0]-only main bind:
+    // a,b bound; multi-hop tail and optional NULL). Documents the routing, not
+    // an endorsement of the legacy multi-hop-main semantics.
+    try testing.expectEqual(@as(usize, 1), r.rows.len);
+    try testing.expect(strEq(r.rows[0][0], "a"));
+    try testing.expect(strEq(r.rows[0][1], "b"));
+    try testing.expect(isNull(r.rows[0][2]));
+    try testing.expect(isNull(r.rows[0][3]));
+}
+
+// ---------------------------------------------------------------------------
+// Test 10 (FIX 2 guard against over-narrowing): a SINGLE-HOP main chain with a
+// literal-prop / bare optional endpoint stays engine-direct. The gate narrows
+// to <=1 hop, so single-hop main is still covered (path-rows > 0).
+// ---------------------------------------------------------------------------
+test "single-hop main chain stays engine-direct" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    // a -> b -> c linear chain.
+    try h.exec(
+        "CREATE (a:T {k:'a'}), (b:T {k:'b'}), (c:T {k:'c'}), " ++
+            "(a)-[:R]->(b), (b)-[:R]->(c)",
+    );
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery(
+        "MATCH (a:T {k:'a'})-[:R]->(b:T) OPTIONAL MATCH (b)-[:R]->(c:T) RETURN a.k, b.k, c.k",
+    );
+    defer r.deinit(h.arena.allocator());
+
+    // Engine-direct: single-hop main is covered.
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+
+    // Correct rows: a->b then b->c -> exactly one (a, b, c) row.
+    try testing.expectEqual(@as(usize, 1), r.rows.len);
+    try testing.expect(strEq(r.rows[0][0], "a"));
+    try testing.expect(strEq(r.rows[0][1], "b"));
+    try testing.expect(strEq(r.rows[0][2], "c"));
+}
