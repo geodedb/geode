@@ -54,6 +54,13 @@ include:
 
 # Auto-cancel redundant pipelines on push (non-tag builds only).
 # Tagged release pipelines are never cancelled — they must run to completion.
+  # Security findings -> auto-triaged Jira SEC issues (.post; reads gl-*-report
+  # artifacts from the scans above). component_id 12496 = SEC > Vuln Mgmt.
+  - component: gitlab.com/devnw/ci-catalog/jira-event-intake@v1.31.0
+    inputs:
+      project_key: SEC
+      component_id: "12496"
+
 workflow:
   auto_cancel:
     on_new_commit: interruptible
