@@ -427,8 +427,8 @@
             // (concurrent shard opens; recovery makes no thread-pool calls so it
             // cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive deps
             // → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.16#e908b1c2525d54586d47947ed95b01f7a72fd202",
-            .hash = "graph_storage-0.2.16-9UyJS-fqFADVzJuskeClRaL5UG1Sim-C8yeyjLObLJqX",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.17#f433940cc635e933145ddc3e9eccd83254e6fff1",
+            .hash = "graph_storage-0.2.17-9UyJS5EGFQAdFKOR64ynIEckFqCBVjulgyWXjzTBTgXI",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
