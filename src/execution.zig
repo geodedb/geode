@@ -1533,7 +1533,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // to build the ordered tree must not fail the DDL.
             if (ci.index_type == .btree or ci.index_type == .hash) {
                 if (graph_store.getGlobalAdapter()) |adapter| {
-                    const target_graph = graph_store.DEFAULT_GRAPH_NAME;
+                    // Register the value-ordered index on the SESSION's active
+                    // graph (same as the catalog row + the nodes), not a hardcoded
+                    // default — otherwise ORDER BY on a non-default graph can never
+                    // use it (the index lands on the wrong, usually empty, graph).
+                    const target_graph = if (context.session_state) |ss|
+                        (ss.graph orelse graph_store.DEFAULT_GRAPH_NAME)
+                    else
+                        graph_store.DEFAULT_GRAPH_NAME;
                     for (ci.properties) |prop| {
                         adapter.createOrderedIndex(target_graph, ci.label, prop) catch |err| {
                             log.warn("CREATE INDEX: ordered index build failed", &.{
