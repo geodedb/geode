@@ -954,14 +954,18 @@ fn nestedLoopCartesian(
     owned_entities: *OwnedGraphEntities,
     slot_combo: []u64,
     depth: usize,
+    cap: ?usize,
 ) !void {
+    // GAP residual: early-exit at offset+limit on the pure-cartesian path.
+    if (cap) |c| if (rows.items.len >= c) return;
     if (depth == all_slots.len) {
         try materializeMultiChainRow(allocator, q, context, plan, slot_combo, chain_binding_indices, param_names, param_values, rows, owned_entities);
         return;
     }
     for (all_slots[depth]) |slot_id| {
+        if (cap) |c| if (rows.items.len >= c) return;
         slot_combo[depth] = slot_id;
-        try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, rows, owned_entities, slot_combo, depth + 1);
+        try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, rows, owned_entities, slot_combo, depth + 1, cap);
     }
 }
 
@@ -1047,6 +1051,20 @@ fn executeMultiChainHashJoin(
 
     const all_slots = all_slots_list.items;
 
+    // GAP residual: cap pure-cartesian materialization at offset+limit. Safe ONLY
+    // when the first offset+limit produced rows ARE the final window — no WHERE
+    // residual filter, no ORDER BY (reorders), no DISTINCT/aggregate (cardinality),
+    // no WITH (reshape). The hash-join branch requires where_clause != null, so this
+    // cap applies only to the pure-cartesian loops.
+    const materialize_cap: ?usize = blk: {
+        if (q.where_clause != null) break :blk null;
+        if (q.order_by != null) break :blk null;
+        if (q.with_clause != null) break :blk null;
+        if (q.ret.distinct) break :blk null;
+        if (hasAggregationItems(q.ret.items)) break :blk null;
+        break :blk requiredStartRows(q, param_names, param_values); // null if no limit
+    };
+
     // Extract a cross-chain join predicate from the WHERE clause (if any).
     const join_pred: ?JoinPredicate = if (q.where_clause) |wc|
         extractJoinPredicate(wc, chain_vars)
@@ -1095,9 +1113,11 @@ fn executeMultiChainHashJoin(
                 }
             }
         } else {
-            // True-cartesian: N×M nested loop.
-            for (slots_a) |slot_a| {
+            // True-cartesian: N×M nested loop. Early-exit at offset+limit when
+            // safe (materialize_cap non-null); otherwise materialize all.
+            outer: for (slots_a) |slot_a| {
                 for (slots_b) |slot_b| {
+                    if (materialize_cap) |cap| if (rows.items.len >= cap) break :outer;
                     const slot_ids = [2]u64{ slot_a, slot_b };
                     const bind_ids = [2]usize{ bind_a, bind_b };
                     try materializeMultiChainRow(allocator, q, context, plan, &slot_ids, &bind_ids, param_names, param_values, &rows, owned_entities);
@@ -1108,7 +1128,7 @@ fn executeMultiChainHashJoin(
         // N-chain (>2): recursive nested-loop cartesian.
         const slot_combo = try allocator.alloc(u64, n_chains);
         defer allocator.free(slot_combo);
-        try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, &rows, owned_entities, slot_combo, 0);
+        try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, &rows, owned_entities, slot_combo, 0, materialize_cap);
     }
 
     const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
