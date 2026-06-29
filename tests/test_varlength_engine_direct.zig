@@ -420,3 +420,32 @@ test "fallback edge-list returns same rows as covered shape" {
 
     try expectSameIdMultiset(aa, direct, oracle);
 }
+
+// ---------------------------------------------------------------------------
+// Test 9: DIFFERENTIAL on an ORDER-SENSITIVE re-convergent-then-diverge graph.
+// This is the worst case for byte-identity: two distinct prefixes reach the
+// same node `m` at the same depth, so the (node,depth) expansion-dedup WINNER
+// (which depends on edge iteration order) decides whether depth-3 yields {z}
+// or {a,z}. Equality here proves the engine-direct adapter iterates edges in
+// the SAME order as the clone-path oracle's store, so the faithful BFS port is
+// byte-identical even when re-convergence drives the result.
+//   p1->a, p1->b, a->m, b->m, m->a (back-edge), m->z ; *1..3 acyclic.
+// ---------------------------------------------------------------------------
+test "differential reconvergent-then-diverge equals clone-path oracle" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+    try h.exec(
+        "CREATE (p1:T {id:'p1'}), (a:T {id:'a'}), (b:T {id:'b'}), (m:T {id:'m'}), (z:T {id:'z'}), " ++
+            "(p1)-[:R]->(a), (p1)-[:R]->(b), (a)-[:R]->(m), (b)-[:R]->(m), (m)-[:R]->(a), (m)-[:R]->(z)",
+    );
+    planned_read_runtime.resetPathRowsMaterialized();
+    var direct = try h.runQuery("MATCH (p:T {id:'p1'})-[:R*1..3]->(c:T) RETURN c.id");
+    defer direct.deinit(aa);
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+    planned_read_runtime.resetPathRowsMaterialized();
+    var oracle = try h.runQuery("MATCH (p:T {id:'p1'})-[r:R*1..3]->(c:T) RETURN c.id");
+    defer oracle.deinit(aa);
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    try expectSameIdMultiset(aa, direct, oracle);
+}
