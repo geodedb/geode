@@ -214,6 +214,9 @@ pub const countNodesLabelRefcountFastPath = match_operations.countNodesLabelRefc
 pub const countEdgesFastPath = match_operations.countEdgesFastPath;
 pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
+// H3-P3: planner ordered-scan fast-path hit counter (test path signal).
+pub const getOrderedScanFastPathHits = match_operations.getOrderedScanFastPathHits;
+pub const resetOrderedScanFastPathHits = match_operations.resetOrderedScanFastPathHits;
 
 // Re-export statement handler functions for backward compatibility (M1 Phase 7 extraction)
 pub const executeShow = statement_handlers.executeShow;

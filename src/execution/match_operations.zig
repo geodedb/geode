@@ -28,6 +28,18 @@ pub fn getFullScanCount() u64 {
     return g_full_scan_count.load(.monotonic);
 }
 
+// H3-P3: diagnostic counter for `ORDER BY <eligible-indexed> LIMIT` queries that
+// `orderedScanFastPath` SERVES from the value-ordered index (vs the full-scan
+// top-K heap). Config-independent path signal for the planner tests: the heap
+// path leaves this at 0; a single index-served query increments it by 1.
+var g_ordered_scan_fastpath_hits: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getOrderedScanFastPathHits() u64 {
+    return g_ordered_scan_fastpath_hits.load(.monotonic);
+}
+pub fn resetOrderedScanFastPathHits() void {
+    g_ordered_scan_fastpath_hits.store(0, .monotonic);
+}
+
 const match_log = std.log.scoped(.match_ops);
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
@@ -2085,6 +2097,167 @@ pub fn topKOrderedFastPath(
         .flags = std.ArrayList([]const u8).empty,
         // Str rows own their duped bytes; freeValue frees them on deinit.
         // Int/Double rows are scalars (freeValue no-op). No node refs escape.
+        .owns_value_memory = true,
+    };
+}
+
+// H3-P3: planner ORDERED-INDEX fast path for
+// `MATCH (n:Label) RETURN n.K ORDER BY n.K [DESC] LIMIT m` when `(Label,K)` has
+// a value-ordered secondary index that is REGISTERED + ELIGIBLE on EVERY shard.
+//
+// Instead of `topKOrderedFastPath`'s full-scan N-log-K heap (which reads the
+// order key for EVERY live label node), this walks the value-ordered index via
+// `adapter.orderedScan` (a 16-shard k-way merge that early-terminates at `m`) and
+// projects the order key in index order. The orderby_limit bench at scale drops
+// from a full-label enumeration to ~m index reads.
+//
+// PLANNER-CORRECTNESS-CRITICAL. This is a strict OPTIMISATION of topK: it serves
+// the index ONLY when it yields the byte-identical rows+order topK would. The
+// gate is topK's EXACT shape gate, PLUS:
+//   - the order key is registered + eligible on ALL shards (a single
+//     ineligible/unregistered shard makes the global merge drop/mis-order rows),
+//   - NO tenant filter active (`orderedScan` does not tenant-filter; topK does —
+//     so a tenant filter must fall back to the heap),
+//   - RLS allowed (same `countFastPathRlsAllowed` guard topK uses).
+// On ANY gate miss → `return null`; the caller falls through to
+// `topKOrderedFastPath` (the proven-correct heap), so a miss is never a wrong
+// answer, only a slower one.
+//
+// Result parity: orderedScan returns live node ids already in `dir` value order,
+// truncated to `m`; we project the SAME single order-key column, with topK's
+// exact column-naming + Value-builder idiom (Int/Double/Str). Property-less nodes
+// are not in the ordered tree (topK skips them too — `getNodeProperty` → null),
+// and the eligibility flag guarantees the column is type-uniform, so the encoded
+// value order equals topK's `entryLess` order.
+pub fn orderedScanFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH (mirror topKOrderedFastPath EXACTLY) ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // --- Shape gates on clauses ---
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.set_clauses.len != 0) return null;
+
+    // --- LIMIT must be a positive literal, bounded ---
+    const k_raw = q.limit orelse return null;
+    if (q.limit_param != null) return null; // parameterised LIMIT: bail
+    if (k_raw == 0) return null;
+    if (k_raw > 10_000) return null;
+    const k: usize = k_raw;
+    // OFFSET: index walk would need to over-read; let the heap path handle it.
+    if (q.offset) |off| {
+        if (off != 0) return null;
+    }
+
+    // --- RETURN shape ---
+    const ret_item = q.ret.items[0];
+    const ret_key = extractBoundVarProperty(ret_item.expr, match_var) orelse return null;
+
+    // --- ORDER BY shape ---
+    const order_by = q.order_by orelse return null;
+    if (order_by.keys.len != 1) return null;
+    const ob_key_entry = order_by.keys[0];
+    if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
+    const ob_key = extractBoundVarProperty(ob_key_entry.expr, match_var) orelse return null;
+    if (!std.mem.eql(u8, ret_key, ob_key)) return null; // keys must match
+    const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
+
+    // --- RLS bypass for correctness (same guard topK uses) ---
+    if (!countFastPathRlsAllowed()) return null;
+
+    // --- Tenant filter: orderedScan cannot tenant-filter; topK does. A tenant
+    //     filter must fall back to the heap so per-node tenant filtering runs. ---
+    if (filter_tenant != null) return null;
+
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+
+    // --- ORDERED-INDEX gate: registered AND eligible on EVERY shard. On ANY
+    //     doubt this is false → fall back to the heap (correct rows). ---
+    const label = head.labels[0];
+    if (!adapter.isOrderedIndexRegistered(filter_graph, label, ret_key)) return null;
+    if (!adapter.isOrderedIndexEligible(filter_graph, label, ret_key)) return null;
+
+    // --- Index-ordered walk: k live node ids in global value order, dir-aware,
+    //     LIMIT already applied by orderedScan. ---
+    const scan_dir: graph_storage_adapter.OrderedScanDir = if (dir == .desc) .desc else .asc;
+    const ids = adapter.orderedScan(filter_graph, label, ret_key, scan_dir, k, allocator) catch return null;
+    defer allocator.free(ids);
+
+    // --- Build ExecutionResult (mirror topK's column naming + Value builder) ---
+    const col_name: []const u8 = if (ret_item.alias) |a|
+        try allocator.dupe(u8, a)
+    else
+        try std.fmt.allocPrint(allocator, "{s}.{s}", .{ match_var, ret_key });
+
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = col_name;
+
+    var rows = try allocator.alloc([]Value, ids.len);
+    var built: usize = 0;
+    errdefer {
+        for (rows[0..built]) |r| {
+            switch (r[0]) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            }
+            allocator.free(r);
+        }
+        allocator.free(rows);
+        allocator.free(columns[0]);
+        allocator.free(columns);
+    }
+    for (ids) |node_id| {
+        // Read the projected order key engine-direct (no cache mutation). A node
+        // that lost the property between the index walk and this read is skipped
+        // — exactly as topK's `getNodeProperty orelse continue`.
+        const pv = (adapter.getNodeProperty(filter_graph, node_id, ret_key, allocator) catch continue) orelse continue;
+        defer switch (pv) {
+            .string => |s| allocator.free(s),
+            else => {},
+        };
+        const v: Value = switch (pv) {
+            .int => |iv| Value{ .Int = iv },
+            .float => |fv| Value{ .Double = fv },
+            .decimal => |d| Value{ .Double = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+            .string => |s| Value{ .Str = try allocator.dupe(u8, s) },
+            else => continue,
+        };
+        const row = try allocator.alloc(Value, 1);
+        row[0] = v;
+        rows[built] = row;
+        built += 1;
+    }
+    // Some ids may have been skipped (property lost mid-flight); shrink to fit.
+    if (built != rows.len) {
+        rows = try allocator.realloc(rows, built);
+    }
+
+    _ = g_ordered_scan_fastpath_hits.fetchAdd(1, .monotonic);
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
         .owns_value_memory = true,
     };
 }
@@ -6980,6 +7153,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —
     // accumulates per-group AggAcc during the label scan, O(groups) space.
     if (try groupByAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // H3-P3: ORDERED-INDEX fast path — serve `ORDER BY key LIMIT` from a
+    // registered + eligible (ALL shards) value-ordered index via a 16-shard
+    // k-way merge (early-terminate at LIMIT) instead of the full-label top-K
+    // heap below. Null (→ heap fallback) on any gate miss.
+    if (try orderedScanFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
     // GAP-0812 Task 3.1: bounded-heap streaming top-K for

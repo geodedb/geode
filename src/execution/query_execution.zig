@@ -1655,6 +1655,14 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         if (try match_operations.groupByAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
             return fast_result;
         }
+        // H3-P3: ORDERED-INDEX fast path — when `(Label,key)` has a registered +
+        // eligible value-ordered index on ALL shards, serve `ORDER BY key LIMIT`
+        // from the index (16-shard k-way merge, early-terminate at LIMIT) instead
+        // of the full-label top-K heap below. Returns null (→ heap fallback) on
+        // any gate miss, so a miss is only slower, never wrong.
+        if (try match_operations.orderedScanFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
         // GAP-0812 Task 3.1: bounded-heap streaming top-K for
         // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> LIMIT K` — walks the
         // label posting list once with a K-bounded heap over the ordered

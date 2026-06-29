@@ -7640,6 +7640,24 @@ pub fn build(b: *std.Build) void {
     );
     ordered_scan_tsan_step.dependOn(&run_ordered_scan_tsan_tests.step);
 
+    // H3-P3: planner orderedScanFastPath — `ORDER BY <eligible-indexed> LIMIT`
+    // served from the value-ordered index (slots ~0), with a strict heap
+    // fallback for non-indexed / ineligible columns. See
+    // tests/test_ordered_scan_fastpath.zig.
+    const ordered_scan_fastpath_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_scan_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    ordered_scan_fastpath_test_mod.addImport("geode", root_mod);
+    ordered_scan_fastpath_test_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_scan_fastpath_tests = b.addTest(.{ .root_module = ordered_scan_fastpath_test_mod });
+    const run_ordered_scan_fastpath_tests = b.addRunArtifact(ordered_scan_fastpath_tests);
+    shardDep(test_step, &run_ordered_scan_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
+    const ordered_scan_fastpath_step = b.step("test-ordered-scan-fastpath", "Run H3-P3 planner orderedScanFastPath + heap-fallback tests");
+    ordered_scan_fastpath_step.dependOn(&run_ordered_scan_fastpath_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{
