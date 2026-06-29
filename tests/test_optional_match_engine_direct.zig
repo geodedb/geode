@@ -179,3 +179,178 @@ test "covered OPTIONAL MATCH (childless parent) emits one NULL-filled row" {
     try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
     try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Test 3: optional-endpoint inline prop filters an edge.
+//   {k:'c1'} keeps only the c1 edge -> exactly one (p1, c1) row.
+//   {k:'nope'} filters every edge -> exactly one (p1, NULL) row.
+// ---------------------------------------------------------------------------
+test "covered OPTIONAL MATCH honors inline prop on optional endpoint" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+
+    {
+        planned_read_runtime.resetPathRowsMaterialized();
+        var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T {k:'c1'}) RETURN p.k, c.k");
+        defer r.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(usize, 1), r.rows.len);
+        try testing.expect(strEq(r.rows[0][0], "p1"));
+        try testing.expect(strEq(r.rows[0][1], "c1"));
+        try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+    }
+    {
+        planned_read_runtime.resetPathRowsMaterialized();
+        var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T {k:'nope'}) RETURN p.k, c.k");
+        defer r.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(usize, 1), r.rows.len);
+        try testing.expect(strEq(r.rows[0][0], "p1"));
+        try testing.expect(isNull(r.rows[0][1]));
+        try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: undirected optional hop. c1 has an INCOMING :R from p1; an
+// undirected optional hop must reach p1.
+// ---------------------------------------------------------------------------
+test "covered OPTIONAL MATCH undirected hop reaches the incoming neighbor" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+
+    graph_store.resetCloneNodesTotal();
+    planned_read_runtime.resetPathRowsMaterialized();
+
+    var r = try h.runQuery("MATCH (c:T {k:'c1'}) OPTIONAL MATCH (c)-[:R]-(x:T) RETURN c.k, x.k");
+    defer r.deinit(h.arena.allocator());
+
+    try testing.expectEqual(@as(usize, 1), r.rows.len);
+    try testing.expect(strEq(r.rows[0][0], "c1"));
+    try testing.expect(strEq(r.rows[0][1], "p1"));
+
+    try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: LIMIT over the covered shape returns the right window (one row),
+// still engine-direct.
+// ---------------------------------------------------------------------------
+test "covered OPTIONAL MATCH respects LIMIT window" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+
+    planned_read_runtime.resetPathRowsMaterialized();
+    var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T) RETURN p.k, c.k LIMIT 1");
+    defer r.deinit(h.arena.allocator());
+
+    try testing.expectEqual(@as(usize, 1), r.rows.len);
+    try testing.expect(strEq(r.rows[0][0], "p1"));
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: DIFFERENTIAL vs the clone-path oracle.
+// A covered query and a semantically identical query that the gate EXCLUDES
+// (a WHERE on the main var forces the legacy executor =
+// executeMatchWithOptionalPatterns) must return identical (p.k, c.k) rows.
+// The covered query is engine-direct (path-rows > 0); the WHERE variant is
+// legacy (path-rows == 0). Both must agree on the row multiset.
+// ---------------------------------------------------------------------------
+const Pair = struct { a: []const u8, b: []const u8 };
+
+fn cellStr(v: Value) []const u8 {
+    return switch (v) {
+        .Str => |s| s,
+        .Null => "<null>",
+        else => "<other>",
+    };
+}
+
+fn lessPair(_: void, x: Pair, y: Pair) bool {
+    const c0 = std.mem.order(u8, x.a, y.a);
+    if (c0 != .eq) return c0 == .lt;
+    return std.mem.order(u8, x.b, y.b) == .lt;
+}
+
+fn collectSortedPairs(allocator: std.mem.Allocator, r: execution.ExecutionResult) ![]Pair {
+    var pairs = try allocator.alloc(Pair, r.rows.len);
+    for (r.rows, 0..) |row, i| {
+        pairs[i] = .{ .a = cellStr(row[0]), .b = cellStr(row[1]) };
+    }
+    std.mem.sort(Pair, pairs, {}, lessPair);
+    return pairs;
+}
+
+test "engine-direct OPTIONAL MATCH equals clone-path oracle (differential)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+    const aa = h.arena.allocator();
+
+    // Engine-direct covered shape.
+    planned_read_runtime.resetPathRowsMaterialized();
+    var direct = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T) RETURN p.k, c.k");
+    defer direct.deinit(aa);
+    const direct_rows_materialized = planned_read_runtime.getPathRowsMaterialized();
+    try testing.expect(direct_rows_materialized > 0); // engine-direct
+
+    // Oracle: WHERE on the main var forces the legacy clone-path executor.
+    planned_read_runtime.resetPathRowsMaterialized();
+    var oracle = try h.runQuery("MATCH (p:T) OPTIONAL MATCH (p)-[:R]->(c:T) WHERE p.k = 'p1' RETURN p.k, c.k");
+    defer oracle.deinit(aa);
+    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized()); // legacy path
+
+    const dp = try collectSortedPairs(aa, direct);
+    const op = try collectSortedPairs(aa, oracle);
+    try testing.expectEqual(op.len, dp.len);
+    for (dp, op) |x, y| {
+        try testing.expect(std.mem.eql(u8, x.a, y.a));
+        try testing.expect(std.mem.eql(u8, x.b, y.b));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: FALLBACK shapes must NOT take the engine-direct path
+// (getPathRowsMaterialized stays 0 -> legacy clone-path executor), and must
+// still return correct rows.
+// ---------------------------------------------------------------------------
+test "uncovered OPTIONAL MATCH shapes fall back to the clone path" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+
+    // (a) WHERE references the optional var -> fallback.
+    {
+        planned_read_runtime.resetPathRowsMaterialized();
+        var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T) WHERE c.k = 'c1' RETURN p.k, c.k");
+        defer r.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    }
+
+    // (b) Two OPTIONAL clauses (3 chains) -> fallback.
+    {
+        planned_read_runtime.resetPathRowsMaterialized();
+        var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T) OPTIONAL MATCH (p)-[:R]->(d:T) RETURN p.k, c.k, d.k");
+        defer r.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    }
+
+    // (c) Optional with two hops -> fallback.
+    {
+        planned_read_runtime.resetPathRowsMaterialized();
+        var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T)-[:R]->(g:T) RETURN p.k, g.k");
+        defer r.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    }
+
+    // (d) Optional var-length hop -> fallback.
+    {
+        planned_read_runtime.resetPathRowsMaterialized();
+        var r = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R*1..2]->(c:T) RETURN p.k, c.k");
+        defer r.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    }
+}
