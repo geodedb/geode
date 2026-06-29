@@ -7201,6 +7201,17 @@ pub fn build(b: *std.Build) void {
     const multichain_limit_step = b.step("test-multichain-limit-pushdown", "Run multi-chain comma-MATCH LIMIT pushdown regression (cap pure-cartesian materialization at offset+limit)");
     multichain_limit_step.dependOn(&run_multichain_limit_tests.step);
 
+    // GAP residual: typed-edge / single-chain scan LIMIT pushdown.
+    // Verifies executePatternQuery + exploreHops stop materializing at
+    // offset+limit, while ORDER BY / WHERE / DISTINCT / aggregate are unchanged.
+    const typed_edge_limit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_typed_edge_limit_pushdown.zig"), .target = target, .optimize = optimize });
+    typed_edge_limit_test_mod.addImport("geode", root_mod);
+    const typed_edge_limit_tests = b.addTest(.{ .root_module = typed_edge_limit_test_mod });
+    const run_typed_edge_limit_tests = b.addRunArtifact(typed_edge_limit_tests);
+    shardDep(test_step, &run_typed_edge_limit_tests.step, 1, test_shard_loads, test_shard_index);
+    const typed_edge_limit_step = b.step("test-typed-edge-limit-pushdown", "Run typed-edge / single-chain scan LIMIT pushdown regression (cap exploreHops materialization at offset+limit)");
+    typed_edge_limit_step.dependOn(&run_typed_edge_limit_tests.step);
+
     // GAP-0901 bounded-cache hydrate/reclaim regression: under a SMALL node
     // cache cap (most nodes evicted to the engine), hydrating an evicted
     // DEFAULT-tenant node from the engine and then reclaiming it must NOT free

@@ -671,6 +671,21 @@ fn executePatternQuery(
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
+    // GAP residual: cap single-chain path materialization at offset+limit.
+    // Mirrors the shipped multi-chain cartesian cap (executeMultiChainHashJoin):
+    // safe ONLY when the first offset+limit materialized rows ARE the final
+    // window — no WHERE residual filter, no ORDER BY (reorders), no
+    // DISTINCT/aggregate (cardinality), no WITH (reshape). Otherwise null =
+    // materialize all (unchanged); the window is applied post-hoc.
+    const materialize_cap: ?usize = blk: {
+        if (q.where_clause != null) break :blk null;
+        if (q.order_by != null) break :blk null;
+        if (q.with_clause != null) break :blk null;
+        if (q.ret.distinct) break :blk null;
+        if (hasAggregationItems(q.ret.items)) break :blk null;
+        break :blk requiredStartRows(q, param_names, param_values); // null if no limit/offset
+    };
+
     if (!adapter.graphExists(plan.graph_name)) {
         const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
         const empty_result = ExecutionResult{
@@ -725,6 +740,7 @@ fn executePatternQuery(
 
     if (chain.hops.len == 0) {
         for (start_slots) |slot_id| {
+            if (materialize_cap) |cap| if (rows.items.len >= cap) break;
             try materializeNodeOnlyRow(allocator, q, context, plan, slot_id, param_names, param_values, &rows, owned_entities);
         }
     } else {
@@ -742,6 +758,7 @@ fn executePatternQuery(
         defer if (projection_plan) |pp| freeProjectionPlan(allocator, pp);
 
         for (start_slots) |start_slot| {
+            if (materialize_cap) |cap| if (rows.items.len >= cap) break;
             if (seeded_from_tail) {
                 // Bug B single-hop reverse walk: start_slot is the terminal c.
                 // Expand backwards (flipped direction) to find the head p.
@@ -750,6 +767,7 @@ fn executePatternQuery(
                 const rev_candidates = try collectHopEdges(allocator, adapter, plan.graph_name, start_slot, flipRelDir(hop.rel.dir));
                 defer allocator.free(rev_candidates);
                 for (rev_candidates) |edge| {
+                    if (materialize_cap) |cap| if (rows.items.len >= cap) break;
                     if (!try edgeMatchesPattern(allocator, adapter, plan.graph_name, edge, hop.rel, param_names, param_values, context)) continue;
                     if (!try nodeMatchesPatternBySlot(allocator, adapter, plan.graph_name, edge.next_slot, hop.left, param_names, param_values, context)) continue;
                     current_nodes[0] = edge.next_slot; // p — logical position 0
@@ -759,7 +777,7 @@ fn executePatternQuery(
                 }
             } else {
                 current_nodes[0] = start_slot;
-                try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0, projection_plan);
+                try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0, projection_plan, materialize_cap);
             }
         }
     }
@@ -794,7 +812,11 @@ fn exploreHops(
     current_edges: []PathEdge,
     hop_index: usize,
     projection_plan: ?[]const BindingProjection,
+    cap: ?usize,
 ) !void {
+    // GAP residual: LIMIT pushdown — stop once offset+limit rows exist (the
+    // caller windows the prefix post-hoc; cap is null unless that is safe).
+    if (cap) |c| if (rows.items.len >= c) return;
     const chain = q.match.chains[0];
     if (hop_index == chain.hops.len) {
         try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities, projection_plan);
@@ -811,6 +833,7 @@ fn exploreHops(
 
     var produced: u64 = 0;
     for (candidates) |edge| {
+        if (cap) |c| if (rows.items.len >= c) break;
         if (!try edgeMatchesPattern(allocator, adapter, graph_name, edge, hop.rel, param_names, param_values, context)) {
             continue;
         }
@@ -820,7 +843,7 @@ fn exploreHops(
         current_edges[hop_index] = edge;
         current_nodes[hop_index + 1] = edge.next_slot;
         produced += 1;
-        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1, projection_plan);
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1, projection_plan, cap);
     }
 
     trace.ops[op_index].rows += produced;
