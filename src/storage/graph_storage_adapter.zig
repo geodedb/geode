@@ -31,6 +31,20 @@ const LabelScanContext = struct {
     label_id: gs.LabelId,
 };
 
+/// Resolved handle for a CHUNKED, per-shard label slot enumeration. `begin`
+/// resolves the graph + label ONCE; the caller then drives the scan one shard at
+/// a time via `appendLabelScanShard`, applying its own per-slot filter + early
+/// termination BETWEEN shards. This preserves the lock-safe, per-shard
+/// SHARED-lock enumeration (`appendLiveNodesForLabelShard`) — NEVER the unlocked
+/// lazy fan-out cursor — while letting a WHERE+LIMIT caller stop after enough
+/// matches instead of materializing every live slot. `shard_count` is captured
+/// at `begin`; `mg`/`label_id` mirror `getNodesByLabelCapped`'s held handle.
+pub const LabelScanCursor = struct {
+    mg: *ManagedGraph,
+    label_id: gs.LabelId,
+    shard_count: usize,
+};
+
 var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Candidate nodes examined by the verify-loop in `lookupNodeIdByLabelAndAllProps`
@@ -4145,6 +4159,38 @@ pub const StorageAdapter = struct {
         }
 
         return try result.toOwnedSlice(allocator);
+    }
+
+    /// Begin a CHUNKED label slot enumeration: resolve the graph + label and
+    /// capture the shard count. Returns null when the graph or label does not
+    /// exist (no nodes). The caller iterates `0..cursor.shard_count`, calling
+    /// `appendLabelScanShard` per shard and applying its own per-slot filter +
+    /// early termination between shards. The resolved `mg` handle is held for
+    /// the duration exactly as `getNodesByLabelCapped` holds it across its shard
+    /// loop (same lifetime exposure, same lock-safety contract).
+    pub fn beginLabelScan(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !?LabelScanCursor {
+        const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return null;
+        return LabelScanCursor{
+            .mg = ctx.mg,
+            .label_id = ctx.label_id,
+            .shard_count = ctx.mg.engine.shards.len,
+        };
+    }
+
+    /// Append ONE shard's live label slots to `result`, under that shard's
+    /// SHARED read lock (via `appendLiveNodesForLabelShard` — the SAME lock-safe
+    /// path `getNodesByLabelCapped` uses). `shard_idx` must be < `cursor.shard_count`.
+    /// The per-shard SHARED hold is internally batched (see
+    /// `label_scan_batch_slots`) so a queued EXCLUSIVE apply interleaves.
+    pub fn appendLabelScanShard(
+        self: *StorageAdapter,
+        cursor: LabelScanCursor,
+        shard_idx: usize,
+        allocator: Allocator,
+        result: *std.ArrayList(u64),
+    ) !void {
+        _ = self;
+        try appendLiveNodesForLabelShard(cursor.mg, shard_idx, cursor.label_id, allocator, result);
     }
 
     /// Number of label slots collected per per-shard SHARED-lock hold.

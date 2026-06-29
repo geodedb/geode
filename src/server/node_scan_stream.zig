@@ -700,18 +700,34 @@ pub fn prepare(
         // must not pass `required` here. Inline-prop filters are applied during
         // collection; a WHERE predicate (if any) is re-evaluated per node in
         // `buildCountPage`'s tally. The tally counts matched slots (no clone).
-        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, owned_param_names, owned_param_values, context);
+        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, null, owned_param_names, owned_param_values, context);
     } else if (where_expr != null) {
-        // Predicate-filtered rows/projection: collect every pattern-matching
-        // slot (unbounded); LIMIT/OFFSET apply to matched rows.
-        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, owned_param_names, owned_param_values, context);
+        // Predicate-filtered rows/projection: LIMIT/OFFSET apply to MATCHED rows.
         row_offset = offset;
-        if (limit) |l| row_limit = l;
+        if (limit) |l| {
+            row_limit = l;
+            // H1 (where-limit-lazy): a LIMIT is present, so push the predicate
+            // into slot collection and STOP enumerating once `offset+limit`
+            // predicate matches are found (the labeled-scan branch enumerates in
+            // lock-safe per-shard chunks). `match_cap` includes OFFSET because
+            // paging still slices the first `row_offset` matched rows; saturating
+            // add guards a pathological `offset+limit` overflow.
+            const pushdown = WherePushdown{
+                .where_expr = where_expr.?,
+                .var_name = var_name,
+                .match_cap = offset +| l,
+            };
+            slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, pushdown, owned_param_names, owned_param_values, context);
+        } else {
+            // No LIMIT: the window is unbounded, so collect every pattern-matching
+            // slot (today's behavior); paging evaluates the predicate per row.
+            slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, null, owned_param_names, owned_param_values, context);
+        }
     } else {
         // No predicate: matched == scanned, so bound slot collection by
         // OFFSET+LIMIT and start paging at OFFSET.
         const required = resolveRequiredRows(q, param_names, param_values);
-        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, required, owned_param_names, owned_param_values, context);
+        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, required, null, owned_param_names, owned_param_values, context);
         start_index = @min(offset, slot_ids.len);
     }
     errdefer if (slot_ids.len > 0) allocator.free(slot_ids);
@@ -1072,11 +1088,26 @@ fn resolveWindowValue(
     return null;
 }
 
+/// H1 (where-limit-lazy): a WHERE-predicate pushdown for the labeled-scan
+/// collection. When present (a WHERE query WITH a LIMIT), the labeled branch
+/// enumerates live slots in lock-safe per-shard CHUNKS, evaluates the predicate
+/// per slot, and STOPS once `match_cap` (= offset+limit) predicate-matching rows
+/// are collected — bounding the scan by MATCHES instead of materializing every
+/// live slot. The predicate is re-evaluated in `buildNextPage` (idempotent),
+/// where OFFSET/LIMIT are applied over the matched rows. Absent (no LIMIT, or no
+/// WHERE), collection keeps its prior behavior (collect all matching slots).
+const WherePushdown = struct {
+    where_expr: ast.Expr,
+    var_name: []const u8,
+    match_cap: usize,
+};
+
 fn collectMatchingSlotIds(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
     pattern: ast.NodePattern,
     required_rows: ?usize,
+    where_pushdown: ?WherePushdown,
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
@@ -1135,6 +1166,43 @@ fn collectMatchingSlotIds(
     }
 
     if (pattern.labels.len > 0) {
+        // H1 (where-limit-lazy): with a WHERE predicate AND a LIMIT, bound the
+        // enumeration by predicate MATCHES — not the whole label. Enumerate live
+        // slots in lock-safe per-shard CHUNKS (each shard under its SHARED lock
+        // via `appendLabelScanShard` -> `appendLiveNodesForLabelShard`, the SAME
+        // lock-safe path `getNodesByLabelCapped` uses — NEVER the unlocked lazy
+        // fan-out cursor that crashed under concurrent reader+writer load),
+        // evaluate the predicate per slot (lock-free: re-reads the node by id,
+        // exactly like the paging path's per-row materialize+evaluate), and STOP
+        // once `match_cap` (= offset+limit) matches are collected. Early
+        // termination happens at shard/chunk boundaries — BETWEEN locked
+        // enumerations — never via an unlocked cursor. Shard order + per-shard
+        // posting order match `getNodesByLabelCapped`, so the matched-row window
+        // is byte-for-byte identical to the unbounded path; a predicate that
+        // matches fewer than `match_cap` rows simply enumerates every shard
+        // (correct: 0-match returns none, selective-near-end still scans most).
+        if (where_pushdown) |wp| {
+            if (try adapter.beginLabelScan(graph_name, pattern.labels[0])) |cursor| {
+                var shard_idx: usize = 0;
+                outer: while (shard_idx < cursor.shard_count) : (shard_idx += 1) {
+                    var chunk = std.ArrayList(u64).empty;
+                    defer chunk.deinit(allocator);
+                    try adapter.appendLabelScanShard(cursor, shard_idx, allocator, &chunk);
+                    for (chunk.items) |slot_id| {
+                        // Verify the full pattern (extra labels / inline props)
+                        // first — cheaper than predicate eval — then the WHERE
+                        // predicate. Only predicate-passing slots count toward
+                        // `match_cap`; capping on raw slots would under-return.
+                        if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+                        if (!slotMatchesPredicate(allocator, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
+                        try result.append(allocator, slot_id);
+                        if (result.items.len >= wp.match_cap) break :outer;
+                    }
+                }
+            }
+            return try result.toOwnedSlice(allocator);
+        }
+
         // CRASH FIX (read-stress): collect the label's live slot ids via the
         // LOCK-SAFE `getNodesByLabelCapped` (each shard materialized under its
         // SHARED read lock) instead of the lazy `iterateNodesByLabel` fan-out,
@@ -1302,6 +1370,48 @@ fn nodeMatchesPattern(
         }
     }
     return true;
+}
+
+/// H1 (where-limit-lazy): evaluate a WHERE predicate against a single live slot
+/// during chunked label-scan collection. Lock-free — it re-reads the node by
+/// slot id (`materializeNode`), exactly like the paging path's per-row
+/// materialize+evaluate, so no shard lock is held during predicate eval. Mirrors
+/// `NodeScanStream.evalPredicate`'s coercion (Bool→value, Null→false,
+/// Int→nonzero, else→false). A materialize failure (node vanished via a
+/// concurrent delete) or an eval error counts as NO match — identical to the
+/// paging path's catch-skip — so the bounded set never includes a stale slot.
+fn slotMatchesPredicate(
+    allocator: std.mem.Allocator,
+    graph_name: []const u8,
+    slot_id: u64,
+    where_expr: ast.Expr,
+    var_name: []const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    context: ExecutionContext,
+) bool {
+    const node = materializeNode(allocator, graph_name, slot_id) catch return false;
+    defer destroyNode(allocator, node);
+    var names = [_][]const u8{var_name};
+    var values = [_]Value{.{ .Node = node }};
+    const env = Env{
+        .names = names[0..1],
+        .values = values[0..1],
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+        .exec_context = @constCast(&context),
+    };
+    // Same as evalPredicate: do NOT free `where_result` — the eligible boolean
+    // predicate folds to a fresh Bool (no heap), and freeing risks touching a
+    // value that borrows the node/params.
+    const where_result = eval.evalExpr(allocator, where_expr, env) catch return false;
+    return switch (where_result) {
+        .Bool => |b| b,
+        .Null => false,
+        .Int => |i| i != 0,
+        else => false,
+    };
 }
 
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
