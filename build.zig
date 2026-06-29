@@ -7345,6 +7345,19 @@ pub fn build(b: *std.Build) void {
     const count_edges_fastpath_step = b.step("test-count-edges-fastpath", "Run GAP-ENT-0002 count(r) edge-count fast path regression (O(1) from IdMap.edgeCount, no row materialization)");
     count_edges_fastpath_step.dependOn(&run_count_edges_fastpath_tests.step);
 
+    // Filtered-count streaming fast path regression.
+    // Pre-fix: getPathRowsMaterialized() == N_match (planned_read materializes a
+    // node row per matching node, then Aggregate counts).
+    // Post-fix: == 0 (streaming tally over the label posting, predicate-key read
+    // only, no row materialization).
+    const filtered_count_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_filtered_count.zig"), .target = target, .optimize = optimize });
+    filtered_count_test_mod.addImport("geode", root_mod);
+    const filtered_count_tests = b.addTest(.{ .root_module = filtered_count_test_mod });
+    const run_filtered_count_tests = b.addRunArtifact(filtered_count_tests);
+    shardDep(test_step, &run_filtered_count_tests.step, 1, test_shard_loads, test_shard_index);
+    const filtered_count_step = b.step("test-filtered-count", "Run filtered count(n) WHERE <pred> streaming fast path regression (no per-row materialize, count exact, fallbacks correct)");
+    filtered_count_step.dependOn(&run_filtered_count_tests.step);
+
     // GAP-ENT-0002 streaming GROUP BY / DISTINCT fast path regression.
     // Pre-fix: getPathRowsMaterialized() == N_nodes (each materialized by planned_read_runtime).
     // Post-fix: == 0 (O(groups) accumulator, executePatternQuery never runs).

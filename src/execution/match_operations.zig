@@ -1303,6 +1303,147 @@ pub fn propertyAggregateFastPath(
     };
 }
 
+// CANARY: REQ=REQ-PERF-FILTERED-COUNT; FEATURE="FilteredCountStreaming"; ASPECT=StreamingTally; STATUS=TESTED; TEST=tests/test_gap_filtered_count.zig; OWNER=execution; UPDATED=2026-06-29
+// Streaming fast path for FILTERED `MATCH (n:<Label>) WHERE n.<k> OP lit
+// RETURN count(n)` / `count(*)`.
+//
+// Why this exists: a bare `count(n)` over a label is O(1) (label refcount via
+// `countNodesFastPath`), but adding a WHERE drops it off that path and onto the
+// general planned-read/legacy executor, which materializes ONE FULL node binding
+// row per node (`planned_read_runtime.materializeNodeOnlyRow`, incrementing
+// `g_path_rows_materialized`) and then an Aggregate counts the rows — an O(N)
+// materialize-then-count (measured 4.64s on a 60K-node graph, ~minutes at
+// 14.27M). Instead we walk the label posting once and read ONLY the predicate's
+// key per slot, tallying matches with NO row materialization (exact count).
+//
+// Mirrors `propertyAggregateFastPath` exactly for the scan/tenant/WHERE/RLS
+// gates, so its visible answer is identical to the path it replaces:
+//   - single MATCH chain, single simple node pattern with exactly one label,
+//     no inline `{prop: val}` pattern, no path variable
+//   - no FILTER / WITH / GROUP BY / HAVING / ORDER BY / SET, no DISTINCT
+//   - RETURN is exactly `count(n)` or `count(*)`
+//   - a REQUIRED simple WHERE `n.<k> OP literal` (OP ∈ {=,!=,<,<=,>,>=}); the
+//     unfiltered count (no WHERE) is left to `countNodesFastPath`'s O(1) path,
+//     and any non-simple WHERE (AND/OR/function) declines → general path.
+//   - no active RLS policy for an authenticated user (per-row policy would need
+//     materialization) — falls through so `passesRLSFilter` runs per node.
+// Tenant filtering IS honoured per slot, identically to the aggregate path.
+pub fn countFilteredFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null; // require exactly one label
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // --- Shape gates on clauses ---
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+
+    // --- RETURN must be count(n) / count(*) ---
+    const item = q.ret.items[0];
+    const call = switch (item.expr) {
+        .Call => |c| c,
+        else => return null,
+    };
+    if (call.callee.* != .Ident) return null;
+    if (!std.ascii.eqlIgnoreCase(call.callee.Ident.orig, "count")) return null;
+    if (call.args.len != 1) return null;
+    const arg = call.args[0].*;
+    const is_star = switch (arg) {
+        .Ident => |id| std.mem.eql(u8, id.orig, "*"),
+        else => false,
+    };
+    const is_var = switch (arg) {
+        .Ident => |id| std.mem.eql(u8, id.orig, match_var),
+        else => false,
+    };
+    if (!is_star and !is_var) return null;
+
+    // --- REQUIRED simple WHERE (the unfiltered case is countNodesFastPath's) ---
+    const where = q.where_clause orelse return null;
+    const where_pred: SimpleWhere = extractSimpleWhere(where, match_var) orelse return null;
+
+    // --- RLS bypass for correctness ---
+    if (!countFastPathRlsAllowed()) return null;
+
+    // --- Walk the label posting list, tallying predicate matches ---
+    // Same engine-direct vs resident strategy as propertyAggregateFastPath:
+    //   * BOUNDED cache → read the WHERE/tenant property ENGINE-DIRECT (sees
+    //     every live node incl. evicted; crash-safe under concurrent readers).
+    //   * UNBOUNDED cache → resident posting + resident property reads (the
+    //     resident map is the complete set; no per-node engine round-trip).
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+
+    var matched: usize = 0;
+    const tenant_active = filter_tenant != null;
+    const writable_store = graph_store.getGlobalStore(allocator);
+
+    if (writable_store.nodes.effectiveCap() == 0) {
+        var read_view = graph_store.ReadView.init(allocator, writable_store);
+        defer read_view.deinit();
+        const read_store = read_view.getReadStore();
+        const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+        if (posting) |slots| {
+            const prop_store: *graph_store.GraphStore = @constCast(read_store);
+            for (slots) |node_id| {
+                const node = read_store.nodes.get(node_id) orelse continue;
+                if (!passesTenantFilter(node, filter_tenant)) continue;
+                const w_val = prop_store.getNodeProperty(node_id, where_pred.key) orelse continue;
+                if (!comparePvLit(w_val, where_pred.op, where_pred.lit)) continue;
+                matched += 1;
+            }
+        }
+    } else {
+        const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
+        defer allocator.free(slots);
+        for (slots) |slot_id| {
+            if (tenant_active) {
+                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
+                    .string => |s| s,
+                    else => graph_store.DEFAULT_TENANT_ID,
+                } else graph_store.DEFAULT_TENANT_ID;
+                defer if (tprop) |tp| switch (tp) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                };
+                if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
+            }
+            const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+            defer switch (w_val) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            if (!compareStoragePvLit(w_val, where_pred.op, where_pred.lit)) continue;
+            matched += 1;
+        }
+    }
+
+    const col_name: []const u8 = item.alias orelse "count(n)";
+    return try buildCountFastPathResult(allocator, col_name, matched);
+}
+
 // CANARY: REQ=GAP-ENT-0002; FEATURE="GroupByStreamingFastPath"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_gap_ent0002_groupby_streaming.zig; OWNER=execution; UPDATED=2026-06-26
 /// Streaming GROUP BY / DISTINCT fast path.
 /// Handles:

@@ -6636,6 +6636,33 @@ fn handleClientMessage(
                     updateTxnStateFromProgram(state, &parse_result.program);
                     return;
                 }
+
+                // Filtered count: `MATCH (n:L) WHERE n.<k> OP lit RETURN
+                // count(n|*)`. Served by a STREAMING tally (label posting walk,
+                // predicate-key read only, NO node-row materialization) instead
+                // of falling to node_scan_stream's per-slot projected-node
+                // materialize / the general materialize-then-count executor
+                // (measured 4.64s on 60K nodes). Declines (null → normal
+                // dispatch) on any non-simple WHERE / RLS / tenant shape it
+                // cannot serve identically.
+                const filtered_count_opt = try execution.countFilteredFastPath(gpa, target.Query, query_graph_name, fast_count_tenant);
+                if (filtered_count_opt) |filtered_count_result| {
+                    var exec_result = filtered_count_result;
+                    defer exec_result.deinit(gpa);
+
+                    graph_store.releaseGraphLock(count_lock);
+                    count_lock_held = false;
+
+                    for (flags.items) |flag| {
+                        try appendFlagToResult(gpa, &exec_result, flag);
+                    }
+
+                    try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
+                    auditQueryExecution(state, query_text, is_mutation);
+                    syncGraphFromSession(state);
+                    updateTxnStateFromProgram(state, &parse_result.program);
+                    return;
+                }
             }
 
             // Task 11 (enterprise-ingest-throughput): bulk-ingest fast path.

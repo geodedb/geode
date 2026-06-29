@@ -1643,6 +1643,17 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         if (try match_operations.countEdgesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
             return fast_result;
         }
+        // Filtered count: `MATCH (n:L) WHERE n.<k> OP lit RETURN count(n|*)`.
+        // A bare count(n) is O(1) (countNodesFastPath above); a WHERE drops it
+        // off that path and onto the general executor, which materializes one
+        // FULL node binding row per node then counts (O(N) materialize-then-
+        // count). Stream the label posting instead: read only the predicate key
+        // per slot and tally — NO row materialization (getPathRowsMaterialized
+        // stays 0). Declines (→ general path) on non-simple WHERE / RLS / tenant
+        // shapes it cannot serve identically.
+        if (try match_operations.countFilteredFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
         // GAP-0811 Task 2.2: property-aggregate fast-path
         // (`sum/avg/min/max(p.<key>)`) — skips materializeNode and reads only
         // the aggregated property (plus optional WHERE property).

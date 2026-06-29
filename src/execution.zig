@@ -212,6 +212,7 @@ pub const executeMatchQueryImpl = match_operations.executeMatchQueryImpl;
 pub const countNodesFastPath = match_operations.countNodesFastPath;
 pub const countNodesLabelRefcountFastPath = match_operations.countNodesLabelRefcountFastPath;
 pub const countEdgesFastPath = match_operations.countEdgesFastPath;
+pub const countFilteredFastPath = match_operations.countFilteredFastPath;
 pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
