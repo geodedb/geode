@@ -1632,6 +1632,13 @@ pub const GraphStore = struct {
     // Count-only reads can load this refcount without contending on the hot
     // posting-list mutex used by concurrent inserts.
     label_counts_by_graph: std.StringHashMap(LabelCountValue),
+    // Exact (graph, edge_type) cardinalities maintained beside `edge_type_index`,
+    // mirroring `label_counts_by_graph` for the edge side. Lets the typed
+    // `count(r:TYPE)` fast path answer O(1) instead of materializing one row per
+    // edge. Durability is replay-on-load: rebuilt by the open edge-scan in
+    // `loadOneGraphFromAdapter` (exactly like the label refcount + untyped
+    // edge count). Key format "graph:type" (see formatGraphLabelKey).
+    edge_type_counts_by_graph: std.StringHashMap(LabelCountValue),
     // CANARY: REQ=REQ-PERF-GRAPH-SCOPED-NODES-001; FEATURE="GraphScopedNodeIndex"; ASPECT=NodesByGraph; STATUS=TESTED; TEST=tests/test_perf_b_graph_scoped_iteration.zig; OWNER=perf; UPDATED=2026-05-15
     // PERF-B (issue #811): Per-graph node-id index so MATCH (n) and equivalent
     // full-store iterators can scope to a single graph in O(nodes_in_graph)
@@ -1696,6 +1703,11 @@ pub const GraphStore = struct {
     // EXCLUSIVE for HashMap insertion/rehash. This removes the single global
     // mutex that serialized every hot-label count read with every mutation.
     label_count_rwlock: std.Io.RwLock = std.Io.RwLock.init,
+    // Guards `edge_type_counts_by_graph` exactly like `label_count_rwlock`
+    // guards `label_counts_by_graph`: SHARED for atomic bump/dec of an existing
+    // (graph,type) entry (map pointer stability), EXCLUSIVE for inserting a new
+    // (graph,type) key (HashMap rehash). Leaf-level.
+    edge_type_count_rwlock: std.Io.RwLock = std.Io.RwLock.init,
     // GAP-825 (issue #825): per-store rwlock that serialises the
     // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
     // `removeNodeLabel`, and their `NoSave` variants) against the
@@ -1776,6 +1788,8 @@ pub const GraphStore = struct {
             // Issue #391, #392: Initialize performance optimization indexes
             .label_index = std.StringHashMap(LabelPosting).init(allocator),
             .label_counts_by_graph = std.StringHashMap(LabelCountValue).init(allocator),
+            // Per-(graph,edge_type) exact cardinalities (mirror of label refcount).
+            .edge_type_counts_by_graph = std.StringHashMap(LabelCountValue).init(allocator),
             // PERF-B (issue #811): per-graph node-id index for O(nodes_in_graph) scans.
             .nodes_by_graph = std.StringHashMap(std.AutoHashMap(u64, void)).init(allocator),
             // PERF-C (issue #814): tenant-keyed multiset for O(1) LSP introspection.
@@ -1878,6 +1892,12 @@ pub const GraphStore = struct {
         }
         self.label_counts_by_graph.deinit();
 
+        var edge_type_count_iter = self.edge_type_counts_by_graph.iterator();
+        while (edge_type_count_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.edge_type_counts_by_graph.deinit();
+
         // PERF-B (issue #811): Clean up per-graph node-id index.
         var nbg_iter = self.nodes_by_graph.iterator();
         while (nbg_iter.next()) |entry| {
@@ -1969,6 +1989,13 @@ pub const GraphStore = struct {
         }
         self.label_counts_by_graph.deinit();
         self.label_counts_by_graph = std.StringHashMap(LabelCountValue).init(self.allocator);
+
+        var edge_type_count_iter = self.edge_type_counts_by_graph.iterator();
+        while (edge_type_count_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.edge_type_counts_by_graph.deinit();
+        self.edge_type_counts_by_graph = std.StringHashMap(LabelCountValue).init(self.allocator);
 
         // PERF-B (issue #811): Reset per-graph node-id index.
         {
@@ -2253,6 +2280,8 @@ pub const GraphStore = struct {
             try self.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
             // PERF-C (issue #814): tenant-keyed edge-type counter.
             try self.bumpEdgeTypeCount(src_edge.tenant_id, src_edge.label);
+            // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+            self.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
         }
     }
 
@@ -3826,6 +3855,93 @@ pub const GraphStore = struct {
         return count.load(.monotonic);
     }
 
+    // ── Per-(graph, edge_type) exact-count refcount ────────────────────────
+    // Mirrors ensure/bump/dec/countGraphLabel for the edge side. Key "graph:type"
+    // via formatGraphLabelKey. Guarded by edge_type_count_rwlock (SHARED for the
+    // atomic mutate of an existing entry, EXCLUSIVE for the lazy insert).
+    fn ensureGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) !void {
+        var key_buf: [512]u8 = undefined;
+        var formatted = try formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type);
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.edge_type_count_rwlock.lockUncancelable(io);
+        defer self.edge_type_count_rwlock.unlock(io);
+
+        if (self.edge_type_counts_by_graph.contains(formatted.key)) return;
+
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
+        errdefer self.allocator.free(owned_key);
+        try self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(0));
+    }
+
+    fn bumpGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) void {
+        var key_buf: [512]u8 = undefined;
+        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.edge_type_count_rwlock.lockSharedUncancelable(io);
+        if (self.edge_type_counts_by_graph.getPtr(formatted.key)) |count| {
+            _ = count.fetchAdd(1, .monotonic);
+            self.edge_type_count_rwlock.unlockShared(io);
+            return;
+        }
+        self.edge_type_count_rwlock.unlockShared(io);
+
+        self.edge_type_count_rwlock.lockUncancelable(io);
+        defer self.edge_type_count_rwlock.unlock(io);
+        if (self.edge_type_counts_by_graph.getPtr(formatted.key)) |count| {
+            _ = count.fetchAdd(1, .monotonic);
+            return;
+        }
+
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type }) catch return;
+        self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(1)) catch {
+            self.allocator.free(owned_key);
+            return;
+        };
+    }
+
+    fn decGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) void {
+        var key_buf: [512]u8 = undefined;
+        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.edge_type_count_rwlock.lockSharedUncancelable(io);
+        defer self.edge_type_count_rwlock.unlockShared(io);
+
+        const count = self.edge_type_counts_by_graph.getPtr(formatted.key) orelse return;
+        var observed = count.load(.monotonic);
+        while (observed != 0) {
+            if (count.cmpxchgWeak(observed, observed - 1, .monotonic, .monotonic)) |actual| {
+                observed = actual;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn countGraphEdgeType(self: *const GraphStore, graph_name: []const u8, edge_type: []const u8) usize {
+        var key_buf: [512]u8 = undefined;
+        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return 0;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const mutable_self: *GraphStore = @constCast(self);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mutable_self.edge_type_count_rwlock.lockSharedUncancelable(io);
+        defer mutable_self.edge_type_count_rwlock.unlockShared(io);
+        const count = mutable_self.edge_type_counts_by_graph.getPtr(formatted.key) orelse return 0;
+        return count.load(.monotonic);
+    }
+
     fn ensureLabelPostingCapacity(self: *GraphStore, graph_name: []const u8, label: []const u8, additional: usize) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
@@ -4916,6 +5032,13 @@ pub const GraphStore = struct {
         self.label_counts_by_graph.deinit();
         self.label_counts_by_graph = std.StringHashMap(LabelCountValue).init(self.allocator);
 
+        var edge_type_count_iter = self.edge_type_counts_by_graph.iterator();
+        while (edge_type_count_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.edge_type_counts_by_graph.deinit();
+        self.edge_type_counts_by_graph = std.StringHashMap(LabelCountValue).init(self.allocator);
+
         // PERF-B (issue #811): Reset per-graph node-id index for rebuild.
         {
             var nbg_iter = self.nodes_by_graph.iterator();
@@ -4995,6 +5118,8 @@ pub const GraphStore = struct {
             try self.addToEdgeTypeIndex(edge.graph_name, edge.label, edge.id);
             // PERF-C (issue #814): rebuild tenant-keyed edge-type counter.
             try self.bumpEdgeTypeCount(edge.tenant_id, edge.label);
+            // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+            self.bumpGraphEdgeTypeCount(edge.graph_name, edge.label);
         }
     }
 
@@ -5885,6 +6010,15 @@ pub const GraphStore = struct {
         return count;
     }
 
+    // Per-(graph, edge_type) O(1) edge count for the typed count(r:TYPE) fast
+    // path. Mirrors countEdgesForGraph for the typed case; served from the
+    // maintained per-(graph,type) refcount (rebuilt on open, so durable across
+    // reopen). Tenantless only — the fast-path caller refuses any concrete
+    // tenant before calling (see countEdgesFastPath in match_operations.zig).
+    pub fn countEdgesByTypeForGraph(self: *const GraphStore, graph_name: []const u8, edge_type: []const u8) usize {
+        return self.countGraphEdgeType(graph_name, edge_type);
+    }
+
     /// PHASE 1 (edge-engine-direct): a COMPLETE, bounded-cache-safe list of every
     /// public edge id (caller owns the returned slice). Full-edge-scan paths
     /// (algorithms, introspection, index build, DELETE collection) must use this
@@ -6569,6 +6703,8 @@ pub const GraphStore = struct {
         try self.addToEdgeTypeIndex(graph_name, edge_type, id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
         try self.bumpEdgeTypeCount(tenant, edge_type);
+        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+        self.bumpGraphEdgeTypeCount(graph_name, edge_type);
 
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
         // Mark store as dirty - persistence happens at query completion, not per-edge
@@ -6690,6 +6826,8 @@ pub const GraphStore = struct {
         // PERF-C (issue #814): tenant-keyed edge-type counter for LSP
         // introspection. GAP-0891 (RC-3): bump the SAME bucket as the tag.
         try self.bumpEdgeTypeCount(tenant, edge_type);
+        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+        self.bumpGraphEdgeTypeCount(graph_name, edge_type);
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -8745,6 +8883,10 @@ pub const GraphStore = struct {
                     try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
                     // PERF-P0-001: Maintain edge-type index during adapter load
                     try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
+                    // DURABILITY: rebuild the per-(graph,type) exact counter on the
+                    // restart edge-scan so typed count(r:TYPE) survives reopen
+                    // (replay-on-load, like the label refcount + untyped edge count).
+                    self.bumpGraphEdgeTypeCount(graph_name, edge.label);
 
                     if (edge_uuid >= self.next_edge_id) {
                         self.next_edge_id = edge_uuid + 1;
@@ -9135,6 +9277,8 @@ pub const GraphStore = struct {
             // before we free label/tenant_id strings (they're still alive in
             // the `edge` struct copy we own here).
             self.decEdgeTypeCount(edge.tenant_id, edge.label);
+            // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+            self.decGraphEdgeTypeCount(edge.graph_name, edge.label);
 
             // Free label
             self.allocator.free(edge.label);
@@ -9397,6 +9541,8 @@ pub const GraphStore = struct {
         try self.addToEdgeTypeIndex(graph_name, label, edge_id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for rollback.
         try self.bumpEdgeTypeCount(DEFAULT_TENANT_ID, label);
+        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+        self.bumpGraphEdgeTypeCount(graph_name, label);
     }
 
     /// Add a label to a node without saving (used during rollback)
@@ -11640,6 +11786,65 @@ test "REQ-QUIC-HC-163: label count refcounts allow concurrent hot-label reads an
 
     try testing.expectEqual(@as(u32, 0), errors.load(.monotonic));
     try testing.expectEqual(@as(usize, 0), store.countNodesByLabel("default", "HotLabel", null));
+}
+
+test "per-(graph,edge_type) counter: maintained on create/delete, cross-graph + cross-type isolated" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Taxon"};
+
+    // G1: create N=6 :R edges (track ids so we can delete some).
+    const n: usize = 6;
+    var g1_edges: [6]u64 = undefined;
+    {
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const a = try store.createNodeWithGraph(&labels, "g1");
+            const b = try store.createNodeWithGraph(&labels, "g1");
+            g1_edges[i] = try store.createEdgeWithGraph(a, b, "R", "g1");
+        }
+    }
+    // G1: also create 2 :OTHER edges (different type, same graph).
+    {
+        var i: usize = 0;
+        while (i < 2) : (i += 1) {
+            const a = try store.createNodeWithGraph(&labels, "g1");
+            const b = try store.createNodeWithGraph(&labels, "g1");
+            _ = try store.createEdgeWithGraph(a, b, "OTHER", "g1");
+        }
+    }
+    // G2: create 3 :R edges (cross-graph isolation).
+    {
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            const a = try store.createNodeWithGraph(&labels, "g2");
+            const b = try store.createNodeWithGraph(&labels, "g2");
+            _ = try store.createEdgeWithGraph(a, b, "R", "g2");
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 6), store.countGraphEdgeType("g1", "R"));
+    try testing.expectEqual(@as(usize, 2), store.countGraphEdgeType("g1", "OTHER"));
+    try testing.expectEqual(@as(usize, 3), store.countGraphEdgeType("g2", "R"));
+    // Public accessor agrees with the internal helper.
+    try testing.expectEqual(@as(usize, 6), store.countEdgesByTypeForGraph("g1", "R"));
+
+    // Delete M=2 :R edges from G1.
+    store.deleteEdgeNoSave(g1_edges[0]);
+    store.deleteEdgeNoSave(g1_edges[1]);
+
+    try testing.expectEqual(@as(usize, 4), store.countGraphEdgeType("g1", "R")); // N - M
+    try testing.expectEqual(@as(usize, 3), store.countGraphEdgeType("g2", "R")); // cross-graph isolated
+    try testing.expectEqual(@as(usize, 2), store.countGraphEdgeType("g1", "OTHER")); // cross-type isolated
+
+    // Unknown (graph,type) keys read 0 without inserting.
+    try testing.expectEqual(@as(usize, 0), store.countGraphEdgeType("g1", "NOPE"));
+    try testing.expectEqual(@as(usize, 0), store.countGraphEdgeType("nope", "R"));
+
+    // ensureGraphEdgeTypeCount creates a zero bucket without changing live counts.
+    try store.ensureGraphEdgeTypeCount("g3", "R");
+    try testing.expectEqual(@as(usize, 0), store.countGraphEdgeType("g3", "R"));
 }
 
 test "GAP-0519: getNodesByLabels heap fallback for >8 labels" {
