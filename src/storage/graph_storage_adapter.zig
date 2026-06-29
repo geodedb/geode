@@ -1591,6 +1591,107 @@ pub fn sessionEngineTxnGraph() ?[]const u8 {
 }
 
 // ============================================================================
+// H3-P2: value-ordered scan (16-shard k-way merge of the ordered indexes)
+// ============================================================================
+
+/// Scan direction for `StorageAdapter.orderedScan`. ASC walks values ascending
+/// (each per-shard ordered tree's natural byte order); DESC walks descending.
+pub const OrderedScanDir = enum { asc, desc };
+
+const OrderedDir = gs.ordered_property_index.OrderedPropertyIndex.Direction;
+const OrderedCursor = gs.ordered_property_index.OrderedPropertyIndex.Cursor;
+
+/// Max (key,node_id) pairs pulled from one shard cursor per SHARED-lock hold.
+/// Bounds how long a single batch fences a queued EXCLUSIVE checkpoint/apply on
+/// that shard (wedge-avoidance), mirroring `label_scan_batch_slots`.
+const ordered_scan_batch_slots: usize = 256;
+
+/// One copied-out head from a shard cursor. `key` is an OWNED dup of the tree's
+/// (order-preserving) encoded key bytes — copied under the shard lock because
+/// the borrowed `OrderedBTree.Entry.key` is only valid under the lock and until
+/// the next mutation of that tree.
+const OrderedScanHead = struct { key: []u8, node_id: u64 };
+
+/// Per-shard cursor + current bounded batch for the k-way merge.
+const OrderedShardState = struct {
+    cursor: ?OrderedCursor = null,
+    opened: bool = false,
+    exhausted: bool = false,
+    buf: std.ArrayList(OrderedScanHead) = .empty,
+    pos: usize = 0,
+};
+
+/// Advance shard `i`'s ordered cursor by a BOUNDED batch, copying (key,node_id)
+/// out into owned buffers, then release the shard lock.
+///
+/// -- LOCK SAFETY (the subtle part) --
+///   * Only this shard's adapter SHARED lock is held while reading the tree;
+///     `mg.rwlock` is NEVER held across the scan (no checkpoint wedge).
+///   * At most `ordered_scan_batch_slots` entries are pulled per acquire, then
+///     the lock is released so a queued EXCLUSIVE checkpoint/apply on this shard
+///     wins before the next batch.
+///   * `exclusiveWaitingBackoff(mg)` parks BEFORE each (re)acquire so a waiting
+///     EXCLUSIVE drains the reader set first (mirrors appendLiveNodesForLabelShard).
+///   * `OrderedBTree.Entry.key` borrows tree-owned bytes valid only under the
+///     lock and until the next tree mutation, so we `dupe` them out here.
+///   * The Cursor is HELD ACROSS lock releases (between batches). This is
+///     memory-safe under concurrent node insert/update/delete: OrderedBTree
+///     insert/remove never free B-tree nodes (a split only shrinks+links leaves;
+///     remove frees the key copy, not the node), and Cursor.next()/prev()
+///     dereference only the leaf node + its prev/next back-pointers, never the
+///     (possibly-relocated) tree handle. A mutation across the gap can yield a
+///     torn read (a valid prefix of a consistent order), never a use-after-free.
+///     The one unsafe concurrent op is a full ordered-index rebuild
+///     (clearTrees) — that is DDL, takes this shard's EXCLUSIVE lock in
+///     `createOrderedIndex`, and does not run during a live scan.
+fn orderedScanRefill(
+    mg: *ManagedGraph,
+    i: usize,
+    label_id: gs.LabelId,
+    key: []const u8,
+    dir: OrderedDir,
+    st: *OrderedShardState,
+    allocator: Allocator,
+    io: std.Io,
+) !void {
+    if (st.exhausted) return;
+
+    // Drop the previous batch's owned key copies before refilling.
+    for (st.buf.items) |h| allocator.free(h.key);
+    st.buf.clearRetainingCapacity();
+    st.pos = 0;
+
+    exclusiveWaitingBackoff(mg);
+    mg.shard_locks[i].lockSharedUncancelable(io);
+    defer mg.shard_locks[i].unlockShared(io);
+
+    const shard = mg.engine.shards[i];
+    if (!st.opened) {
+        st.opened = true;
+        // openOrderedCursor descends the tree (findLeaf + seek); read it under
+        // the SHARED lock. Null => no ordered index registered on this shard.
+        st.cursor = shard.openOrderedCursor(label_id, key, dir);
+        if (st.cursor == null) {
+            st.exhausted = true;
+            return;
+        }
+    }
+
+    var n: usize = 0;
+    while (n < ordered_scan_batch_slots) : (n += 1) {
+        const e = st.cursor.?.next() orelse {
+            st.exhausted = true;
+            break;
+        };
+        const kc = try allocator.dupe(u8, e.key);
+        st.buf.append(allocator, .{ .key = kc, .node_id = e.node_id }) catch |err| {
+            allocator.free(kc);
+            return err;
+        };
+    }
+}
+
+// ============================================================================
 // StorageAdapter — top-level adapter managing multiple named graphs
 // ============================================================================
 
@@ -4390,6 +4491,107 @@ pub const StorageAdapter = struct {
             defer mg.shard_locks[i].unlock(io);
             try shard.createOrderedIndex(label_id, key);
         }
+    }
+
+    /// H3-P2: return node ids for `(label,key)` in global value order (`dir`),
+    /// up to `limit`, by a lock-safe 16-shard k-way merge of the per-shard
+    /// ordered-index cursors. Caller OWNS the returned slice.
+    ///
+    /// Correctness: the output equals a global `std.sort` of the union of all
+    /// shards' (encoded-value, node_id) keys for `(label,key)`, truncated to
+    /// `limit`, in `dir` (ties are broken by node_id, which the P0 ordered
+    /// encoding embeds in the key). Deleted-but-still-posted nodes are skipped
+    /// via a `getNode` liveness check, and one more head is pulled so `limit` is
+    /// still reached when live nodes remain.
+    ///
+    /// Returns an empty slice when the label is unknown or no ordered index is
+    /// registered for `(label,key)` on any shard.
+    ///
+    /// LOCK DISCIPLINE: see `orderedScanRefill` — bounded SHARED batches per
+    /// shard, `exclusiveWaitingBackoff` before each (re)acquire, keys copied out
+    /// under the lock, `mg.rwlock` never held across the scan, and the liveness
+    /// `getNode` runs OUTSIDE any shard lock (it takes only its own brief lock).
+    pub fn orderedScan(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        dir: OrderedScanDir,
+        limit: usize,
+        allocator: Allocator,
+    ) ![]u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        const ctx = (try self.resolveLabelScanContext(graph_name, label)) orelse
+            return try allocator.alloc(u64, 0);
+        const mg = ctx.mg;
+        const label_id = ctx.label_id;
+
+        const eng_dir: OrderedDir = switch (dir) {
+            .asc => .asc,
+            .desc => .desc,
+        };
+
+        const shard_count = mg.engine.shards.len;
+        var states: [sharded_store.SHARD_COUNT]OrderedShardState =
+            [_]OrderedShardState{.{}} ** sharded_store.SHARD_COUNT;
+
+        // Free every copied key buffer + per-shard batch list on exit (success
+        // or error). Cursors need no teardown (no deinit / no buffer-pool pins).
+        defer {
+            for (states[0..shard_count]) |*st| {
+                for (st.buf.items) |h| allocator.free(h.key);
+                st.buf.deinit(allocator);
+            }
+        }
+
+        var result = std.ArrayList(u64).empty;
+        errdefer result.deinit(allocator);
+
+        // Prime every shard's cursor + first batch.
+        for (states[0..shard_count], 0..) |*st, i| {
+            try orderedScanRefill(mg, i, label_id, key, eng_dir, st, allocator, io);
+        }
+
+        // k-way merge: repeatedly emit the extreme head across the (<=16) shards.
+        // A linear select over 16 heads is O(shard_count) per emission — for a
+        // fixed 16-way fan-in this is equivalent to (and simpler than) a binary
+        // heap, and the per-key cost is dominated by the liveness getNode anyway.
+        while (result.items.len < limit) {
+            var best: ?usize = null;
+            for (states[0..shard_count], 0..) |*st, i| {
+                if (st.pos >= st.buf.items.len) continue; // no current head here
+                if (best == null) {
+                    best = i;
+                    continue;
+                }
+                const a = st.buf.items[st.pos].key;
+                const b = states[best.?].buf.items[states[best.?].pos].key;
+                const ord = std.mem.order(u8, a, b);
+                const a_wins = switch (dir) {
+                    .asc => ord == .lt, // smallest key first
+                    .desc => ord == .gt, // largest key first
+                };
+                if (a_wins) best = i;
+            }
+            const bi = best orelse break; // every shard exhausted
+
+            const head = states[bi].buf.items[states[bi].pos];
+            // Liveness: a node deleted after it was posted is still in the
+            // ordered tree; skip it but keep pulling so we can still reach
+            // `limit`. getNode takes only its own brief internal lock — NO shard
+            // lock is held here.
+            if ((try mg.engine.getNode(head.node_id)) != null) {
+                try result.append(allocator, head.node_id);
+            }
+
+            states[bi].pos += 1;
+            if (states[bi].pos >= states[bi].buf.items.len and !states[bi].exhausted) {
+                try orderedScanRefill(mg, bi, label_id, key, eng_dir, &states[bi], allocator, io);
+            }
+        }
+
+        return try result.toOwnedSlice(allocator);
     }
 
     /// Test-only: force a full rebuild of the exact node-property index for
