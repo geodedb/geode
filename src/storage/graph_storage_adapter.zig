@@ -4637,6 +4637,32 @@ pub const StorageAdapter = struct {
         return true;
     }
 
+    /// H3-P4: report whether the ordered index is FRESH — i.e. a registered
+    /// ordered index exists AND its trees reflect EVERY committed write since the
+    /// last durability-boundary rebuild on EVERY shard. The online label/property
+    /// hooks only mark the tree stale; the value-ordered tree is rebuilt+cleared
+    /// only at the durability boundary (full checkpoint / close). A registered,
+    /// eligible, but STALE tree would serve missing/mis-ordered rows, so the
+    /// planner must gate on freshness and fall back to the proven heap when any
+    /// shard is stale (correct, slower). Freshness is engine-global ("no
+    /// un-rebuilt writes"); per-(label,key) registration is already enforced by
+    /// the registered+eligible predicates the planner checks first. False when
+    /// graph/label is unknown.
+    pub fn isOrderedIndexFresh(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) bool {
+        _ = key;
+        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
+            return false;
+        for (ctx.mg.engine.shards) |shard| {
+            if (!shard.orderedIndexFresh()) return false;
+        }
+        return true;
+    }
+
     /// Test-only: force a full rebuild of the exact node-property index for
     /// `graph_name`, exactly as restart recovery does (clear + rescan every
     /// engine shard). Exposed so `test-parallel-index-rebuild` can drive the

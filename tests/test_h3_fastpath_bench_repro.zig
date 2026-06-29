@@ -1,10 +1,20 @@
-// H3-P3 BENCH REPRO: mirror the synthseed/bench ordering — CREATE INDEX runs
+// H3-P4 FRESHNESS GATE: mirror the synthseed/bench ordering — CREATE INDEX runs
 // BEFORE any node exists, then nodes are created via the executor `CREATE (n:T
-// {k:...})` path (label added first, property set after). The unit test
-// test-ordered-scan-fastpath seeds nodes FIRST then CREATE INDEX, so it exercises
-// the build-from-live-scan in createOrderedIndex and passes (hits=1). This repro
-// flips the order to reproduce the real benchmark, where the ordered fast path
-// does NOT engage.
+// {k:...})` path (label added first, property set after). In that ordering the
+// value-ordered tree is EMPTY/STALE until the durability boundary rebuilds it,
+// because the engine's only online ordered-index hook fires on addLabelTxn with
+// the node's prop_head AT LABEL-ADD TIME (== 0 here) and putPropertyTxn does no
+// ordered-index maintenance. A registered+eligible-but-STALE tree must NEVER be
+// served (it would return missing rows). This file proves the planner freshness
+// gate (adapter.isOrderedIndexFresh) closes that latent correctness bug:
+//
+//   STALE case: CREATE INDEX, then create nodes, NO checkpoint -> tree stale ->
+//     the ordered fast path MUST bail to the heap (hits unchanged) and still
+//     return correct, correctly-ordered rows.
+//   FRESH case: same setup, THEN force a FULL checkpoint (adapter.checkpointAll,
+//     light=false -> engine.checkpoint() rebuilds the ordered tree and clears the
+//     stale flag) -> the ordered fast path MUST engage (hits += 1) and return the
+//     SAME correct, correctly-ordered rows.
 //
 // Real store, real parser, real executor, tmpDir — no mocks.
 
@@ -72,62 +82,116 @@ const Harness = struct {
     }
 };
 
-// Bench order: CREATE INDEX FIRST (0 nodes), THEN create nodes via the executor
-// CREATE-with-inline-label path (label added, then property set).
-test "H3-P3 BENCH REPRO: CREATE INDEX before nodes → ordered fast path must still engage" {
-    var h = try Harness.init(testing.allocator);
-    defer h.deinit();
+const N: usize = 300;
+const LIMIT: usize = 20;
 
-    const aa = h.arena.allocator();
-
-    // 1) CREATE INDEX while the graph has ZERO :T nodes (synthseed ordering).
+// Seed the bench ordering: CREATE INDEX FIRST (0 nodes), THEN create N nodes via
+// the executor CREATE-with-inline-label path (label added, then property set).
+// In this ordering the value-ordered tree stays EMPTY/STALE until a durability
+// boundary rebuilds it.
+fn seedIndexBeforeNodes(h: *Harness, aa: std.mem.Allocator) !void {
     {
         var r = try h.runQuery("CREATE INDEX ON :T(k)");
         r.deinit(aa);
     }
-
-    // 2) Create N nodes via the SAME executor path the SQL driver uses for
-    //    `CREATE (n:T {k:...})` — bound var + inline label + inline property.
-    const n: usize = 300;
     var i: usize = 0;
-    while (i < n) : (i += 1) {
-        const v: usize = (i * 97) % n;
+    while (i < N) : (i += 1) {
+        const v: usize = (i * 97) % N;
         const q = try std.fmt.allocPrint(aa, "CREATE (n:T {{k: '{d:0>5}'}})", .{v});
         var r = try h.runQuery(q);
         r.deinit(aa);
     }
+}
 
-    // Instrument the gate predicates after the create-via-inline-label sequence.
-    const adapter = graph_store.getGlobalAdapter().?;
-    const registered = adapter.isOrderedIndexRegistered(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
-    const eligible = adapter.isOrderedIndexEligible(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
-    const scan_ids = try adapter.orderedScan(graph_store.DEFAULT_GRAPH_NAME, "T", "k", .asc, 1000, aa);
-    std.debug.print("[H3-P3 REPRO] registered={} eligible={} orderedScan_count={d} (expected {d})\n", .{ registered, eligible, scan_ids.len, n });
+// Run the ORDER BY ... LIMIT query once, returning (fast-path-hits-delta, result).
+// Caller owns the result and must deinit it with `aa`.
+fn runOrderByLimit(h: *Harness, hits_before: u64) !struct { delta: u64, res: execution.ExecutionResult } {
+    const res = try h.runQuery("MATCH (n:T) RETURN n.k ORDER BY n.k ASC LIMIT 20");
+    const delta = execution.getOrderedScanFastPathHits() - hits_before;
+    return .{ .delta = delta, .res = res };
+}
 
-    // ROOT CAUSE signal: nodes created AFTER `CREATE INDEX` (label added first,
-    // property set after) never populate the value-ordered tree, because the
-    // engine's only ordered-index maintenance fires on addLabelTxn with the
-    // node's prop_head AT LABEL-ADD TIME (== 0 here), and putPropertyTxn does
-    // no ordered-index maintenance. So the tree is EMPTY.
-    try testing.expectEqual(n, scan_ids.len);
-
-    execution.resetOrderedScanFastPathHits();
-    adapter_mod.resetLabelSlotsEnumerated();
-    var res = try h.runQuery("MATCH (n:T) RETURN n.k ORDER BY n.k ASC LIMIT 20");
-    defer res.deinit(aa);
-    const hits = execution.getOrderedScanFastPathHits();
-    const slots = adapter_mod.getLabelSlotsEnumerated();
-
-    std.debug.print("[H3-P3 REPRO] ordered_hits={d} slots_enumerated={d} rows={d}\n", .{ hits, slots, res.rows.len });
-
-    // Correctness: ASC top-20 must be "00000".."00019".
-    try testing.expectEqual(@as(usize, 20), res.rows.len);
+// Assert the ASC top-LIMIT rows are exactly "00000".."00019".
+fn expectAscTopRows(res: execution.ExecutionResult) !void {
+    try testing.expectEqual(LIMIT, res.rows.len);
     var expect_buf: [8]u8 = undefined;
     for (res.rows, 0..) |row, idx| {
         const want = try std.fmt.bufPrint(&expect_buf, "{d:0>5}", .{idx});
         try testing.expectEqualStrings(want, row[0].Str);
     }
+}
 
-    // The bug: the ordered fast path is NOT taken for index-before-nodes.
-    try testing.expectEqual(@as(u64, 1), hits);
+// STALE case: CREATE INDEX before nodes, NO checkpoint -> the value-ordered tree
+// is empty/stale. The freshness gate MUST keep the ordered fast path from firing
+// (heap fallback), and the heap MUST still return correct, correctly-ordered
+// rows. This proves a stale tree NEVER serves wrong/missing rows.
+test "H3-P4 FRESHNESS: stale ordered tree -> fast path bails to heap, rows still correct" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const aa = h.arena.allocator();
+    try seedIndexBeforeNodes(&h, aa);
+
+    const adapter = graph_store.getGlobalAdapter().?;
+    const registered = adapter.isOrderedIndexRegistered(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    const eligible = adapter.isOrderedIndexEligible(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    const fresh = adapter.isOrderedIndexFresh(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    const scan_ids = try adapter.orderedScan(graph_store.DEFAULT_GRAPH_NAME, "T", "k", .asc, 1000, aa);
+    std.debug.print("[H3-P4 STALE] registered={} eligible={} fresh={} orderedScan_count={d}\n", .{ registered, eligible, fresh, scan_ids.len });
+
+    // Tree is registered+eligible but STALE (online hooks never populated it).
+    try testing.expect(registered);
+    try testing.expect(eligible);
+    try testing.expect(!fresh);
+
+    execution.resetOrderedScanFastPathHits();
+    var out = try runOrderByLimit(&h, 0);
+    defer out.res.deinit(aa);
+    std.debug.print("[H3-P4 STALE] ordered_hits_delta={d} rows={d}\n", .{ out.delta, out.res.rows.len });
+
+    // The freshness gate forced a heap fallback: fast path did NOT engage.
+    try testing.expectEqual(@as(u64, 0), out.delta);
+    // ...yet the rows are still correct + correctly ordered (heap is proven).
+    try expectAscTopRows(out.res);
+}
+
+// FRESH case: same seed, THEN force a FULL checkpoint (adapter.checkpointAll ->
+// checkpointAllEx(false, true) -> engine.checkpoint(), which rebuilds the ordered
+// tree from a live-node scan and clears the stale flag). After the durability
+// boundary the index is fresh -> the ordered fast path MUST engage and return the
+// SAME correct, correctly-ordered rows as the stale (heap) case.
+test "H3-P4 FRESHNESS: full checkpoint makes ordered tree fresh -> fast path engages, same rows" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const aa = h.arena.allocator();
+    try seedIndexBeforeNodes(&h, aa);
+
+    const adapter = graph_store.getGlobalAdapter().?;
+
+    // Force the durability boundary: a FULL checkpoint rebuilds the value-ordered
+    // tree and clears ordered_index_stale on every shard.
+    try adapter.checkpointAll();
+
+    const registered = adapter.isOrderedIndexRegistered(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    const eligible = adapter.isOrderedIndexEligible(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    const fresh = adapter.isOrderedIndexFresh(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+    const scan_ids = try adapter.orderedScan(graph_store.DEFAULT_GRAPH_NAME, "T", "k", .asc, 1000, aa);
+    std.debug.print("[H3-P4 FRESH] registered={} eligible={} fresh={} orderedScan_count={d} (expected {d})\n", .{ registered, eligible, fresh, scan_ids.len, N });
+
+    // After the full checkpoint the tree reflects every committed write.
+    try testing.expect(registered);
+    try testing.expect(eligible);
+    try testing.expect(fresh);
+    try testing.expectEqual(N, scan_ids.len);
+
+    execution.resetOrderedScanFastPathHits();
+    var out = try runOrderByLimit(&h, 0);
+    defer out.res.deinit(aa);
+    std.debug.print("[H3-P4 FRESH] ordered_hits_delta={d} rows={d}\n", .{ out.delta, out.res.rows.len });
+
+    // The freshness gate now allows the ordered fast path: it engaged exactly once.
+    try testing.expectEqual(@as(u64, 1), out.delta);
+    // ...returning the SAME correct, correctly-ordered rows as the stale case.
+    try expectAscTopRows(out.res);
 }

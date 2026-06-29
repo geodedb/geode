@@ -2196,6 +2196,13 @@ pub fn orderedScanFastPath(
     const label = head.labels[0];
     if (!adapter.isOrderedIndexRegistered(filter_graph, label, ret_key)) return null;
     if (!adapter.isOrderedIndexEligible(filter_graph, label, ret_key)) return null;
+    // --- FRESHNESS gate (H3-P4): the value-ordered tree is rebuilt+refreshed
+    //     only at the durability boundary (full checkpoint / close), so a
+    //     registered+eligible-but-STALE tree reflects only a subset of writes and
+    //     would return missing/mis-ordered rows. Serve from the index ONLY when it
+    //     reflects every committed write on every shard; otherwise fall back to
+    //     the heap (correct, slower). Strictly narrows the gate (one more AND). ---
+    if (!adapter.isOrderedIndexFresh(filter_graph, label, ret_key)) return null;
 
     // --- Index-ordered walk: k live node ids in global value order, dir-aware,
     //     LIMIT already applied by orderedScan. ---
