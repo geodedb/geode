@@ -3497,12 +3497,12 @@ fn coveredOptionalLeftOuter(q: *const ast.Query) bool {
     if (!opt_chain.is_optional) return false;
     if (!isStorageNativeSingleChain(main_chain)) return false;
 
-    // FIX 2 (review): the clone-path oracle (executeMatchWithOptionalPatterns)
-    // only traverses hops[0] of the main chain, so a multi-hop main breaks
-    // differential equivalence with the engine-direct path and is untested.
-    // Restrict the main chain to bare-node (0 hops) or single-hop (1 hop);
-    // multi-hop main falls back to the (correct) clone path.
-    if (main_chain.hops.len > 1) return false;
+    // GAP fix: multi-hop main chains ARE served engine-direct. The legacy
+    // clone-path oracle (executeMatchWithOptionalPatterns) only bound hops[0]
+    // of the main chain (NULLs for hops[1+] = a real bug); the engine-direct
+    // exploreMainHopsForOptional traverses ALL main hops with correct
+    // left-outer semantics. isStorageNativeSingleChain already validates the
+    // full multi-hop main (distinct vars, no var-length), so no hop cap here.
 
     // Optional chain: exactly one walk hop, no var-length, no shortest, a hop
     // chain (not a bare node).

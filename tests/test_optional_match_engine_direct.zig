@@ -387,46 +387,85 @@ test "correlated optional inline prop falls back to clone path and rows correct"
 }
 
 // ---------------------------------------------------------------------------
-// Test 9 (gate-tightening FIX 2): a MULTI-HOP main chain must NOT take the
-// engine-direct path. The clone-path oracle (executeMatchWithOptionalPatterns)
-// only traverses hops[0] of the main chain, so multi-hop main breaks
-// differential equivalence and is untested. The gate must fall back to the
-// clone path (path-rows == 0).
+// Test 9 (GAP fix): a MULTI-HOP main chain OPTIONAL MATCH is served
+// ENGINE-DIRECT with CORRECT left-outer semantics. The legacy clone-path
+// executor (executeMatchWithOptionalPatterns) only bound hops[0] of the main
+// chain -> NULLs for hops[1+] = a real bug. The engine-direct
+// exploreMainHopsForOptional traverses ALL main hops correctly; widening the
+// gate routes this shape to it.
 //
-// NOTE on rows: the legacy clone-path executor itself only traverses hops[0]
-// of the main chain, so for a 2-hop main it binds only (a,b) and leaves the
-// hop[1]+ node `c` (and therefore the optional `d`) NULL. That is a
-// PRE-EXISTING legacy limitation, OUTSIDE the scope of this gate-tightening.
-// The job of FIX 2 is purely to stop the engine-direct path from silently
-// disagreeing with that oracle: after the fix the shape routes to the legacy
-// path (path-rows == 0) and returns exactly the legacy result.
+// HAND-VALIDATED graph (expectations computed by hand, NOT vs the buggy oracle):
+//   a1{id:1} -[:R]-> b1{id:11} -[:R]-> c1{id:21}   (c1 has 2 children d1,d2)
+//   a1{id:1} -[:R]-> b1{id:11} -[:R]-> c2{id:22}   (c2 has 0 children)
+//   a1{id:1} -[:R]-> b2{id:12} -[:R]-> c3{id:23}   (c3 has 1 child d3)
+//   c1 -[:R]-> d1{id:31}, c1 -[:R]-> d2{id:32}, c3 -[:R]-> d3{id:33}
+//
+// MATCH (a:T{id:1})-[:R]->(b)-[:R]->(c) OPTIONAL MATCH (c)-[:R]->(d)
+//   RETURN a.id, b.id, c.id, d.id
+//
+// Three main (a,b,c) paths; left-outer expands optional from c:
+//   (1,11,21,31)  (1,11,21,32)        c1 with 2 children -> 2 rows
+//   (1,11,22,NULL)                    c2 childless       -> 1 NULL row
+//   (1,12,23,33)                      c3 with 1 child    -> 1 row
+// = 4 rows total. a,b,c always bound (NEVER NULL); d per left-outer match.
 // ---------------------------------------------------------------------------
-test "multi-hop main chain falls back to clone path (not engine-direct)" {
+test "multi-hop main chain OPTIONAL MATCH is engine-direct with correct left-outer rows" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
-    // a -> b -> c -> d linear chain.
     try h.exec(
-        "CREATE (a:T {k:'a'}), (b:T {k:'b'}), (c:T {k:'c'}), (d:T {k:'d'}), " ++
-            "(a)-[:R]->(b), (b)-[:R]->(c), (c)-[:R]->(d)",
+        "CREATE (a1:T {id:1}), (b1:T {id:11}), (b2:T {id:12}), " ++
+            "(c1:T {id:21}), (c2:T {id:22}), (c3:T {id:23}), " ++
+            "(d1:T {id:31}), (d2:T {id:32}), (d3:T {id:33}), " ++
+            "(a1)-[:R]->(b1), (a1)-[:R]->(b2), " ++
+            "(b1)-[:R]->(c1), (b1)-[:R]->(c2), (b2)-[:R]->(c3), " ++
+            "(c1)-[:R]->(d1), (c1)-[:R]->(d2), (c3)-[:R]->(d3)",
     );
 
     planned_read_runtime.resetPathRowsMaterialized();
     var r = try h.runQuery(
-        "MATCH (a:T {k:'a'})-[:R]->(b:T)-[:R]->(c:T) OPTIONAL MATCH (c)-[:R]->(d:T) RETURN a.k, b.k, c.k, d.k",
+        "MATCH (a:T {id:1})-[:R]->(b)-[:R]->(c) OPTIONAL MATCH (c)-[:R]->(d) RETURN a.id, b.id, c.id, d.id",
     );
     defer r.deinit(h.arena.allocator());
 
-    // Load-bearing FIX 2 assertion: NOT engine-direct -> clone-path fallback.
-    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized());
+    // Load-bearing: engine-direct served it (legacy never increments this).
+    try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0);
 
-    // Result is exactly the legacy clone-path output (hops[0]-only main bind:
-    // a,b bound; multi-hop tail and optional NULL). Documents the routing, not
-    // an endorsement of the legacy multi-hop-main semantics.
-    try testing.expectEqual(@as(usize, 1), r.rows.len);
-    try testing.expect(strEq(r.rows[0][0], "a"));
-    try testing.expect(strEq(r.rows[0][1], "b"));
-    try testing.expect(isNull(r.rows[0][2]));
-    try testing.expect(isNull(r.rows[0][3]));
+    // Correct left-outer cardinality: 4 rows.
+    try testing.expectEqual(@as(usize, 4), r.rows.len);
+
+    // Hand-computed expected multiset (a.id, b.id, c.id, d.id; d null sentinel).
+    const Exp = struct { a: i64, b: i64, c: i64, d: ?i64 };
+    const expected = [_]Exp{
+        .{ .a = 1, .b = 11, .c = 21, .d = 31 },
+        .{ .a = 1, .b = 11, .c = 21, .d = 32 },
+        .{ .a = 1, .b = 11, .c = 22, .d = null },
+        .{ .a = 1, .b = 12, .c = 23, .d = 33 },
+    };
+    var matched = [_]bool{false} ** expected.len;
+    for (r.rows) |row| {
+        // a, b, c must ALWAYS be bound (the legacy bug left them NULL).
+        try testing.expect(!isNull(row[0]));
+        try testing.expect(!isNull(row[1]));
+        try testing.expect(!isNull(row[2]));
+        const a = row[0].Int;
+        const b = row[1].Int;
+        const c = row[2].Int;
+        const d: ?i64 = if (isNull(row[3])) null else row[3].Int;
+        var found = false;
+        for (&matched, 0..) |*used, i| {
+            if (used.*) continue;
+            const e = expected[i];
+            const d_eq = (e.d == null and d == null) or
+                (e.d != null and d != null and e.d.? == d.?);
+            if (e.a == a and e.b == b and e.c == c and d_eq) {
+                used.* = true;
+                found = true;
+                break;
+            }
+        }
+        try testing.expect(found);
+    }
+    for (matched) |used| try testing.expect(used);
 }
 
 // ---------------------------------------------------------------------------
