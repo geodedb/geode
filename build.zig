@@ -7395,6 +7395,16 @@ pub fn build(b: *std.Build) void {
     const where_scan_progress_step = b.step("test-where-scan-writer-progress", "Run where-scan-writer-progress concurrency regression (sparse WHERE scan must not starve per-shard apply)");
     where_scan_progress_step.dependOn(&run_where_scan_progress_tests.step);
 
+    // H1 (where-limit-lazy): WHERE+LIMIT must bound label-slot enumeration by
+    // predicate MATCHES (offset+limit), not enumerate every live slot up front.
+    const where_limit_lazy_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_where_limit_lazy.zig"), .target = target, .optimize = optimize });
+    where_limit_lazy_test_mod.addImport("geode", root_mod);
+    const where_limit_lazy_tests = b.addTest(.{ .root_module = where_limit_lazy_test_mod });
+    const run_where_limit_lazy_tests = b.addRunArtifact(where_limit_lazy_tests);
+    shardDep(test_step, &run_where_limit_lazy_tests.step, 5, test_shard_loads, test_shard_index);
+    const where_limit_lazy_step = b.step("test-where-limit-lazy", "Run WHERE+LIMIT lazy/match-bounded label enumeration regression (H1)");
+    where_limit_lazy_step.dependOn(&run_where_limit_lazy_tests.step);
+
     // Scan-cancellation regression (FIX #1): a server-side node scan must STOP
     // iterating and RELEASE its per-graph SHARED read lock when the driving
     // client's stream closes (cancel token) OR a query deadline passes —
