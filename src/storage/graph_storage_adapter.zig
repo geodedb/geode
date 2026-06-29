@@ -53,6 +53,14 @@ var g_lookup_all_props_candidates_scanned: std.atomic.Value(u64) = std.atomic.Va
 // probe with NO `getNodeProperty`, so this counter must NOT grow per endpoint on
 // the composite path. Wall-clock-independent regression instrumentation.
 var g_node_property_engine_reads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Live label slots VISITED (appended) by `appendLiveNodesForLabelShard` since
+// the last `resetLabelSlotsEnumerated`. Each non-deleted/non-empty slot the
+// label-scan path materializes increments this once. H1: the WHERE+LIMIT
+// streaming read path must STOP enumerating once `offset+limit` predicate
+// matches are found instead of enumerating EVERY live slot up front; this
+// counter makes that bound wall-clock-independent (pre-fix == all live slots
+// for the label, post-fix << N for an early-/all-matching predicate).
+var g_label_slots_enumerated: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
 // CANARY: REQ=REQ-QUIC-HC-122; FEATURE="HighConcurrencyMutations"; ASPECT=ExactPropertyIndexSharding; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
 pub const exact_node_property_index_shard_count: usize = 64;
@@ -73,6 +81,22 @@ pub fn resetLookupCounters() void {
     g_label_scan_lookup_count.store(0, .release);
     g_lookup_all_props_candidates_scanned.store(0, .release);
     g_node_property_engine_reads.store(0, .release);
+    g_label_slots_enumerated.store(0, .release);
+}
+
+/// Reset the live-label-slots-enumerated counter (H1 read-path enumeration cost).
+pub fn resetLabelSlotsEnumerated() void {
+    g_label_slots_enumerated.store(0, .release);
+}
+
+/// Live label slots VISITED by the lock-safe label-scan enumeration
+/// (`appendLiveNodesForLabelShard`) since the last reset. The WHERE+LIMIT
+/// streaming read path must keep this BOUNDED (≈ enough shards to find
+/// `offset+limit` predicate matches), not equal to the label's full live-node
+/// count. Wall-clock-independent instrumentation for the H1 bounded-enumeration
+/// fix.
+pub fn getLabelSlotsEnumerated() u64 {
+    return g_label_slots_enumerated.load(.acquire);
 }
 
 /// Engine-direct single-property reads (`getNodeProperty` → PropertyChain →
@@ -4238,6 +4262,10 @@ pub const StorageAdapter = struct {
 
                 if (node_mod.isDeleted(&rec)) continue;
                 if (node_mod.isEmpty(&rec)) continue;
+                // H1 instrumentation: one live slot enumerated (materialized into
+                // a label-scan result). Bounded by the WHERE+LIMIT fix once the
+                // caller stops requesting shards after `offset+limit` matches.
+                _ = g_label_slots_enumerated.fetchAdd(1, .monotonic);
                 try result.append(allocator, nid);
             }
 
