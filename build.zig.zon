@@ -414,6 +414,10 @@
         //   .url  = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.8#<sha>",
         //   .hash = "graph_storage-0.2.8-<...>",
         .graph_storage = .{
+            // v0.2.15 = v0.2.14 + value-ordered secondary index (H3): order-preserving
+            // encoder + ordered B+Tree + per-(label,key) per-shard index, counter-gated
+            // persistence + checkpoint-refresh. Additive/gated (active only when an
+            // ordered index is registered). Same FIPS transitive deps -> no diamond.
             // v0.2.14 = v0.2.13 + Lever B: a CLEAN restart LOADS the persisted
             // derived index snapshots (O(snapshot)) instead of the O(graph)
             // rebuildDerivedIndexes — a full checkpoint now persists dirty derived
@@ -423,8 +427,8 @@
             // (concurrent shard opens; recovery makes no thread-pool calls so it
             // cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive deps
             // → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.14#8163188292e1641a6d0f91a3e72be9df72c9a514",
-            .hash = "graph_storage-0.2.14-9UyJS-bmEwAVBsuH7ij-Ny4kxIiCC5VhlKiYmYIwUzNu",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.15#97ff3355018bf737a23974a3317a2e7671d52ba7",
+            .hash = "graph_storage-0.2.15-9UyJS6rlFABaP68-qUFE4jIKV56NJwvXeaihdmdHZ3Xi",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
