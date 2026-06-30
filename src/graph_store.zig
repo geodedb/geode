@@ -8973,25 +8973,6 @@ pub const GraphStore = struct {
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
-            // Cold-open loop1 I/O locality: sort scan_entries by
-            // (shard, prop_head) so the per-node props-page fetch below
-            // (getNodePropertyByHead) visits each shard's props pages in
-            // ascending prop_head order instead of raw slot-scan order.
-            // Reorder-only — both loop1 (id_map keyed by uuid) and loop2
-            // (self.nodes keyed by uuid) are insertion-order-independent, so
-            // this changes I/O locality only, not the resulting IdMap or
-            // skipped-mapping count. The slice is function-local and freed
-            // above; no other scanAllNodes caller observes this order.
-            const ScanEntry = graph_storage_adapter.StorageAdapter.ScanEntry;
-            std.sort.pdq(ScanEntry, scan_entries, adapter, struct {
-                fn less(a: *graph_storage_adapter.StorageAdapter, x: ScanEntry, y: ScanEntry) bool {
-                    const sx = a.shardOfSlot(x.slot_id);
-                    const sy = a.shardOfSlot(y.slot_id);
-                    if (sx != sy) return sx < sy;
-                    return x.rec.prop_head < y.rec.prop_head;
-                }
-            }.less);
-
             // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
             // adopted as base at open), the node uuid->slot mappings already
             // live in the immutable base. Re-inserting them here (loop1) would
@@ -9000,6 +8981,30 @@ pub const GraphStore = struct {
             // Skip loop1 entirely; loop2 below reads node uuids straight from
             // base via id_map.nodeUuid(slot_id).
             if (id_map.mode == .resident) {
+                // Cold-open loop1 I/O locality: sort scan_entries by
+                // (shard, prop_head) so the per-node props-page fetch below
+                // (getNodePropertyByHead) visits each shard's props pages in
+                // ascending prop_head order instead of raw slot-scan order.
+                // Reorder-only — both loop1 (id_map keyed by uuid) and loop2
+                // (self.nodes keyed by uuid) are insertion-order-independent, so
+                // this changes I/O locality only, not the resulting IdMap or
+                // skipped-mapping count. The slice is function-local and freed
+                // above; no other scanAllNodes caller observes this order.
+                // Gated to the .resident rebuild path: this is loop1's only
+                // consumer. On .mmap_backed (lazy-hydrate / fast-restart) loop1
+                // is skipped entirely, so sorting scan_entries there would be
+                // pure wasted O(n log n) work undercutting the sub-second
+                // restart goal.
+                const ScanEntry = graph_storage_adapter.StorageAdapter.ScanEntry;
+                std.sort.pdq(ScanEntry, scan_entries, adapter, struct {
+                    fn less(a: *graph_storage_adapter.StorageAdapter, x: ScanEntry, y: ScanEntry) bool {
+                        const sx = a.shardOfSlot(x.slot_id);
+                        const sy = a.shardOfSlot(y.slot_id);
+                        if (sx != sy) return sx < sy;
+                        return x.rec.prop_head < y.rec.prop_head;
+                    }
+                }.less);
+
                 for (scan_entries) |entry| {
                     const slot_id = entry.slot_id;
                     // PHASE 1b instrumentation: per-node engine read of the IdMap
