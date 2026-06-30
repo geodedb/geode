@@ -8459,7 +8459,7 @@ test "StorageAdapter: getNodePropertyByHead parity with getNodeProperty" {
                 .float => |f| try std.testing.expectEqual(f, by_head.?.float),
                 .bool => |b| try std.testing.expectEqual(b, by_head.?.bool),
                 .null => try std.testing.expectEqual(gs.PropertyValue.null, by_head.?),
-                else => {},
+                else => try std.testing.expect(false),
             }
         }
     }
