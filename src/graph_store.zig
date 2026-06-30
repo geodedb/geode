@@ -8973,6 +8973,25 @@ pub const GraphStore = struct {
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
+            // Cold-open loop1 I/O locality: sort scan_entries by
+            // (shard, prop_head) so the per-node props-page fetch below
+            // (getNodePropertyByHead) visits each shard's props pages in
+            // ascending prop_head order instead of raw slot-scan order.
+            // Reorder-only — both loop1 (id_map keyed by uuid) and loop2
+            // (self.nodes keyed by uuid) are insertion-order-independent, so
+            // this changes I/O locality only, not the resulting IdMap or
+            // skipped-mapping count. The slice is function-local and freed
+            // above; no other scanAllNodes caller observes this order.
+            const ScanEntry = graph_storage_adapter.StorageAdapter.ScanEntry;
+            std.sort.pdq(ScanEntry, scan_entries, adapter, struct {
+                fn less(a: *graph_storage_adapter.StorageAdapter, x: ScanEntry, y: ScanEntry) bool {
+                    const sx = a.shardOfSlot(x.slot_id);
+                    const sy = a.shardOfSlot(y.slot_id);
+                    if (sx != sy) return sx < sy;
+                    return x.rec.prop_head < y.rec.prop_head;
+                }
+            }.less);
+
             // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
             // adopted as base at open), the node uuid->slot mappings already
             // live in the immutable base. Re-inserting them here (loop1) would
@@ -8998,7 +9017,7 @@ pub const GraphStore = struct {
                         // the per-node level so the rest of the graph still
                         // hydrates and the bad node is dropped to the
                         // legacy-uuid fallback (or skipped) below.
-                        const maybe_stored = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
+                        const maybe_stored = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
                             error.DataCorruption, error.CircularChainDetected => {
                                 log.warn("skipping node with corrupt property page during load", &.{
                                     Attr.string("graph", graph_name),
@@ -11855,6 +11874,112 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     try testing.expectEqual(@as(u64, 1002), edge.to_id);
     const edge_weight = edge.properties.get("weight") orelse return error.PropertyNotFound;
     try testing.expectEqual(@as(i64, 3), edge_weight.Int);
+}
+
+test "loadOneGraphFromAdapterFull: sorted-by-prop_head loop1 matches legacy per-node IdMap reconstruction" {
+    const gs = @import("graph_storage");
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(path);
+
+    // Small page_size forces node_b's internal-id property past the head
+    // page, exercising the multi-page prop chain through the by-head fetch.
+    const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, path, gs.GraphConfig{
+        .page_size = 256,
+        .buffer_pool_pages = 512,
+    });
+    defer adapter.deinit();
+
+    const graph = "coldopen_loop1_test";
+    const key = INTERNAL_NODE_ID_PROPERTY_KEY;
+
+    // Persisted public ids must round-trip through parsePersistedPublicId
+    // (hex-encoded, matching encodePersistedPublicId), not arbitrary text.
+    var id_buf_a: [16]u8 = undefined;
+    var id_buf_b: [16]u8 = undefined;
+    var id_buf_d: [16]u8 = undefined;
+
+    // node_a: normal node with the internal-id property set.
+    const node_a = try adapter.createNode(graph, &[_][]const u8{"L"});
+    try adapter.setNodeProperty(graph, node_a, key, .{ .String = encodePersistedPublicId(&id_buf_a, 1001) });
+
+    // node_b: multi-page prop chain (many props before the internal id).
+    const node_b = try adapter.createNode(graph, &[_][]const u8{"L"});
+    var pi: usize = 0;
+    while (pi < 12) : (pi += 1) {
+        const pk = try std.fmt.allocPrint(allocator, "extra_prop_{d:0>2}", .{pi});
+        defer allocator.free(pk);
+        try adapter.setNodeProperty(graph, node_b, pk, .{ .String = "val_0123456789abcdefghij" });
+    }
+    try adapter.setNodeProperty(graph, node_b, key, .{ .String = encodePersistedPublicId(&id_buf_b, 1002) });
+
+    // node_c: NO internal-id property at all -> must be skipped (no legacy
+    // map present in this standalone GraphStore, since data_dir is "").
+    const node_c = try adapter.createNode(graph, &[_][]const u8{"L"});
+
+    // node_d: another normal node, on a different shard than node_c.
+    const node_d = try adapter.createNode(graph, &[_][]const u8{"L"});
+    try adapter.setNodeProperty(graph, node_d, key, .{ .String = encodePersistedPublicId(&id_buf_d, 1004) });
+
+    // Confirm the artifact actually spans >=2 shards.
+    try testing.expect(gs.shard_count.shardOfNode(node_a) != gs.shard_count.shardOfNode(node_b));
+
+    // ---- GOLDEN: legacy per-node getNodeProperty reconstruction (no sort,
+    // raw slot-scan order) — the pre-change behavior this change must match. ----
+    const golden_entries = try adapter.scanAllNodes(graph, allocator);
+    defer allocator.free(golden_entries);
+
+    var golden = std.AutoHashMap(u128, u64).init(allocator); // uuid -> slot_id
+    defer golden.deinit();
+    var golden_skipped: u64 = 0;
+    for (golden_entries) |entry| {
+        const maybe_stored = try adapter.getNodeProperty(graph, entry.slot_id, key, allocator);
+        var matched_uuid: ?u64 = null;
+        if (maybe_stored) |stored_prop| {
+            defer graph_storage_adapter.freeOwnedStorageProperty(allocator, stored_prop);
+            switch (stored_prop) {
+                .string => |text| {
+                    if (parsePersistedPublicId(text)) |parsed| matched_uuid = parsed;
+                },
+                else => {},
+            }
+        }
+        if (matched_uuid) |u| {
+            try golden.put(@as(u128, u), entry.slot_id);
+        } else {
+            golden_skipped += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), golden_skipped); // only node_c
+    try testing.expectEqual(@as(usize, 3), golden.count()); // a, b, d
+
+    // ---- ACTUAL: run the function under test (sorted loop1 + by-head fetch). ----
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+    try store.loadOneGraphFromAdapterFull(adapter, graph);
+
+    const id_map = store.getIdMap(graph) orelse return error.IdMapNotLoaded;
+
+    var golden_it = golden.iterator();
+    var matched: u64 = 0;
+    while (golden_it.next()) |e| {
+        const slot = id_map.nodeSlot(e.key_ptr.*) orelse return error.NodeSlotMappingMissing;
+        try testing.expectEqual(e.value_ptr.*, slot);
+        matched += 1;
+    }
+    try testing.expectEqual(golden.count(), matched);
+
+    // node_c must be absent from the rebuilt IdMap (the skip path).
+    try testing.expect(id_map.nodeUuid(node_c) == null);
+
+    // The IdMap must not contain any extra mappings beyond the golden set.
+    var idmap_uuid_it = id_map.nodeUuidIterator();
+    var idmap_count: u64 = 0;
+    while (idmap_uuid_it.next()) |_| idmap_count += 1;
+    try testing.expectEqual(golden.count(), idmap_count);
 }
 
 test "rollback removes adapter-backed state before reload" {
