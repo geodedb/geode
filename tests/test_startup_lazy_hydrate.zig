@@ -184,6 +184,104 @@ test "PHASE 1b: concurrent first-queries hydrate a cold graph exactly once" {
     }
 }
 
+// PHASE 1b CONCURRENCY (review-found CRITICAL, CWE-362): a FIRST read of a cold
+// graph A hydrates it by rebuilding the deferred `nodes_by_graph` / `label_index`
+// outer maps (StringHashMap.getOrPut -> whole-map rehash) while holding only the
+// SHARED store lock. That rehash races concurrent SHARED readers of ANOTHER
+// graph B (`getNodesByLabel` / `iterateNodesInGraph` / `nodesInGraphCount`) and
+// the concurrent first-touch hydration of B. Pre-fix this is a data race / torn
+// read (RED under -fsanitize-thread, can crash); post-fix the leaf mutexes
+// (`nodes_by_graph_mutex` + `label_index_mutex` on the readers) serialise the
+// rehash against the readers (GREEN). Run via:
+//   zig build test-startup-lazy-hydrate          (functional)
+//   zig build test-startup-lazy-hydrate-tsan      (race detection)
+test "PHASE 1b: hydrate A || read B -- concurrent cross-graph hydration is race-free" {
+    const allocator = testing.allocator;
+
+    const GA = "graphA";
+    const GB = "graphB";
+    const NA: usize = 200;
+    const NB: usize = 200;
+
+    var iter: usize = 0;
+    while (iter < 5) : (iter += 1) {
+        graph_store.deinitGlobalStore();
+
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+        defer allocator.free(data_dir);
+
+        // --- Phase 1: seed BOTH graphs + full checkpoint (writes IdMap snapshot). ---
+        {
+            graph_store.setDataDirOverride(allocator, data_dir);
+            const store = graph_store.getGlobalStore(allocator);
+            var i: usize = 0;
+            while (i < NA) : (i += 1) _ = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GA);
+            i = 0;
+            while (i < NB) : (i += 1) _ = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GB);
+            try store.saveToFile();
+            graph_store.deinitGlobalStore();
+            graph_store.setDataDirOverride(allocator, null);
+        }
+
+        // --- Phase 2: reopen cold; first-touch A and B CONCURRENTLY. ---
+        {
+            graph_store.setDataDirOverride(allocator, data_dir);
+            defer graph_store.setDataDirOverride(allocator, null);
+            graph_store.resetLazyHydrateCounters();
+            const store = graph_store.getGlobalStore(allocator);
+
+            // Both graphs are cold: no deferred loop2 scan ran at the ready point.
+            try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+            var start = std.atomic.Value(bool).init(false);
+            var a_ok = std.atomic.Value(usize).init(0);
+            var b_ok = std.atomic.Value(usize).init(0);
+
+            const W = struct {
+                // First read on A triggers A's hydration (outer-map rehash).
+                fn readA(s: *GraphStore, go: *std.atomic.Value(bool), ok: *std.atomic.Value(usize)) void {
+                    while (!go.load(.acquire)) {}
+                    const r = s.getNodesByLabel(GA, LABEL) orelse return;
+                    const c = s.nodesInGraphCount(GA);
+                    if (r.len == NA and c == NA) _ = ok.fetchAdd(1, .monotonic);
+                }
+                // First read on B triggers B's hydration; the repeat reads then
+                // exercise the lockless outer-map readers while A may still be
+                // rehashing the shared maps.
+                fn readB(s: *GraphStore, go: *std.atomic.Value(bool), ok: *std.atomic.Value(usize)) void {
+                    while (!go.load(.acquire)) {}
+                    var good: usize = 0;
+                    var k: usize = 0;
+                    while (k < 64) : (k += 1) {
+                        const r = s.getNodesByLabel(GB, LABEL) orelse continue;
+                        var it = s.iterateNodesInGraph(GB);
+                        var cnt: usize = 0;
+                        while (it.next()) |_| cnt += 1;
+                        if (r.len == NB and cnt == NB and s.nodesInGraphCount(GB) == NB) good += 1;
+                    }
+                    if (good == 64) _ = ok.fetchAdd(1, .monotonic);
+                }
+            };
+
+            const ta = try std.Thread.spawn(.{}, W.readA, .{ store, &start, &a_ok });
+            const tb = try std.Thread.spawn(.{}, W.readB, .{ store, &start, &b_ok });
+            start.store(true, .release); // release both threads simultaneously
+            ta.join();
+            tb.join();
+
+            // No torn results: A correct once, B correct on every one of its reads.
+            try testing.expectEqual(@as(usize, 1), a_ok.load(.monotonic));
+            try testing.expectEqual(@as(usize, 1), b_ok.load(.monotonic));
+            // Each graph hydrated EXACTLY once: loop2 scanned NA + NB, not more.
+            try testing.expectEqual(@as(u64, NA + NB), graph_store.loop2ScanNodeCount());
+
+            graph_store.deinitGlobalStore();
+        }
+    }
+}
+
 test "PHASE 1b: absent snapshot falls back to scan-rebuild (correct)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();

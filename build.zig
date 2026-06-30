@@ -7696,6 +7696,29 @@ pub fn build(b: *std.Build) void {
     const startup_lazy_step = b.step("test-startup-lazy-hydrate", "PHASE 1b: deferred resident-load -> lazy per-graph hydration (sub-second open)");
     startup_lazy_step.dependOn(&run_startup_lazy_tests.step);
 
+    // TSan companion: same lazy-hydrate test file compiled with -fsanitize-thread
+    // so the "hydrate A || read B" cross-graph hydration race (CWE-362 on the
+    // shared `nodes_by_graph` / `label_index` outer maps) runs under the thread
+    // sanitizer. Opt-in (not part of the default test_step): TSan adds ~5-8x
+    // overhead and requires libtsan at runtime.
+    // Run via: zig build test-startup-lazy-hydrate-tsan
+    const startup_lazy_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_startup_lazy_hydrate.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    startup_lazy_tsan_mod.addImport("geode", root_mod);
+    startup_lazy_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const startup_lazy_tsan_tests = b.addTest(.{ .root_module = startup_lazy_tsan_mod });
+    const run_startup_lazy_tsan_tests = b.addRunArtifact(startup_lazy_tsan_tests);
+    const startup_lazy_tsan_step = b.step(
+        "test-startup-lazy-hydrate-tsan",
+        "TSan companion: lazy-hydrate cross-graph concurrency under -fsanitize-thread (race detection)",
+    );
+    startup_lazy_tsan_step.dependOn(&run_startup_lazy_tsan_tests.step);
+
     // H3-P2: value-ordered scan (16-shard k-way merge) + ordered-index
     // registration on CREATE INDEX. See tests/test_ordered_scan.zig.
     const ordered_scan_test_mod = b.createModule(.{

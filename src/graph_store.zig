@@ -1710,6 +1710,24 @@ pub const GraphStore = struct {
     // posting-list insert. This mutex guards the outer map and is held while
     // a posting's leaf mutex is held, so rehash cannot move a locked posting.
     label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // CANARY: REQ=REQ-STARTUP-P1B-CONCFIX-001; FEATURE="LazyHydrationConcurrency"; ASPECT=NodesByGraphLeafLock; STATUS=TESTED; TEST=tests/test_startup_lazy_hydrate.zig; OWNER=storage; UPDATED=2026-06-29
+    //
+    // PHASE 1b concurrency fix: `nodes_by_graph` historically relied on the
+    // EXCLUSIVE per-graph rwlock to protect its outer StringHashMap against
+    // rehash. Lazy hydration (`ensureGraphHydrated`) breaks that assumption:
+    // a FIRST read of a cold graph rebuilds the deferred indexes by calling
+    // `addNodeToGraphIndex` (StringHashMap.getOrPut -> whole-map rehash) while
+    // the caller holds only the SHARED store lock, racing concurrent SHARED
+    // readers of OTHER graphs (`iterateNodesInGraph` / `nodesInGraphCount`)
+    // and concurrent first-touch hydration of yet other graphs (CWE-362).
+    // This leaf mutex serialises every outer-map structural access (rehash on
+    // the writer; the getPtr lookups that extract a stable heap-backed inner
+    // iterator/count on the readers) so the rehash can never tear a concurrent
+    // reader. Leaf-level: no other lock is acquired while it is held, so it is
+    // ordering-safe under either the SHARED or EXCLUSIVE store lock. (The
+    // sibling `label_index` already has `label_index_mutex` on its writer; the
+    // companion fix wires that mutex into its lockless readers below.)
+    nodes_by_graph_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // CANARY: REQ=REQ-QUIC-HC-163; FEATURE="High-Concurrency Label Counts"; ASPECT=AtomicLabelCountRefcounts; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
     //
     // Existing graph+label refcount entries are mutated atomically while this
@@ -1772,6 +1790,21 @@ pub const GraphStore = struct {
     // build is serialised by each entry's own mutex.
     pending_hydration: std.StringHashMap(*HydrationEntry) = undefined,
     hydration_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // PHASE 1b concurrency fix (review): a STORE-WIDE serialiser for the actual
+    // per-graph hydration BUILD (`loadOneGraphFromAdapterFull`). The per-graph
+    // `entry.mutex` only serialises first-touches of the SAME graph; first
+    // touches of DIFFERENT cold graphs (A and B) would otherwise run their
+    // builds concurrently and both mutate the STORE-WIDE maps the build touches
+    // (`id_maps`/`graphs` getOrPut, `merge_prop_index`, etc.) at the same time —
+    // a data race (CWE-362) that trips the HashMap pointer-stability SafetyLock.
+    // The build runs under the global store lock only in SHARED mode (R6: the
+    // global EXCLUSIVE lock is RESTORE/BACKUP-only and cannot be acquired from a
+    // chokepoint already holding it SHARED without deadlocking), so this leaf
+    // mutex provides the cross-graph build mutual-exclusion the shared store lock
+    // does not. Held ONLY on the rare first-touch build, never on the hydrated
+    // fast path, so the read hot path is unaffected. Ordering: entry.mutex ->
+    // hydration_build_mutex (then the build's own leaf locks); never the reverse.
+    hydration_build_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     /// Initialize GraphStore with default tenant
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!GraphStore {
@@ -4144,6 +4177,12 @@ pub const GraphStore = struct {
     // PERF-B (issue #811): Add a node-id to the per-graph node-id index.
     // Idempotent: re-adding the same id is a no-op (AutoHashMap.put dedupes).
     fn addNodeToGraphIndex(self: *GraphStore, graph_name: []const u8, node_id: u64) !void {
+        // PHASE 1b concurrency fix: serialise the outer-map rehash against the
+        // lockless `nodes_by_graph` readers (see `nodes_by_graph_mutex`). Leaf
+        // lock — innermost, no nesting.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.nodes_by_graph_mutex.lockUncancelable(io);
+        defer self.nodes_by_graph_mutex.unlock(io);
         const result = try self.nodes_by_graph.getOrPut(graph_name);
         if (!result.found_existing) {
             const key_copy = try self.allocator.dupe(u8, graph_name);
@@ -4160,6 +4199,11 @@ pub const GraphStore = struct {
     // index, and recreating the inner map on the next insert is cheap. Keeps
     // the read-side path stateless (no need to retry on missing key).
     fn removeNodeFromGraphIndex(self: *GraphStore, graph_name: []const u8, node_id: u64) void {
+        // PHASE 1b concurrency fix: hold the leaf mutex for the outer getPtr +
+        // inner remove so a concurrent hydration rehash cannot tear the lookup.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.nodes_by_graph_mutex.lockUncancelable(io);
+        defer self.nodes_by_graph_mutex.unlock(io);
         if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
             _ = inner.remove(node_id);
         }
@@ -4194,6 +4238,15 @@ pub const GraphStore = struct {
     /// this index is graph-scoped, not tenant- or RLS-scoped.
     pub fn iterateNodesInGraph(self: *const GraphStore, graph_name: []const u8) NodesByGraphIterator {
         @constCast(self).ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        // PHASE 1b concurrency fix: hold `nodes_by_graph_mutex` across the outer
+        // getPtr + keyIterator extraction so a concurrent hydration rehash of
+        // the outer map (a first-touch of ANOTHER cold graph under the shared
+        // store lock) cannot tear this lookup. The returned KeyIterator captures
+        // the inner map's HEAP pointers, which survive an outer-map rehash, so
+        // it stays valid after the leaf lock is released.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        @constCast(self).nodes_by_graph_mutex.lockUncancelable(io);
+        defer @constCast(self).nodes_by_graph_mutex.unlock(io);
         if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
             return .{ .inner = inner.keyIterator(), .nodes = &self.nodes };
         }
@@ -4204,6 +4257,11 @@ pub const GraphStore = struct {
     /// given graph (0 when the graph is absent).
     pub fn nodesInGraphCount(self: *const GraphStore, graph_name: []const u8) usize {
         @constCast(self).ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        // PHASE 1b concurrency fix: leaf-lock the outer getPtr + count so a
+        // concurrent hydration rehash cannot tear the lookup.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        @constCast(self).nodes_by_graph_mutex.lockUncancelable(io);
+        defer @constCast(self).nodes_by_graph_mutex.unlock(io);
         if (self.nodes_by_graph.getPtr(graph_name)) |inner| return inner.count();
         return 0;
     }
@@ -4921,6 +4979,17 @@ pub const GraphStore = struct {
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
 
+        // PHASE 1b concurrency fix: the `label_index` writer (`addToLabelIndex`,
+        // reached by hydration) already rehashes the outer map under
+        // `label_index_mutex`; take it here too so this lookup cannot tear when
+        // a concurrent first-touch hydration rebuilds the index under the shared
+        // store lock. The returned slice aliases the posting's HEAP-backed
+        // ArrayList, which survives an outer-map rehash, so it stays valid after
+        // the mutex is released (the existing per-graph rwlock still excludes
+        // posting-list writers for the slice's lifetime).
+        const io = std.Io.Threaded.global_single_threaded.io();
+        @constCast(self).label_index_mutex.lockUncancelable(io);
+        defer @constCast(self).label_index_mutex.unlock(io);
         if (self.label_index.get(key)) |posting| {
             return posting.list.items;
         }
@@ -4948,6 +5017,14 @@ pub const GraphStore = struct {
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
 
+        // PHASE 1b concurrency fix: guard the outer getPtr with `label_index_mutex`
+        // (same ordering as the writer: outer mutex -> posting leaf mutex) so a
+        // concurrent hydration rehash cannot tear the lookup. The posting pointer
+        // is stable once found because the rehash only moves the small posting
+        // struct's heap backing is reached through the leaf-locked copy below.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
         const posting = self.label_index.getPtr(key) orelse return null;
         posting.lock();
         defer posting.unlock();
@@ -8791,6 +8868,11 @@ pub const GraphStore = struct {
             entry.done.store(true, .release);
             return;
         };
+        // PHASE 1b concurrency fix: serialise the build store-wide so a
+        // concurrent first-touch of a DIFFERENT cold graph cannot race this
+        // build on the store-wide maps it mutates (see `hydration_build_mutex`).
+        self.hydration_build_mutex.lockUncancelable(io);
+        defer self.hydration_build_mutex.unlock(io);
         self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| {
             log.err("lazy graph hydration failed; graph may be degraded", &.{
                 Attr.string("graph", graph_name),
