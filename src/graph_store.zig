@@ -8800,15 +8800,25 @@ pub const GraphStore = struct {
         defer dir.close(io);
 
         var snap = (id_map_mod.IdMap.loadSnapshot(dir) catch return false) orelse return false;
-        defer snap.deinit();
 
         // Crash-safety gate: the snapshot is valid only if it reflects exactly
         // the engine's currently-committed state (no committed write since it was
-        // written). Any mismatch/absence => fall back to the scan-rebuild.
-        const cur = adapter.graphManifestCounter(graph_name) orelse return false;
-        if (snap.manifest_counter != cur) return false;
+        // written). Any mismatch/absence => unmap and fall back to scan-rebuild.
+        const cur = adapter.graphManifestCounter(graph_name) orelse {
+            snap.deinit();
+            return false;
+        };
+        if (snap.manifest_counter != cur) {
+            snap.deinit();
+            return false;
+        }
 
-        try id_map.bulkLoadFromSnapshot(&snap);
+        // PHASE 4: O(1) open. Instead of bulk-loading the whole snapshot into
+        // the in-memory hashmaps (O(ids)), mmap it as an IMMUTABLE BASE and
+        // serve reads IN PLACE; only writes-since-open go to the overlay. The
+        // IdMap takes ownership of the mapping (its deinit unmaps). Open is now
+        // flat in node count (mmap + header + CRC already done by loadSnapshot).
+        id_map.adoptSnapshotAsBase(snap);
         _ = g_idmap_from_snapshot.fetchAdd(1, .monotonic);
         return true;
     }
@@ -8963,64 +8973,73 @@ pub const GraphStore = struct {
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
-            for (scan_entries) |entry| {
-                const slot_id = entry.slot_id;
-                // PHASE 1b instrumentation: per-node engine read of the IdMap
-                // scan-rebuild (loop1). Stays 0 at open when a valid snapshot was
-                // bulk-loaded instead.
-                _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
-                const node_uuid = blk: {
-                    // 2026-05-22: tolerate per-node property page corruption.
-                    // A torn/partially-flushed property page (e.g. WAL+TDE
-                    // hard-crash mid-write) used to bubble up through
-                    // `adapter.getNodeProperty` -> `PropStore.getProperty`
-                    // and either panic on unsigned underflow inside
-                    // `readDirEntry` or quarantine the entire graph. We now
-                    // catch DataCorruption / OutOfBounds / CircularChain at
-                    // the per-node level so the rest of the graph still
-                    // hydrates and the bad node is dropped to the
-                    // legacy-uuid fallback (or skipped) below.
-                    const maybe_stored = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
-                        error.DataCorruption, error.CircularChainDetected => {
-                            log.warn("skipping node with corrupt property page during load", &.{
-                                Attr.string("graph", graph_name),
-                                Attr.int("slot_id", @intCast(slot_id)),
-                                Attr.string("error", @errorName(err)),
-                            });
-                            break :blk null;
-                        },
-                        else => return err,
-                    };
-                    if (maybe_stored) |stored_prop| {
-                        defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                        switch (stored_prop) {
-                            .string => |text| {
-                                if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+            // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
+            // adopted as base at open), the node uuid->slot mappings already
+            // live in the immutable base. Re-inserting them here (loop1) would
+            // dump the entire base into the in-memory overlay — defeating the
+            // O(1)-open / bounded-RSS win and re-doing the per-node engine read.
+            // Skip loop1 entirely; loop2 below reads node uuids straight from
+            // base via id_map.nodeUuid(slot_id).
+            if (id_map.mode == .resident) {
+                for (scan_entries) |entry| {
+                    const slot_id = entry.slot_id;
+                    // PHASE 1b instrumentation: per-node engine read of the IdMap
+                    // scan-rebuild (loop1). Stays 0 at open when a valid snapshot
+                    // was bulk-loaded instead.
+                    _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
+                    const node_uuid = blk: {
+                        // 2026-05-22: tolerate per-node property page corruption.
+                        // A torn/partially-flushed property page (e.g. WAL+TDE
+                        // hard-crash mid-write) used to bubble up through
+                        // `adapter.getNodeProperty` -> `PropStore.getProperty`
+                        // and either panic on unsigned underflow inside
+                        // `readDirEntry` or quarantine the entire graph. We now
+                        // catch DataCorruption / OutOfBounds / CircularChain at
+                        // the per-node level so the rest of the graph still
+                        // hydrates and the bad node is dropped to the
+                        // legacy-uuid fallback (or skipped) below.
+                        const maybe_stored = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
+                            error.DataCorruption, error.CircularChainDetected => {
+                                log.warn("skipping node with corrupt property page during load", &.{
+                                    Attr.string("graph", graph_name),
+                                    Attr.int("slot_id", @intCast(slot_id)),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                                break :blk null;
                             },
-                            else => {},
+                            else => return err,
+                        };
+                        if (maybe_stored) |stored_prop| {
+                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                            switch (stored_prop) {
+                                .string => |text| {
+                                    if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                                },
+                                else => {},
+                            }
                         }
-                    }
 
-                    if (legacy_map) |*map| {
-                        const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
-                        const public_id = @as(u64, @truncate(legacy_uuid_128));
-                        var id_buf: [16]u8 = undefined;
-                        try adapter.setNodeProperty(
-                            graph_name,
-                            slot_id,
-                            INTERNAL_NODE_ID_PROPERTY_KEY,
-                            .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-                        );
-                        backfilled_from_legacy = true;
-                        break :blk public_id;
-                    }
+                        if (legacy_map) |*map| {
+                            const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
+                            const public_id = @as(u64, @truncate(legacy_uuid_128));
+                            var id_buf: [16]u8 = undefined;
+                            try adapter.setNodeProperty(
+                                graph_name,
+                                slot_id,
+                                INTERNAL_NODE_ID_PROPERTY_KEY,
+                                .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                            );
+                            backfilled_from_legacy = true;
+                            break :blk public_id;
+                        }
 
-                    break :blk null;
-                } orelse {
-                    skipped_node_mappings += 1;
-                    continue;
-                };
-                try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
+                        break :blk null;
+                    } orelse {
+                        skipped_node_mappings += 1;
+                        continue;
+                    };
+                    try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
+                }
             }
 
             for (scan_entries) |entry| {
@@ -9205,7 +9224,11 @@ pub const GraphStore = struct {
                         });
                         continue;
                     };
-                    try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
+                    // PHASE 4: skip the edge IdMap re-insert when mmap_backed —
+                    // base already holds the edge uuid->slot mapping; loop2's
+                    // reads (below and id_map.nodeUuid) are served by base.
+                    if (id_map.mode == .resident)
+                        try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
 
                     if (self.edges.contains(edge_uuid)) continue;
 

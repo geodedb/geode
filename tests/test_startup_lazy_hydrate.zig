@@ -122,6 +122,12 @@ test "PHASE 1b: open-no-scan + lazy hydrate correctness (valid snapshot)" {
         try testing.expectEqual(N, got.len);
         try testing.expect(graph_store.loop2ScanNodeCount() >= N); // the deferred scan ran now
 
+        // PHASE 4: even AFTER lazy hydration, the IdMap per-node engine read
+        // (loop1) stays 0 — the mmap_backed base serves node uuid->slot in
+        // place, so hydration never re-inserts the snapshot into the overlay.
+        // (loop2 reads above are served by base via id_map.nodeUuid.)
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+
         // count
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
 
