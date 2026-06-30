@@ -427,8 +427,16 @@
             // (concurrent shard opens; recovery makes no thread-pool calls so it
             // cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive deps
             // → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.20#5481c69409f9cf9a29b97d8798dd6fa0be020e36",
-            .hash = "graph_storage-0.2.20-9UyJS8dZFQC2Sn3Ahc6uNYSr5WvrcWHLkUbyZMC1qDjE",
+            // COLD-OPEN DEV PIN 2026-06-30 (local path, not pushed): v0.2.21 =
+            // O(1)-amortized CLOCK eviction (buffer_pool) + getPropertyNoDerived
+            // (chain read without derived-index hydration) — the engine half of
+            // sub-second cold-open. `git+file://` is unsupported by zig fetch and
+            // the commits are unpushed, so a path override is the dev pin.
+            // AT RELEASE: tag graph-storage v0.2.21, restore url+hash, run the
+            // diamond-cascade bump. Prior pin (restore at release):
+            //   .url  = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.20#5481c69409f9cf9a29b97d8798dd6fa0be020e36",
+            //   .hash = "graph_storage-0.2.20-9UyJS8dZFQC2Sn3Ahc6uNYSr5WvrcWHLkUbyZMC1qDjE",
+            .path = "../gs-coldopen-wt",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

@@ -4206,7 +4206,12 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         if (prop_head == 0) return null;
-        return try mg.shardEngineForNode(slot_id).getProperty(prop_head, key, allocator);
+        // Cold-open H1: read the chain WITHOUT triggering the engine's full
+        // derived property-chain index build (ensureDerivedHydrated). loop1 only
+        // ever looks up the internal-id key which is always present, so the
+        // derived index gives no benefit; getPropertyNoDerived walks the chain
+        // directly and is byte-identical to getProperty for present keys.
+        return try mg.shardEngineForNode(slot_id).getPropertyNoDerived(prop_head, key, allocator);
     }
 
     /// Return the shard index for a node slot. Mirrors shardOfNode(slot_id)
