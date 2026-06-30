@@ -4195,6 +4195,27 @@ pub const StorageAdapter = struct {
         return _prop;
     }
 
+    /// Get a node property directly from its prop_head (already known from a
+    /// prior scanAllNodes), skipping the per-node getNode random read.
+    /// slot_id routes to the owning shard (same as getNodeProperty); prop_head
+    /// skips the getNode fetch, saving one random read per node.
+    pub fn getNodePropertyByHead(self: *StorageAdapter, graph_name: []const u8, slot_id: u64, prop_head: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        if (prop_head == 0) return null;
+        return try mg.shardEngineForNode(slot_id).getProperty(prop_head, key, allocator);
+    }
+
+    /// Return the shard index for a node slot. Mirrors shardOfNode(slot_id)
+    /// used internally so callers can sort by (shard, prop_head) without
+    /// importing graph_storage directly.
+    pub fn shardOfSlot(_: *StorageAdapter, slot: u64) usize {
+        return gs.shard_count.shardOfNode(slot);
+    }
+
     /// Find all node IDs with the given label in a graph.
     /// Filters out deleted nodes whose slot IDs are still present in the
     /// label index (the engine's deleteNode sets NODE_FLAG_DELETED but does
@@ -8367,6 +8388,81 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     try std.testing.expect(adapter.getTimeseriesStore("__geode_security") == null);
     try std.testing.expect(adapter.getFulltextIndex("__geode_security") == null);
     try std.testing.expect(!adapter.graphExists("__geode_security"));
+}
+
+test "StorageAdapter: getNodePropertyByHead parity with getNodeProperty" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    // Small page_size forces a multi-page property chain on node_b.
+    const cfg = gs.GraphConfig{
+        .page_size = 256,
+        .buffer_pool_pages = 512,
+    };
+    const adapter = try StorageAdapter.init(allocator, path, cfg);
+    defer adapter.deinit();
+
+    const graph = "parity_test";
+    const key = graph_store.INTERNAL_NODE_ID_PROPERTY_KEY;
+
+    // (a) Normal node in shard 0.
+    const node_a = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    try adapter.setNodeProperty(graph, node_a, key, .{ .String = "uuid-aaaa-0000" });
+
+    // (b) Multi-page prop chain: set many props BEFORE the internal id so
+    // the internal id lands past the head page. Nodes are round-robin allocated
+    // so node_b lands in shard 1 (shardOfNode(1) == 1).
+    const node_b = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    var pi: usize = 0;
+    while (pi < 12) : (pi += 1) {
+        const pk = try std.fmt.allocPrint(allocator, "extra_prop_{d:0>2}", .{pi});
+        defer allocator.free(pk);
+        try adapter.setNodeProperty(graph, node_b, pk, .{ .String = "val_0123456789abcdefghij" });
+    }
+    try adapter.setNodeProperty(graph, node_b, key, .{ .String = "uuid-bbbb-1111" });
+
+    // (c) Node with no properties — prop_head stays 0 after creation.
+    const node_c = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    _ = node_c;
+
+    // (d) Another node with internal-id, in shard 3.
+    const node_d = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    try adapter.setNodeProperty(graph, node_d, key, .{ .String = "uuid-dddd-3333" });
+
+    // Verify distribution across ≥2 shards.
+    try std.testing.expect(gs.shard_count.shardOfNode(node_a) != gs.shard_count.shardOfNode(node_b));
+
+    // Scan all nodes to get ScanEntry records (carries rec.prop_head).
+    const entries = try adapter.scanAllNodes(graph, allocator);
+    defer allocator.free(entries);
+    try std.testing.expect(entries.len >= 4);
+
+    for (entries) |entry| {
+        const by_slot = try adapter.getNodeProperty(graph, entry.slot_id, key, allocator);
+        defer if (by_slot) |v| freeOwnedStorageProperty(allocator, v);
+
+        const by_head = try adapter.getNodePropertyByHead(graph, entry.slot_id, entry.rec.prop_head, key, allocator);
+        defer if (by_head) |v| freeOwnedStorageProperty(allocator, v);
+
+        if (by_slot == null) {
+            try std.testing.expectEqual(@as(?gs.PropertyValue, null), by_head);
+        } else {
+            try std.testing.expect(by_head != null);
+            switch (by_slot.?) {
+                .string => |s| try std.testing.expectEqualStrings(s, by_head.?.string),
+                .int => |i| try std.testing.expectEqual(i, by_head.?.int),
+                .float => |f| try std.testing.expectEqual(f, by_head.?.float),
+                .bool => |b| try std.testing.expectEqual(b, by_head.?.bool),
+                .null => try std.testing.expectEqual(gs.PropertyValue.null, by_head.?),
+                else => {},
+            }
+        }
+    }
 }
 
 test "GAP-0900 throughput: addEx(assume_new) builds a complete low-selectivity posting (O(n^2) scan fix)" {
