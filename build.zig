@@ -1317,6 +1317,25 @@ pub fn build(b: *std.Build) void {
     const idmap_snap_step = b.step("test-idmap-snapshot", "Run IdMap mmap snapshot round-trip / CRC-gate / 100k-scale tests");
     idmap_snap_step.dependOn(&run_idmap_snap_tests.step);
 
+    // PHASE 4 (mmap-in-place IdMap): parity oracle + merge-MISS dedup +
+    // iterator/clone + checkpoint round-trip + concurrency. id_map.zig imports
+    // only std, so the standalone module needs no extra imports.
+    const idmap_inplace_mod = b.createModule(.{
+        .root_source_file = b.path("src/storage/id_map.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const idmap_inplace_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_idmap_inplace.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    idmap_inplace_test_mod.addImport("id_map", idmap_inplace_mod);
+    const idmap_inplace_tests = b.addTest(.{ .root_module = idmap_inplace_test_mod });
+    const run_idmap_inplace_tests = b.addRunArtifact(idmap_inplace_tests);
+    const idmap_inplace_step = b.step("test-idmap-inplace", "PHASE 4: mmap-in-place IdMap parity oracle + merge-MISS + checkpoint round-trip");
+    idmap_inplace_step.dependOn(&run_idmap_inplace_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)

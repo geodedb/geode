@@ -67,6 +67,10 @@ const FileHeader = extern struct {
 /// Bidirectional mapping between UUIDv7 external IDs (u128) and dense
 /// engine slot IDs (u64).  Supports separate namespaces for nodes and edges.
 pub const IdMap = struct {
+    /// PHASE 4: read-serving mode. `.resident` = legacy (overlay holds all);
+    /// `.mmap_backed` = immutable base snapshot + overlay + tombstones.
+    pub const Mode = enum { resident, mmap_backed };
+
     allocator: Allocator,
 
     // Mutex protecting the maps below. Required because the per-graph
@@ -90,6 +94,39 @@ pub const IdMap = struct {
     next_node_slot: u64,
     next_edge_slot: u64,
 
+    // ------------------------------------------------------------------
+    // PHASE 4: mmap-in-place mode.
+    //
+    // `.resident` (default) is the legacy behaviour: the four hashmaps above
+    // hold EVERY mapping and the `.resident` arm of every method is the
+    // unchanged historical body (crash-safety fallback).
+    //
+    // `.mmap_backed` keeps a saved snapshot mmap'd as an IMMUTABLE BASE and
+    // serves reads in place; only writes-since-open live in the four hashmaps
+    // (now the OVERLAY) plus the tombstone sets below. Open becomes O(1) in
+    // node count (no eager bulk-load). The merged view is base ⊕ overlay ⊖
+    // tombstones; `insertNode`/`insertEdge` MUST consult overlay AND base
+    // (minus tombstones) before allocating a new slot or a base-only entry is
+    // duplicated (corruption). `node_live_delta`/`edge_live_delta` track the
+    // running (insert − remove) so `nodeCount`/`edgeCount` stay O(1).
+    mode: Mode = .resident,
+    base: ?LoadedIdMapSnapshot = null,
+
+    // Tombstones (overlay deletions of base-resident entries). A uuid present
+    // here shadows the base forward lookup; a slot present here shadows the
+    // base reverse lookup. Both directions are tracked because slots are never
+    // recycled, so a freed slot must stay dead even after its uuid re-adds at a
+    // FRESH slot.
+    removed_node_uuids: std.AutoHashMap(u128, void),
+    removed_node_slots: std.AutoHashMap(u64, void),
+    removed_edge_uuids: std.AutoHashMap(u128, void),
+    removed_edge_slots: std.AutoHashMap(u64, void),
+
+    // Live-count deltas relative to base.{node,edge}_fwd_count. Resident mode
+    // leaves these at 0 and ignores them.
+    node_live_delta: i64 = 0,
+    edge_live_delta: i64 = 0,
+
     pub fn init(allocator: Allocator) IdMap {
         return .{
             .allocator = allocator,
@@ -99,6 +136,14 @@ pub const IdMap = struct {
             .edge_slot_to_uuid = std.AutoHashMap(u64, u128).init(allocator),
             .next_node_slot = 0,
             .next_edge_slot = 0,
+            .mode = .resident,
+            .base = null,
+            .removed_node_uuids = std.AutoHashMap(u128, void).init(allocator),
+            .removed_node_slots = std.AutoHashMap(u64, void).init(allocator),
+            .removed_edge_uuids = std.AutoHashMap(u128, void).init(allocator),
+            .removed_edge_slots = std.AutoHashMap(u64, void).init(allocator),
+            .node_live_delta = 0,
+            .edge_live_delta = 0,
         };
     }
 
@@ -107,6 +152,64 @@ pub const IdMap = struct {
         self.node_slot_to_uuid.deinit();
         self.edge_uuid_to_slot.deinit();
         self.edge_slot_to_uuid.deinit();
+        self.removed_node_uuids.deinit();
+        self.removed_node_slots.deinit();
+        self.removed_edge_uuids.deinit();
+        self.removed_edge_slots.deinit();
+        if (self.base) |*b| b.deinit();
+    }
+
+    /// PHASE 4: adopt a loaded snapshot as the immutable BASE and switch to
+    /// `.mmap_backed` mode. Takes ownership of `snap` (deinit unmaps it). The
+    /// overlay (the four hashmaps) MUST be empty when this is called — this is
+    /// the open path's O(1) replacement for `bulkLoadFromSnapshot`. The
+    /// next-slot counters are seeded from the snapshot header so freshly
+    /// allocated slots never collide with base slots.
+    pub fn adoptSnapshotAsBase(self: *IdMap, snap: LoadedIdMapSnapshot) void {
+        self.lockMu();
+        defer self.unlockMu();
+        self.mode = .mmap_backed;
+        self.base = snap;
+        self.next_node_slot = snap.next_node_slot;
+        self.next_edge_slot = snap.next_edge_slot;
+        self.node_live_delta = 0;
+        self.edge_live_delta = 0;
+    }
+
+    // ------------------------------------------------------------------
+    // PHASE 4: merged-view helpers (caller holds the mutex; no locking here).
+    // For `.resident` these collapse to the plain overlay lookup (no base, no
+    // tombstones). For `.mmap_backed` they implement overlay ⊕ base ⊖
+    // tombstone. The MERGE-MISS authority (`mergedNodeSlot`/`mergedEdgeSlot`)
+    // is the dedup crux used by the insert paths.
+    // ------------------------------------------------------------------
+
+    fn mergedNodeSlot(self: *const IdMap, uuid: u128) ?u64 {
+        if (self.node_uuid_to_slot.get(uuid)) |s| return s;
+        if (self.removed_node_uuids.contains(uuid)) return null;
+        if (self.base) |*b| return b.nodeSlotOf(uuid);
+        return null;
+    }
+
+    fn mergedNodeUuid(self: *const IdMap, slot: u64) ?u128 {
+        if (self.node_slot_to_uuid.get(slot)) |u| return u;
+        if (self.removed_node_slots.contains(slot)) return null;
+        if (self.base) |*b| return b.nodeUuidAt(slot);
+        return null;
+    }
+
+    fn mergedEdgeSlot(self: *const IdMap, uuid: u128) ?u64 {
+        if (self.edge_uuid_to_slot.get(uuid)) |s| return s;
+        if (self.removed_edge_uuids.contains(uuid)) return null;
+        if (self.base) |*b| return b.edgeSlotOf(uuid);
+        return null;
+    }
+
+    fn mergedEdgeUuid(self: *const IdMap, slot: u64) ?u128 {
+        if (self.edge_slot_to_uuid.get(slot)) |u| return u;
+        if (self.removed_edge_slots.contains(slot)) return null;
+        if (self.base) |*b| return b.edgeUuidAt(slot);
+        return null;
     }
 
     // Acquire/release the IdMap mutex using the global single-threaded IO,
@@ -129,24 +232,58 @@ pub const IdMap = struct {
     pub fn insertNode(self: *IdMap, uuid: u128) !u64 {
         self.lockMu();
         defer self.unlockMu();
-        if (self.node_uuid_to_slot.get(uuid)) |existing| {
-            return existing;
+        switch (self.mode) {
+            .resident => {
+                if (self.node_uuid_to_slot.get(uuid)) |existing| {
+                    return existing;
+                }
+                const slot = self.next_node_slot;
+                self.next_node_slot += 1;
+                try self.node_uuid_to_slot.put(uuid, slot);
+                try self.node_slot_to_uuid.put(slot, uuid);
+                return slot;
+            },
+            .mmap_backed => {
+                // MERGE-MISS dedup crux: a base-only entry missed here = a
+                // duplicate node = corruption. Consult overlay ⊕ base ⊖
+                // tombstone before allocating.
+                if (self.mergedNodeSlot(uuid)) |existing| return existing;
+                const slot = self.next_node_slot;
+                self.next_node_slot += 1;
+                try self.node_uuid_to_slot.put(uuid, slot);
+                try self.node_slot_to_uuid.put(slot, uuid);
+                // Re-add after tombstone: clear the uuid tombstone (its OLD
+                // base slot stays tombstoned — slots are never recycled).
+                _ = self.removed_node_uuids.remove(uuid);
+                self.node_live_delta += 1;
+                return slot;
+            },
         }
-        const slot = self.next_node_slot;
-        self.next_node_slot += 1;
-        try self.node_uuid_to_slot.put(uuid, slot);
-        try self.node_slot_to_uuid.put(slot, uuid);
-        return slot;
     }
 
     /// Insert a node mapping with a specific slot ID (used during load).
     pub fn insertNodeWithSlot(self: *IdMap, uuid: u128, slot: u64) !void {
         self.lockMu();
         defer self.unlockMu();
-        try self.node_uuid_to_slot.put(uuid, slot);
-        try self.node_slot_to_uuid.put(slot, uuid);
-        if (slot >= self.next_node_slot) {
-            self.next_node_slot = slot + 1;
+        switch (self.mode) {
+            .resident => {
+                try self.node_uuid_to_slot.put(uuid, slot);
+                try self.node_slot_to_uuid.put(slot, uuid);
+                if (slot >= self.next_node_slot) {
+                    self.next_node_slot = slot + 1;
+                }
+            },
+            .mmap_backed => {
+                const was_live = self.mergedNodeSlot(uuid) != null;
+                try self.node_uuid_to_slot.put(uuid, slot);
+                try self.node_slot_to_uuid.put(slot, uuid);
+                _ = self.removed_node_uuids.remove(uuid);
+                _ = self.removed_node_slots.remove(slot);
+                if (!was_live) self.node_live_delta += 1;
+                if (slot >= self.next_node_slot) {
+                    self.next_node_slot = slot + 1;
+                }
+            },
         }
     }
 
@@ -154,24 +291,53 @@ pub const IdMap = struct {
     pub fn nodeSlot(self: *IdMap, uuid: u128) ?u64 {
         self.lockMu();
         defer self.unlockMu();
-        return self.node_uuid_to_slot.get(uuid);
+        switch (self.mode) {
+            .resident => return self.node_uuid_to_slot.get(uuid),
+            .mmap_backed => return self.mergedNodeSlot(uuid),
+        }
     }
 
     /// Look up the UUID for a node slot ID.
     pub fn nodeUuid(self: *IdMap, slot: u64) ?u128 {
         self.lockMu();
         defer self.unlockMu();
-        return self.node_slot_to_uuid.get(slot);
+        switch (self.mode) {
+            .resident => return self.node_slot_to_uuid.get(slot),
+            .mmap_backed => return self.mergedNodeUuid(slot),
+        }
     }
 
     /// Remove a node mapping by UUID.
     pub fn removeNode(self: *IdMap, uuid: u128) bool {
         self.lockMu();
         defer self.unlockMu();
-        const slot = self.node_uuid_to_slot.get(uuid) orelse return false;
-        _ = self.node_uuid_to_slot.remove(uuid);
-        _ = self.node_slot_to_uuid.remove(slot);
-        return true;
+        switch (self.mode) {
+            .resident => {
+                const slot = self.node_uuid_to_slot.get(uuid) orelse return false;
+                _ = self.node_uuid_to_slot.remove(uuid);
+                _ = self.node_slot_to_uuid.remove(slot);
+                return true;
+            },
+            .mmap_backed => {
+                const slot = self.mergedNodeSlot(uuid) orelse return false;
+                const in_base = if (self.base) |*b| (b.nodeSlotOf(uuid) != null) else false;
+                // Tombstone only when the base shadows this uuid/slot. Order so
+                // an OOM rolls back cleanly and reports not-removed (bool path
+                // cannot propagate error.OutOfMemory).
+                if (in_base) {
+                    self.removed_node_uuids.put(uuid, {}) catch return false;
+                    self.removed_node_slots.put(slot, {}) catch {
+                        _ = self.removed_node_uuids.remove(uuid);
+                        return false;
+                    };
+                }
+                if (self.node_uuid_to_slot.fetchRemove(uuid)) |kv| {
+                    _ = self.node_slot_to_uuid.remove(kv.value);
+                }
+                self.node_live_delta -= 1;
+                return true;
+            },
+        }
     }
 
     // ------------------------------------------------------------------
@@ -183,24 +349,53 @@ pub const IdMap = struct {
     pub fn insertEdge(self: *IdMap, uuid: u128) !u64 {
         self.lockMu();
         defer self.unlockMu();
-        if (self.edge_uuid_to_slot.get(uuid)) |existing| {
-            return existing;
+        switch (self.mode) {
+            .resident => {
+                if (self.edge_uuid_to_slot.get(uuid)) |existing| {
+                    return existing;
+                }
+                const slot = self.next_edge_slot;
+                self.next_edge_slot += 1;
+                try self.edge_uuid_to_slot.put(uuid, slot);
+                try self.edge_slot_to_uuid.put(slot, uuid);
+                return slot;
+            },
+            .mmap_backed => {
+                if (self.mergedEdgeSlot(uuid)) |existing| return existing;
+                const slot = self.next_edge_slot;
+                self.next_edge_slot += 1;
+                try self.edge_uuid_to_slot.put(uuid, slot);
+                try self.edge_slot_to_uuid.put(slot, uuid);
+                _ = self.removed_edge_uuids.remove(uuid);
+                self.edge_live_delta += 1;
+                return slot;
+            },
         }
-        const slot = self.next_edge_slot;
-        self.next_edge_slot += 1;
-        try self.edge_uuid_to_slot.put(uuid, slot);
-        try self.edge_slot_to_uuid.put(slot, uuid);
-        return slot;
     }
 
     /// Insert an edge mapping with a specific slot ID (used during load).
     pub fn insertEdgeWithSlot(self: *IdMap, uuid: u128, slot: u64) !void {
         self.lockMu();
         defer self.unlockMu();
-        try self.edge_uuid_to_slot.put(uuid, slot);
-        try self.edge_slot_to_uuid.put(slot, uuid);
-        if (slot >= self.next_edge_slot) {
-            self.next_edge_slot = slot + 1;
+        switch (self.mode) {
+            .resident => {
+                try self.edge_uuid_to_slot.put(uuid, slot);
+                try self.edge_slot_to_uuid.put(slot, uuid);
+                if (slot >= self.next_edge_slot) {
+                    self.next_edge_slot = slot + 1;
+                }
+            },
+            .mmap_backed => {
+                const was_live = self.mergedEdgeSlot(uuid) != null;
+                try self.edge_uuid_to_slot.put(uuid, slot);
+                try self.edge_slot_to_uuid.put(slot, uuid);
+                _ = self.removed_edge_uuids.remove(uuid);
+                _ = self.removed_edge_slots.remove(slot);
+                if (!was_live) self.edge_live_delta += 1;
+                if (slot >= self.next_edge_slot) {
+                    self.next_edge_slot = slot + 1;
+                }
+            },
         }
     }
 
@@ -208,24 +403,50 @@ pub const IdMap = struct {
     pub fn edgeSlot(self: *IdMap, uuid: u128) ?u64 {
         self.lockMu();
         defer self.unlockMu();
-        return self.edge_uuid_to_slot.get(uuid);
+        switch (self.mode) {
+            .resident => return self.edge_uuid_to_slot.get(uuid),
+            .mmap_backed => return self.mergedEdgeSlot(uuid),
+        }
     }
 
     /// Look up the UUID for an edge slot ID.
     pub fn edgeUuid(self: *IdMap, slot: u64) ?u128 {
         self.lockMu();
         defer self.unlockMu();
-        return self.edge_slot_to_uuid.get(slot);
+        switch (self.mode) {
+            .resident => return self.edge_slot_to_uuid.get(slot),
+            .mmap_backed => return self.mergedEdgeUuid(slot),
+        }
     }
 
     /// Remove an edge mapping by UUID.
     pub fn removeEdge(self: *IdMap, uuid: u128) bool {
         self.lockMu();
         defer self.unlockMu();
-        const slot = self.edge_uuid_to_slot.get(uuid) orelse return false;
-        _ = self.edge_uuid_to_slot.remove(uuid);
-        _ = self.edge_slot_to_uuid.remove(slot);
-        return true;
+        switch (self.mode) {
+            .resident => {
+                const slot = self.edge_uuid_to_slot.get(uuid) orelse return false;
+                _ = self.edge_uuid_to_slot.remove(uuid);
+                _ = self.edge_slot_to_uuid.remove(slot);
+                return true;
+            },
+            .mmap_backed => {
+                const slot = self.mergedEdgeSlot(uuid) orelse return false;
+                const in_base = if (self.base) |*b| (b.edgeSlotOf(uuid) != null) else false;
+                if (in_base) {
+                    self.removed_edge_uuids.put(uuid, {}) catch return false;
+                    self.removed_edge_slots.put(slot, {}) catch {
+                        _ = self.removed_edge_uuids.remove(uuid);
+                        return false;
+                    };
+                }
+                if (self.edge_uuid_to_slot.fetchRemove(uuid)) |kv| {
+                    _ = self.edge_slot_to_uuid.remove(kv.value);
+                }
+                self.edge_live_delta -= 1;
+                return true;
+            },
+        }
     }
 
     // ------------------------------------------------------------------
@@ -233,44 +454,112 @@ pub const IdMap = struct {
     // ------------------------------------------------------------------
 
     pub fn nodeCount(self: *const IdMap) u32 {
-        return self.node_uuid_to_slot.count();
+        switch (self.mode) {
+            .resident => return self.node_uuid_to_slot.count(),
+            .mmap_backed => {
+                const base_n: i64 = @intCast(self.base.?.node_fwd_count);
+                return @intCast(base_n + self.node_live_delta);
+            },
+        }
     }
 
-    /// Iterator over every public node uuid in this graph's mapping. The IdMap
-    /// stays fully resident (~24 B/entry) independent of the bounded node cache,
-    /// so this enumerates ALL nodes of the graph even after node-cache eviction.
-    /// Used by full-graph "all node ids" paths so they don't miss evicted nodes.
+    /// Iterator over every public node uuid in this graph's mapping.
+    ///
+    /// `.resident`: walks the overlay hashmap keys (legacy behaviour).
+    /// `.mmap_backed`: streams the merged live set IN PLACE — the base forward
+    /// region (skipping tombstoned uuids) followed by overlay-only uuids (those
+    /// not present in base, so re-added base uuids are emitted exactly once).
+    /// No materialization; safe for the 14.27M-node case.
     pub const NodeUuidIterator = struct {
+        map: *const IdMap,
         inner: @TypeOf(@as(IdMap, undefined).node_uuid_to_slot).KeyIterator,
+        base_idx: u64 = 0,
+        in_base_phase: bool = false,
         pub fn next(it: *NodeUuidIterator) ?u128 {
-            if (it.inner.next()) |k| return k.* else return null;
+            if (it.in_base_phase) {
+                if (it.map.base) |*b| {
+                    while (it.base_idx < b.node_fwd_count) {
+                        const idx = it.base_idx;
+                        it.base_idx += 1;
+                        const uuid = b.nodeFwdUuidAt(idx);
+                        if (it.map.removed_node_uuids.contains(uuid)) continue;
+                        return uuid;
+                    }
+                }
+                it.in_base_phase = false;
+            }
+            while (it.inner.next()) |k| {
+                const uuid = k.*;
+                if (it.map.base) |*b| {
+                    if (b.nodeSlotOf(uuid) != null) continue; // emitted in base phase
+                }
+                return uuid;
+            }
+            return null;
         }
     };
     pub fn nodeUuidIterator(self: *const IdMap) NodeUuidIterator {
-        return .{ .inner = self.node_uuid_to_slot.keyIterator() };
+        return .{
+            .map = self,
+            .inner = self.node_uuid_to_slot.keyIterator(),
+            .base_idx = 0,
+            .in_base_phase = (self.mode == .mmap_backed and self.base != null),
+        };
     }
 
     pub fn edgeCount(self: *const IdMap) u32 {
-        return self.edge_uuid_to_slot.count();
+        switch (self.mode) {
+            .resident => return self.edge_uuid_to_slot.count(),
+            .mmap_backed => {
+                const base_e: i64 = @intCast(self.base.?.edge_fwd_count);
+                return @intCast(base_e + self.edge_live_delta);
+            },
+        }
     }
 
-    /// Iterator over every public edge uuid in this graph's mapping. Like
-    /// `NodeUuidIterator`, the IdMap edge map stays fully resident (~24 B/entry)
-    /// independent of the bounded EDGE cache, so this enumerates ALL edges of
-    /// the graph even after edge-cache eviction. Used by full-graph "all edge
-    /// ids" paths (tenant-drop cascade, edge-type derivation, index rebuild) so
-    /// they don't miss evicted edges. (PHASE 1: edge-engine-direct.)
+    /// Iterator over every public edge uuid in this graph's mapping. Mirrors
+    /// `NodeUuidIterator` (base forward ⊖ tombstone, then overlay-only).
     pub const EdgeUuidIterator = struct {
+        map: *const IdMap,
         inner: @TypeOf(@as(IdMap, undefined).edge_uuid_to_slot).KeyIterator,
+        base_idx: u64 = 0,
+        in_base_phase: bool = false,
         pub fn next(it: *EdgeUuidIterator) ?u128 {
-            if (it.inner.next()) |k| return k.* else return null;
+            if (it.in_base_phase) {
+                if (it.map.base) |*b| {
+                    while (it.base_idx < b.edge_fwd_count) {
+                        const idx = it.base_idx;
+                        it.base_idx += 1;
+                        const uuid = b.edgeFwdUuidAt(idx);
+                        if (it.map.removed_edge_uuids.contains(uuid)) continue;
+                        return uuid;
+                    }
+                }
+                it.in_base_phase = false;
+            }
+            while (it.inner.next()) |k| {
+                const uuid = k.*;
+                if (it.map.base) |*b| {
+                    if (b.edgeSlotOf(uuid) != null) continue;
+                }
+                return uuid;
+            }
+            return null;
         }
     };
     pub fn edgeUuidIterator(self: *const IdMap) EdgeUuidIterator {
-        return .{ .inner = self.edge_uuid_to_slot.keyIterator() };
+        return .{
+            .map = self,
+            .inner = self.edge_uuid_to_slot.keyIterator(),
+            .base_idx = 0,
+            .in_base_phase = (self.mode == .mmap_backed and self.base != null),
+        };
     }
 
-    /// Deep-copy the mapping tables into a new IdMap owned by `allocator`.
+    /// Deep-copy the mapping tables into a new (`.resident`) IdMap owned by
+    /// `allocator`. For `.mmap_backed` this MATERIALIZES the merged live view
+    /// (base ⊕ overlay ⊖ tombstone) into a plain resident map — clone is an
+    /// inherently O(n) snapshot, so an in-place clone would be meaningless.
     pub fn clone(self: *const IdMap, allocator: Allocator) !IdMap {
         var copy = IdMap.init(allocator);
         errdefer copy.deinit();
@@ -278,21 +567,73 @@ pub const IdMap = struct {
         copy.next_node_slot = self.next_node_slot;
         copy.next_edge_slot = self.next_edge_slot;
 
-        try copy.node_uuid_to_slot.ensureTotalCapacity(self.node_uuid_to_slot.count());
-        try copy.node_slot_to_uuid.ensureTotalCapacity(self.node_slot_to_uuid.count());
-        try copy.edge_uuid_to_slot.ensureTotalCapacity(self.edge_uuid_to_slot.count());
-        try copy.edge_slot_to_uuid.ensureTotalCapacity(self.edge_slot_to_uuid.count());
+        switch (self.mode) {
+            .resident => {
+                try copy.node_uuid_to_slot.ensureTotalCapacity(self.node_uuid_to_slot.count());
+                try copy.node_slot_to_uuid.ensureTotalCapacity(self.node_slot_to_uuid.count());
+                try copy.edge_uuid_to_slot.ensureTotalCapacity(self.edge_uuid_to_slot.count());
+                try copy.edge_slot_to_uuid.ensureTotalCapacity(self.edge_slot_to_uuid.count());
 
-        var node_iter = self.node_uuid_to_slot.iterator();
-        while (node_iter.next()) |entry| {
-            try copy.node_uuid_to_slot.put(entry.key_ptr.*, entry.value_ptr.*);
-            try copy.node_slot_to_uuid.put(entry.value_ptr.*, entry.key_ptr.*);
-        }
+                var node_iter = self.node_uuid_to_slot.iterator();
+                while (node_iter.next()) |entry| {
+                    try copy.node_uuid_to_slot.put(entry.key_ptr.*, entry.value_ptr.*);
+                    try copy.node_slot_to_uuid.put(entry.value_ptr.*, entry.key_ptr.*);
+                }
 
-        var edge_iter = self.edge_uuid_to_slot.iterator();
-        while (edge_iter.next()) |entry| {
-            try copy.edge_uuid_to_slot.put(entry.key_ptr.*, entry.value_ptr.*);
-            try copy.edge_slot_to_uuid.put(entry.value_ptr.*, entry.key_ptr.*);
+                var edge_iter = self.edge_uuid_to_slot.iterator();
+                while (edge_iter.next()) |entry| {
+                    try copy.edge_uuid_to_slot.put(entry.key_ptr.*, entry.value_ptr.*);
+                    try copy.edge_slot_to_uuid.put(entry.value_ptr.*, entry.key_ptr.*);
+                }
+            },
+            .mmap_backed => {
+                try copy.node_uuid_to_slot.ensureTotalCapacity(self.nodeCount());
+                try copy.node_slot_to_uuid.ensureTotalCapacity(self.nodeCount());
+                try copy.edge_uuid_to_slot.ensureTotalCapacity(self.edgeCount());
+                try copy.edge_slot_to_uuid.ensureTotalCapacity(self.edgeCount());
+
+                // Nodes: base live forward, then overlay-only (matches the
+                // forward-iteration normalization the resident arm performs).
+                if (self.base) |*b| {
+                    var i: u64 = 0;
+                    while (i < b.node_fwd_count) : (i += 1) {
+                        const uuid = b.nodeFwdUuidAt(i);
+                        if (self.removed_node_uuids.contains(uuid)) continue;
+                        const slot = self.mergedNodeSlot(uuid).?;
+                        try copy.node_uuid_to_slot.put(uuid, slot);
+                        try copy.node_slot_to_uuid.put(slot, uuid);
+                    }
+                }
+                var nit = self.node_uuid_to_slot.iterator();
+                while (nit.next()) |e| {
+                    const uuid = e.key_ptr.*;
+                    if (self.base) |*b| {
+                        if (b.nodeSlotOf(uuid) != null) continue;
+                    }
+                    try copy.node_uuid_to_slot.put(uuid, e.value_ptr.*);
+                    try copy.node_slot_to_uuid.put(e.value_ptr.*, uuid);
+                }
+
+                if (self.base) |*b| {
+                    var i: u64 = 0;
+                    while (i < b.edge_fwd_count) : (i += 1) {
+                        const uuid = b.edgeFwdUuidAt(i);
+                        if (self.removed_edge_uuids.contains(uuid)) continue;
+                        const slot = self.mergedEdgeSlot(uuid).?;
+                        try copy.edge_uuid_to_slot.put(uuid, slot);
+                        try copy.edge_slot_to_uuid.put(slot, uuid);
+                    }
+                }
+                var eit = self.edge_uuid_to_slot.iterator();
+                while (eit.next()) |e| {
+                    const uuid = e.key_ptr.*;
+                    if (self.base) |*b| {
+                        if (b.edgeSlotOf(uuid) != null) continue;
+                    }
+                    try copy.edge_uuid_to_slot.put(uuid, e.value_ptr.*);
+                    try copy.edge_slot_to_uuid.put(e.value_ptr.*, uuid);
+                }
+            },
         }
 
         return copy;
@@ -469,8 +810,18 @@ pub const IdMap = struct {
 
         const nn = self.next_node_slot;
         const ne = self.next_edge_slot;
-        const node_fwd_count: u64 = self.node_uuid_to_slot.count();
-        const edge_fwd_count: u64 = self.edge_uuid_to_slot.count();
+
+        // Collect the MERGED live forward pairs (base ⊕ overlay ⊖ tombstone).
+        // For `.resident` this collapses to the overlay hashmaps; for
+        // `.mmap_backed` it folds base + overlay − tombstones into one set so a
+        // later open re-reads exactly the live mapping. O(live) either way.
+        const node_pairs = try self.collectMergedForward(a, .node);
+        defer a.free(node_pairs);
+        const edge_pairs = try self.collectMergedForward(a, .edge);
+        defer a.free(edge_pairs);
+
+        const node_fwd_count: u64 = node_pairs.len;
+        const edge_fwd_count: u64 = edge_pairs.len;
 
         const node_rev_off: usize = SNAP_HEADER_SIZE;
         const node_fwd_off: usize = node_rev_off + @as(usize, @intCast(nn)) * REV_ENTRY;
@@ -494,33 +845,31 @@ pub const IdMap = struct {
         std.mem.writeInt(u64, buf[HDR_NODE_FWD_OFF..][0..8], node_fwd_count, .little);
         std.mem.writeInt(u64, buf[HDR_EDGE_FWD_OFF..][0..8], edge_fwd_count, .little);
 
-        // NODE reverse (direct-indexed by slot).
+        // NODE reverse (direct-indexed by slot) via the merged view.
         {
-            var it = self.node_slot_to_uuid.iterator();
-            while (it.next()) |e| {
-                const slot = e.key_ptr.*;
-                if (slot < nn) {
+            var slot: u64 = 0;
+            while (slot < nn) : (slot += 1) {
+                if (self.mergedNodeUuid(slot)) |uuid| {
                     const off = node_rev_off + @as(usize, @intCast(slot)) * REV_ENTRY;
-                    std.mem.writeInt(u128, buf[off..][0..16], e.value_ptr.*, .little);
+                    std.mem.writeInt(u128, buf[off..][0..16], uuid, .little);
                 }
             }
         }
         // NODE forward (sorted by uuid).
-        try serializeForward(a, buf, node_fwd_off, &self.node_uuid_to_slot);
+        writeForwardPairs(buf, node_fwd_off, node_pairs);
 
         // EDGE reverse.
         {
-            var it = self.edge_slot_to_uuid.iterator();
-            while (it.next()) |e| {
-                const slot = e.key_ptr.*;
-                if (slot < ne) {
+            var slot: u64 = 0;
+            while (slot < ne) : (slot += 1) {
+                if (self.mergedEdgeUuid(slot)) |uuid| {
                     const off = edge_rev_off + @as(usize, @intCast(slot)) * REV_ENTRY;
-                    std.mem.writeInt(u128, buf[off..][0..16], e.value_ptr.*, .little);
+                    std.mem.writeInt(u128, buf[off..][0..16], uuid, .little);
                 }
             }
         }
         // EDGE forward.
-        try serializeForward(a, buf, edge_fwd_off, &self.edge_uuid_to_slot);
+        writeForwardPairs(buf, edge_fwd_off, edge_pairs);
 
         // CRC32 over the entire payload preceding the trailer.
         const crc = std.hash.crc.Crc32.hash(buf[0..crc_off]);
@@ -529,22 +878,32 @@ pub const IdMap = struct {
         return buf;
     }
 
-    fn serializeForward(
-        a: Allocator,
-        buf: []u8,
-        base_off: usize,
-        map: *std.AutoHashMap(u128, u64),
-    ) !void {
-        const count = map.count();
-        if (count == 0) return;
-        const pairs = try a.alloc(FwdPair, count);
-        defer a.free(pairs);
-        var i: usize = 0;
-        var it = map.iterator();
-        while (it.next()) |e| {
-            pairs[i] = .{ .uuid = e.key_ptr.*, .slot = e.value_ptr.* };
-            i += 1;
+    const Namespace = enum { node, edge };
+
+    /// Collect the merged-live forward (uuid, slot) pairs for one namespace.
+    /// Caller owns the returned slice. Caller MUST hold the mutex.
+    fn collectMergedForward(self: *const IdMap, a: Allocator, ns: Namespace) ![]FwdPair {
+        var list: std.ArrayList(FwdPair) = .empty;
+        errdefer list.deinit(a);
+        switch (ns) {
+            .node => {
+                var it = self.nodeUuidIterator();
+                while (it.next()) |uuid| {
+                    try list.append(a, .{ .uuid = uuid, .slot = self.mergedNodeSlot(uuid).? });
+                }
+            },
+            .edge => {
+                var it = self.edgeUuidIterator();
+                while (it.next()) |uuid| {
+                    try list.append(a, .{ .uuid = uuid, .slot = self.mergedEdgeSlot(uuid).? });
+                }
+            },
         }
+        return list.toOwnedSlice(a);
+    }
+
+    fn writeForwardPairs(buf: []u8, base_off: usize, pairs: []FwdPair) void {
+        if (pairs.len == 0) return;
         std.mem.sort(FwdPair, pairs, {}, fwdLess);
         for (pairs, 0..) |p, idx| {
             const off = base_off + idx * FWD_ENTRY;
@@ -736,9 +1095,25 @@ pub const IdMap = struct {
         self.lockMu();
         defer self.unlockMu();
         var max: ?u128 = null;
+        // Overlay keys (writes-since-open in mmap mode; everything in resident).
         var it = self.node_uuid_to_slot.keyIterator();
         while (it.next()) |k| {
             if (max == null or k.* > max.?) max = k.*;
+        }
+        if (self.mode == .mmap_backed) {
+            // Base forward is sorted ascending by uuid, so the largest LIVE
+            // base uuid is the tail walked backward past any tombstoned entries
+            // (O(1) at open: overlay empty, no tombstones).
+            if (self.base) |*b| {
+                var i = b.node_fwd_count;
+                while (i > 0) {
+                    i -= 1;
+                    const uuid = b.nodeFwdUuidAt(i);
+                    if (self.removed_node_uuids.contains(uuid)) continue;
+                    if (max == null or uuid > max.?) max = uuid;
+                    break;
+                }
+            }
         }
         return max;
     }
@@ -751,6 +1126,18 @@ pub const IdMap = struct {
         var it = self.edge_uuid_to_slot.keyIterator();
         while (it.next()) |k| {
             if (max == null or k.* > max.?) max = k.*;
+        }
+        if (self.mode == .mmap_backed) {
+            if (self.base) |*b| {
+                var i = b.edge_fwd_count;
+                while (i > 0) {
+                    i -= 1;
+                    const uuid = b.edgeFwdUuidAt(i);
+                    if (self.removed_edge_uuids.contains(uuid)) continue;
+                    if (max == null or uuid > max.?) max = uuid;
+                    break;
+                }
+            }
         }
         return max;
     }
@@ -794,6 +1181,19 @@ pub const LoadedIdMapSnapshot = struct {
 
     pub fn edgeSlotOf(self: *const LoadedIdMapSnapshot, uuid: u128) ?u64 {
         return fwdSearch(self.mapping, self.edge_fwd_off, self.edge_fwd_count, uuid);
+    }
+
+    /// uuid at forward-region index (0-based, sorted ascending). PHASE 4: used
+    /// by the merged iterator / clone / serialize / maxUuid to enumerate the
+    /// base live forward set without materializing it.
+    pub fn nodeFwdUuidAt(self: *const LoadedIdMapSnapshot, idx: u64) u128 {
+        const off = self.node_fwd_off + @as(usize, @intCast(idx)) * IdMap.FWD_ENTRY;
+        return std.mem.readInt(u128, self.mapping[off..][0..16], .little);
+    }
+
+    pub fn edgeFwdUuidAt(self: *const LoadedIdMapSnapshot, idx: u64) u128 {
+        const off = self.edge_fwd_off + @as(usize, @intCast(idx)) * IdMap.FWD_ENTRY;
+        return std.mem.readInt(u128, self.mapping[off..][0..16], .little);
     }
 
     fn revLookup(mapping: []const u8, base_off: usize, next_slot: u64, slot: u64) ?u128 {
