@@ -11353,7 +11353,14 @@ pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*Gra
         deinitGlobalStore();
         return error.StorageAdapterMismatch;
     }
-    store.data_dir = data_dir;
+    // NOTE: do NOT re-alias `store.data_dir = data_dir` here. `getPrimaryGlobalStore`
+    // already set `store.data_dir` to the OWNED `last_data_dir` copy (global-allocator
+    // dupe, lives for the store's lifetime). Re-aliasing to the *caller's* borrowed
+    // `data_dir` slice made `store.data_dir` dangle once the caller freed it — harmless
+    // before the clean-shutdown snapshot write existed, but a use-after-free now that
+    // `deinitGlobalStore` reads `data_dir` in `saveToFileEx`/`resolveGraphRootDirPath`.
+    // Callers that free their `data_dir` before the deferred `deinitGlobalStore`
+    // (e.g. tmpDir tests, defer LIFO) would otherwise crash the shutdown save.
     // The disk-backed engine is now available, so the node cache can serve
     // evicted ids via hydrate-on-miss — install the hook and activate the
     // configured resident cap (GEODE_NODE_CACHE_ENTRIES). Until this point the
@@ -11413,7 +11420,15 @@ fn deinitGlobalStoreEx(clean: bool) void {
     if (initialized.load(.acquire) and global_store != null) {
         // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
         // at the matching counter) BEFORE the store and adapter are destroyed.
-        if (clean) {
+        //
+        // GUARD: only run the save when it is meaningful AND safe — i.e. there is a
+        // real persistence adapter (`getGlobalAdapter() != null`) AND the store has a
+        // non-empty data dir. A transient/test store with no adapter or no data dir has
+        // nothing to checkpoint and no directory to write a snapshot into; running the
+        // save there is pure cost (and emits spurious FileNotFound). This mirrors the
+        // pre-snapshot-write behavior (deinit did not save for such stores) while
+        // preserving the real-data-dir win: a populated store still writes the snapshot.
+        if (clean and getGlobalAdapter() != null and global_store.?.data_dir.len > 0) {
             global_store.?.saveToFileEx(false) catch |err| {
                 log.err("clean-shutdown IdMap snapshot persist failed", &.{
                     Attr.string("error", @errorName(err)),
