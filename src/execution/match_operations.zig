@@ -885,9 +885,11 @@ const AggAcc = struct {
 
 const Cmp = enum { eq, ne, lt, le, gt, ge };
 
-/// Literal value extracted from a simple WHERE predicate. Holds either an
-/// integer, float, or string (strings for eq/ne only — ordering comparisons
-/// on strings are not handled here).
+/// Literal value extracted from a simple WHERE predicate. Holds an integer,
+/// float, string, or bool. The comparison helpers (`comparePvLit` /
+/// `compareStoragePvLit`) delegate to `eval.evalBinary`, so all literal/property
+/// type combinations — including string ordering and cross-type eq — are handled
+/// with exact parity to the general WHERE path.
 const LitValue = union(enum) {
     Int: i64,
     Float: f64,
@@ -1006,41 +1008,65 @@ fn propToI64(pv: graph_store.PropertyValue) ?i64 {
     };
 }
 
-/// Evaluate `pv OP lit` on the fast path. Returns false on type mismatches
-/// (lit `String` against numeric `pv`, etc.) and on null/unsupported types.
-fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
-    // Equality/inequality on strings (only eq/ne supported for strings).
-    if (pv == .String and lit == .Str) {
-        const eq = std.mem.eql(u8, pv.String, lit.Str);
-        return switch (op) {
-            .eq => eq,
-            .ne => !eq,
-            else => false,
-        };
-    }
-    if (pv == .Bool and lit == .Bool) {
-        const eq = pv.Bool == lit.Bool;
-        return switch (op) {
-            .eq => eq,
-            .ne => !eq,
-            else => false,
-        };
-    }
-    // Numeric path.
-    const left = propToF64(pv) orelse return false;
-    const right: f64 = switch (lit) {
-        .Int => |i| @as(f64, @floatFromInt(i)),
-        .Float => |f| f,
-        else => return false,
-    };
+/// Map the fast-path `Cmp` back to the AST `BinOp` understood by
+/// `eval.evalBinary`, so the per-slot comparison can delegate to the same
+/// comparison the general executor runs per materialized row.
+fn cmpToBinOp(op: Cmp) ast.BinOp {
     return switch (op) {
-        .eq => left == right,
-        .ne => left != right,
-        .lt => left < right,
-        .le => left <= right,
-        .gt => left > right,
-        .ge => left >= right,
+        .eq => .Eq,
+        .ne => .Ne,
+        .lt => .Lt,
+        .le => .Le,
+        .gt => .Gt,
+        .ge => .Ge,
     };
+}
+
+/// Lift a simple WHERE literal into an eval `Value`, matching how the
+/// materialize path turns an AST literal into a `Value` (a float literal
+/// becomes `.Double`, the same shape `propertyValueToValue` produces for a
+/// `.Float` property).
+fn litToValue(lit: LitValue) value_types.Value {
+    return switch (lit) {
+        .Int => |i| .{ .Int = i },
+        .Float => |f| .{ .Double = f },
+        .Str => |s| .{ .Str = s },
+        .Bool => |b| .{ .Bool = b },
+    };
+}
+
+/// Evaluate `pv OP lit` on the fast path with EXACT parity to the
+/// materialize / `eval.zig` WHERE path (the oracle).
+///
+/// The previous hand-rolled comparison DIVERGED from `eval.evalBinary`:
+///   * string ordering (`<,<=,>,>=`) returned false -> 0 instead of the true
+///     count (eval does NFC-normalized lexicographic ordering),
+///   * string eq/ne used raw-byte `std.mem.eql` -> canonically-equal Unicode
+///     under NFC was missed (eval NFC-normalizes both sides first), and
+///   * cross-type `=`/`!=` between a string property and an int literal (or
+///     vice versa) returned false (eval stringify-coerces and compares).
+///
+/// Rather than re-replicate those semantics, we decode the property + literal
+/// into eval `Value`s and DELEGATE to `eval.evalBinary` — guaranteeing the fast
+/// count equals the general count by construction for every admitted shape
+/// (numeric eq/ordering, string eq/ne under NFC, string NFC ordering, cross-type
+/// eq stringify-coerce, and NULL three-valued logic).
+///
+/// On any eval error or a non-boolean result (e.g. a NULL operand yields NULL),
+/// we return false — mirroring the materialize path's
+/// `eval.evalExpr(...) catch Value{ .Bool = false }` + truthy test, which
+/// EXCLUDES the row.
+fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
+    const lv = property_value_codec.propertyValueToValue(pv);
+    const rv = litToValue(lit);
+    // The passed allocator is not used by comparison operators: the only
+    // allocating comparison sub-path (NFC string normalization) allocates via
+    // its own internal allocator and frees before returning, and comparison ops
+    // return a borrow-free `.Bool`/`.Null`. `smp_allocator` (the
+    // governance-approved process allocator) therefore stays effectively
+    // allocation-free on the per-slot hot path.
+    const res = eval.evalBinary(std.heap.smp_allocator, cmpToBinOp(op), lv, rv) catch return false;
+    return res == .Bool and res.Bool;
 }
 
 // GAP-0902: storage-side (engine `gs.PropertyValue`) variants of the coercion +
@@ -1063,38 +1089,28 @@ fn storagePropToI64(pv: gs.PropertyValue) ?i64 {
     };
 }
 
+/// Storage-side (engine `gs.PropertyValue`) variant of `comparePvLit`.
+///
+/// Convert the engine value to a geode `graph_store.PropertyValue` (string data
+/// passed by reference, no copy — it outlives this call) and delegate to
+/// `comparePvLit`, so the engine-direct fast path shares the SAME eval-parity
+/// comparison as the resident path (string NFC ordering, NFC eq, cross-type eq).
+///
+/// `.ext` (extended types: list/date/uuid/etc.) compared against a scalar WHERE
+/// literal is a `TypeMismatch` in eval -> the row is excluded -> return false.
+/// This stays in parity: `extractLiteral` only ever produces Int/Float/Str/Bool
+/// literals, so an `.ext` property never faces a matching-typed literal here.
 fn compareStoragePvLit(pv: gs.PropertyValue, op: Cmp, lit: LitValue) bool {
-    // Equality/inequality on strings (only eq/ne supported for strings).
-    if (pv == .string and lit == .Str) {
-        const eq = std.mem.eql(u8, pv.string, lit.Str);
-        return switch (op) {
-            .eq => eq,
-            .ne => !eq,
-            else => false,
-        };
-    }
-    if (pv == .bool and lit == .Bool) {
-        const eq = pv.bool == lit.Bool;
-        return switch (op) {
-            .eq => eq,
-            .ne => !eq,
-            else => false,
-        };
-    }
-    const left = storagePropToF64(pv) orelse return false;
-    const right: f64 = switch (lit) {
-        .Int => |i| @as(f64, @floatFromInt(i)),
-        .Float => |f| f,
-        else => return false,
+    const gpv: graph_store.PropertyValue = switch (pv) {
+        .string => |s| .{ .String = s },
+        .int => |i| .{ .Int = i },
+        .float => |f| .{ .Float = f },
+        .bool => |b| .{ .Bool = b },
+        .null => .Null,
+        .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ext => return false,
     };
-    return switch (op) {
-        .eq => left == right,
-        .ne => left != right,
-        .lt => left < right,
-        .le => left <= right,
-        .gt => left > right,
-        .ge => left >= right,
-    };
+    return comparePvLit(gpv, op, lit);
 }
 
 // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="AggregateFastPath"; ASPECT=PropertyAggregate; STATUS=TESTED; TEST=tests/test_gap0811b_property_aggregate_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
@@ -1400,9 +1416,23 @@ pub fn countFilteredFastPath(
     const writable_store = graph_store.getGlobalStore(allocator);
 
     if (writable_store.nodes.effectiveCap() == 0) {
-        var read_view = graph_store.ReadView.init(allocator, writable_store);
-        defer read_view.deinit();
-        const read_store = read_view.getReadStore();
+        // REQ-QUIC-HC-017: honor an already-installed active read store (held by
+        // the QUIC handler under the graph read lock) instead of building a fresh
+        // ReadView. `ReadView.init(...).getReadStore()` re-acquires the store lock
+        // and deep-clones a QueryReadSession (graph_store.zig getReadStore) — an
+        // O(graph) clone + stall under concurrent writes. Mirror
+        // countNodesFastPath's pattern; legacy callers without an active read
+        // store keep the ReadView fallback.
+        var fallback_read_view: graph_store.ReadView = undefined;
+        var fallback_read_view_active = false;
+        defer if (fallback_read_view_active) fallback_read_view.deinit();
+        const read_store = if (graph_store.getActiveQueryReadStore()) |active_read_store|
+            active_read_store
+        else blk: {
+            fallback_read_view = graph_store.ReadView.init(allocator, writable_store);
+            fallback_read_view_active = true;
+            break :blk fallback_read_view.getReadStore();
+        };
         const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);

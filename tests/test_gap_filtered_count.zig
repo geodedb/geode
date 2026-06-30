@@ -89,6 +89,47 @@ const Harness = struct {
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
     }
 
+    /// Run a statement and discard its result (for CREATE seeding).
+    fn exec(self: *Harness, query: []const u8) !void {
+        var r = try self.runQuery(query);
+        r.deinit(self.arena.allocator());
+    }
+
+    /// Run a `RETURN count(...)` query and return the single integer result.
+    fn countOf(self: *Harness, query: []const u8) !i64 {
+        var r = try self.runQuery(query);
+        defer r.deinit(self.arena.allocator());
+        return r.rows[0][0].Int;
+    }
+
+    /// Differential assertion: the streaming filtered-count fast path for
+    /// `fast_query` must (1) materialize ZERO rows (delta == 0, proving the fast
+    /// path fired) and (2) return EXACTLY the same count as `oracle_query`, the
+    /// general materialize/eval path (an AND-compound predicate that DECLINES the
+    /// fast path and runs the row-by-row executor — the oracle). `oracle_query`
+    /// is constructed so the extra AND clause is true for every seeded node, so
+    /// the two counts must be identical.
+    fn expectFastMatchesOracle(
+        self: *Harness,
+        fast_query: []const u8,
+        oracle_query: []const u8,
+    ) !void {
+        planned_read_runtime.resetPathRowsMaterialized();
+        const fast = try self.countOf(fast_query);
+        const fast_delta = planned_read_runtime.getPathRowsMaterialized();
+
+        planned_read_runtime.resetPathRowsMaterialized();
+        const oracle = try self.countOf(oracle_query);
+        const oracle_delta = planned_read_runtime.getPathRowsMaterialized();
+
+        // The fast path streamed (no per-row materialize)...
+        try testing.expectEqual(@as(u64, 0), fast_delta);
+        // ...the oracle ran the general (materializing) path...
+        try testing.expect(oracle_delta > 0);
+        // ...and both produced the SAME count.
+        try testing.expectEqual(oracle, fast);
+    }
+
     // Seed N nodes: ordinal 0..N-1; source='col' for the first N_COL, else 'x'.
     fn seed(self: *Harness) !void {
         var i: usize = 0;
@@ -187,4 +228,114 @@ test "FALLBACK: compound (AND) WHERE count is not wrongly routed, still correct"
     var res = try h.runQuery("MATCH (n:T) WHERE n.source = 'col' AND n.ordinal < 150 RETURN count(n) AS c");
     defer res.deinit(h.arena.allocator());
     try testing.expectEqual(@as(i64, 150), res.rows[0][0].Int);
+}
+
+// ---------------------------------------------------------------------------
+// Differential parity tests (fast filtered-count == general/eval oracle).
+//
+// These cover the reviewer-found divergences between the per-slot fast-path
+// comparison and the materialize/eval.zig WHERE semantics. Each was RED before
+// the comparison delegated to `eval.evalBinary` (string ordering counted 0, NFC
+// eq under-counted, str<->int eq missed) and is GREEN after, matching the
+// general path exactly.
+// ---------------------------------------------------------------------------
+
+// BUG #1 (CRITICAL): string ordering predicates returned 0 instead of the true
+// count. eval does NFC-normalized lexicographic ordering; the fast path must
+// agree.
+test "DIFFERENTIAL: string ordering n.name > 'm' / <= 'x' == general oracle" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const names = [_][]const u8{ "alpha", "mango", "nova", "zeta", "mike", "yak" };
+    for (names) |nm| {
+        const aa = h.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "CREATE (:S {{name: '{s}', tag: 1}})", .{nm});
+        try h.exec(q);
+    }
+
+    // > 'm' : mango, mike, nova, yak, zeta → 5 (alpha excluded).
+    try h.expectFastMatchesOracle(
+        "MATCH (n:S) WHERE n.name > 'm' RETURN count(n) AS c",
+        "MATCH (n:S) WHERE n.name > 'm' AND n.tag = 1 RETURN count(n) AS c",
+    );
+    // <= 'x' : alpha, mango, mike, nova → 4 (yak, zeta excluded).
+    try h.expectFastMatchesOracle(
+        "MATCH (n:S) WHERE n.name <= 'x' RETURN count(n) AS c",
+        "MATCH (n:S) WHERE n.name <= 'x' AND n.tag = 1 RETURN count(n) AS c",
+    );
+}
+
+// BUG #2 (NFC eq): a property stored in a canonically-equal but byte-different
+// Unicode form must compare equal to the literal (eval NFC-normalizes; the fast
+// path previously used raw-byte std.mem.eql and under-counted).
+test "DIFFERENTIAL: NFC eq (decomposed property == composed literal) == oracle" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    // "café" with é stored DECOMPOSED as 'e' + U+0301 (combining acute):
+    //   bytes: c a f e 0xCC 0x81
+    try h.exec("CREATE (:V {name: 'cafe\xCC\x81', tag: 1})");
+    try h.exec("CREATE (:V {name: 'other', tag: 1})");
+
+    // Literal "café" with é COMPOSED as U+00E9 (0xC3 0xA9). Byte-different from
+    // the stored form, but NFC-equal → must match exactly one node.
+    try h.expectFastMatchesOracle(
+        "MATCH (n:V) WHERE n.name = 'caf\xC3\xA9' RETURN count(n) AS c",
+        "MATCH (n:V) WHERE n.name = 'caf\xC3\xA9' AND n.tag = 1 RETURN count(n) AS c",
+    );
+}
+
+// BUG #3 (str<->int eq coercion): eval stringifies and compares across Str/Int
+// for = / !=; the fast path previously returned false for the cross-type pair.
+test "DIFFERENTIAL: str<->int eq/ne coercion == general oracle" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.exec("CREATE (:W {code: '5', tag: 1})"); // string "5"
+    try h.exec("CREATE (:W {code: 5, tag: 1})"); //   int 5
+    try h.exec("CREATE (:W {code: '7', tag: 1})"); // string "7"
+
+    // = 5  → both the string "5" and the int 5 stringify-coerce equal → 2.
+    try h.expectFastMatchesOracle(
+        "MATCH (n:W) WHERE n.code = 5 RETURN count(n) AS c",
+        "MATCH (n:W) WHERE n.code = 5 AND n.tag = 1 RETURN count(n) AS c",
+    );
+    // = '5' → string "5" eq, int 5 stringify-coerce equal → 2.
+    try h.expectFastMatchesOracle(
+        "MATCH (n:W) WHERE n.code = '5' RETURN count(n) AS c",
+        "MATCH (n:W) WHERE n.code = '5' AND n.tag = 1 RETURN count(n) AS c",
+    );
+    // != 5 → only the string "7" survives → 1.
+    try h.expectFastMatchesOracle(
+        "MATCH (n:W) WHERE n.code != 5 RETURN count(n) AS c",
+        "MATCH (n:W) WHERE n.code != 5 AND n.tag = 1 RETURN count(n) AS c",
+    );
+}
+
+// Numeric eq / ordering / ne parity (regression guard — already worked, must
+// stay equal to the oracle after the eval delegation).
+test "DIFFERENTIAL: numeric eq / ordering / ne == general oracle" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const aa = h.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "CREATE (:N {{ordinal: {d}, tag: 1}})", .{i});
+        try h.exec(q);
+    }
+
+    try h.expectFastMatchesOracle(
+        "MATCH (n:N) WHERE n.ordinal = 5 RETURN count(n) AS c",
+        "MATCH (n:N) WHERE n.ordinal = 5 AND n.tag = 1 RETURN count(n) AS c",
+    );
+    try h.expectFastMatchesOracle(
+        "MATCH (n:N) WHERE n.ordinal >= 8 RETURN count(n) AS c",
+        "MATCH (n:N) WHERE n.ordinal >= 8 AND n.tag = 1 RETURN count(n) AS c",
+    );
+    try h.expectFastMatchesOracle(
+        "MATCH (n:N) WHERE n.ordinal != 3 RETURN count(n) AS c",
+        "MATCH (n:N) WHERE n.ordinal != 3 AND n.tag = 1 RETURN count(n) AS c",
+    );
 }
