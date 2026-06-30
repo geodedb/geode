@@ -4785,6 +4785,9 @@ pub const StorageAdapter = struct {
         acquireWholeGraphExclusive(mg);
         defer releaseWholeGraphExclusive(mg);
         try rebuildExactNodePropertyIndex(mg);
+        // H4: mark the index built so a deferred graph doesn't redundantly rebuild
+        // on the next ensure (mirrors ensureExactNodePropertyIndexBuilt's latch).
+        mg.exact_index_built.store(true, .release);
     }
 
     /// Test-only: read the coverage counter from the most recent
@@ -5834,10 +5837,20 @@ pub const StorageAdapter = struct {
             if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
                 if (light) {
                     invalidateExactPropertyIndexFile(self.allocator, dir_path);
-                } else {
+                } else if (mg.exact_index_built.load(.acquire)) {
                     mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
                         log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
                     };
+                } else {
+                    // H4: the exact index was DEFERRED at open and never built, so
+                    // the in-memory index is EMPTY. Persisting it would write an
+                    // empty snapshot that loadFromFile accepts as "complete"
+                    // (entry_count == 0 is a valid load), permanently latching
+                    // exact_index_built = true on the next open so the deferred
+                    // rebuild never runs — property-equality queries return empty
+                    // and MERGE silently creates duplicates. Instead, remove any
+                    // stale on-disk index so the next open DEFERS + rebuilds lazily.
+                    invalidateExactPropertyIndexFile(self.allocator, dir_path);
                 }
                 self.allocator.free(dir_path);
             } else |err| {
