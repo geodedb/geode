@@ -46,6 +46,12 @@ pub const LabelScanCursor = struct {
 };
 
 var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// H4 (cold-open phase 1): number of times `rebuildExactNodePropertyIndex` has
+// run process-wide. Test instrumentation for the deferred-build latch: a graph
+// opened WITHOUT a persisted exact index must NOT rebuild at open (counter
+// unchanged) and must rebuild EXACTLY ONCE on first index access (read or
+// live-mutation). Incremented at the top of every rebuild.
+var g_exact_rebuild_runs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Candidate nodes examined by the verify-loop in `lookupNodeIdByLabelAndAllProps`
 // (the bulk edge-endpoint resolver). A dangling composite-key endpoint whose
@@ -123,6 +129,18 @@ pub fn getNodePropertyEngineReads() u64 {
 
 pub fn getExactNodePropertyLookupCount() u64 {
     return g_exact_node_property_lookup_count.load(.acquire);
+}
+
+/// H4 (cold-open phase 1): process-wide count of `rebuildExactNodePropertyIndex`
+/// runs. Test-only: assert 0 after a deferred open and exactly 1 after first
+/// index access.
+pub fn getExactRebuildRunsForTesting() u64 {
+    return g_exact_rebuild_runs.load(.acquire);
+}
+
+/// H4 (cold-open phase 1): reset the rebuild-runs counter (test-only).
+pub fn resetExactRebuildRunsForTesting() void {
+    g_exact_rebuild_runs.store(0, .release);
 }
 
 /// Candidates examined by `lookupNodeIdByLabelAndAllProps`'s verify-loop since
@@ -746,6 +764,23 @@ pub const ManagedGraph = struct {
     /// shard) increments it concurrently. After a successful rebuild it equals
     /// the live-node count, letting tests assert every node was processed.
     exact_index_rebuild_iters: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// H4 (cold-open phase 1): lazy-build latch for `exact_node_property_index`.
+    /// `true`  → the index is fully built; reads/live-mutations may touch it.
+    /// `false` → the index was DEFERRED at open (no/stale persisted snapshot) and
+    /// must be rebuilt from the durable pages on first access, instead of paying
+    /// the full O(graph) property-chain scan EAGERLY at open (~1.5-2h at 14.27M
+    /// nodes — cold-open "phase 1"). Default `true` so a freshly CREATED graph
+    /// (which maintains the index incrementally) and the persisted-load path are
+    /// unaffected; the open path sets it `false` only when it defers. Mirrors the
+    /// engine's `ensureDerivedHydrated` lazy pattern.
+    exact_index_built: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    /// Serializes the one-shot deferred build so concurrent first-accessors build
+    /// the index EXACTLY ONCE (a double-checked latch). Uses `std.Io.Mutex` (the
+    /// file convention — the geode root module's std has no `std.Thread.Mutex`);
+    /// locked via the global single-threaded io handle, like the other per-graph
+    /// mutexes here. Only `ensureExactNodePropertyIndexBuilt` ever holds it, so it
+    /// participates in no lock-ordering relationship and cannot deadlock.
+    exact_index_build_mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
     /// May be null if audit init failed (soft failure — graph still usable).
     audit_logger: ?*audit.AuditLogger = null,
@@ -1398,6 +1433,10 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
 // the serial one. If only one shard exists (or any other degenerate case) we
 // fall back to a straight serial loop.
 fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
+    // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
+    // deferred-build latch rebuilds 0 times at open and exactly once on first
+    // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
+    _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
     mg.exact_node_property_index.clear();
     mg.exact_index_rebuild_iters.store(0, .monotonic);
 
@@ -1485,6 +1524,33 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
     for (ctxs[0..shards.len]) |*c| {
         if (c.err) |err| return err;
     }
+}
+
+/// H4 (cold-open phase 1): build the exact node-property index on first access
+/// if it was DEFERRED at open. Lock-free fast path when already built; otherwise
+/// the build mutex serializes a single rebuild from the durable pages (a
+/// double-checked latch — concurrent first-accessors build EXACTLY once).
+///
+/// MUST be called at the top of EVERY public path that READS or live-MUTATES
+/// `mg.exact_node_property_index`, BEFORE the index is touched — a missed
+/// accessor returns wrong/empty results (read) or corrupts the index (a live
+/// write onto an unbuilt index) on a deferred graph. The build itself rebuilds
+/// from the durable pages, so it is crash-safe and idempotent (counter-gated by
+/// `loadFromFile` on the next open).
+///
+/// MUST NOT be called from inside `rebuildExactNodePropertyIndex` (its internal
+/// `addEx` calls would re-enter here and recurse); the rebuild uses the raw
+/// helpers directly.
+fn ensureExactNodePropertyIndexBuilt(mg: *ManagedGraph) !void {
+    if (mg.exact_index_built.load(.acquire)) return;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mg.exact_index_build_mutex.lockUncancelable(io);
+    defer mg.exact_index_build_mutex.unlock(io);
+    // Double-check under the mutex: a peer first-accessor may have built it
+    // while we waited for the lock.
+    if (mg.exact_index_built.load(.acquire)) return;
+    try rebuildExactNodePropertyIndex(mg);
+    mg.exact_index_built.store(true, .release);
 }
 
 // ============================================================================
@@ -2336,6 +2402,11 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        // Build it FIRST (before any node/index write below) so this insert's
+        // posting lands on top of the fully-rebuilt index. No-op (one atomic
+        // load) on a freshly-created or already-built graph — the ingest case.
+        try ensureExactNodePropertyIndexBuilt(mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -3765,6 +3836,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(mg);
 
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const shard = mg.shardEngineForNode(node_id);
@@ -3995,6 +4068,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
@@ -4061,6 +4136,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
@@ -4124,6 +4201,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
@@ -4467,6 +4546,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: build the exact index on first access if it was deferred at open.
+        try ensureExactNodePropertyIndexBuilt(mg);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
 
         const storage_value = try toStorageProperty(allocator, value);
@@ -5049,6 +5130,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: build the exact index on first access if it was deferred at open.
+        try ensureExactNodePropertyIndexBuilt(mg);
         const label_id = mg.label_dict.getId(label) orelse return 0;
 
         const storage_value = try toStorageProperty(self.allocator, value);
@@ -6407,14 +6490,24 @@ pub const StorageAdapter = struct {
             mg.fts_dir = fts_result.dir;
         }
 
-        // Try loading the persisted property index; fall back to full rebuild.
+        // Try loading the persisted property index; fall back to a lazy rebuild.
         const loaded_from_disk = blk: {
             const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
             defer self.allocator.free(dir_path);
             break :blk mg.exact_node_property_index.loadFromFile(dir_path);
         };
-        if (!loaded_from_disk) {
-            try rebuildExactNodePropertyIndex(mg);
+        if (loaded_from_disk) {
+            // Persisted snapshot loaded: the index is complete and ready.
+            mg.exact_index_built.store(true, .release);
+        } else {
+            // H4 (cold-open phase 1): DEFER the full O(graph) property-chain
+            // rebuild to first access instead of paying it EAGERLY at open
+            // (~1.5-2h at 14.27M nodes). `ensureExactNodePropertyIndexBuilt`
+            // rebuilds from the durable pages on the first read/live-mutation;
+            // every index accessor guards on it. Crash-safe (rebuild reads
+            // durable pages; counter-gated by loadFromFile on the next open).
+            mg.exact_index_built.store(false, .release);
+            log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild)", .{name});
         }
 
         try self.engines.put(owned_name, mg);
@@ -6652,6 +6745,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index
+        // (adding a label re-indexes the node's properties under the new label).
+        try ensureExactNodePropertyIndexBuilt(mg);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = try resolvePersistedLabelId(mg, label);
         const node_shard = mg.shardEngineForNode(node_id);
@@ -6676,6 +6772,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index
+        // (removing a label drops the node's postings under that label).
+        try ensureExactNodePropertyIndexBuilt(mg);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
         removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
@@ -7310,6 +7409,9 @@ fn copySmallestMergePropCandidates(
     label: []const u8,
     props: []const StorageAdapter.PropKV,
 ) ![]u64 {
+    // H4: build the exact index on first access if it was deferred at open
+    // (this MERGE-preselect path reads postings for both probes below).
+    try ensureExactNodePropertyIndexBuilt(mg);
     const io = std.Io.Threaded.global_single_threaded.io();
     const label_id = blk: {
         mg.string_indexes_mutex.lockUncancelable(io);

@@ -7827,6 +7827,24 @@ pub fn build(b: *std.Build) void {
     const parallel_index_rebuild_step = b.step("test-parallel-index-rebuild", "Correctness + coverage guard for the restart property-index rebuild (serial baseline -> parallel)");
     parallel_index_rebuild_step.dependOn(&run_parallel_index_rebuild_tests.step);
 
+    // H4 (cold-open phase 1): defer the exact node-property index rebuild to
+    // lazy first-access. Asserts open does NOT rebuild, the first index access
+    // rebuilds exactly once and returns correct postings, and a second access
+    // does not rebuild again (correctness == an eager rebuild).
+    const exact_index_deferred_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_exact_index_deferred_build.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exact_index_deferred_test_mod.addImport("geode", root_mod);
+    exact_index_deferred_test_mod.addImport("graph_storage", graph_storage_mod);
+    const exact_index_deferred_tests = b.addTest(.{ .root_module = exact_index_deferred_test_mod });
+    const run_exact_index_deferred_tests = b.addRunArtifact(exact_index_deferred_tests);
+    shardDep(test_step, &run_exact_index_deferred_tests.step, 1, test_shard_loads, test_shard_index);
+    const exact_index_deferred_step = b.step("test-exact-index-deferred-build", "H4: defer exact node-property index rebuild to lazy first-access (cold-open phase 1)");
+    exact_index_deferred_step.dependOn(&run_exact_index_deferred_tests.step);
+
     // TSan companion: same test file compiled with -fsanitize-thread so the
     // adversarial repeated-rebuild case runs under the thread sanitizer.
     // Wired as an opt-in step (not part of the default test_step) because TSan
