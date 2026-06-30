@@ -405,6 +405,362 @@ pub const IdMap = struct {
 
         return self;
     }
+
+    // ------------------------------------------------------------------
+    // mmap-able snapshot (Phase 1a of sub-second startup)
+    //
+    // A NEW on-disk format, separate from the legacy id_map.dat above. One
+    // file holds BOTH namespaces (node + edge). The format is designed so an
+    // open path can `mmap` it and answer lookups directly off the bytes with
+    // NO O(graph) scan-rebuild:
+    //   * reverse (slot -> uuid) = flat u128[next_slot], direct-indexed O(1);
+    //     a deleted/absent slot is the sentinel 0 (a real UUIDv7 is never 0).
+    //   * forward (uuid -> slot) = sorted (u128 uuid, u64 slot)[count] by uuid,
+    //     answered with binary search + FULL-KEY (u128) verify.
+    //
+    // Layout (all integers little-endian, no native alignment assumed — every
+    // field is read/written with std.mem.readInt/writeInt so the mmap'd bytes
+    // need no special alignment):
+    //   magic "GEOIDMAP" (8)
+    //   format_ver        u32
+    //   manifest_counter  u64   (caller's crash-safety gate; gate logic = 1b)
+    //   next_node_slot    u64
+    //   next_edge_slot    u64
+    //   node_fwd_count    u64
+    //   edge_fwd_count    u64
+    //   NODE reverse  u128[next_node_slot]
+    //   NODE forward  (u128 uuid, u64 slot)[node_fwd_count]   (sorted by uuid)
+    //   EDGE reverse  u128[next_edge_slot]
+    //   EDGE forward  (u128 uuid, u64 slot)[edge_fwd_count]   (sorted by uuid)
+    //   CRC32 u32  (over EVERYTHING before this trailer)
+    // ------------------------------------------------------------------
+
+    /// Magic for the mmap-able snapshot (distinct from the legacy FILE_MAGIC).
+    const SNAP_MAGIC: [8]u8 = "GEOIDMAP".*;
+    /// Snapshot format version.
+    const SNAP_VERSION: u32 = 1;
+    const SNAP_FILE = "idmap.snapshot";
+    const SNAP_TMP = "idmap.snapshot.tmp";
+
+    // Fixed header field offsets.
+    const HDR_VER_OFF = 8;
+    const HDR_MANIFEST_OFF = 12;
+    const HDR_NEXT_NODE_OFF = 20;
+    const HDR_NEXT_EDGE_OFF = 28;
+    const HDR_NODE_FWD_OFF = 36;
+    const HDR_EDGE_FWD_OFF = 44;
+    const SNAP_HEADER_SIZE = 52;
+    const REV_ENTRY = 16; // u128
+    const FWD_ENTRY = 24; // u128 uuid + u64 slot
+    const CRC_SIZE = 4;
+
+    const FwdPair = struct { uuid: u128, slot: u64 };
+    fn fwdLess(_: void, a: FwdPair, b: FwdPair) bool {
+        return a.uuid < b.uuid;
+    }
+
+    /// Build the serialized snapshot payload (header + regions + CRC trailer)
+    /// into a freshly-allocated buffer owned by the caller. Locks the IdMap so
+    /// the captured state is internally consistent.
+    fn serializeSnapshot(self: *IdMap, manifest_counter: u64) ![]u8 {
+        const a = self.allocator;
+        self.lockMu();
+        defer self.unlockMu();
+
+        const nn = self.next_node_slot;
+        const ne = self.next_edge_slot;
+        const node_fwd_count: u64 = self.node_uuid_to_slot.count();
+        const edge_fwd_count: u64 = self.edge_uuid_to_slot.count();
+
+        const node_rev_off: usize = SNAP_HEADER_SIZE;
+        const node_fwd_off: usize = node_rev_off + @as(usize, @intCast(nn)) * REV_ENTRY;
+        const edge_rev_off: usize = node_fwd_off + @as(usize, @intCast(node_fwd_count)) * FWD_ENTRY;
+        const edge_fwd_off: usize = edge_rev_off + @as(usize, @intCast(ne)) * REV_ENTRY;
+        const crc_off: usize = edge_fwd_off + @as(usize, @intCast(edge_fwd_count)) * FWD_ENTRY;
+        const total: usize = crc_off + CRC_SIZE;
+
+        const buf = try a.alloc(u8, total);
+        errdefer a.free(buf);
+        // Zero the whole buffer first: this leaves every reverse-region slot at
+        // the sentinel 0 (= hole) unless explicitly filled below.
+        @memset(buf, 0);
+
+        // Header.
+        @memcpy(buf[0..8], &SNAP_MAGIC);
+        std.mem.writeInt(u32, buf[HDR_VER_OFF..][0..4], SNAP_VERSION, .little);
+        std.mem.writeInt(u64, buf[HDR_MANIFEST_OFF..][0..8], manifest_counter, .little);
+        std.mem.writeInt(u64, buf[HDR_NEXT_NODE_OFF..][0..8], nn, .little);
+        std.mem.writeInt(u64, buf[HDR_NEXT_EDGE_OFF..][0..8], ne, .little);
+        std.mem.writeInt(u64, buf[HDR_NODE_FWD_OFF..][0..8], node_fwd_count, .little);
+        std.mem.writeInt(u64, buf[HDR_EDGE_FWD_OFF..][0..8], edge_fwd_count, .little);
+
+        // NODE reverse (direct-indexed by slot).
+        {
+            var it = self.node_slot_to_uuid.iterator();
+            while (it.next()) |e| {
+                const slot = e.key_ptr.*;
+                if (slot < nn) {
+                    const off = node_rev_off + @as(usize, @intCast(slot)) * REV_ENTRY;
+                    std.mem.writeInt(u128, buf[off..][0..16], e.value_ptr.*, .little);
+                }
+            }
+        }
+        // NODE forward (sorted by uuid).
+        try serializeForward(a, buf, node_fwd_off, &self.node_uuid_to_slot);
+
+        // EDGE reverse.
+        {
+            var it = self.edge_slot_to_uuid.iterator();
+            while (it.next()) |e| {
+                const slot = e.key_ptr.*;
+                if (slot < ne) {
+                    const off = edge_rev_off + @as(usize, @intCast(slot)) * REV_ENTRY;
+                    std.mem.writeInt(u128, buf[off..][0..16], e.value_ptr.*, .little);
+                }
+            }
+        }
+        // EDGE forward.
+        try serializeForward(a, buf, edge_fwd_off, &self.edge_uuid_to_slot);
+
+        // CRC32 over the entire payload preceding the trailer.
+        const crc = std.hash.crc.Crc32.hash(buf[0..crc_off]);
+        std.mem.writeInt(u32, buf[crc_off..][0..4], crc, .little);
+
+        return buf;
+    }
+
+    fn serializeForward(
+        a: Allocator,
+        buf: []u8,
+        base_off: usize,
+        map: *std.AutoHashMap(u128, u64),
+    ) !void {
+        const count = map.count();
+        if (count == 0) return;
+        const pairs = try a.alloc(FwdPair, count);
+        defer a.free(pairs);
+        var i: usize = 0;
+        var it = map.iterator();
+        while (it.next()) |e| {
+            pairs[i] = .{ .uuid = e.key_ptr.*, .slot = e.value_ptr.* };
+            i += 1;
+        }
+        std.mem.sort(FwdPair, pairs, {}, fwdLess);
+        for (pairs, 0..) |p, idx| {
+            const off = base_off + idx * FWD_ENTRY;
+            std.mem.writeInt(u128, buf[off..][0..16], p.uuid, .little);
+            std.mem.writeInt(u64, buf[off + 16 ..][0..8], p.slot, .little);
+        }
+    }
+
+    /// Serialize this IdMap to an mmap-able snapshot in `dir`, stamped with
+    /// `manifest_counter` (the caller's crash-safety gate). Atomic: writes a
+    /// temp file, fsyncs it, then renames over the final name (mirrors the
+    /// legacy `save` atomic discipline).
+    pub fn saveSnapshot(self: *IdMap, dir: std.Io.Dir, manifest_counter: u64) !void {
+        const buf = try self.serializeSnapshot(manifest_counter);
+        defer self.allocator.free(buf);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try dir.createFile(io, SNAP_TMP, .{});
+        {
+            errdefer file.close(io);
+            try file.writePositionalAll(io, buf, 0);
+            try file.sync(io); // fsync the temp file before publishing it
+        }
+        file.close(io);
+        try dir.rename(SNAP_TMP, dir, SNAP_FILE, io);
+    }
+
+    /// Load the mmap-able snapshot from `dir`. Returns `null` (caller falls
+    /// back to scan-rebuild) when the file is absent, has a bad magic/version,
+    /// is the wrong size (torn/truncated), or fails the CRC32 check. On success
+    /// the returned handle owns an mmap'd, read-only view of the file; call
+    /// `deinit` to unmap.
+    pub fn loadSnapshot(dir: std.Io.Dir) !?LoadedIdMapSnapshot {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = dir.openFile(io, SNAP_FILE, .{}) catch |err| {
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
+
+        const len_u64 = file.length(io) catch {
+            file.close(io);
+            return null;
+        };
+        if (len_u64 < SNAP_HEADER_SIZE + CRC_SIZE) {
+            file.close(io);
+            return null;
+        }
+        const len: usize = @intCast(len_u64);
+
+        const mapping = std.posix.mmap(
+            null,
+            len,
+            .{ .READ = true },
+            .{ .TYPE = .PRIVATE },
+            file.handle,
+            0,
+        ) catch {
+            file.close(io);
+            return null;
+        };
+        // The mapping survives closing the fd.
+        file.close(io);
+        errdefer std.posix.munmap(mapping);
+
+        // Random-access hint for the binary-search / direct-index regions.
+        std.posix.madvise(mapping.ptr, mapping.len, std.posix.MADV.RANDOM) catch {};
+
+        if (!std.mem.eql(u8, mapping[0..8], &SNAP_MAGIC)) {
+            std.posix.munmap(mapping);
+            return null;
+        }
+        const ver = std.mem.readInt(u32, mapping[HDR_VER_OFF..][0..4], .little);
+        if (ver != SNAP_VERSION) {
+            std.posix.munmap(mapping);
+            return null;
+        }
+
+        const manifest = std.mem.readInt(u64, mapping[HDR_MANIFEST_OFF..][0..8], .little);
+        const nn = std.mem.readInt(u64, mapping[HDR_NEXT_NODE_OFF..][0..8], .little);
+        const ne = std.mem.readInt(u64, mapping[HDR_NEXT_EDGE_OFF..][0..8], .little);
+        const node_fwd_count = std.mem.readInt(u64, mapping[HDR_NODE_FWD_OFF..][0..8], .little);
+        const edge_fwd_count = std.mem.readInt(u64, mapping[HDR_EDGE_FWD_OFF..][0..8], .little);
+
+        // Recompute the expected layout with overflow-checked math; any overflow
+        // (corrupt counts) or size mismatch (truncation) => treat as invalid.
+        const regions = computeRegions(nn, ne, node_fwd_count, edge_fwd_count) orelse {
+            std.posix.munmap(mapping);
+            return null;
+        };
+        if (regions.total != len) {
+            std.posix.munmap(mapping);
+            return null;
+        }
+
+        const crc_off = regions.crc_off;
+        const stored_crc = std.mem.readInt(u32, mapping[crc_off..][0..4], .little);
+        const calc_crc = std.hash.crc.Crc32.hash(mapping[0..crc_off]);
+        if (stored_crc != calc_crc) {
+            std.posix.munmap(mapping);
+            return null;
+        }
+
+        return LoadedIdMapSnapshot{
+            .mapping = mapping,
+            .manifest_counter = manifest,
+            .next_node_slot = nn,
+            .next_edge_slot = ne,
+            .node_fwd_count = node_fwd_count,
+            .edge_fwd_count = edge_fwd_count,
+            .node_rev_off = regions.node_rev_off,
+            .node_fwd_off = regions.node_fwd_off,
+            .edge_rev_off = regions.edge_rev_off,
+            .edge_fwd_off = regions.edge_fwd_off,
+        };
+    }
+
+    const Regions = struct {
+        node_rev_off: usize,
+        node_fwd_off: usize,
+        edge_rev_off: usize,
+        edge_fwd_off: usize,
+        crc_off: usize,
+        total: usize,
+    };
+
+    /// Overflow-checked layout computation; returns null on any overflow.
+    fn computeRegions(nn: u64, ne: u64, node_fwd: u64, edge_fwd: u64) ?Regions {
+        const m = std.math;
+        const node_rev_off: usize = SNAP_HEADER_SIZE;
+        const node_rev_bytes = m.mul(usize, @as(usize, @intCast(nn)), REV_ENTRY) catch return null;
+        const node_fwd_off = m.add(usize, node_rev_off, node_rev_bytes) catch return null;
+        const node_fwd_bytes = m.mul(usize, @as(usize, @intCast(node_fwd)), FWD_ENTRY) catch return null;
+        const edge_rev_off = m.add(usize, node_fwd_off, node_fwd_bytes) catch return null;
+        const edge_rev_bytes = m.mul(usize, @as(usize, @intCast(ne)), REV_ENTRY) catch return null;
+        const edge_fwd_off = m.add(usize, edge_rev_off, edge_rev_bytes) catch return null;
+        const edge_fwd_bytes = m.mul(usize, @as(usize, @intCast(edge_fwd)), FWD_ENTRY) catch return null;
+        const crc_off = m.add(usize, edge_fwd_off, edge_fwd_bytes) catch return null;
+        const total = m.add(usize, crc_off, CRC_SIZE) catch return null;
+        return .{
+            .node_rev_off = node_rev_off,
+            .node_fwd_off = node_fwd_off,
+            .edge_rev_off = edge_rev_off,
+            .edge_fwd_off = edge_fwd_off,
+            .crc_off = crc_off,
+            .total = total,
+        };
+    }
+};
+
+/// A read-only, mmap-backed view of a saved IdMap snapshot. Lookups read
+/// directly from the mapped bytes (no hashmap materialization). Reusable by
+/// Phase 1b to bulk-hydrate an in-memory IdMap. Call `deinit` to unmap.
+pub const LoadedIdMapSnapshot = struct {
+    mapping: []align(std.heap.page_size_min) const u8,
+    manifest_counter: u64,
+    next_node_slot: u64,
+    next_edge_slot: u64,
+    node_fwd_count: u64,
+    edge_fwd_count: u64,
+    node_rev_off: usize,
+    node_fwd_off: usize,
+    edge_rev_off: usize,
+    edge_fwd_off: usize,
+
+    pub fn deinit(self: *LoadedIdMapSnapshot) void {
+        std.posix.munmap(self.mapping);
+        self.* = undefined;
+    }
+
+    /// slot -> uuid via the direct-indexed reverse region. Returns null when
+    /// the slot is out of range or is a hole (sentinel 0).
+    pub fn nodeUuidAt(self: *const LoadedIdMapSnapshot, slot: u64) ?u128 {
+        return revLookup(self.mapping, self.node_rev_off, self.next_node_slot, slot);
+    }
+
+    pub fn edgeUuidAt(self: *const LoadedIdMapSnapshot, slot: u64) ?u128 {
+        return revLookup(self.mapping, self.edge_rev_off, self.next_edge_slot, slot);
+    }
+
+    /// uuid -> slot via binary search over the sorted forward region with an
+    /// exact full-key (u128) verify. Returns null when absent.
+    pub fn nodeSlotOf(self: *const LoadedIdMapSnapshot, uuid: u128) ?u64 {
+        return fwdSearch(self.mapping, self.node_fwd_off, self.node_fwd_count, uuid);
+    }
+
+    pub fn edgeSlotOf(self: *const LoadedIdMapSnapshot, uuid: u128) ?u64 {
+        return fwdSearch(self.mapping, self.edge_fwd_off, self.edge_fwd_count, uuid);
+    }
+
+    fn revLookup(mapping: []const u8, base_off: usize, next_slot: u64, slot: u64) ?u128 {
+        if (slot >= next_slot) return null;
+        const off = base_off + @as(usize, @intCast(slot)) * IdMap.REV_ENTRY;
+        const uuid = std.mem.readInt(u128, mapping[off..][0..16], .little);
+        if (uuid == 0) return null; // sentinel hole
+        return uuid;
+    }
+
+    fn fwdSearch(mapping: []const u8, base_off: usize, count: u64, uuid: u128) ?u64 {
+        var lo: usize = 0;
+        var hi: usize = @intCast(count);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const off = base_off + mid * IdMap.FWD_ENTRY;
+            const key = std.mem.readInt(u128, mapping[off..][0..16], .little);
+            if (key == uuid) {
+                // full-key match verified above; read the slot
+                return std.mem.readInt(u64, mapping[off + 16 ..][0..8], .little);
+            }
+            if (key < uuid) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return null;
+    }
 };
 
 // ---------------------------------------------------------------------------

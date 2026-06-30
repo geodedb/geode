@@ -1299,6 +1299,24 @@ pub fn build(b: *std.Build) void {
     const node_cache_step = b.step("test-bounded-node-cache", "Run BoundedNodeCache unit tests");
     node_cache_step.dependOn(&run_node_cache_tests.step);
 
+    // Phase 1a (sub-second startup): mmap-able IdMap snapshot format. id_map.zig
+    // imports only std, so the standalone module needs no extra imports.
+    const idmap_snap_mod = b.createModule(.{
+        .root_source_file = b.path("src/storage/id_map.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const idmap_snap_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_idmap_snapshot.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    idmap_snap_test_mod.addImport("id_map", idmap_snap_mod);
+    const idmap_snap_tests = b.addTest(.{ .root_module = idmap_snap_test_mod });
+    const run_idmap_snap_tests = b.addRunArtifact(idmap_snap_tests);
+    const idmap_snap_step = b.step("test-idmap-snapshot", "Run IdMap mmap snapshot round-trip / CRC-gate / 100k-scale tests");
+    idmap_snap_step.dependOn(&run_idmap_snap_tests.step);
+
     const is_windows = target.result.os.tag == .windows;
 
     // Extended type built-in functions tests (new module)
