@@ -45,6 +45,20 @@ fn nameFor(buf: []u8, i: usize) []const u8 {
     return std.fmt.bufPrint(buf, "person-{d}", .{i}) catch unreachable;
 }
 
+// PHASE 1b shutdown: does an `idmap.snapshot` exist ANYWHERE under the data dir?
+// Walks the per-graph engine root dirs (`<data_dir>/<uuid_hex>/idmap.snapshot`).
+fn snapshotExists(allocator: std.mem.Allocator, data_dir: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return false;
+    defer dir.close(io);
+    var walker = dir.walk(allocator) catch return false;
+    defer walker.deinit();
+    while (walker.next(io) catch return false) |entry| {
+        if (std.mem.eql(u8, entry.basename, "idmap.snapshot")) return true;
+    }
+    return false;
+}
+
 // Zig 0.16: std.time.Timer was removed; read the monotonic clock directly.
 fn monoNanos() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
@@ -301,9 +315,11 @@ test "PHASE 1b: absent snapshot falls back to scan-rebuild (correct)" {
             _ = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
         }
         // Checkpoint via the LIGHT path only: flushes engine pages so a reopen
-        // can recover the nodes, but writes NO IdMap snapshot.
+        // can recover the nodes, but writes NO IdMap snapshot. Use the crash-
+        // style deinit so the clean-shutdown snapshot write does NOT run -- this
+        // test exercises the genuinely-absent-snapshot scan-rebuild fallback.
         try store.saveToFileEx(true);
-        graph_store.deinitGlobalStore();
+        graph_store.deinitGlobalStoreForTestCrash();
         graph_store.setDataDirOverride(allocator, null);
     }
 
@@ -322,6 +338,132 @@ test "PHASE 1b: absent snapshot falls back to scan-rebuild (correct)" {
         try testing.expectEqual(N, got.len);
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
 
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// PHASE 1b shutdown (THE FIX): a real SIGTERM clean shutdown goes through
+// `deinitGlobalStore` and must persist the IdMap snapshot EVEN IF the session
+// never called an explicit save. Pre-fix `deinitGlobalStore` only checkpointed
+// the engine (via deinitGlobalAdapter) and never wrote `idmap.snapshot`, so the
+// next open paid the loop1 IdMap per-node scan. Post-fix the snapshot exists on
+// disk after shutdown and the reopen bulk-loads it (zero loop1 reads).
+test "PHASE 1b shutdown: clean shutdown writes IdMap snapshot; reopen loads it (no loop1)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 400;
+    var seed_ids: [400]u64 = undefined;
+
+    // --- Phase 1: create + write, then CLEAN-shutdown via the REAL shutdown
+    //     entry point ONLY (deinitGlobalStore) -- no explicit saveToFile. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            seed_ids[i] = id;
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        // NOTE: deliberately NO store.saveToFile() here. The production SIGTERM
+        // path is deinitGlobalStore; it must persist the snapshot by itself.
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // The clean shutdown wrote the snapshot to disk.
+    try testing.expect(snapshotExists(allocator, data_dir));
+
+    // --- Phase 2: reopen -> IdMap bulk-loaded from snapshot, NO loop1 scan. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+
+        const store = graph_store.getGlobalStore(allocator); // "server ready"
+
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount()); // no loop1
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount()); // loop2 still lazy
+
+        // Queries correct after lazy hydration.
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expect(store.getNodePtr(seed_ids[0]) != null);
+        try testing.expect(store.getNodePtr(seed_ids[N - 1]) != null);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// PHASE 1b shutdown: the case that motivated the fix -- a READ-ONLY session.
+// A server opens a graph that has NO snapshot yet (so the open does a loop1
+// scan-rebuild), serves only READS, then clean-shuts-down. That shutdown must
+// still write the snapshot so the NEXT open is fast.
+test "PHASE 1b shutdown: read-only session persists snapshot on clean shutdown" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 300;
+
+    // --- Phase A: seed via a LIGHT checkpoint only (engine recoverable, but NO
+    //     idmap.snapshot on disk), then a crash-style deinit (no clean save). ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) _ = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        try store.saveToFileEx(true); // light: NO IdMap snapshot
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(!snapshotExists(allocator, data_dir)); // none yet
+
+    // --- Phase B: READ-ONLY session. Open (loop1 scan-rebuild), do reads only,
+    //     then clean shutdown via deinitGlobalStore. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        // No snapshot existed: the open paid the loop1 scan-rebuild.
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+        // Reads only -- no mutations this session.
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+
+        graph_store.deinitGlobalStore(); // CLEAN shutdown must write the snapshot
+    }
+
+    // The read-only session's clean shutdown persisted the snapshot.
+    try testing.expect(snapshotExists(allocator, data_dir));
+
+    // --- Phase C: reopen -> now bulk-loads from the snapshot (no loop1). ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
         graph_store.deinitGlobalStore();
     }
 }
@@ -353,7 +495,10 @@ test "PHASE 1b: crash (stale snapshot) -> reopen rebuilds from scan, correct" {
             _ = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
         }
         try store.saveToFileEx(true); // light: no new IdMap snapshot
-        graph_store.deinitGlobalStore();
+        // CRASH: NOT a clean shutdown -- deinitGlobalStore would now persist a
+        // fresh snapshot at the advanced counter. Use the crash-style deinit so
+        // the engine state advances past the snapshot WITHOUT refreshing it.
+        graph_store.deinitGlobalStoreForTestCrash();
         graph_store.setDataDirOverride(allocator, null);
     }
 

@@ -11356,8 +11356,47 @@ pub fn getCurrentGlobalStore() ?*GraphStore {
     return null;
 }
 
+// CANARY: REQ=REQ-STARTUP-IDMAP-SNAPSHOT-001; FEATURE="FastRestartIdMapSnapshot"; ASPECT=ShutdownSnapshotWrite; STATUS=TESTED; TEST=tests/test_startup_lazy_hydrate.zig; OWNER=storage; UPDATED=2026-06-29
+/// PHASE 1b: the production clean-shutdown (SIGTERM) entry point. ALWAYS
+/// persists the per-graph IdMap mmap snapshots so the next open bulk-loads them
+/// (sub-second ready) instead of paying the eager O(ids) loop1 IdMap scan.
+///
+/// The snapshot write MUST happen while BOTH the store (its `id_maps`) and the
+/// adapter (engine `graphManifestCounter` + checkpoint) are still alive, and
+/// AFTER the final engine checkpoint so the snapshot is stamped at the
+/// post-checkpoint counter that the next open's counter-gate accepts. We get
+/// exactly that ordering for free from `saveToFileEx(false)`: it runs
+/// `adapter.checkpointAll()` and THEN the IdMap-snapshot loop at the now-current
+/// counter. Done UNCONDITIONALLY (not gated on `dirty`) so even a read-only
+/// session writes the snapshot and the restart stays fast.
+///
+/// Crash-safety is unchanged: an abrupt termination skips this path entirely
+/// (no clean deinit), leaving no/stale snapshot -> the next open rejects it on
+/// the counter-gate and falls back to the loop1 scan-rebuild (still correct).
 pub fn deinitGlobalStore() void {
+    deinitGlobalStoreEx(true);
+}
+
+/// TEST-ONLY: simulate an abrupt crash. Releases in-memory state and tears the
+/// adapter down WITHOUT the clean-shutdown IdMap-snapshot write, so on-disk
+/// state reflects only the last runtime checkpoint (engine may have advanced
+/// past the last snapshot's counter). Production crashes are hard kills with no
+/// deinit at all; this frees memory so the same test process can reopen.
+pub fn deinitGlobalStoreForTestCrash() void {
+    deinitGlobalStoreEx(false);
+}
+
+fn deinitGlobalStoreEx(clean: bool) void {
     if (initialized.load(.acquire) and global_store != null) {
+        // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
+        // at the matching counter) BEFORE the store and adapter are destroyed.
+        if (clean) {
+            global_store.?.saveToFileEx(false) catch |err| {
+                log.err("clean-shutdown IdMap snapshot persist failed", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
         global_store.?.deinit();
         global_store = null;
         global_store_allocator = null;
