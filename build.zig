@@ -7679,6 +7679,23 @@ pub fn build(b: *std.Build) void {
     const adapter_registry_restart_step = b.step("test-adapter-registry-restart", "Regression: NodePropertyExactIndex.loadFromFile self-deadlock on adapter reopen");
     adapter_registry_restart_step.dependOn(&run_adapter_registry_restart_tests.step);
 
+    // PHASE 1b (sub-second startup): deferred resident-load -> lazy per-graph
+    // hydration. Open-no-scan + correctness + concurrency + snapshot/scan +
+    // crash + startup milestone. Uses the global store wired to a tmpDir.
+    const startup_lazy_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_startup_lazy_hydrate.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    startup_lazy_test_mod.addImport("geode", root_mod);
+    startup_lazy_test_mod.addImport("graph_storage", graph_storage_mod);
+    const startup_lazy_tests = b.addTest(.{ .root_module = startup_lazy_test_mod });
+    const run_startup_lazy_tests = b.addRunArtifact(startup_lazy_tests);
+    shardDep(test_step, &run_startup_lazy_tests.step, 1, test_shard_loads, test_shard_index);
+    const startup_lazy_step = b.step("test-startup-lazy-hydrate", "PHASE 1b: deferred resident-load -> lazy per-graph hydration (sub-second open)");
+    startup_lazy_step.dependOn(&run_startup_lazy_tests.step);
+
     // H3-P2: value-ordered scan (16-shard k-way merge) + ordered-index
     // registration on CREATE INDEX. See tests/test_ordered_scan.zig.
     const ordered_scan_test_mod = b.createModule(.{

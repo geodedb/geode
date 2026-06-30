@@ -692,6 +692,68 @@ pub const IdMap = struct {
             .total = total,
         };
     }
+
+    /// PHASE 1b: bulk-populate this (expected-empty) IdMap from a loaded,
+    /// counter-gated mmap snapshot WITHOUT any engine reads. Walks the
+    /// direct-indexed reverse regions (slot -> uuid) for both namespaces and
+    /// inserts every live (non-hole) mapping, then restores the next-slot
+    /// counters. This is the fast IdMap path at open (replaces the per-node
+    /// `getNodeProperty` engine-read scan, loop1, when a valid snapshot exists).
+    /// Locks the map mutex once for the whole load.
+    pub fn bulkLoadFromSnapshot(self: *IdMap, snap: *const LoadedIdMapSnapshot) !void {
+        self.lockMu();
+        defer self.unlockMu();
+
+        try self.node_uuid_to_slot.ensureTotalCapacity(@intCast(snap.node_fwd_count));
+        try self.node_slot_to_uuid.ensureTotalCapacity(@intCast(snap.node_fwd_count));
+        try self.edge_uuid_to_slot.ensureTotalCapacity(@intCast(snap.edge_fwd_count));
+        try self.edge_slot_to_uuid.ensureTotalCapacity(@intCast(snap.edge_fwd_count));
+
+        var slot: u64 = 0;
+        while (slot < snap.next_node_slot) : (slot += 1) {
+            if (snap.nodeUuidAt(slot)) |uuid| {
+                try self.node_uuid_to_slot.put(uuid, slot);
+                try self.node_slot_to_uuid.put(slot, uuid);
+            }
+        }
+        slot = 0;
+        while (slot < snap.next_edge_slot) : (slot += 1) {
+            if (snap.edgeUuidAt(slot)) |uuid| {
+                try self.edge_uuid_to_slot.put(uuid, slot);
+                try self.edge_slot_to_uuid.put(slot, uuid);
+            }
+        }
+        if (snap.next_node_slot > self.next_node_slot) self.next_node_slot = snap.next_node_slot;
+        if (snap.next_edge_slot > self.next_edge_slot) self.next_edge_slot = snap.next_edge_slot;
+    }
+
+    /// Largest node public-id (uuid) currently mapped, or null when empty.
+    /// Used at open to recover the global next-public-id counter from the
+    /// resident IdMaps WITHOUT an engine scan (Phase 1b lazy-hydrate keeps the
+    /// per-graph node cache + introspection counters deferred, so the public-id
+    /// high-water must be recovered here instead of in the deferred loop2).
+    pub fn maxNodeUuid(self: *IdMap) ?u128 {
+        self.lockMu();
+        defer self.unlockMu();
+        var max: ?u128 = null;
+        var it = self.node_uuid_to_slot.keyIterator();
+        while (it.next()) |k| {
+            if (max == null or k.* > max.?) max = k.*;
+        }
+        return max;
+    }
+
+    /// Largest edge public-id (uuid) currently mapped, or null when empty.
+    pub fn maxEdgeUuid(self: *IdMap) ?u128 {
+        self.lockMu();
+        defer self.unlockMu();
+        var max: ?u128 = null;
+        var it = self.edge_uuid_to_slot.keyIterator();
+        while (it.next()) |k| {
+            if (max == null or k.* > max.?) max = k.*;
+        }
+        return max;
+    }
 };
 
 /// A read-only, mmap-backed view of a saved IdMap snapshot. Lookups read

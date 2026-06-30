@@ -5386,6 +5386,26 @@ pub const StorageAdapter = struct {
         };
     }
 
+    /// PHASE 1b crash-safety gate: return an aggregate (sum over all shards) of
+    /// the per-shard `manifest.counter` for the named graph, or null if the
+    /// graph is not loaded. Each shard's `counter` bumps once per durable
+    /// checkpoint, so the sum changes whenever ANY shard advances. An IdMap
+    /// snapshot stamped with this aggregate is valid IFF the value matches on
+    /// reopen (no committed write happened since the snapshot was written);
+    /// any mismatch/absence => caller falls back to the scan-rebuild.
+    pub fn graphManifestCounter(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        var counter: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            counter +%= shard.manifest.counter;
+        }
+        return counter;
+    }
+
     // ------------------------------------------------------------------
     // Property iteration
     // ------------------------------------------------------------------
