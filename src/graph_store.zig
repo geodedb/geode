@@ -5994,6 +5994,11 @@ pub const GraphStore = struct {
     // bindings — strictly cheaper than the old iteration path which built a
     // MatchBinding per node then discarded them.
     pub fn countNodesForGraph(self: *const GraphStore, graph_name: []const u8, tenant: ?[]const u8) usize {
+        // PHASE 1b chokepoint (H3): guard the deferred hydration so a count(n)
+        // before hydration completes can't observe a partial IdMap node count
+        // after a no-snapshot open (same bug class as countEdgesForGraph).
+        // No-op once hydrated / on snapshot-resident opens, so O(1) is preserved.
+        @constCast(self).ensureGraphHydrated(graph_name);
         // Bounded cache: the resident map is incomplete — count from the
         // per-graph IdMap (fully resident). With no tenant filter, the graph's
         // IdMap node count IS the answer (O(1)). With a tenant filter, resolve
