@@ -339,3 +339,56 @@ test "DIFFERENTIAL: numeric eq / ordering / ne == general oracle" {
         "MATCH (n:N) WHERE n.ordinal != 3 AND n.tag = 1 RETURN count(n) AS c",
     );
 }
+
+// ---------------------------------------------------------------------------
+// eval.evalBinary string-compare ASCII fast-path (perf/coldopen-loop1-prop_head).
+//
+// The `l == .Str and r == .Str` branch of eval.evalBinary previously spun up a
+// fresh DebugAllocator and heap-allocated two NFC-normalized copies PER CALL
+// (catastrophic in per-row WHERE/filter/join scans). The fix adds an ASCII fast
+// path: when BOTH operands are pure ASCII, NFC is the identity, so it compares
+// the raw bytes directly with zero allocation. Non-ASCII operands still route
+// through nfcNormalize (using the caller-provided allocator, not a per-call one)
+// for Unicode correctness.
+//
+// `eval.nfc_fallback_count` is a test-only counter incremented ONLY on the
+// non-ASCII NFC fallback, letting us assert the fast path engages without
+// changing results.
+// ---------------------------------------------------------------------------
+test "eval ASCII fast path engages (no NFC alloc) yet stays byte-identical; non-ASCII still NFC" {
+    const eval = geode.eval;
+    const Value = eval.Value;
+    const alloc = testing.allocator;
+
+    // ---- ASCII correctness: results identical to NFC-then-compare ----
+    eval.nfc_fallback_count = 0;
+    const col_a = Value{ .Str = "col" };
+    const col_b = Value{ .Str = "col" };
+    const aa = Value{ .Str = "a" };
+    const bb = Value{ .Str = "b" };
+
+    try testing.expect((try eval.evalBinary(alloc, .Eq, col_a, col_b)).Bool); // 'col' == 'col'
+    try testing.expect(!(try eval.evalBinary(alloc, .Ne, col_a, col_b)).Bool);
+    try testing.expect((try eval.evalBinary(alloc, .Lt, aa, bb)).Bool); // a < b
+    try testing.expect((try eval.evalBinary(alloc, .Gt, bb, aa)).Bool); // b > a
+    try testing.expect((try eval.evalBinary(alloc, .Le, col_a, col_b)).Bool);
+    try testing.expect((try eval.evalBinary(alloc, .Ge, col_a, col_b)).Bool);
+    try testing.expect(!(try eval.evalBinary(alloc, .Eq, aa, bb)).Bool);
+
+    // All-ASCII: the NFC fallback must NOT have run at all.
+    try testing.expectEqual(@as(usize, 0), eval.nfc_fallback_count);
+
+    // ---- Non-ASCII NFC equivalence: composed É == decomposed E+U+0301 ----
+    eval.nfc_fallback_count = 0;
+    const composed = Value{ .Str = "\xC3\x89" }; // U+00C9 composed
+    const decomposed = Value{ .Str = "E\xCC\x81" }; // 'E' + U+0301
+    try testing.expect((try eval.evalBinary(alloc, .Eq, composed, decomposed)).Bool);
+    try testing.expect(!(try eval.evalBinary(alloc, .Ne, composed, decomposed)).Bool);
+    try testing.expect(eval.nfc_fallback_count > 0); // fallback engaged
+
+    // ---- Mixed (ASCII vs non-ASCII): must take NFC path, must not shortcut ----
+    eval.nfc_fallback_count = 0;
+    const ascii_e = Value{ .Str = "E" };
+    try testing.expect(!(try eval.evalBinary(alloc, .Eq, ascii_e, composed)).Bool);
+    try testing.expect(eval.nfc_fallback_count > 0);
+}

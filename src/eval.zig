@@ -198,6 +198,25 @@ const eqVals = value_types.eqVals;
 // Phase 6 M6.1: Integer comparison function moved to eval/type_promotion.zig
 // Function: cmpIntsOp
 
+/// True when every byte of `s` is 7-bit ASCII (< 0x80). NFC normalization is the
+/// IDENTITY on pure-ASCII text (no ASCII scalar is a composed/decomposed form),
+/// so `nfcNormalize(s) == s` byte-for-byte when `isAscii(s)`. The string-compare
+/// fast path relies on this to skip normalization + allocation entirely.
+inline fn isAscii(s: []const u8) bool {
+    for (s) |c| {
+        if (c >= 0x80) return false;
+    }
+    return true;
+}
+
+/// Test-only counter: incremented ONLY when the string-compare NON-ASCII NFC
+/// fallback runs. Lets tests prove the ASCII fast path engages (stays 0 for
+/// all-ASCII comparisons, >0 once a non-ASCII operand forces normalization).
+/// The increment is guarded by `builtin.is_test`, a comptime-false constant in
+/// production builds, so the counter and its update are dead-code-eliminated on
+/// the hot path outside tests.
+pub var nfc_fallback_count: usize = 0;
+
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
@@ -501,15 +520,32 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (l == .Str and r == .Str) {
                 // Unicode-aware comparison: normalize both operands to NFC then compare byte-wise.
                 // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2025-09-27
-                const unicode = @import("unicode/geode_unicode.zig");
-                var gpa = std.heap.DebugAllocator(.{}){};
-                defer _ = gpa.deinit();
-                const gpa_alloc = gpa.allocator();
-                const ln = unicode.nfcNormalize(gpa_alloc, l.Str) catch return EvalError.Unsupported;
-                defer gpa_alloc.free(ln);
-                const rn = unicode.nfcNormalize(gpa_alloc, r.Str) catch return EvalError.Unsupported;
-                defer gpa_alloc.free(rn);
-                const ord = std.mem.order(u8, ln, rn);
+                //
+                // PERF: NFC normalization is the IDENTITY for pure-ASCII input, so when BOTH
+                // operands are ASCII we compare the raw bytes directly — no allocator, no
+                // normalization. This is the overwhelmingly common case (ids, source tags,
+                // ASCII names) in WHERE/filter/join scans and was previously catastrophic:
+                // it spun up a fresh DebugAllocator (munmap-per-free) and heap-allocated two
+                // NFC copies PER ROW. Only when an operand contains a byte >= 0x80 do we fall
+                // back to real NFC normalization (for Unicode correctness, e.g. composed vs
+                // decomposed "é"), and even then we reuse the caller-provided `alloc` rather
+                // than constructing a per-call allocator.
+                const ord = if (isAscii(l.Str) and isAscii(r.Str))
+                    // ASCII fast path: NFC(ascii) == ascii, so raw-byte order is byte-identical
+                    // to normalize-then-compare. Zero allocation.
+                    std.mem.order(u8, l.Str, r.Str)
+                else nfc_blk: {
+                    // Non-ASCII fallback: at least one operand has a byte >= 0x80. Normalize
+                    // BOTH to NFC (a non-ASCII string may normalize to a different form, so we
+                    // must never shortcut unless BOTH operands are ASCII).
+                    if (@import("builtin").is_test) nfc_fallback_count += 1;
+                    const unicode = @import("unicode/geode_unicode.zig");
+                    const ln = unicode.nfcNormalize(alloc, l.Str) catch return EvalError.Unsupported;
+                    defer alloc.free(ln);
+                    const rn = unicode.nfcNormalize(alloc, r.Str) catch return EvalError.Unsupported;
+                    defer alloc.free(rn);
+                    break :nfc_blk std.mem.order(u8, ln, rn);
+                };
                 return .{ .Bool = switch (op) {
                     .Eq => ord == .eq,
                     .Ne => ord != .eq,
@@ -3699,6 +3735,14 @@ test "eval: CASE searched produces expected values" {
     const out = try evalExpr(allocator, cse, env);
     try std.testing.expect(out == .Str and std.mem.eql(u8, out.Str, "p"));
 }
+
+// NOTE: correctness + fast-path-engagement coverage for the ASCII string-compare
+// optimization (isAscii / nfc_fallback_count) lives in
+// tests/test_gap_filtered_count.zig (wired via `zig build test-filtered-count`),
+// where eval.zig is reachable through the fully-wired `geode` module. It cannot
+// live as an inline test here because src/eval.zig is not a working test ROOT in
+// this worktree (its transitive security imports need build_options/crypto_backend
+// modules that only the geode module supplies).
 
 test "eval: string predicates and regex basic" {
     const allocator = std.testing.allocator;
