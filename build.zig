@@ -7738,6 +7738,23 @@ pub fn build(b: *std.Build) void {
     );
     startup_lazy_tsan_step.dependOn(&run_startup_lazy_tsan_tests.step);
 
+    // GAP-ENT-0020 P7a: prop-store slab packing validated through the full
+    // geode stack (facade -> adapter -> gs shards). Asserts bytes/node << 8192
+    // for node props, legacy page-granular edge-prop chains, read parity, and
+    // clean-shutdown -> reopen parity. See tests/test_slab_packing_geode.zig.
+    const slab_packing_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_slab_packing_geode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    slab_packing_test_mod.addImport("geode", root_mod);
+    slab_packing_test_mod.addImport("graph_storage", graph_storage_mod);
+    const slab_packing_tests = b.addTest(.{ .root_module = slab_packing_test_mod });
+    const run_slab_packing_tests = b.addRunArtifact(slab_packing_tests);
+    const slab_packing_step = b.step("test-slab-packing-geode", "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the geode adapter");
+    slab_packing_step.dependOn(&run_slab_packing_tests.step);
+
     // H3-P2: value-ordered scan (16-shard k-way merge) + ordered-index
     // registration on CREATE INDEX. See tests/test_ordered_scan.zig.
     const ordered_scan_test_mod = b.createModule(.{

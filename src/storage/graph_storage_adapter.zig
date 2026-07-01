@@ -5192,7 +5192,11 @@ pub const StorageAdapter = struct {
             // error-policy: A — best-effort rollback on an already-failing path.
             errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
 
-            const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, found_prop_head), key, storage_val, local_txn);
+            // GAP-ENT-0020 (P7a): edge prop_heads are packed as u32 in
+            // adjacency entries + the edge index, which cannot represent a
+            // slab head — edge chains must stay LEGACY (one page-chain per
+            // edge) even with slab_packing ON. Node writes keep putPropertyTxn.
+            const new_head_u64 = try from_shard.putPropertyLegacyTxn(@as(u64, found_prop_head), key, storage_val, local_txn);
             const new_head: u32 = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
 
             if (new_head != found_prop_head) {
@@ -5236,7 +5240,8 @@ pub const StorageAdapter = struct {
         // error-policy: A — best-effort rollback on an already-failing path.
         errdefer from_shard.abortTxn(fb_local_txn) catch {};
 
-        const fb_new_head_u64 = try from_shard.putPropertyTxn(@as(u64, fb_found_prop_head), key, storage_val, fb_local_txn);
+        // GAP-ENT-0020 (P7a): edge chains stay legacy — see the txn branch above.
+        const fb_new_head_u64 = try from_shard.putPropertyLegacyTxn(@as(u64, fb_found_prop_head), key, storage_val, fb_local_txn);
         const fb_new_head: u32 = std.math.cast(u32, fb_new_head_u64) orelse return error.Overflow;
 
         if (fb_new_head != fb_found_prop_head) {
@@ -5323,7 +5328,9 @@ pub const StorageAdapter = struct {
                 .null;
             defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
 
-            const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, running_prop_head), entry.key, storage_val, local_txn);
+            // GAP-ENT-0020 (P7a): edge chains stay legacy (u32 prop_head) —
+            // see setEdgeProperty. Node writes keep the slab-eligible path.
+            const new_head_u64 = try from_shard.putPropertyLegacyTxn(@as(u64, running_prop_head), entry.key, storage_val, local_txn);
             running_prop_head = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
             last_new_head_u64 = new_head_u64;
         }

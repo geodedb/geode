@@ -432,8 +432,15 @@
             // + open-time pool-recreate hardening — the engine half of the
             // sub-second cold-open work (geode perf/coldopen-loop1-prop_head).
             // Same transitive deps as v0.2.20 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.21#2915ec0639223fbd07bbae2a1520a95fb900ee52",
-            .hash = "graph_storage-0.2.21-9UyJS9WYFQAuSOgfQjV8fFjqpP2W0SoPIY5y4nTz-XIM",
+            // DEV PIN (GAP-ENT-0020 P7a, 2026-07-01): LOCAL PATH to the
+            // gs-coldopen-wt worktree (branch perf/coldopen-engine-bufferpool)
+            // so geode validates the unreleased prop-store slab-packing work
+            // (P0-P5 + P7 default-ON flip) through the full geode stack before
+            // the gs v0.2.22 release. P7b MUST restore the url+hash pin at
+            // v0.2.22. Prior pin (restore at release):
+            //   .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.21#2915ec0639223fbd07bbae2a1520a95fb900ee52",
+            //   .hash = "graph_storage-0.2.21-9UyJS9WYFQAuSOgfQjV8fFjqpP2W0SoPIY5y4nTz-XIM",
+            .path = "../gs-coldopen-wt",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
