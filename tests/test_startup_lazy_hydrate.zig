@@ -614,6 +614,156 @@ fn seedNoSnapshot(allocator: std.mem.Allocator, data_dir: []const u8, seed_ids: 
     graph_store.setDataDirOverride(allocator, null);
 }
 
+// Variant of seedNoSnapshot that ALSO captures the created edge ids so a by-id
+// EDGE test can address a specific pre-existing edge after the deferred reopen.
+// Requires `seed_ids.len > edge_ids.len` (each edge chains node[e] -> node[e+1]).
+fn seedNoSnapshotWithEdges(
+    allocator: std.mem.Allocator,
+    data_dir: []const u8,
+    seed_ids: []u64,
+    edge_ids: []u64,
+) !void {
+    graph_store.setDataDirOverride(allocator, data_dir);
+    const store = graph_store.getGlobalStore(allocator);
+    for (seed_ids, 0..) |*sid, i| {
+        const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        sid.* = id;
+        var nb: [32]u8 = undefined;
+        try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+    }
+    for (edge_ids, 0..) |*eid, e| {
+        eid.* = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "KNOWS", GRAPH);
+    }
+    try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
+    graph_store.deinitGlobalStoreForTestCrash();
+    graph_store.setDataDirOverride(allocator, null);
+}
+
+// FIX 2 (this task): the by-id EDGE-property setters lacked the hydration guard
+// their NODE-property counterparts already had. On a no-snapshot deferred graph
+// the edge IdMap/cache is EMPTY at open, so a by-id `setEdgeProperty` as the
+// FIRST access resolves no edge (the `if (getEdgePtrHydrated(...)) |edge|` block
+// is skipped) and the property write is SILENTLY DROPPED. With the
+// `ensureEdgeGraphHydrated` guard added at the top of setEdgeProperty the graph
+// is built first, so the write lands on the real edge and is readable.
+// RED (pre-fix): the read-back below returns null (property dropped).
+// GREEN (post-fix): the property is present and equal.
+test "H3 no-snapshot: by-id setEdgeProperty as FIRST access hydrates + edge update persists (FIX 2)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const E: usize = 40;
+    var seed_ids: [200]u64 = undefined;
+    var edge_ids: [40]u64 = undefined;
+    try seedNoSnapshotWithEdges(allocator, data_dir, seed_ids[0..N], edge_ids[0..E]);
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
+
+    // EARLY-READY: loop1 (IdMap scan-rebuild) + loop2 both deferred at open.
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+    // FIRST access is a by-id EDGE-property WRITE. Pre-fix this silently no-op'd
+    // (empty IdMap => edge "not found"); post-fix the guard hydrates and it lands.
+    try store.setEdgeProperty(edge_ids[3], "weight", .{ .Int = 42 });
+
+    // The deferred build (loop1 + loop2) ran as a result of that by-id write.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    // The edge property update actually took effect and is readable (not dropped).
+    const edge = store.getEdgeHydrated(edge_ids[3]) orelse return error.EdgeMissing;
+    const w = edge.properties.get("weight") orelse return error.WeightMissing;
+    try testing.expect(w == .Int and w.Int == 42);
+
+    // Pre-existing topology intact after the hydrate-on-write.
+    try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
+    try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+
+    graph_store.deinitGlobalStore();
+}
+
+// FIX 1 (this task): the distributed replication apply (`TxnCoordinator.applyOperation`)
+// gates its `.update` paths on the RAW non-hydrating by-id accessors
+// (`getNodePtr` / `getEdgePtr`) BEFORE the setter. On a no-snapshot deferred
+// graph those resolve null pre-hydration, so a replicated property UPDATE is
+// SILENTLY DROPPED on the replica. The fix calls `store.ensureGraphHydrated(graph_name)`
+// (known at the apply site) before the gate. This test models the graph_store-level
+// path the coordinator uses: it exercises the OLD gate logic (RED — update
+// dropped) and the NEW gate logic (GREEN — hydrate first, gate passes, update
+// applies) against the same deferred graph, proving the mechanism the coordinator
+// relies on. (A full TxnCoordinator apply is exercised separately by the
+// distributed suite; this keeps the regression in the fast graph_store test.)
+test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraphHydrated (FIX 1)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const E: usize = 40;
+    var seed_ids: [200]u64 = undefined;
+    var edge_ids: [40]u64 = undefined;
+    try seedNoSnapshotWithEdges(allocator, data_dir, seed_ids[0..N], edge_ids[0..E]);
+    try testing.expect(!snapshotExists(allocator, data_dir));
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // "server ready"
+
+    const node_id = seed_ids[5];
+    const edge_id = edge_ids[5];
+
+    // --- RED: OLD coordinator gate (raw accessor, NO hydrate). On the deferred
+    // graph both by-id accessors resolve null, so the replicated `.update` block
+    // would be SKIPPED and the property write dropped. Nothing has hydrated yet. ---
+    var node_gate_old = false;
+    if (store.getNodePtr(node_id) != null) node_gate_old = true;
+    var edge_gate_old = false;
+    if (store.getEdgePtr(edge_id) != null) edge_gate_old = true;
+    try testing.expect(!node_gate_old); // replicated node UPDATE would be dropped
+    try testing.expect(!edge_gate_old); // replicated edge UPDATE would be dropped
+    // The raw-accessor probes did NOT build the graph (still fully deferred).
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+    // --- FIX 1: hydrate the target graph first (the coordinator now does this
+    // with the graph_name it already has). Idempotent / cheap once built. ---
+    store.ensureGraphHydrated(GRAPH);
+
+    // --- GREEN: the same by-id gates now resolve the real node/edge, so the
+    // `.update` block runs and the property write applies. ---
+    try testing.expect(store.getNodePtr(node_id) != null);
+    try testing.expect(store.getEdgePtr(edge_id) != null);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N); // build happened once
+
+    try store.setNodeProperty(node_id, "role", .{ .String = "admin" });
+    try store.setEdgeProperty(edge_id, "w", .{ .Int = 7 });
+
+    const role = store.getNodeProperty(node_id, "role") orelse return error.RoleMissing;
+    try testing.expect(role == .String and std.mem.eql(u8, role.String, "admin"));
+    const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeMissing;
+    const w = edge.properties.get("w") orelse return error.WeightMissing;
+    try testing.expect(w == .Int and w.Int == 7);
+
+    graph_store.deinitGlobalStore();
+}
+
 test "H3 no-snapshot: open defers loop1; by-id first-access (empty IdMap) hydrates + correct" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();

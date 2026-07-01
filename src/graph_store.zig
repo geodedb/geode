@@ -7318,6 +7318,7 @@ pub const GraphStore = struct {
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
@@ -7435,6 +7436,7 @@ pub const GraphStore = struct {
     /// Intended for internal bulk-ingest callers; regular per-property
     /// callers keep using `setEdgeProperty`.
     pub fn setEdgePropertiesBatch(self: *GraphStore, edge_id: u64, entries: []const BatchPropertyEntry) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         const edge = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
 
         // --- Adapter path: single lock acquisition for all properties ---
@@ -7554,6 +7556,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
@@ -9950,6 +9953,7 @@ pub const GraphStore = struct {
 
     /// Set an edge property without saving (used during rollback)
     pub fn setEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
             const value_copy = try copyPropertyValue(self, value);
             errdefer freePropertyValue(self, value_copy);
@@ -9966,6 +9970,7 @@ pub const GraphStore = struct {
 
     /// Remove an edge property without saving (used during rollback)
     pub fn removeEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);

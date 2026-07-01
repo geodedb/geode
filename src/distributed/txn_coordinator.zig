@@ -570,6 +570,13 @@ pub const TxnCoordinator = struct {
                         }
                     },
                     .update => {
+                        // PHASE 1b (H3): a no-snapshot deferred graph keeps its
+                        // IdMap/resident caches EMPTY until first access, so the
+                        // raw `getNodePtr` gate below would resolve null and
+                        // SILENTLY DROP this replicated property update. Hydrate
+                        // the target graph first (no-op once hydrated / for a
+                        // non-deferred graph) so the by-id gate sees the node.
+                        self.store.ensureGraphHydrated(graph_name);
                         if (self.store.getNodePtr(node_op.node_id) != null) {
                             for (node_op.props) |p| {
                                 try self.store.setNodeProperty(node_op.node_id, p.key, p.value);
@@ -600,6 +607,12 @@ pub const TxnCoordinator = struct {
                         }
                     },
                     .update => {
+                        // PHASE 1b (H3): mirror the node .update fix. A deferred
+                        // no-snapshot graph's edge IdMap/cache is EMPTY until
+                        // first access, so the raw `getEdgePtr` gate would
+                        // resolve null and SILENTLY DROP this replicated edge
+                        // property update. Hydrate first (no-op once hydrated).
+                        self.store.ensureGraphHydrated(graph_name);
                         if (self.store.getEdgePtr(edge_op.edge_id) != null) {
                             for (edge_op.props) |p| {
                                 try self.store.setEdgeProperty(edge_op.edge_id, p.key, p.value);
