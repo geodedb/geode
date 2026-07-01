@@ -8756,9 +8756,11 @@ pub const GraphStore = struct {
     /// nodes_by_graph / merge / tenant introspection / edges + adjacency /
     /// edge_type) are DEFERRED to first-touch (`ensureGraphHydrated`). When no
     /// valid snapshot exists (cold first open, or a stale/torn snapshot) it
-    /// falls back to the full eager scan-rebuild for that graph (unchanged
-    /// behaviour, the crash-safety net) and leaves it absent from the pending
-    /// set (= already hydrated).
+    /// ALSO defers — the full per-graph build (loop1 IdMap scan-rebuild + loop2
+    /// resident indexes) is registered as pending and runs lazily on first
+    /// access, so open stays O(open_core) and "server ready" is sub-second even
+    /// for a no-snapshot artifact. (Crash-safety is preserved: a crash before
+    /// hydration leaves the durable pages; the next open defers again.)
     fn loadOneGraphFromAdapter(
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
@@ -8777,10 +8779,26 @@ pub const GraphStore = struct {
             return;
         }
 
-        // Fallback: no valid snapshot. Full eager load (IdMap scan-rebuild +
-        // resident indexes) for this graph, left out of the pending set so it is
-        // treated as already hydrated.
-        try self.loadOneGraphFromAdapterFull(adapter, graph_name);
+        // Fallback: no valid snapshot. EARLY-READY: defer the full per-graph
+        // build (loop1 IdMap scan-rebuild + loop2 resident indexes) to lazy
+        // first-access via `ensureGraphHydrated`, exactly like the snapshot
+        // branch above. This keeps open O(open_core) — graph-size-independent —
+        // so "server ready" fires sub-second even for a stale / no-snapshot
+        // (legacy or crash-recovered) artifact; the first read/write of the
+        // graph pays the full build once under `hydration_build_mutex`.
+        //
+        // CRITICAL DIFFERENCE from the snapshot branch: no IdMap is resident
+        // here (loop1 has NOT run), so `self.id_maps` for this graph is EMPTY
+        // until first access. The by-id hydration chokepoints
+        // (`ensureNodeGraphHydrated` / `ensureEdgeGraphHydrated`) resolve the
+        // owning graph via the IdMaps; with an empty IdMap a by-id first-access
+        // cannot route to this graph, so those chokepoints fall back to
+        // `ensureAllGraphsHydrated` on a routing miss (see there). The global
+        // public-id high-water is NOT recovered here (recoverIdCountersFromIdMap
+        // needs a populated IdMap); this is safe because new public ids come
+        // from the wall-clock-backed `generateTimeBasedId` atomic, not
+        // `next_node_id` (which loop1 restores during the deferred build).
+        try self.markPendingHydration(graph_name);
     }
 
     /// Try to load `graph_name`'s IdMap from its counter-gated mmap snapshot.
@@ -8925,7 +8943,21 @@ pub const GraphStore = struct {
     /// IdMaps (no engine read). For by-id mutation entry points that carry no
     /// graph_name. No-op when the id maps to no graph (pure in-memory store).
     fn ensureNodeGraphHydrated(self: *GraphStore, node_id: u64) void {
-        if (self.resolveNodeGraphSlot(node_id)) |gs| self.ensureGraphHydrated(gs.graph_name);
+        if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            self.ensureGraphHydrated(gs.graph_name);
+            return;
+        }
+        // The id resolved to NO IdMap. With no-snapshot early-ready open, a
+        // graph defers its loop1 IdMap build to first access, so its IdMap is
+        // EMPTY until hydrated and a by-id first-access cannot be routed to it.
+        // Build every still-deferred graph so the id resolves and the graph's
+        // resident node/edge caches are populated before this by-id op reads
+        // them. Cheap once all deferred graphs are hydrated (each
+        // `pending_hydration` entry's `done` flag short-circuits the rebuild)
+        // and a no-op for a pure in-memory store (nothing pending). Called at
+        // the top of the entry point, before any store lock, so the store-wide
+        // `hydration_build_mutex` it takes cannot deadlock the caller.
+        self.ensureAllGraphsHydrated();
     }
 
     /// PHASE 1b: hydrate the graph that owns `edge_id`. The edge's graph is
@@ -8933,8 +8965,16 @@ pub const GraphStore = struct {
     /// edge cache's `graph_name` field, because hydration mutates the edge cache
     /// and could evict/free that string mid-call.
     fn ensureEdgeGraphHydrated(self: *GraphStore, edge_id: u64) void {
-        const from_id = if (self.edges.get(edge_id)) |e| e.from_id else return;
-        self.ensureNodeGraphHydrated(from_id);
+        if (self.edges.get(edge_id)) |e| {
+            self.ensureNodeGraphHydrated(e.from_id);
+            return;
+        }
+        // Edge not resident. It may belong to a deferred no-snapshot graph whose
+        // edge cache + IdMap were not built at open (see ensureNodeGraphHydrated):
+        // the from-endpoint lookup that would route hydration is unavailable
+        // until the graph is built. Build every still-deferred graph so the edge
+        // (and its owning graph) become resident. No-op once all are hydrated.
+        self.ensureAllGraphsHydrated();
     }
 
     /// Load a single graph from the storage adapter. Returns an error if
@@ -11876,6 +11916,16 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     try testing.expectError(error.FileNotFound, graph_dir.access(io, "adapter_labels.dat", .{}));
 
     try store.loadFromFile();
+
+    // EARLY-READY (H3): loadFromFile now DEFERS the full per-graph build (loop1
+    // IdMap + loop2 resident caches) to lazy first-access even when no IdMap
+    // snapshot exists, so the resident node/edge caches are empty at this point
+    // and the raw (non-hydrating) getNodePtr/getEdgePtr accessors would miss.
+    // Trigger the graph's hydration before the resident by-id reads — mirroring
+    // the snapshot-deferred contract (see tests/test_startup_lazy_hydrate.zig,
+    // which likewise reads by id only after a graph-scoped access hydrates).
+    // The survival guarantee is that the data is fully recoverable after reload.
+    store.ensureGraphHydrated("default");
 
     const node = store.getNodePtr(1001) orelse return error.NodeNotFound;
     const node_name = node.properties.get("name") orelse return error.PropertyNotFound;

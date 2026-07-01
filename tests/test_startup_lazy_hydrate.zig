@@ -333,16 +333,23 @@ test "PHASE 1b: absent snapshot falls back to scan-rebuild (correct)" {
         graph_store.setDataDirOverride(allocator, data_dir);
         defer graph_store.setDataDirOverride(allocator, null);
         graph_store.resetLazyHydrateCounters();
-        const store = graph_store.getGlobalStore(allocator);
+        const store = graph_store.getGlobalStore(allocator); // <- "server ready"
 
-        // No snapshot => the open path used the IdMap scan-rebuild for this graph.
+        // EARLY-READY (H3): no snapshot exists, but the open now DEFERS the full
+        // per-graph build (loop1 IdMap scan-rebuild + loop2) to first access, so
+        // at the ready point NOTHING scanned: no IdMap per-node engine read, no
+        // loop2 scan, and no snapshot was loaded.
         try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
-        try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
 
-        // Results are still correct.
+        // First query triggers the deferred build (loop1 + loop2) — correct.
         const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
         try testing.expectEqual(N, got.len);
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        // The build ran loop1 (no-snapshot => IdMap scan-rebuild) and loop2 now.
+        try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N);
 
         graph_store.deinitGlobalStore();
     }
@@ -573,4 +580,128 @@ test "PHASE 1b: startup milestone -- ~30k clean restart reaches ready with no lo
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
         graph_store.deinitGlobalStore();
     }
+}
+
+// ===========================================================================
+// H3 (Task G): no-snapshot open EARLY-READY — defer loop1 IdMap build.
+//
+// A no-snapshot artifact (legacy or crash-recovered) used to run the FULL eager
+// per-graph build (loop1 IdMap scan-rebuild + loop2 indexes) synchronously at
+// open, so "server ready" was O(graph). These tests prove the open now DEFERS
+// that build to lazy first-access (loop1 counter == 0 at ready), and that a
+// FIRST access — including a by-id access against the still-EMPTY IdMap —
+// hydrates once and returns CORRECT data.
+// ===========================================================================
+
+// Seed a graph with `n` nodes (each with a "name" prop) plus a chain of edges,
+// then persist with a LIGHT checkpoint only (engine-recoverable, NO idmap
+// snapshot) and CRASH-deinit so the next open is genuinely no-snapshot.
+fn seedNoSnapshot(allocator: std.mem.Allocator, data_dir: []const u8, seed_ids: []u64, edges: usize) !void {
+    graph_store.setDataDirOverride(allocator, data_dir);
+    const store = graph_store.getGlobalStore(allocator);
+    for (seed_ids, 0..) |*sid, i| {
+        const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        sid.* = id;
+        var nb: [32]u8 = undefined;
+        try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+    }
+    var e: usize = 0;
+    while (e < edges and e + 1 < seed_ids.len) : (e += 1) {
+        _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "KNOWS", GRAPH);
+    }
+    try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
+    graph_store.deinitGlobalStoreForTestCrash();
+    graph_store.setDataDirOverride(allocator, null);
+}
+
+test "H3 no-snapshot: open defers loop1; by-id first-access (empty IdMap) hydrates + correct" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 300;
+    const E: usize = 50;
+    var seed_ids: [300]u64 = undefined;
+    try seedNoSnapshot(allocator, data_dir, seed_ids[0..N], E);
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
+
+    // (a) EARLY-READY: loop1 (IdMap scan-rebuild) did NOT run at open. This is
+    // the RED assertion under the old eager behaviour (counter would be >= N).
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+    // (b) FIRST access is a BY-ID WRITE. The IdMap is EMPTY (loop1 deferred), so
+    // ensureNodeGraphHydrated cannot route by id and must fall back to hydrate
+    // all deferred graphs. Pre-guard this silently no-op'd (node "not found"),
+    // corrupting the write. It must now succeed and take effect.
+    try store.setNodeProperty(seed_ids[7], "flag", .{ .Bool = true });
+
+    // The deferred build ran (loop1 + loop2) exactly as a result of that access.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    // The by-id write landed on the correct, real node.
+    const flag = store.getNodeProperty(seed_ids[7], "flag") orelse return error.FlagMissing;
+    try testing.expect(flag == .Bool and flag.Bool == true);
+
+    // (c) Node/edge counts and the pre-existing property read are correct.
+    try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+    try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
+    var nb: [32]u8 = undefined;
+    const name7 = store.getNodeProperty(seed_ids[7], "name") orelse return error.NameMissing;
+    try testing.expect(name7 == .String and std.mem.eql(u8, name7.String, nameFor(&nb, 7)));
+
+    graph_store.deinitGlobalStore();
+}
+
+test "H3 no-snapshot: CREATE before any read gets a fresh id + no corruption" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 250;
+    var seed_ids: [250]u64 = undefined;
+    try seedNoSnapshot(allocator, data_dir, seed_ids[0..N], 0);
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator);
+
+    // (a) loop1 deferred at open.
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+
+    // (d) A WRITE (CREATE) is the very first access. createNodeWithGraph is
+    // graph-scoped => it hydrates the graph (building the existing N nodes)
+    // BEFORE inserting, then assigns a fresh wall-clock time-based id. No
+    // collision with any seeded id, and the pre-existing nodes survive intact.
+    const new_id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+    for (seed_ids[0..N]) |sid| try testing.expect(sid != new_id);
+
+    // The deferred build ran; totals reflect the pre-existing N plus the new one.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expectEqual(N + 1, store.countNodesByLabel(GRAPH, LABEL, null));
+
+    // The seeded data was not corrupted by hydrating concurrently with the write.
+    var nb: [32]u8 = undefined;
+    const name0 = store.getNodeProperty(seed_ids[0], "name") orelse return error.NameMissing;
+    try testing.expect(name0 == .String and std.mem.eql(u8, name0.String, nameFor(&nb, 0)));
+
+    graph_store.deinitGlobalStore();
 }
