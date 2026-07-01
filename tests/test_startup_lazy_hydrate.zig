@@ -1162,3 +1162,127 @@ test "GAP regression: getAllNodesForTenant/getAllEdgesForTenant as FIRST access 
 
     graph_store.deinitGlobalStore();
 }
+
+// ===========================================================================
+// CRITICAL (silent data loss): a FULL checkpoint (saveToFileEx(false) ->
+// saveIdMapSnapshots) on a DEFERRED (not-yet-hydrated, case-B .resident) graph
+// must NOT persist the EMPTY resident IdMap as a counter-stamped snapshot.
+//
+// Bug: on a no-snapshot open the per-graph IdMap build (loop1) is DEFERRED, so
+// self.id_maps[graph] is EMPTY until first access. saveIdMapSnapshots iterated
+// EVERY id_map and wrote a snapshot stamped with the CURRENT manifest counter.
+// For a deferred graph that snapshot is EMPTY. On the NEXT open,
+// loadIdMapFromSnapshot finds it, the counter-gate PASSES (no committed write
+// since), and it adopts the EMPTY IdMap as the immutable base -> the graph
+// appears empty -> SILENT DATA LOSS. (Mirror of the H4 exact-index persist-empty
+// bug fixed in 88a05773.)
+//
+// Fix: saveIdMapSnapshots SKIPS a deferred .resident graph and INVALIDATES any
+// stale on-disk snapshot, so the next open re-defers + rebuilds from the durable
+// engine pages instead of loading a stale/empty snapshot.
+//
+// This test exercises the STRONGEST variant — a STALE snapshot already exists on
+// disk (session 1 full-checkpoints K nodes, then adds M more + light-checkpoints
+// so the engine counter advances past the snapshot). Session 2 opens (stale
+// snapshot REJECTED -> case-B deferred), FULL-checkpoints BEFORE any hydrating
+// access, and crash-deinits. Session 3 reopens.
+//
+// RED (pre-fix): session 2 OVERWRITES the stale file with an EMPTY snapshot
+// stamped at the current counter; session 3's gate PASSES and adopts it
+// (idMapFromSnapshotCount >= 1) -> the graph is EMPTY (count == 0) = data loss.
+// GREEN (post-fix): session 2 deletes the stale file + skips; session 3 finds no
+// snapshot (idMapFromSnapshotCount == 0), defers, and rebuilds from pages ->
+// the graph still has all K+M nodes and its edges.
+//
+// To verify RED: comment out the `if (id_map.mode == .resident and
+// self.isGraphDeferred(graph_name)) { ...; continue; }` block in
+// saveIdMapSnapshots (src/graph_store.zig) and rerun
+// `zig build test-startup-lazy-hydrate -j2 --summary all`.
+test "CRITICAL regression: full checkpoint on a deferred graph does not persist an empty IdMap snapshot (no data loss on reopen)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const K: usize = 160; // in the (soon-stale) snapshot
+    const M: usize = 90; // added after -> advances the engine counter past it
+    const EDGES: usize = 70;
+    var seed_ids: [250]u64 = undefined;
+
+    // --- Session 1: full checkpoint (writes snapshot @ counter C1, K nodes),
+    //     then add M nodes + EDGES edges, LIGHT checkpoint (engine counter -> C2
+    //     > C1, snapshot now STALE), CRASH-deinit. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < K) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        try store.saveToFile(); // FULL checkpoint -> snapshot @ C1 (K nodes)
+        try testing.expect(snapshotExists(allocator, data_dir));
+        while (i < K + M) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        var e: usize = 0;
+        while (e < EDGES) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFileEx(true); // LIGHT: advance engine counter, NO snapshot refresh
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    // The stale snapshot file is still on disk (session 1 never refreshed it).
+    try testing.expect(snapshotExists(allocator, data_dir));
+
+    // --- Session 2: open (stale snapshot REJECTED -> case-B .resident deferred),
+    //     FULL checkpoint BEFORE any hydrating access, CRASH-deinit. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator); // "server ready"
+
+        // The stale snapshot was rejected (counter mismatch) -> genuinely deferred.
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+        // FULL checkpoint while the graph is still deferred. Pre-fix this wrote an
+        // EMPTY snapshot stamped at the current counter; post-fix it deletes the
+        // stale file and skips. It must NOT trigger hydration either way.
+        try store.saveToFileEx(false);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // GREEN: the stale snapshot was INVALIDATED (removed), not overwritten empty.
+    // (Pre-fix this would be TRUE — an empty snapshot file present.)
+    try testing.expect(!snapshotExists(allocator, data_dir));
+
+    // --- Session 3: reopen. The graph must still have ALL K+M nodes + EDGES edges. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        // No snapshot was adopted (post-fix: none exists). Pre-fix this would be
+        // >= 1 (the empty snapshot loaded as "complete") — the data-loss tell.
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+        // The data is intact: full node + edge counts (NOT 0), rebuilt from pages.
+        try testing.expectEqual(K + M, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(EDGES, store.countEdgesForGraph(GRAPH));
+
+        // Proves session 3 rebuilt from durable pages rather than adopting an
+        // empty snapshot (pre-fix: scan == 0 because the empty snapshot "won").
+        try testing.expect(graph_store.idMapScanGetPropCount() >= K + M);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= K + M);
+
+        graph_store.deinitGlobalStore();
+    }
+}

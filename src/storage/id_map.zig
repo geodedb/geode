@@ -931,6 +931,25 @@ pub const IdMap = struct {
         try dir.rename(SNAP_TMP, dir, SNAP_FILE, io);
     }
 
+    /// PHASE 1b: remove any on-disk IdMap snapshot (and a leftover temp) in
+    /// `dir`. Best-effort: a missing file is success. Used by the checkpoint
+    /// path to INVALIDATE a stale snapshot for a graph whose resident IdMap is
+    /// deferred/empty, so persisting it would stamp an empty snapshot the next
+    /// open would adopt as base (silent data loss). After invalidation the next
+    /// open re-defers + rebuilds from the durable engine pages. Mirrors
+    /// graph_storage_adapter.invalidateExactPropertyIndexFile for the H4 index.
+    pub fn deleteSnapshot(dir: std.Io.Dir) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        dir.deleteFile(io, SNAP_FILE) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => {},
+        };
+        dir.deleteFile(io, SNAP_TMP) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => {},
+        };
+    }
+
     /// Load the mmap-able snapshot from `dir`. Returns `null` (caller falls
     /// back to scan-rebuild) when the file is absent, has a bad magic/version,
     /// is the wrong size (torn/truncated), or fails the CRC32 check. On success

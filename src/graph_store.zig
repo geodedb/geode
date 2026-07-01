@@ -8609,18 +8609,63 @@ pub const GraphStore = struct {
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
             const graph_name = entry.key_ptr.*;
-            const counter = adapter.graphManifestCounter(graph_name) orelse continue;
+            const id_map = entry.value_ptr;
             const dir_path = (self.resolveGraphRootDirPath(graph_name) catch continue) orelse continue;
             defer self.allocator.free(dir_path);
             var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch continue;
             defer dir.close(io);
-            entry.value_ptr.saveSnapshot(dir, counter) catch |err| {
+
+            // CRITICAL (silent-data-loss guard): a graph whose loop1 IdMap build
+            // was DEFERRED at open (no-snapshot fallback: markPendingHydration
+            // with NO snapshot adopted) and has NOT been hydrated yet has an
+            // EMPTY, `.resident` overlay — loop1 never ran. Persisting it here
+            // would write an EMPTY snapshot stamped with the CURRENT manifest
+            // counter; the next open's counter-gate would PASS and adopt the
+            // empty IdMap as base, so the graph would appear empty forever.
+            // Skip the write and INVALIDATE any stale on-disk snapshot so the
+            // next open re-defers + rebuilds from the durable engine pages.
+            // (Crash-safety is preserved: the durable pages are the source of
+            // truth; skipping the snapshot just means the next open rebuilds.)
+            //
+            // A `.mmap_backed` deferred graph is NOT dangerous: it adopted a
+            // valid snapshot as its immutable base at open (case A), so its
+            // merged view still reflects the on-disk mapping and re-serializing
+            // it is correct (and preserves the sub-second-open fast path). Only
+            // the empty `.resident` deferred case (case B) is skipped, so idle
+            // snapshot-backed graphs keep their snapshots across a checkpoint.
+            //
+            // NOTE: we do NOT call ensureGraphHydrated here — a routine
+            // checkpoint must not force full hydration of every idle graph, and
+            // skipping avoids taking hydration_build_mutex under the checkpoint
+            // path entirely (no lock inversion vs. loadOneGraphFromAdapterFull).
+            if (id_map.mode == .resident and self.isGraphDeferred(graph_name)) {
+                id_map_mod.IdMap.deleteSnapshot(dir);
+                continue;
+            }
+
+            const counter = adapter.graphManifestCounter(graph_name) orelse continue;
+            id_map.saveSnapshot(dir, counter) catch |err| {
                 log.warn("failed to write IdMap snapshot", &.{
                     Attr.string("graph", graph_name),
                     Attr.string("error", @errorName(err)),
                 });
             };
         }
+    }
+
+    /// PHASE 1b: true iff `graph_name` has a deferred-hydration entry that has
+    /// NOT completed (its resident loop1/loop2 build is still pending). Reads the
+    /// authoritative hydration state (`pending_hydration` membership + the
+    /// entry's atomic `done` latch) under `hydration_mutex` — the same leaf lock
+    /// `markPendingHydration`/`ensureGraphHydrated` use. A graph absent from
+    /// `pending_hydration` (freshly CREATEd, default, snapshot/clone store, or
+    /// already hydrated) returns false.
+    fn isGraphDeferred(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        return !entry.done.load(.acquire);
     }
 
     /// DEPRECATED: Legacy serialization stub — adapter handles persistence.
