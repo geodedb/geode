@@ -12049,6 +12049,59 @@ test "loadOneGraphFromAdapterFull: sorted-by-prop_head loop1 matches legacy per-
     try testing.expectEqual(golden.count(), idmap_count);
 }
 
+test "loadOneGraphFromAdapterFull: countGraphLabel (label-count fast path) is exact after rebuild" {
+    const gs = @import("graph_storage");
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(path);
+
+    const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, path, gs.GraphConfig{
+        .page_size = 4096,
+        .buffer_pool_pages = 512,
+    });
+    defer adapter.deinit();
+
+    const graph = "labelcount_rebuild_test";
+    const key = INTERNAL_NODE_ID_PROPERTY_KEY;
+
+    // N nodes carry label "L"; the first M of them ALSO carry label "M".
+    const N: u64 = 7;
+    const M: u64 = 3;
+    var i: u64 = 0;
+    while (i < N) : (i += 1) {
+        const public_id: u64 = 2001 + i;
+        const labels: []const []const u8 = if (i < M)
+            &[_][]const u8{ "L", "M" }
+        else
+            &[_][]const u8{"L"};
+        const slot = try adapter.createNode(graph, labels);
+        var id_buf: [16]u8 = undefined;
+        try adapter.setNodeProperty(graph, slot, key, .{ .String = encodePersistedPublicId(&id_buf, public_id) });
+    }
+
+    // Rebuild into a fresh resident store — this is exactly the loop2 path
+    // taken by cold-open / lazy hydration (ensureGraphHydrated ->
+    // loadOneGraphFromAdapterFull). label_index and label_counts_by_graph
+    // both start empty here, mirroring a first-touch hydration.
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+    try store.loadOneGraphFromAdapterFull(adapter, graph);
+
+    // Cross-check: the actual MATCH (n:L) scan (label posting list) sees N.
+    const l_posting = store.getNodesByLabel(graph, "L") orelse return error.LPostingMissing;
+    try testing.expectEqual(@as(usize, N), l_posting.len);
+    const m_posting = store.getNodesByLabel(graph, "M") orelse return error.MPostingMissing;
+    try testing.expectEqual(@as(usize, M), m_posting.len);
+
+    // The label-count fast path (count(:Label)) MUST equal the scan count,
+    // and must NOT double-count (== N, not 2N).
+    try testing.expectEqual(@as(usize, N), store.countGraphLabel(graph, "L"));
+    try testing.expectEqual(@as(usize, M), store.countGraphLabel(graph, "M"));
+}
+
 test "rollback removes adapter-backed state before reload" {
     const txn_undo_log = @import("txn_undo_log.zig");
 
