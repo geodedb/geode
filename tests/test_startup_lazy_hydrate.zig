@@ -1286,3 +1286,54 @@ test "CRITICAL regression: full checkpoint on a deferred graph does not persist 
         graph_store.deinitGlobalStore();
     }
 }
+
+// Guards for the remaining deferred-state readers: getEdgeCount, allEdgeIds, and
+// getNodeCount (the node analog of getEdgeCount) are store-wide stats/enumeration
+// readers with no single graph_name. After a no-snapshot deferred open they read
+// the empty per-graph IdMaps / resident caches, so as a FIRST access they would
+// return a PARTIAL result (0 / missing edges). Each now calls
+// ensureAllGraphsHydrated first.
+//
+// To verify RED: remove the `ensureAllGraphsHydrated()` guard from getEdgeCount /
+// allEdgeIds / getNodeCount (src/graph_store.zig) and rerun the step.
+test "GAP regression: getEdgeCount/allEdgeIds/getNodeCount as FIRST access after no-snapshot open return FULL totals, not partial" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const M: usize = 150;
+    var seed_ids: [200]u64 = undefined;
+    try seedNoSnapshot(allocator, data_dir, seed_ids[0..N], M);
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // "server ready"
+
+    // Still deferred before the first reader call.
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+    // FIRST access is getEdgeCount — pre-fix returns 0 (empty deferred IdMaps),
+    // post-fix hydrates all graphs first and returns the full edge total.
+    try testing.expectEqual(M, store.getEdgeCount());
+    // Proves the count came from a real hydrate, not a lucky partial match.
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    // allEdgeIds must enumerate the COMPLETE edge id set (not miss deferred edges).
+    const edge_ids = try store.allEdgeIds(allocator);
+    defer allocator.free(edge_ids);
+    try testing.expectEqual(M, edge_ids.len);
+
+    // getNodeCount (node analog) returns the full node total.
+    try testing.expectEqual(N, store.getNodeCount());
+
+    graph_store.deinitGlobalStore();
+}

@@ -5998,7 +5998,24 @@ pub const GraphStore = struct {
     }
 
     pub fn getNodeCount(self: *GraphStore) usize {
-        return self.nodes.count();
+        // PHASE 1b chokepoint (H3): store-wide node count, the node analog of
+        // getEdgeCount. Reads deferred state (the per-graph IdMaps, and the
+        // resident node cache populated by loop2), so after a no-snapshot open it
+        // would return a PARTIAL count for any not-yet-hydrated graph. No single
+        // graph_name -> hydrate every deferred graph first.
+        self.ensureAllGraphsHydrated();
+        // With a BOUNDED node cache the resident map is incomplete, so count from
+        // the per-graph IdMaps (fully resident) — mirrors getEdgeCount and
+        // countNodesForGraph. Unbounded cache: the resident count IS the total.
+        if (self.nodes.effectiveCap() == 0) {
+            return self.nodes.count();
+        }
+        var total: usize = 0;
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            total += entry.value_ptr.nodeCount();
+        }
+        return total;
     }
 
     // CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=StoreCount; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
@@ -6135,6 +6152,14 @@ pub const GraphStore = struct {
     }
 
     pub fn getEdgeCount(self: *GraphStore) usize {
+        // PHASE 1b chokepoint (H3): store-wide edge count. Both arms read
+        // deferred state — the per-graph IdMaps (empty until loop1 hydration) or
+        // the resident edge map (populated by loop2). Without this guard, after a
+        // no-snapshot open this returns a PARTIAL count (0 → … → true total) for
+        // any not-yet-hydrated graph. No single graph_name here, so hydrate every
+        // deferred graph first (mirrors ensureAllGraphsHydrated in getAll*).
+        // Placed before any lock/iteration — matches the guarded-reader precedent.
+        self.ensureAllGraphsHydrated();
         // PHASE 1: with a BOUNDED edge cache the resident map is incomplete, so
         // count from the per-graph IdMaps (fully resident, ~24 B/edge — the same
         // authoritative source `getEdgeCount`'s node analog `countNodesForGraph`
@@ -6200,6 +6225,16 @@ pub const GraphStore = struct {
     /// (residency stays bounded — the cache evicts as it hydrates). Mirrors
     /// `getAllNodes` for the node side.
     pub fn allEdgeIds(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
+        // PHASE 1b chokepoint (H3): the COMPLETE edge id set is enumerated from
+        // the per-graph IdMaps (bounded cache) or the resident edge map
+        // (unbounded) — both empty/partial for a graph whose loop1/loop2 build
+        // was deferred at a no-snapshot open. Without this guard, index builds,
+        // graph algorithms, and DELETE collection would silently MISS every edge
+        // of a not-yet-hydrated graph. No single graph_name, so hydrate all
+        // deferred graphs first (mirrors getAllNodes). Placed before any
+        // iteration — matches the guarded-reader precedent; the hydration body
+        // takes no store/graph lock, and no caller holds hydration_build_mutex.
+        @constCast(self).ensureAllGraphsHydrated();
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
         if (self.edges.effectiveCap() == 0) {
@@ -10443,6 +10478,20 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
 ///
 /// CANARY: REQ=REQ-PERF-HANDLER-LOCK-HOLD-001; FEATURE="HandlerLockHoldScope"; ASPECT=SnapshotCapture; STATUS=TESTED; TEST=tests/test_handler_lock_hold_scope.zig; OWNER=transport; UPDATED=2026-04-18
 pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u8) !QueryReadSession {
+    // PHASE 1b chokepoint (deferred-hydration hazard). `initIfAvailable`
+    // DEEP-CLONES the primary store's id_maps + node cache into an arena
+    // snapshot and the query reads THAT clone. After a no-snapshot early-ready
+    // open the target graph's IdMap/nodes are EMPTY until first access
+    // (`markPendingHydration` fallback), so cloning before hydration would
+    // snapshot an EMPTY graph and the query would return WRONG (empty) results
+    // — even though the live store still holds the graph on durable pages.
+    // Hydrate the target graph (the only graph this graph_name-locked session
+    // reads) BEFORE acquiring the read lock, matching the guard-before-lock
+    // precedent. Deadlock-free: `ensureGraphHydrated`'s build path
+    // (loadOneGraphFromAdapterFull) takes only leaf mutexes + the store-wide
+    // hydration_build_mutex, never the per-graph adapter rwlock acquired below.
+    getPrimaryGlobalStore(allocator).ensureGraphHydrated(graph_name);
+
     const handle = acquireGraphReadLockTagged(graph_name, .snapshot);
     defer releaseGraphLock(handle);
 
