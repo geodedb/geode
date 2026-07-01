@@ -990,6 +990,55 @@ fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
     return null;
 }
 
+/// PERF (GAP-ENT-0019): decide whether a filtered `count(n)` WHERE predicate is
+/// safe to serve with an exact-index SEEK (O(matching)) instead of an O(label)
+/// scan, and if so return the seekable literal string.
+///
+/// This gate is CORRECTNESS-CRITICAL — a filtered count MUST be byte-identical
+/// to the full scan. WHERE `=` uses `eval.evalBinary` semantics, which are
+/// BROADER than the exact-hash node-property index in two ways the index cannot
+/// see, so a naive seek would UNDERCOUNT (miss real matches):
+///   1. String equality is NFC-normalized (a decomposed stored value eval-equals
+///      a composed literal), but the index hashes the RAW bytes.
+///   2. `=` cross-type stringify-coerces (int 5 eval-equals string "5"), but the
+///      index hashes each value under its own type.
+///
+/// The seek is EXACT — seek-set == eval-match-set — only when BOTH broadenings
+/// are provably impossible for the literal:
+///   * pure-ASCII literal: NFC is the identity on ASCII (`eval` isAscii fast
+///     path), and no non-ASCII string can NFC-normalize to an ASCII string, so
+///     eval string-eq reduces to exact-byte eq — every string match is in the
+///     seek's hash bucket (no NFC false-negative);
+///   * non-numeric, non-bool literal: ints/floats/bools/decimals stringify to
+///     numeric/bool text, so a literal that parses as none of them cannot be the
+///     coercion of ANY non-string scalar — no cross-type match exists outside
+///     the seek set (no cross-type false-negative).
+/// `shouldIndexProperty(key)` is the SAME per-key completeness gate
+/// `seekIndexedCandidates` uses (index is complete for the key). Any other shape
+/// (numeric/bool literal, ordering op, non-ASCII or numeric-looking string,
+/// non-`eq`) returns null and the caller keeps the exact full scan.
+fn seekableAsciiStringEq(where_pred: SimpleWhere) ?[]const u8 {
+    if (where_pred.op != .eq) return null;
+    // Reuse the exact-index completeness gate (do NOT invent a new rule).
+    if (!graph_store.shouldIndexProperty(where_pred.key)) return null;
+    const s = switch (where_pred.lit) {
+        .Str => |x| x,
+        else => return null,
+    };
+    // NFC identity requires pure ASCII: only then does eval string-eq == byte-eq.
+    for (s) |c| {
+        if (c >= 0x80) return null;
+    }
+    // Rule out cross-type stringify coercion: a literal that parses as a number
+    // or bool could eval-equal a non-string-typed node the seek would miss.
+    if (std.ascii.eqlIgnoreCase(s, "true") or std.ascii.eqlIgnoreCase(s, "false")) return null;
+    if (s.len > 0) {
+        if (std.fmt.parseInt(i64, s, 10)) |_| return null else |_| {}
+        if (std.fmt.parseFloat(f64, s)) |_| return null else |_| {}
+    }
+    return s;
+}
+
 /// Coerce a property value to f64 for ordering comparisons.
 fn propToF64(pv: graph_store.PropertyValue) ?f64 {
     return switch (pv) {
@@ -1414,6 +1463,56 @@ pub fn countFilteredFastPath(
     var matched: usize = 0;
     const tenant_active = filter_tenant != null;
     const writable_store = graph_store.getGlobalStore(allocator);
+
+    // PERF (GAP-ENT-0019): selective indexed-equality filtered count served by an
+    // exact-index SEEK (O(matching)) instead of the O(label) scan below. Fires
+    // only for the provably-exact shape decided by `seekableAsciiStringEq` (see
+    // its doc-comment for the NFC / cross-type soundness argument). The seek
+    // narrows the candidate set via the exact node-property index; each candidate
+    // is RE-VERIFIED with the SAME `compareStoragePvLit` (eval) comparison + the
+    // SAME tenant filter the scan uses, so the tally is byte-identical to the
+    // full scan (re-verify tolerates hash collisions). `head.labels.len == 1` is
+    // guaranteed by the shape gate above. `getCandidateNodesByLabelAndProperty`
+    // triggers `ensureExactNodePropertyIndexBuilt`, so an H4-deferred index is
+    // built before the first seek (never observed empty).
+    if (seekableAsciiStringEq(where_pred)) |seek_str| {
+        if (adapter.getCandidateNodesByLabelAndProperty(
+            filter_graph,
+            head.labels[0],
+            where_pred.key,
+            graph_store.PropertyValue{ .String = seek_str },
+            allocator,
+        )) |candidates| {
+            defer allocator.free(candidates);
+            var seek_matched: usize = 0;
+            for (candidates) |slot_id| {
+                if (tenant_active) {
+                    const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                    const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
+                        .string => |s| s,
+                        else => graph_store.DEFAULT_TENANT_ID,
+                    } else graph_store.DEFAULT_TENANT_ID;
+                    defer if (tprop) |tp| switch (tp) {
+                        .string => |s| allocator.free(s),
+                        else => {},
+                    };
+                    if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
+                }
+                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+                defer switch (w_val) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                };
+                if (!compareStoragePvLit(w_val, where_pred.op, where_pred.lit)) continue;
+                seek_matched += 1;
+            }
+            const seek_col_name: []const u8 = item.alias orelse "count(n)";
+            return try buildCountFastPathResult(allocator, seek_col_name, seek_matched);
+        } else |_| {
+            // Seek unavailable (e.g. graph vanished mid-flight) — fall through to
+            // the exact full scan, which is always correct.
+        }
+    }
 
     if (writable_store.nodes.effectiveCap() == 0) {
         // REQ-QUIC-HC-017: honor an already-installed active read store (held by

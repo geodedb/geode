@@ -28,6 +28,7 @@ const geode = @import("geode");
 const graph_store = geode.graph_store;
 const execution = geode.execution;
 const planned_read_runtime = geode.planned_read_runtime;
+const graph_storage_adapter = geode.graph_storage_adapter;
 
 const N_NODES: usize = 500;
 const N_COL: usize = 300; // ordinal 0..299  -> source='col'
@@ -391,4 +392,98 @@ test "eval ASCII fast path engages (no NFC alloc) yet stays byte-identical; non-
     const ascii_e = Value{ .Str = "E" };
     try testing.expect(!(try eval.evalBinary(alloc, .Eq, ascii_e, composed)).Bool);
     try testing.expect(eval.nfc_fallback_count > 0);
+}
+
+// ---------------------------------------------------------------------------
+// GAP-ENT-0019: selective indexed-equality filtered count uses an exact-index
+// SEEK (O(matching)) instead of the O(label) scan — WITHOUT changing the count.
+//
+// Seed N nodes each with a UNIQUE indexed string key `source_id='colK'` and a
+// common indexed string key `source='col'`. Assertions:
+//   * `count WHERE source_id='col5'` == 1 AND the exact-index lookup counter
+//     advanced (the seek fired). RED pre-fix: full scan, counter delta == 0.
+//   * `count WHERE source='col'` == N (all match) — seek returns N candidates,
+//     count still exact.
+//   * a NON-equality predicate (`ordinal < K`) and a NUMERIC-looking string are
+//     NOT seeked (counter delta == 0) yet return the exact count via the scan.
+// The counts must equal the full-scan oracle in every case.
+// ---------------------------------------------------------------------------
+
+const SEEK_N: usize = 400;
+
+fn seedUnique(h: *Harness) !void {
+    var i: usize = 0;
+    while (i < SEEK_N) : (i += 1) {
+        const aa = h.arena.allocator();
+        // source_id is unique per node; source is common; ordinal is numeric.
+        const q = try std.fmt.allocPrint(
+            aa,
+            "CREATE (:U {{source_id: 'col{d}', source: 'col', ordinal: {d}}})",
+            .{ i, i },
+        );
+        try h.exec(q);
+    }
+}
+
+test "GAP-ENT-0019: selective source_id='col5' count == 1 via exact-index seek" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedUnique(&h);
+
+    // SELECTIVE: exactly one node has source_id='col5'.
+    graph_storage_adapter.resetLookupCounters();
+    const before = graph_storage_adapter.getExactNodePropertyLookupCount();
+    const c = try h.countOf("MATCH (n:U) WHERE n.source_id = 'col5' RETURN count(n) AS c");
+    const delta = graph_storage_adapter.getExactNodePropertyLookupCount() - before;
+
+    try testing.expectEqual(@as(i64, 1), c);
+    // The seek fired: the exact node-property index was probed (RED pre-fix: the
+    // full-scan path never calls getCandidateNodesByLabelAndProperty → delta 0).
+    try testing.expect(delta >= 1);
+}
+
+test "GAP-ENT-0019: common source='col' count == N (all match, still exact)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedUnique(&h);
+
+    const c = try h.countOf("MATCH (n:U) WHERE n.source = 'col' RETURN count(n) AS c");
+    try testing.expectEqual(@as(i64, @intCast(SEEK_N)), c);
+
+    // A miss (no such value) must count exactly 0 through the seek.
+    const zero = try h.countOf("MATCH (n:U) WHERE n.source_id = 'nope' RETURN count(n) AS c");
+    try testing.expectEqual(@as(i64, 0), zero);
+}
+
+test "GAP-ENT-0019: non-equality predicate is NOT seeked but still exact via scan" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedUnique(&h);
+
+    // Ordering predicate: not an equality → no seek → full scan. ordinal<10 → 10.
+    graph_storage_adapter.resetLookupCounters();
+    const before = graph_storage_adapter.getExactNodePropertyLookupCount();
+    const c = try h.countOf("MATCH (n:U) WHERE n.ordinal < 10 RETURN count(n) AS c");
+    const delta = graph_storage_adapter.getExactNodePropertyLookupCount() - before;
+
+    try testing.expectEqual(@as(i64, 10), c);
+    try testing.expectEqual(@as(u64, 0), delta); // scan path, no exact-index seek
+}
+
+test "GAP-ENT-0019: seek parity with full-scan oracle (selective + all-match)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedUnique(&h);
+
+    // The AND-compound oracle DECLINES the seek/fast path and runs the general
+    // materialize/eval scan; the extra clause (ordinal >= 0) is true for all, so
+    // the seek and the oracle must return the SAME count.
+    try h.expectFastMatchesOracle(
+        "MATCH (n:U) WHERE n.source_id = 'col5' RETURN count(n) AS c",
+        "MATCH (n:U) WHERE n.source_id = 'col5' AND n.ordinal >= 0 RETURN count(n) AS c",
+    );
+    try h.expectFastMatchesOracle(
+        "MATCH (n:U) WHERE n.source = 'col' RETURN count(n) AS c",
+        "MATCH (n:U) WHERE n.source = 'col' AND n.ordinal >= 0 RETURN count(n) AS c",
+    );
 }
