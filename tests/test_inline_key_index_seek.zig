@@ -290,3 +290,180 @@ test "inline-key index seek: filtered count is correct via index" {
     };
     try testing.expectEqual(@as(i64, 1), got);
 }
+
+// ===================================================================
+// GAP-ENT-0019: a WHERE-clause equality on an indexed scalar property must
+// use the SAME exact-index SEEK the inline `{prop:val}` form uses — O(matching)
+// not O(n). RED (pre-fix): `MATCH (n:L) WHERE n.key = 'v'` full-scanned the
+// label (getLabelScanLookupCount > 0, getExactNodePropertyLookupCount == 0).
+// GREEN (post-fix): it seeks (getExactNodePropertyLookupCount > 0,
+// getLabelScanLookupCount == 0). Soundness: only a pure-ASCII, non-bool,
+// non-numeric string literal on an indexed key seeks (identical gate to
+// match_operations.seekableAsciiStringEq); numeric/non-ASCII literals fall back
+// to the exact full scan. Every candidate is re-verified + the full WHERE is
+// re-applied downstream, so results are byte-identical to the scan.
+// ===================================================================
+
+fn countOfStream(
+    aa: std.mem.Allocator,
+    q: *const geode.gql.ast.Query,
+    ctx: execution.ExecutionContext,
+) !i64 {
+    var stream = (try node_scan_stream.prepare(aa, q, ctx, &.{}, &.{}, &.{})) orelse {
+        return error.StreamPathNotEligible;
+    };
+    defer stream.deinit();
+    var page = try stream.buildNextPage(aa, 256);
+    defer page.result.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    return switch (page.result.rows[0][0]) {
+        .Int => |v| v,
+        .BigInt => |v| v,
+        .SmallInt => |v| v,
+        else => error.UnexpectedCountType,
+    };
+}
+
+// Test 6 — selective WHERE equality on the unique indexed key: exactly 1, and
+// the SEEK path is taken (exact-property lookup > 0, NO full label scan).
+test "where-clause index seek: selective WHERE equality uses seek, count == 1" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const aa = qa.allocator();
+
+    const q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.source_id = 'sid5' RETURN count(n)");
+    try testing.expect(node_scan_stream.isEligible(q));
+
+    graph_storage_adapter.resetLookupCounters();
+    const got = try countOfStream(aa, q, h.ctx);
+
+    try testing.expectEqual(@as(i64, 1), got);
+    // GREEN: seek engaged. RED (pre-fix) left exact==0 and label-scan>0.
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() > 0);
+    try testing.expectEqual(@as(u64, 0), graph_storage_adapter.getLabelScanLookupCount());
+}
+
+// Test 7 — RETURN n (node shape, not count) also seeks: the fix helps ALL read
+// shapes routed through collectMatchingSlotIds, not just count.
+test "where-clause index seek: RETURN n via WHERE uses seek" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const aa = qa.allocator();
+
+    const q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.source_id = 'sid3' RETURN n");
+    graph_storage_adapter.resetLookupCounters();
+    const rows = try streamRowCount(aa, q, h.ctx);
+
+    try testing.expectEqual(@as(usize, 1), rows);
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() > 0);
+    try testing.expectEqual(@as(u64, 0), graph_storage_adapter.getLabelScanLookupCount());
+}
+
+// Test 8 — low-selectivity WHERE equality (every node shares source='col')
+// returns ALL N, and STILL seeks (candidates re-verified per node). Byte-parity
+// with a full-scan oracle (an ORDERING predicate that has no seekable Eq
+// conjunct and therefore scans).
+test "where-clause index seek: all-match equality returns N, parity with scan oracle" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const aa = qa.allocator();
+
+    // Seek path: WHERE source = 'col' (all N match).
+    const seek_q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.source = 'col' RETURN count(n)");
+    graph_storage_adapter.resetLookupCounters();
+    const seek_count = try countOfStream(aa, seek_q, h.ctx);
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() > 0);
+    try testing.expectEqual(@as(u64, 0), graph_storage_adapter.getLabelScanLookupCount());
+
+    // Oracle: an ORDERING predicate (no Eq conjunct) forces the full label scan
+    // — an independent ground truth for the same result set (rank = 0..N-1 ≥ 0).
+    const oracle_q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.rank >= 0 RETURN count(n)");
+    graph_storage_adapter.resetLookupCounters();
+    const oracle_count = try countOfStream(aa, oracle_q, h.ctx);
+    try testing.expect(graph_storage_adapter.getLabelScanLookupCount() > 0);
+
+    try testing.expectEqual(@as(i64, @intCast(N_NODES)), seek_count);
+    try testing.expectEqual(oracle_count, seek_count);
+}
+
+// Test 9 — SOUNDNESS: a NUMERIC WHERE equality literal must NOT seek (eval `=`
+// cross-type coerces, broader than the raw-hash index) — it falls back to the
+// exact full scan and still returns the correct count. sid5 was seeded with
+// rank = 5, so exactly one node matches.
+test "where-clause index seek: numeric equality falls back to scan, correct" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const aa = qa.allocator();
+
+    const q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.rank = 5 RETURN count(n)");
+    graph_storage_adapter.resetLookupCounters();
+    const got = try countOfStream(aa, q, h.ctx);
+
+    try testing.expectEqual(@as(i64, 1), got);
+    // Numeric literal is NOT seekable → the label was full-scanned.
+    try testing.expect(graph_storage_adapter.getLabelScanLookupCount() > 0);
+}
+
+// Test 10 — SOUNDNESS: a NON-ASCII WHERE equality literal must NOT seek (NFC
+// normalization makes eval string-eq broader than the raw-byte hash index) — it
+// falls back to the full scan and still finds the matching node.
+test "where-clause index seek: non-ascii equality falls back to scan, correct" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+
+    // A node whose source_id contains a non-ASCII byte (é = 0xC3 0xA9).
+    {
+        var r = try h.runQuery("CREATE (n:Taxon {source_id: 'caf\u{00e9}', source: 'col', rank: 424242})");
+        r.deinit(h.arena.allocator());
+    }
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const aa = qa.allocator();
+
+    const q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.source_id = 'caf\u{00e9}' RETURN count(n)");
+    graph_storage_adapter.resetLookupCounters();
+    const got = try countOfStream(aa, q, h.ctx);
+
+    try testing.expectEqual(@as(i64, 1), got);
+    // Non-ASCII literal is NOT seekable → the label was full-scanned.
+    try testing.expect(graph_storage_adapter.getLabelScanLookupCount() > 0);
+}
+
+// Test 11 — INLINE path unchanged (no regression): the inline `{source_id:'v'}`
+// form still seeks and returns 1 (guards against the merge accidentally breaking
+// the original path).
+test "where-clause index seek: inline path still seeks (no regression)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(N_NODES);
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const aa = qa.allocator();
+
+    const q = try parseQuery(&qa, "MATCH (n:Taxon {source_id: 'sid8'}) RETURN n");
+    graph_storage_adapter.resetLookupCounters();
+    const rows = try streamRowCount(aa, q, h.ctx);
+
+    try testing.expectEqual(@as(usize, 1), rows);
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() > 0);
+    try testing.expectEqual(@as(u64, 0), graph_storage_adapter.getLabelScanLookupCount());
+}
