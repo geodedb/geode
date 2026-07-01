@@ -6136,6 +6136,13 @@ pub const GraphStore = struct {
     // Tenantless only — the fast-path caller refuses any concrete tenant before
     // calling this method (see countEdgesFastPath in match_operations.zig).
     pub fn countEdgesForGraph(self: *const GraphStore, graph_name: []const u8) usize {
+        // PHASE 1b chokepoint (H3): the untyped edge-count fast path reads the
+        // IdMap edge count / resident edge map, which are populated by the
+        // deferred loop2 hydration. Without this guard a `count(r)` issued
+        // before hydration completes returns a PARTIAL count (0 → …→ true count)
+        // after a no-snapshot open. Mirror the typed `countGraphEdgeType` guard
+        // so the reader triggers + waits for full hydration first.
+        @constCast(self).ensureGraphHydrated(graph_name);
         if (self.edges.effectiveCap() != 0) {
             // Bounded: IdMap is always fully resident.
             const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
