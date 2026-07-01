@@ -9082,7 +9082,14 @@ pub const GraphStore = struct {
                 // tenant property is non-fatal: fall back to default rather than
                 // quarantine the node.
                 const tenant_id_copy = blk_tenant: {
-                    const maybe_t = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                    // Cold-open H1: read the tenant tag WITHOUT triggering the
+                    // engine's full derived property-chain index build
+                    // (ensureDerivedHydrated). Like the node-id read above, use
+                    // the known prop_head; getNodePropertyByHead walks the chain
+                    // directly. Using plain getNodeProperty here forced a
+                    // one-time O(graph) refreshPropertyChainIndex build (~71% of
+                    // loop1 CPU) on the FIRST node — pure waste for loop1.
+                    const maybe_t = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
                     if (maybe_t) |stored_prop| {
                         defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
                         switch (stored_prop) {
