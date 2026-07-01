@@ -5855,6 +5855,14 @@ pub const GraphStore = struct {
     }
 
     pub fn getAllNodes(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
+        // PHASE 1b chokepoint: enumerates ALL graphs' IdMaps (no single
+        // graph_name). After a no-snapshot cold-open a deferred graph's IdMap is
+        // EMPTY until first access, so an unguarded scan under-counts — the
+        // DROP TENANT cascade (tenant_dispatch) would then leave orphaned rows /
+        // report a false "empty tenant" success. Hydrate every deferred graph
+        // first, before any lock (no deadlock, no re-entrancy: hydration's
+        // loadOneGraphFromAdapterFull never calls these readers).
+        @constCast(self).ensureAllGraphsHydrated();
         // When the node cache is bounded (eviction active), the resident map is
         // an INCOMPLETE view — enumerate every public id from the per-graph
         // IdMaps instead, which stay fully resident (~24 B/entry) regardless of
@@ -5883,6 +5891,11 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="PerTenantIsolation"; ASPECT=BulkNodeAccess; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Return only nodes belonging to the specified tenant (or all if tenant is null)
     pub fn getAllNodesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
+        // PHASE 1b chokepoint: enumerates ALL graphs' IdMaps (no single
+        // graph_name). Hydrate every deferred graph before the scan so a
+        // no-snapshot cold-open cannot under-count the tenant (DROP TENANT
+        // cascade correctness). Safe/no-deadlock/no-reentrancy as in getAllNodes.
+        @constCast(self).ensureAllGraphsHydrated();
         const tid = tenant orelse return self.getAllNodes(allocator);
 
         // Unbounded cache: resident map is the full set (fast path, unchanged).
@@ -5942,6 +5955,11 @@ pub const GraphStore = struct {
     // cascade to collect a tenant's edges for referential-consistency deletion
     // (edges deleted before their endpoint nodes).
     pub fn getAllEdgesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
+        // PHASE 1b chokepoint: enumerates ALL graphs' IdMaps (no single
+        // graph_name). Hydrate every deferred graph before the scan so a
+        // no-snapshot cold-open cannot under-count the tenant's edges (DROP
+        // TENANT cascade would otherwise orphan edges). Safe as in getAllNodes.
+        @constCast(self).ensureAllGraphsHydrated();
         // Unbounded cache: the resident map is the full set (fast path).
         if (self.edges.effectiveCap() == 0) {
             var result: std.ArrayList(u64) = .empty;
@@ -9450,6 +9468,18 @@ pub const GraphStore = struct {
     ///   {"type":"edge","id":N,"from":F,"to":T,"graph":"G","label":"L","properties":{}}
     /// Returns owned bytes that the caller must free with `allocator.free`.
     pub fn serializeSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]u8 {
+        // PHASE 1b chokepoint: a snapshot enumerates every graph's IdMaps and the
+        // resident node/edge caches. After a no-snapshot early-ready open
+        // (`markPendingHydration` fallback) a deferred graph's IdMap is EMPTY
+        // until first access, so an unguarded serialize would emit a PARTIAL /
+        // empty snapshot — silent divergence for the automatic cluster
+        // replication callers (cluster.replicateShardToNode,
+        // raft_snapshot_manager.createSnapshotData) that never run a query first.
+        // Hydrate EVERY graph before reading. Called first, before any lock, so
+        // the store-wide `hydration_build_mutex` it takes cannot deadlock (mirrors
+        // the count/listEdgeTypes guards); `loadOneGraphFromAdapterFull` never
+        // re-enters this serializer, so no re-entrancy.
+        self.ensureAllGraphsHydrated();
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(allocator);
 

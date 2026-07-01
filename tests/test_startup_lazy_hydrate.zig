@@ -1011,3 +1011,154 @@ test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-sna
 
     graph_store.deinitGlobalStore();
 }
+
+// ===========================================================================
+// serializeSnapshot + getAll* deferred-hydration guard regression.
+//
+// serializeSnapshot (src/graph_store.zig) and the getAll* readers
+// (getAllNodes / getAllNodesForTenant / getAllEdgesForTenant) now call
+// ensureAllGraphsHydrated as their FIRST statement -- the same fix class as the
+// count guards above. Before that fix, a snapshot or DROP TENANT cascade issued
+// right after a genuinely no-snapshot (H3-deferred) open enumerated the
+// still-empty deferred IdMaps and emitted a PARTIAL / empty result:
+//   * serializeSnapshot -> a partial cluster snapshot = silent data divergence
+//     on the automatic-replication callers (cluster.replicateShardToNode,
+//     raft_snapshot_manager.createSnapshotData) that never run a query first.
+//   * getAllNodesForTenant/getAllEdgesForTenant -> under-count in the DROP
+//     TENANT cascade = orphaned rows / false "empty tenant" success.
+//
+// Each test seeds a no-snapshot graph, reopens it (loop1 IdMap scan-rebuild +
+// loop2 both deferred to first access), and calls ONLY the reader under test as
+// the literal first access -- no other read triggers hydration as a side
+// effect. Removing the guard sends the test RED (partial/empty), which is what
+// makes it a real regression guard.
+//
+// To verify RED: comment out `self.ensureAllGraphsHydrated();` at the top of
+// serializeSnapshot (first test) or `@constCast(self).ensureAllGraphsHydrated();`
+// at the top of getAllNodesForTenant/getAllEdgesForTenant (second test) and
+// rerun `zig build test-startup-lazy-hydrate -j2 --summary all`.
+
+test "GAP regression: serializeSnapshot as FIRST access after no-snapshot open yields COMPLETE snapshot, not partial" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const M: usize = 150;
+    var seed_ids: [200]u64 = undefined;
+
+    // --- Phase 1: seed N nodes + M edges, light checkpoint (NO IdMap snapshot)
+    //     + crash-style deinit so the reopen is genuinely no-snapshot. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        var e: usize = 0;
+        while (e < M) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    // --- Phase 2: reopen. loop1 + loop2 both deferred. ---
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
+
+    // EARLY-READY: confirm still deferred (nothing scanned) before serialize.
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+    // THE REGRESSION GUARD: serializeSnapshot is the FIRST access. Pre-fix it
+    // enumerated the empty deferred IdMaps and produced an empty/partial
+    // snapshot; post-fix the ensureAllGraphsHydrated guard forces a full
+    // hydrate first, so every node and edge line is present.
+    const snap = try store.serializeSnapshot(allocator);
+    defer allocator.free(snap);
+
+    const node_lines = std.mem.count(u8, snap, "\"type\":\"node\"");
+    const edge_lines = std.mem.count(u8, snap, "\"type\":\"edge\"");
+    try testing.expectEqual(N, node_lines);
+    try testing.expectEqual(M, edge_lines);
+
+    // Proves the snapshot came from a real hydrate, not a lucky partial match.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    graph_store.deinitGlobalStore();
+}
+
+test "GAP regression: getAllNodesForTenant/getAllEdgesForTenant as FIRST access after no-snapshot open return FULL set, not partial" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const M: usize = 150;
+    var seed_ids: [200]u64 = undefined;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        var e: usize = 0;
+        while (e < M) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
+
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+    // THE REGRESSION GUARD: getAllNodesForTenant("default") is the FIRST
+    // access. Seeded nodes carry DEFAULT_TENANT_ID, so this exercises
+    // getAllNodesForTenant's OWN guarded body (not the null->getAllNodes
+    // delegate). Pre-fix it enumerated the empty deferred IdMaps and
+    // under-counted (0 / partial) -> DROP TENANT cascade would orphan rows;
+    // post-fix the ensureAllGraphsHydrated guard forces a full hydrate first.
+    const node_ids = try store.getAllNodesForTenant(allocator, "default");
+    defer allocator.free(node_ids);
+    try testing.expectEqual(N, node_ids.len);
+
+    // Edges too (getAllEdgesForTenant shares the same guard + IdMap scan).
+    const edge_ids = try store.getAllEdgesForTenant(allocator, null);
+    defer allocator.free(edge_ids);
+    try testing.expectEqual(M, edge_ids.len);
+
+    // Proves the counts came from a real hydrate, not a lucky partial match.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    graph_store.deinitGlobalStore();
+}
