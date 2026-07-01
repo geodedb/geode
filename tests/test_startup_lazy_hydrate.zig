@@ -855,3 +855,159 @@ test "H3 no-snapshot: CREATE before any read gets a fresh id + no corruption" {
 
     graph_store.deinitGlobalStore();
 }
+
+// ===========================================================================
+// count(r)/count(n) deferred-hydration guard regression (commits 30f219ee +
+// e8f2f516).
+//
+// `countEdgesForGraph` and `countNodesForGraph` (src/graph_store.zig) now call
+// `@constCast(self).ensureGraphHydrated(graph_name)` as the FIRST line of the
+// function. Before that fix, an untyped `count(r)`/`count(n)` issued right
+// after a genuinely no-snapshot (H3-deferred) open read straight from the
+// still-empty deferred IdMap / resident maps and returned 0 -- then a PARTIAL
+// count if background/concurrent hydration was in flight -- instead of the
+// true total. `countGraphEdgeType` (the typed count(r:TYPE) path) already had
+// this guard, so the untyped paths were the same bug class one release late.
+//
+// Each test below seeds a no-snapshot graph, reopens it (loop1 IdMap
+// scan-rebuild + loop2 index build both deferred to first access), and calls
+// ONLY the count function under test as the literal first access to the
+// graph -- no other read runs first, so nothing else could have triggered
+// hydration as a side effect. This is what makes it a real regression guard
+// and not just a correctness check: if you removed the guard from either
+// function independently, THAT function's test goes RED (returns 0, not the
+// full count) while the other stays GREEN, mirroring the two separate fix
+// commits.
+//
+// To verify RED: comment out the `@constCast(self).ensureGraphHydrated(...)`
+// line at the top of countEdgesForGraph (src/graph_store.zig, ~line 6143) and
+// rerun `zig build test-startup-lazy-hydrate -j2 --summary all` -- the first
+// test below fails (`expectEqual(M, ...)` sees 0, not M). Restore it, then
+// comment out the guard at the top of countNodesForGraph (~line 5996) and
+// rerun -- the second test below fails the same way (0, not N). With both
+// guards in place (current code) both tests pass (GREEN).
+
+test "GAP regression: count(r) (countEdgesForGraph) as FIRST access after no-snapshot open returns FULL count, not partial" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const M: usize = 150;
+    var seed_ids: [200]u64 = undefined;
+
+    // --- Phase 1: seed N nodes + a PARENT_OF chain of M edges. LIGHT
+    //     checkpoint only (engine-recoverable, NO IdMap snapshot) + CRASH-style
+    //     deinit so the reopen below is genuinely no-snapshot (same mechanism
+    //     as seedNoSnapshotWithEdges above; inlined here for the PARENT_OF
+    //     edge type and explicit N/M). ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        var e: usize = 0;
+        while (e < M) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    // --- Phase 2: reopen. loop1 (IdMap scan-rebuild) + loop2 both deferred. ---
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
+
+    // EARLY-READY: confirm the graph is genuinely still in the deferred
+    // (pre-hydration) state before the count call below -- nothing has
+    // scanned yet.
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+    // THE REGRESSION GUARD: the FIRST access to this graph after the deferred
+    // reopen is the untyped edge count -- no other read runs first. Pre-fix
+    // this observed the empty deferred maps and returned 0; post-fix the
+    // `ensureGraphHydrated` guard at the top of countEdgesForGraph forces
+    // synchronous hydration first, so this already returns the FULL count M.
+    try testing.expectEqual(M, store.countEdgesForGraph(GRAPH));
+
+    // Proves the M above came from a real hydrate, not a lucky partial match.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    // Typed edge count (already guarded pre-fix) for completeness -- confirm
+    // it agrees now that the graph is hydrated.
+    try testing.expectEqual(M, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+
+    graph_store.deinitGlobalStore();
+}
+
+test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-snapshot open returns FULL count, not partial" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    const M: usize = 150;
+    var seed_ids: [200]u64 = undefined;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        var e: usize = 0;
+        while (e < M) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+
+    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
+
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+    try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+
+    // THE REGRESSION GUARD: the FIRST access to this graph after the deferred
+    // reopen is the untyped node count -- no other read runs first. Pre-fix
+    // (before e8f2f516) this observed the empty deferred maps and returned 0;
+    // post-fix the `ensureGraphHydrated` guard at the top of
+    // countNodesForGraph forces synchronous hydration first, so this already
+    // returns the FULL count N.
+    try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+
+    // Proves the N above came from a real hydrate, not a lucky partial match.
+    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
+    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+    // Sanity: edge count agrees too, now that hydration has run.
+    try testing.expectEqual(M, store.countEdgesForGraph(GRAPH));
+
+    graph_store.deinitGlobalStore();
+}
