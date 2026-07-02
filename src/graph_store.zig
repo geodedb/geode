@@ -6034,17 +6034,28 @@ pub const GraphStore = struct {
         // after a no-snapshot open (same bug class as countEdgesForGraph).
         // No-op once hydrated / on snapshot-resident opens, so O(1) is preserved.
         @constCast(self).ensureGraphHydrated(graph_name);
-        // Bounded cache: the resident map is incomplete — count from the
-        // per-graph IdMap (fully resident). With no tenant filter, the graph's
-        // IdMap node count IS the answer (O(1)). With a tenant filter, resolve
-        // each node's tenant without populating the cache.
-        if (self.nodes.effectiveCap() != 0) {
-            const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
-            if (tenant == null) {
+        // GAP-ENT-0013: with no tenant filter, the graph's IdMap node count IS
+        // the answer — O(1) in BOTH cache modes (the IdMap is fully resident
+        // whenever an engine adapter backs the graph, bounded or unbounded
+        // node cache alike). Hoisted out of the bounded-cache branch so an
+        // unbounded cache no longer pays an O(N) `nodes.iterator()` walk.
+        if (tenant == null) {
+            if (@constCast(self).getIdMap(graph_name)) |id_map| {
                 // GAP-ENT-0013 path counter: O(1) IdMap total served the count.
                 _ = g_count_nodes_idmap_fast.fetchAdd(1, .monotonic);
                 return id_map.nodeCount();
             }
+            // No IdMap for this graph (purely in-memory graph with no
+            // adapter). Bounded cache: the resident map is incomplete and
+            // there is no authoritative source — preserve the pre-existing
+            // bounded behavior (0). Unbounded cache: fall through to the
+            // resident iteration below, which IS exact (O(resident)).
+            if (self.nodes.effectiveCap() != 0) return 0;
+        } else if (self.nodes.effectiveCap() != 0) {
+            // Bounded cache + tenant filter: the resident map is incomplete —
+            // resolve each node's tenant from the IdMap without populating
+            // the cache.
+            const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
             const tid = tenant.?;
             // GAP-ENT-0013 path counter: tenant-filtered per-uuid iteration
             // (O(N) `nodeMatchesTenant` property reads).
@@ -6057,8 +6068,8 @@ pub const GraphStore = struct {
             }
             return count;
         }
-        // GAP-ENT-0013 path counter: unbounded-cache full node iteration (O(N)
-        // walk over every resident node, even when tenant == null).
+        // GAP-ENT-0013 path counter: unbounded-cache resident node iteration
+        // (tenant-filtered count, or the no-IdMap in-memory fallback above).
         _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
         var count: usize = 0;
         var iter = self.nodes.iterator();
