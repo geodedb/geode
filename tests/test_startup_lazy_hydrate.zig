@@ -25,7 +25,9 @@
 
 const std = @import("std");
 const testing = std.testing;
-const graph_store = @import("geode").graph_store;
+const geode = @import("geode");
+const graph_store = geode.graph_store;
+const execution = geode.execution;
 const GraphStore = graph_store.GraphStore;
 const PropertyValue = graph_store.PropertyValue;
 
@@ -1918,5 +1920,215 @@ test "P3 C2: graph-scoped scan never mutates the node cache; retained node point
         }
 
         graph_store.deinitGlobalStore();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// C3 (review-0023): write-path residency across a warm reopen.
+//
+// P3 snapshot-served warm hydration leaves the node cache COLD, and the C2
+// detached scan boxes no longer warm it as a side effect of MATCHing. The
+// legacy mutation paths gated their durable writes on a RESIDENT node body:
+//   * MATCH…SET n.p = v      -> loud error.NodeNotFound (store gate)
+//   * MATCH…REMOVE n.prop    -> SILENT durable no-op (resident-only getPtr)
+//   * MATCH…SET n = {…}      -> SILENT durable no-op (resident-only getPtr)
+//   * MERGE … ON MATCH SET   -> same setNodePropertyFromValue chokepoint
+// Each e2e below: build + FULL checkpoint -> clean reopen (hydration served
+// from snapshots, caches COLD) -> mutation via the QUERY executor ->
+// checkpoint -> clean reopen -> assert the write survived durably.
+// ---------------------------------------------------------------------------
+
+const C3Ids = struct { set: u64, rm: u64, map: u64, mrg: u64 };
+
+// Session 1: build the 4 fixture nodes in the DEFAULT graph (bare MATCH/MERGE
+// statements target it) and FULL-checkpoint so the next open is warm.
+fn c3BuildAndCheckpoint(allocator: std.mem.Allocator, data_dir: []const u8) !C3Ids {
+    graph_store.setDataDirOverride(allocator, data_dir);
+    const store = graph_store.getGlobalStore(allocator);
+    const labels = @constCast(&[_][]const u8{LABEL});
+
+    var ids: C3Ids = undefined;
+    ids.set = try store.createNode(labels);
+    try store.setNodeProperty(ids.set, "name", .{ .String = "c3-set" });
+    ids.rm = try store.createNode(labels);
+    try store.setNodeProperty(ids.rm, "name", .{ .String = "c3-remove" });
+    try store.setNodeProperty(ids.rm, "doomed", .{ .String = "present" });
+    ids.map = try store.createNode(labels);
+    try store.setNodeProperty(ids.map, "name", .{ .String = "c3-map" });
+    try store.setNodeProperty(ids.map, "old", .{ .String = "stale" });
+    ids.mrg = try store.createNode(labels);
+    try store.setNodeProperty(ids.mrg, "name", .{ .String = "c3-merge" });
+
+    try store.saveToFile();
+    graph_store.deinitGlobalStore();
+    graph_store.setDataDirOverride(allocator, null);
+    return ids;
+}
+
+fn c3Exec(allocator: std.mem.Allocator, ctx: execution.ExecutionContext, query: []const u8) !execution.ExecutionResult {
+    var parsed = try geode.parseGql(query, allocator);
+    defer parsed.deinit();
+    return execution.executeStatementWithContext(allocator, parsed.program.statements[0], ctx);
+}
+
+// Session 2: warm reopen (caches COLD — asserted) -> run `query` through the
+// executor -> FULL checkpoint -> close. Any error from the executor (the C3
+// loud-fail mode) propagates to the test.
+fn c3WarmReopenExecCheckpoint(allocator: std.mem.Allocator, data_dir: []const u8, query: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+    const store = graph_store.getGlobalStore(allocator);
+    installBoundedCaches(store); // production parity (server init does this)
+    defer graph_store.deinitGlobalStore();
+
+    // Premise of the whole C3 class: after a snapshot-served warm reopen the
+    // node cache is COLD (nothing resident) when the first mutation arrives.
+    try testing.expectEqual(@as(usize, 0), store.nodes.residentCount());
+
+    const catalog = try execution.ensureCatalogInstance(aa);
+    defer execution.cleanupCatalogInstance();
+    const ctx = execution.ExecutionContext{ .catalog = catalog };
+
+    var res = try c3Exec(aa, ctx, query);
+    res.deinit(aa);
+
+    try store.saveToFile(); // FULL checkpoint: the durable write must survive
+}
+
+// Session 3 helper: expect a String property with the given value (hydrating
+// point read), or null when `expected` is null (property must be gone).
+fn c3ExpectProp(store: *GraphStore, node_id: u64, key: []const u8, expected: ?[]const u8) !void {
+    const got = store.getNodeProperty(node_id, key);
+    if (expected) |want| {
+        const val = got orelse return error.DurableWriteDropped;
+        try testing.expect(val == .String);
+        try testing.expectEqualStrings(want, val.String);
+    } else {
+        try testing.expect(got == null);
+    }
+}
+
+test "C3 e2e: MATCH...SET n.p on a cold node after warm reopen persists durably (RED: loud NodeNotFound)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    execution.cleanupCatalogInstance();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const ids = try c3BuildAndCheckpoint(allocator, data_dir);
+
+    try c3WarmReopenExecCheckpoint(allocator, data_dir, "MATCH (n:Person {name: 'c3-set'}) SET n.flag = 'set-done'");
+
+    // Session 3: clean reopen — the SET must have reached the engine.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        defer graph_store.deinitGlobalStore();
+
+        // First touch through a hydration-chokepointed API (production parity:
+        // reads hydrate the graph before by-id point reads run).
+        try testing.expectEqual(@as(usize, 4), store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+
+        try c3ExpectProp(store, ids.set, "flag", "set-done");
+        try c3ExpectProp(store, ids.set, "name", "c3-set");
+    }
+}
+
+test "C3 e2e: MATCH...REMOVE n.prop on a cold node after warm reopen removes durably (RED: silent no-op)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    execution.cleanupCatalogInstance();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const ids = try c3BuildAndCheckpoint(allocator, data_dir);
+
+    try c3WarmReopenExecCheckpoint(allocator, data_dir, "MATCH (n:Person {name: 'c3-remove'}) REMOVE n.doomed");
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        defer graph_store.deinitGlobalStore();
+
+        // First touch through a hydration-chokepointed API (production parity).
+        try testing.expectEqual(@as(usize, 4), store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+
+        try c3ExpectProp(store, ids.rm, "doomed", null); // durably removed
+        try c3ExpectProp(store, ids.rm, "name", "c3-remove"); // untouched
+    }
+}
+
+test "C3 e2e: SET n = {map} on a cold node after warm reopen replaces durably (RED: silent no-op)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    execution.cleanupCatalogInstance();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const ids = try c3BuildAndCheckpoint(allocator, data_dir);
+
+    try c3WarmReopenExecCheckpoint(allocator, data_dir, "MATCH (n:Person {name: 'c3-map'}) SET n = {name: 'c3-map', fresh: 'mapped'}");
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        defer graph_store.deinitGlobalStore();
+
+        // First touch through a hydration-chokepointed API (production parity).
+        try testing.expectEqual(@as(usize, 4), store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+
+        try c3ExpectProp(store, ids.map, "fresh", "mapped"); // new prop landed
+        try c3ExpectProp(store, ids.map, "old", null); // replaced-away prop gone
+        try c3ExpectProp(store, ids.map, "name", "c3-map");
+    }
+}
+
+test "C3 e2e: MERGE ... ON MATCH SET on a cold node after warm reopen persists durably (no duplicate)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    execution.cleanupCatalogInstance();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const ids = try c3BuildAndCheckpoint(allocator, data_dir);
+
+    try c3WarmReopenExecCheckpoint(allocator, data_dir, "MERGE (n:Person {name: 'c3-merge'}) ON MATCH SET n.matched = 'yes'");
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        defer graph_store.deinitGlobalStore();
+
+        // First touch through a hydration-chokepointed API (production reads
+        // hydrate the graph before point reads run). Doubles as the ON MATCH
+        // (not ON CREATE) assertion: the merge must NOT have minted a duplicate.
+        try testing.expectEqual(@as(usize, 4), store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+
+        try c3ExpectProp(store, ids.mrg, "matched", "yes");
     }
 }

@@ -2978,9 +2978,13 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                             for (match_result.rows) |row| {
                                 if (ci < row.len and row[ci] == .Node) {
                                     const node_id = row[ci].Node.id;
-                                    if (store.nodes.getPtr(node_id)) |node| {
-                                        _ = node.properties.fetchRemove(prop.property);
-                                    }
+                                    // C3 (review-0023): id-based store call — durable
+                                    // (adapter + WAL + merge/label index maintenance)
+                                    // and hydrates a cold node instead of silently
+                                    // skipping it. The old resident-only fetchRemove
+                                    // was in-memory-only AND leaked the removed
+                                    // key/value allocations.
+                                    store.removeNodeProperty(node_id, prop.property);
                                 }
                             }
                             break;
@@ -9776,8 +9780,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
-                                // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                // Clear all existing properties by getting node and manually clearing.
+                                // C3 (review-0023): hydrate-on-miss — the row's node box
+                                // is detached (never resident), so a resident-only getPtr
+                                // silently dropped `SET n = {…}` after every warm reopen.
+                                // Safe: SET runs on the write path (per-graph EXCLUSIVE).
+                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
                                     try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
@@ -9790,7 +9798,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     switch (remove_clause) {
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.object, match_variable orelse "")) {
-                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                // C3 (review-0023): hydrate-on-miss — a resident-only
+                                // getPtr silently dropped `REMOVE n.prop` for cold
+                                // (post-warm-reopen) nodes. Safe: REMOVE runs on the
+                                // write path (per-graph EXCLUSIVE lock).
+                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
                                     property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                                 }
                             }

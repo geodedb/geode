@@ -2552,6 +2552,12 @@ pub const GraphStore = struct {
         }
         var pit = props.iterator();
         while (pit.next()) |e| {
+            // C3 (review-0023): skip `.null` — the adapter's removeNodeProperty
+            // writes a `.null` TOMBSTONE (putPropertyTxn(key, .null)), it never
+            // physically deletes the key. Materializing the tombstone as a
+            // present PropertyValue.Null made a durably-REMOVEd property
+            // resurface after reopen (live remove = fetchRemove = truly absent).
+            if (e.value_ptr.* == .null) continue;
             const key = try allocator.dupe(u8, e.key_ptr.*);
             errdefer allocator.free(key);
             const value = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
@@ -2967,6 +2973,9 @@ pub const GraphStore = struct {
             }
             var sp_it = sp.iterator();
             while (sp_it.next()) |e| {
+                // C3 (review-0023): skip the `.null` REMOVE tombstone (same
+                // convention as node properties — see materializeNodeFromEngine).
+                if (e.value_ptr.* == .null) continue;
                 const key_copy = try allocator.dupe(u8, e.key_ptr.*);
                 const pv = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
                 try edge.properties.put(key_copy, pv);
@@ -3489,6 +3498,23 @@ pub const GraphStore = struct {
 
         // Initialize IdMap for the new graph
         _ = try self.getOrCreateIdMap(graph_name);
+
+        // R2 (review-0023 residual): an in-session DROP GRAPH followed by a
+        // re-CREATE of the SAME name used to inherit the dropped graph's stale
+        // HydrationEntry (entries are never removed before deinit). A stale
+        // `failed=true` would silently suppress the NEW graph's snapshot writes
+        // until the next reopen (perf-only, but avoidable). A freshly created
+        // graph has nothing to hydrate — neutralize the stale entry: done=true
+        // (hydration no-op, same as no entry) and failed=false (saves enabled).
+        {
+            const hio = std.Io.Threaded.global_single_threaded.io();
+            self.hydration_mutex.lockUncancelable(hio);
+            defer self.hydration_mutex.unlock(hio);
+            if (self.pending_hydration.get(graph_name)) |hentry| {
+                hentry.failed.store(false, .release);
+                hentry.done.store(true, .release);
+            }
+        }
 
         self.dirty.store(true, .release);
         incrementMutationEpoch();
@@ -5604,6 +5630,18 @@ pub const GraphStore = struct {
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
+        // C3 (review-0023): hydrate the node BODY on miss before the durable
+        // write below is gated on residency. P3 snapshot-served warm hydration
+        // leaves the node cache COLD for graphs of ANY size, and the detached
+        // scan boxes (C2) no longer warm it — so after every warm reopen a
+        // matched node is typically non-resident and the resident-only
+        // `nodes.get` gate would fail the SET with NodeNotFound and skip the
+        // adapter write. Same hydrate-on-miss the read paths (getNodeProperty
+        // et al.) already use; safe here because all node property writers run
+        // under the per-graph EXCLUSIVE lock, so the cache insert cannot race
+        // shard readers (the same guarantee the evict-retire machinery relies
+        // on). A truly-missing id still falls through to error.NodeNotFound.
+        _ = self.nodes.getOrHydratePtr(node_id) catch null;
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
@@ -5983,6 +6021,11 @@ pub const GraphStore = struct {
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
+        // C3 (review-0023): hydrate the node body on miss — without this the
+        // resident-only gates below turn a REMOVE on a cold (post-warm-reopen)
+        // node into a SILENT durable no-op. See setNodeProperty for the full
+        // rationale and the write-lock safety argument.
+        _ = self.nodes.getOrHydratePtr(node_id) catch null;
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             const node = self.nodes.get(node_id) orelse return;
@@ -9582,6 +9625,29 @@ pub const GraphStore = struct {
                     Attr.string("graph", graph_name),
                     Attr.string("error", @errorName(err)),
                 });
+                // R1 (review-0023 residual): a partially-loaded graph (the load
+                // can die AFTER getOrCreateIdMap, e.g. OOM) would otherwise sit
+                // in `id_maps` with NO pending_hydration entry — both
+                // isGraphDeferred and isGraphHydrationFailed report false — so
+                // the next FULL checkpoint would bless EMPTY IdMap + loop2
+                // snapshots as counter-current and freeze the graph empty at
+                // every later open. Best-effort: register the entry and mark it
+                // FAILED so the checkpoint writers skip (and delete) its
+                // snapshots; `done` stays false so the first in-session touch
+                // still attempts a full rebuild (self-heal).
+                if (self.markPendingHydration(graph_name)) |_| {
+                    const hio = std.Io.Threaded.global_single_threaded.io();
+                    self.hydration_mutex.lockUncancelable(hio);
+                    defer self.hydration_mutex.unlock(hio);
+                    if (self.pending_hydration.get(graph_name)) |hentry| {
+                        hentry.failed.store(true, .release);
+                    }
+                } else |mark_err| {
+                    log.warn("failed to quarantine partially-loaded graph; checkpoint may bless empty snapshots", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(mark_err)),
+                    });
+                }
                 continue;
             };
         }
@@ -10567,6 +10633,10 @@ pub const GraphStore = struct {
 
                 var sp_iter = storage_props.iterator();
                 while (sp_iter.next()) |sp_entry| {
+                    // C3 (review-0023): `.null` is the adapter's REMOVE tombstone —
+                    // never materialize it as a present Null property (see
+                    // materializeNodeFromEngine).
+                    if (sp_entry.value_ptr.* == .null) continue;
                     const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
                     const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
                     try node.properties.put(key_copy, pv);
@@ -10781,6 +10851,9 @@ pub const GraphStore = struct {
 
                         var edge_sp_iter = edge_storage_props.iterator();
                         while (edge_sp_iter.next()) |sp_entry| {
+                            // C3 (review-0023): skip the `.null` REMOVE tombstone
+                            // (same convention as node properties).
+                            if (sp_entry.value_ptr.* == .null) continue;
                             const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
                             const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
                             try edge.properties.put(key_copy, pv);
