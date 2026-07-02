@@ -322,3 +322,97 @@ test "PERF: unlabeled count MUST NOT be slower than labeled count" {
         return error.CountPushdownRatioRegression;
     }
 }
+
+/// GAP-ENT-0013 helper: seed the store with a mixed-label population —
+/// `n_widget` ":Widget" nodes, `n_gadget` ":Gadget" nodes, and `n_unlabeled`
+/// nodes with no label at all. The unlabeled slice matters: `MATCH (n)
+/// RETURN count(n)` cannot be served by any label posting list, so its only
+/// O(1) source is the per-graph IdMap node total.
+fn seedMixedStore(
+    allocator: std.mem.Allocator,
+    n_widget: usize,
+    n_gadget: usize,
+    n_unlabeled: usize,
+) !void {
+    const store = graph_store.getGlobalStore(allocator);
+    const empty_labels = [_][]const u8{};
+    const widget_labels = [_][]const u8{"Widget"};
+    const gadget_labels = [_][]const u8{"Gadget"};
+
+    var i: usize = 0;
+    while (i < n_widget) : (i += 1) {
+        _ = try store.createNode(&widget_labels);
+    }
+    i = 0;
+    while (i < n_gadget) : (i += 1) {
+        _ = try store.createNode(&gadget_labels);
+    }
+    i = 0;
+    while (i < n_unlabeled) : (i += 1) {
+        _ = try store.createNode(&empty_labels);
+    }
+}
+
+// GAP-ENT-0013 PATH REGRESSION: bare unlabeled `MATCH (n) RETURN count(n)`
+// with no tenant filter MUST be served by the O(1) `IdMap.nodeCount()` path
+// in `countNodesForGraph` — NOT by any per-node iteration. The wall-clock
+// gates above cannot see this at 10k nodes (an O(N) walk still clears 50 ms);
+// at 14.27M nodes the same walk measured 27.2 s warm vs 108 ms for the
+// labeled O(1) path. Two defects compose today:
+//   1. `countNodesForGraph` only consults `IdMap.nodeCount()` when the node
+//      cache is BOUNDED (`effectiveCap() != 0`); with the default unbounded
+//      cache it walks `nodes.iterator()` over every resident node.
+//   2. With a tenant filter present it iterates every IdMap uuid and does a
+//      per-node property read (`nodeMatchesTenant`), O(N) with disk I/O.
+// This test pins the path itself via the GAP-ENT-0013 counters in
+// graph_store.zig (`getCountNodesIdMapFastTotal` / `getCountNodesIterFallbackTotal`),
+// which discriminate three outcomes:
+//   - idmap_fast +1, iter_fallback +0  -> FIXED (test passes);
+//   - idmap_fast +0, iter_fallback +1  -> countNodesForGraph reached but the
+//     iteration branch ran (defect 1 or 2 — the expected RED today);
+//   - both +0                          -> the count fast path was rejected
+//     UPSTREAM (countNodesFastPath bailed before reaching the store counter).
+test "PATH: unlabeled count(n) is served by IdMap.nodeCount() O(1), not iteration (GAP-ENT-0013)" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    // ~50k nodes: 2 labels + an unlabeled slice, per the GAP-ENT-0013 plan.
+    const n_widget: usize = 20_000;
+    const n_gadget: usize = 20_000;
+    const n_unlabeled: usize = 10_000;
+    const total: usize = n_widget + n_gadget + n_unlabeled;
+    try seedMixedStore(allocator, n_widget, n_gadget, n_unlabeled);
+
+    // Snapshot the path counters AFTER seeding, immediately before the query,
+    // so store-setup noise (hydration, catalog init) cannot mask the signal.
+    const idmap_fast_before = graph_store.getCountNodesIdMapFastTotal();
+    const iter_fallback_before = graph_store.getCountNodesIterFallbackTotal();
+
+    var res = try h.runQuery("MATCH (n) RETURN count(n) AS c");
+    defer res.deinit(h.arena.allocator());
+
+    const idmap_fast_after = graph_store.getCountNodesIdMapFastTotal();
+    const iter_fallback_after = graph_store.getCountNodesIterFallbackTotal();
+    const idmap_fast_delta = idmap_fast_after - idmap_fast_before;
+    const iter_fallback_delta = iter_fallback_after - iter_fallback_before;
+
+    // Correctness first: ALL nodes counted (both labels + unlabeled).
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectInt(res.rows[0][0], @intCast(total));
+
+    // Path assertions. Print the deltas before failing so the red run
+    // documents WHICH branch actually served the query.
+    if (iter_fallback_delta != 0 or idmap_fast_delta == 0) {
+        std.debug.print(
+            "GAP-ENT-0013 path regression: unlabeled MATCH (n) RETURN count(n) " ++
+                "against {d} nodes: idmap_fast delta={d}, iter_fallback delta={d}. " ++
+                "Expected idmap_fast>=1 and iter_fallback==0 (O(1) IdMap total). " ++
+                "iter_fallback>0 means countNodesForGraph iterated per node; " ++
+                "both zero means countNodesFastPath was rejected upstream.\n",
+            .{ total, idmap_fast_delta, iter_fallback_delta },
+        );
+    }
+    try std.testing.expectEqual(@as(u64, 0), iter_fallback_delta);
+    try std.testing.expect(idmap_fast_delta >= 1);
+}
