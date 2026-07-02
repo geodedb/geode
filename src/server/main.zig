@@ -1372,10 +1372,33 @@ pub fn main() !void {
         server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
     } else {
         user_mgmt.setPersistentUserResolver(null);
-        user_mgmt.ensureDefaultUser(gpa) catch |err| {
-            log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-            return err;
-        };
+        // Review-0016 Important-3 (2026-07-01 incident residual): this branch
+        // runs when NO AuthGraphManager is active (AGM.init threw, HMAC key
+        // unavailable, or the store fell back to in-memory). Historically it
+        // unconditionally seeded an IN-MEMORY admin from GEODE_ADMIN_PASSWORD —
+        // so on a data dir that still holds a persisted admin credential, the
+        // env password became the working admin credential for the session
+        // (the operator-visible "password tracks the env var" symptom). Run
+        // the same engine-level persisted-admin check the bootstrap guard
+        // uses and REFUSE env seeding (fail closed) when persisted records
+        // exist or the engine check itself fails. The persisted credential on
+        // disk stays authoritative; admin login may be unavailable this
+        // session until the operator repairs the store — strictly better than
+        // silently activating the env credential.
+        const agm_mod = @import("auth_graph_manager");
+        const persisted_on_disk: ?u64 = agm_mod.persistedSecurityUserCountOnDisk() catch null; // null => engine error => fail closed
+        if (persisted_on_disk == null or persisted_on_disk.? > 0) {
+            log.err("ADMIN ENV SEEDING SKIPPED (fail-closed): no auth graph manager is active this session, but the storage engine reports persisted admin records in __geode_security (or errored while checking); refusing to seed an in-memory admin from GEODE_ADMIN_PASSWORD — the persisted credential remains authoritative. Repair the auth graph / HMAC key setup and restart.", &.{
+                Attr.uint("persisted_user_records", persisted_on_disk orelse 0),
+                Attr.string("engine_check", if (persisted_on_disk == null) "error (fail-closed)" else "ok"),
+            });
+            std.debug.print("[startup] admin env seeding SKIPPED: persisted admin records exist on disk (or the engine check failed) but the auth graph manager is unavailable; GEODE_ADMIN_PASSWORD ignored (fail-closed)\n", .{});
+        } else {
+            user_mgmt.ensureDefaultUser(gpa) catch |err| {
+                log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+        }
     }
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 

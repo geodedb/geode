@@ -482,8 +482,13 @@ pub fn initialize(
                         // login may fail this session until the operator
                         // repairs the store — strictly better than silently
                         // destroying the persisted credential.
-                        log.err("ADMIN BOOTSTRAP SKIPPED: persisted admin records exist on disk but none were loaded; GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD are IGNORED (persisted credential wins). Investigate __geode_security storage health, then restart.", &.{});
-                        std.debug.print("[startup] admin bootstrap SKIPPED: persisted admin records exist on disk but failed to load; GEODE_ADMIN_PASSWORD env ignored (persisted credential wins)\n", .{});
+                        // (Review-0016: `PersistedAdminExists` is also the
+                        // fail-closed mapping for engine errors during the
+                        // persisted-record check — the AGM already logged the
+                        // precise underlying error; the breadcrumb wording
+                        // covers both refusal reasons.)
+                        log.err("ADMIN BOOTSTRAP SKIPPED: persisted admin records exist on disk but none were loaded (or the engine check failed); GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD are IGNORED (persisted credential wins). Investigate __geode_security storage health, then restart.", &.{});
+                        std.debug.print("[startup] admin bootstrap SKIPPED: persisted admin records exist on disk but failed to load (or the engine check failed); GEODE_ADMIN_PASSWORD env ignored (persisted credential wins)\n", .{});
                         agm.hmac_key = kr.key;
                         break :agm_blk agm;
                     }
