@@ -6039,11 +6039,24 @@ pub const GraphStore = struct {
         // whenever an engine adapter backs the graph, bounded or unbounded
         // node cache alike). Hoisted out of the bounded-cache branch so an
         // unbounded cache no longer pays an O(N) `nodes.iterator()` walk.
+        //
+        // Review I-1: gate the O(1) return on `global_vtable != null`. The
+        // IdMap is only WRITE-maintained when an engine vtable backs node
+        // creation (`createNode*` inserts into the IdMap solely inside the
+        // `adapter_node != null` arm), but `createGraph` /
+        // `openOrCreateGraphWithUuid` unconditionally create an EMPTY IdMap
+        // even with no disk adapter (GAP-0839). Without the gate, an
+        // adapterless `CREATE GRAPH` + node creates + `count(n)` returned 0
+        // from that empty IdMap. Adapterless stores never bound the node
+        // cache (hydrate-on-miss is engine-backed), so falling through to
+        // the resident iteration below is exact there.
         if (tenant == null) {
-            if (@constCast(self).getIdMap(graph_name)) |id_map| {
-                // GAP-ENT-0013 path counter: O(1) IdMap total served the count.
-                _ = g_count_nodes_idmap_fast.fetchAdd(1, .monotonic);
-                return id_map.nodeCount();
+            if (global_vtable != null) {
+                if (@constCast(self).getIdMap(graph_name)) |id_map| {
+                    // GAP-ENT-0013 path counter: O(1) IdMap total served the count.
+                    _ = g_count_nodes_idmap_fast.fetchAdd(1, .monotonic);
+                    return id_map.nodeCount();
+                }
             }
             // No IdMap for this graph (purely in-memory graph with no
             // adapter). Bounded cache: the resident map is incomplete and
