@@ -4294,10 +4294,19 @@ pub const GraphStore = struct {
         pub fn next(it: *NodesByGraphIterator) ?*Node {
             const inner = &(it.inner orelse return null);
             while (inner.next()) |id_ptr| {
-                if (it.nodes.getPtr(id_ptr.*)) |node_ptr| return node_ptr;
-                // Stale id (deleted in the same tick as a concurrent reader?
-                // shouldn't happen under the caller-held graph rwlock, but be
-                // defensive — skip and continue).
+                // GAP-ENT-0023 P3: HYDRATE-on-miss, not resident-only getPtr.
+                // With a BOUNDED engine-backed cache the resident map is
+                // incomplete (evictions — and after a snapshot-served warm
+                // hydration the cache starts COLD), so a resident-only lookup
+                // would silently drop live rows from every consumer of this
+                // iterator (MATCH fallback scans, getEdgesByType). The id set
+                // (`nodes_by_graph`) is authoritative; the body is rebuilt
+                // from the engine exactly like every other hydrating reader
+                // (same borrow lifetime: grace-point reclaim excluded by the
+                // caller's read lock). A per-node engine failure is skipped
+                // defensively, matching the old stale-id stance.
+                const cache: *NodeCache = @constCast(it.nodes);
+                if (cache.getOrHydratePtr(id_ptr.*) catch null) |node_ptr| return node_ptr;
             }
             return null;
         }
@@ -6281,7 +6290,10 @@ pub const GraphStore = struct {
         const tid = tenant.?;
         var count: usize = 0;
         for (posting.list.items) |node_id| {
-            const node = self.nodes.get(node_id) orelse continue;
+            // GAP-ENT-0023 P3: hydrate-on-miss — a bounded (or snapshot-warm,
+            // cold-cache) resident map would otherwise silently undercount
+            // evicted-but-live nodes for the tenant-filtered path.
+            const node = (mutable_self.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
             if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
             count += 1;
         }

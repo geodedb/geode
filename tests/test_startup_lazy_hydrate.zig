@@ -1462,6 +1462,19 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         // Point read through the hydrate-on-miss node cache (no warm-up ran).
         try testing.expect(store.getNodeProperty(seed_ids[3], "name") != null);
 
+        // Resident-set iteration (the MATCH fallback scan) must see EVERY
+        // node even though the cache started COLD after the snapshot-served
+        // hydration — proves the iterator hydrates on miss instead of
+        // silently dropping non-resident rows.
+        var res_iter = store.iterateNodesInGraph(GRAPH);
+        var n_seen: usize = 0;
+        while (res_iter.next()) |_| n_seen += 1;
+        try testing.expectEqual(N, n_seen);
+
+        // Tenant-filtered label count walks the posting and hydrates each
+        // node body — exact, not resident-only.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, "default"));
+
         // Introspection (tenant multisets restored from the counters snapshot).
         const labels_list = try store.listNodeLabels(allocator, null);
         defer {
