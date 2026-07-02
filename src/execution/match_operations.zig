@@ -194,9 +194,16 @@ inline fn edgeVisibleForTenantHierarchy(
     filter_tenant: ?[]const u8,
 ) bool {
     if (passesTenantFilterEdge(edge, filter_tenant)) return true;
-    const from = store.nodes.get(edge.from_id) orelse return false;
-    const to = store.nodes.get(edge.to_id) orelse return false;
-    return passesTenantFilter(from, filter_tenant) and passesTenantFilter(to, filter_tenant);
+    // GAP-ENT-0023 P3 (review I1): residency is NOT existence — on a bounded
+    // (or snapshot-warm, cold) cache a resident-only endpoint lookup denied
+    // every legacy-tagged edge whose endpoints were merely evicted. Read the
+    // endpoint tenant tags resident-first with an engine fallback; the helper
+    // never mutates the cache (callers hold retained `*Node` pointers).
+    const from_tenant = store.dupeNodeTenantForRead(store.allocator, edge.from_id) orelse return false;
+    defer store.allocator.free(from_tenant);
+    const to_tenant = store.dupeNodeTenantForRead(store.allocator, edge.to_id) orelse return false;
+    defer store.allocator.free(to_tenant);
+    return passesTenantFilterSlice(from_tenant, filter_tenant) and passesTenantFilterSlice(to_tenant, filter_tenant);
 }
 
 // GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
@@ -2768,7 +2775,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                 defer label_node_ids.deinit(allocator);
 
                 for (label_node_ids.items) |node_id| {
-                    const node = store.nodes.getPtr(node_id) orelse continue;
+                    const node = store.getNodePtrForScan(node_id) orelse continue;
                     // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                     // scan under an active hierarchy; the per-row hierarchy-aware check
                     // is the fail-closed compensator so siblings/ancestors cannot leak.
@@ -2830,7 +2837,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                         const node_pattern = chain.head.?;
                         env_names[ci] = node_pattern.name orelse "";
                         const node_id = chain_matches.items[ci].items[indices[ci]];
-                        const node_ptr = store.nodes.getPtr(node_id) orelse continue;
+                        const node_ptr = store.getNodePtrForScan(node_id) orelse continue;
                         env_values[ci] = Value{ .Node = node_ptr };
                     }
 
@@ -3096,7 +3103,9 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             defer candidates.deinit(allocator);
 
             for (candidates.items) |node_id| {
-                const node = read_store.nodes.get(node_id) orelse continue;
+                // GAP-ENT-0023 P3 (review I1): engine-fallback row sourcing —
+                // resident-only `.get` dropped evicted/cold rows silently.
+                const node = (read_store.getNodePtrForScan(node_id) orelse continue).*;
 
                 // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                 // scan under an active hierarchy; per-row hierarchy-aware check is the
@@ -3549,7 +3558,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             };
 
             for (candidate_ids) |node_id| {
-                const node = store.nodes.getPtr(node_id) orelse continue;
+                const node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                 // scan under an active hierarchy; per-row hierarchy-aware check is the
                 // fail-closed compensator. WITHOUT this, `MATCH (a:P),(b:Q)` as a
@@ -4242,7 +4251,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const left_node = store.nodes.getPtr(node_id) orelse continue;
+                const left_node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -4262,7 +4271,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
                     if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4284,7 +4293,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
                     if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4304,7 +4313,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const right_node = store.nodes.getPtr(node_id) orelse continue;
+                const right_node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -4325,7 +4334,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // ~2813/2834). Fail-closed, cheap string compare.
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.from_id)) |left_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -4347,7 +4356,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // (symmetry with the left-anchor branch). Fail-closed.
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.to_id)) |left_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -4376,8 +4385,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             for (typed_edge_ids) |edge_id| {
                 const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                 if (!matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
-                const from_node = store.nodes.getPtr(edge_ptr.from_id) orelse continue;
-                const to_node = store.nodes.getPtr(edge_ptr.to_id) orelse continue;
+                const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
+                const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
 
                 if (rel_dir == .right or rel_dir == .undirected) {
                     // rls_row_local aliasing: each passesRLSFilter call
@@ -4429,7 +4438,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4446,7 +4455,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4472,7 +4481,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const node = store.nodes.getPtr(node_id) orelse continue;
+                const node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan; also restores the
                 // RLS denied-labels check missing on this index fast path.
@@ -4533,7 +4542,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                         if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
 
-                        if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4582,7 +4591,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                         if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
 
-                        if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4644,7 +4653,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4666,7 +4675,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4708,7 +4717,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         }
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                        if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4740,7 +4749,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         }
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                        if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -5176,7 +5185,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 }
                 // GAP-0509: Filter edge by tenant
                 if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
+                const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
 
                 // Filter right node by graph
                 if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5258,7 +5267,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 }
                 // GAP-0509: Filter edge by tenant
                 if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+                const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
 
                 // Filter right node by graph
                 if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5556,7 +5565,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         }
                         // GAP-0509: Filter edge by tenant
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                        const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
+                        const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
 
                         // Filter by labels
                         if (right_labels.len > 0) {
@@ -5626,7 +5635,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         }
                         // GAP-0509: Filter edge by tenant
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                        const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+                        const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
 
                         // Filter by labels
                         if (right_labels.len > 0) {
@@ -5821,7 +5830,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                 if (!type_matches) return;
                             }
                             const target_id = if (is_incoming) edge.from_id else edge.to_id;
-                            const target_node = st.nodes.getPtr(target_id) orelse return;
+                            const target_node = st.getNodePtrForScan(target_id) orelse return;
                             if (tpat.labels.len > 0) {
                                 for (tpat.labels) |required_label| {
                                     var found = false;
@@ -6541,7 +6550,7 @@ fn executeVariableLengthPathTraversal(
 
         // Get the last node in the path as the right node
         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
-        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
         // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
         // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
@@ -6637,7 +6646,7 @@ fn executeVariableLengthPathTraversal(
             var path_edges_list = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
 
             for (path.nodes.items) |node_id| {
-                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                if (store.getNodePtrForScan(node_id)) |node_ptr| {
                     path_nodes_list.append(allocator, node_ptr) catch {};
                 }
             }
@@ -6790,7 +6799,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Get the target node
             const right_node_id = if (edge_set.use_from) edge.from_id else edge.to_id;
-            const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+            const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
             // GAP-0846 hardening: tenant-filter the RIGHT (target) node too. The
             // left node was already tenant-checked by the caller and the edge by
@@ -7127,7 +7136,7 @@ fn executeMultiHopGroupBy(
         defer label_node_ids.deinit(allocator);
 
         for (label_node_ids.items) |node_id| {
-            const node = store.nodes.getPtr(node_id) orelse continue;
+            const node = store.getNodePtrForScan(node_id) orelse continue;
             // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for the
             // relaxed storageTenantFilter() label scan; also restores the RLS
             // denied-labels check missing on this multi-hop init fast path.
@@ -7207,7 +7216,7 @@ fn executeMultiHopGroupBy(
                 if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
                 const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                 // Filter right node by labels
                 if (hop.right.labels.len > 0) {
@@ -7513,11 +7522,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Iterate over nodes and edges to collect bindings
-                var left_iter = store.nodes.iterator();
-                while (left_iter.next()) |left_entry| {
-                    const left_node = left_entry.value_ptr;
-
-                    // Filter by graph
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — `store.nodes.iterator()` visits only the RESIDENT subset
+                // (silently drops evicted/cold rows on a bounded cache).
+                var left_iter = store.iterateNodesInGraph(filter_graph);
+                while (left_iter.next()) |left_node| {
+                    // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -7587,7 +7597,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -7735,7 +7745,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -7962,10 +7972,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Group nodes by grouping key values (filter by labels first)
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-
+            // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
+            // resident-only iteration dropped evicted/cold rows silently.
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node| {
                 // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
@@ -8172,11 +8182,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Iterate over nodes and edges to collect all matching relationship bindings
-                var left_iter = store.nodes.iterator();
-                while (left_iter.next()) |left_entry| {
-                    const left_node = left_entry.value_ptr;
-
-                    // Filter by graph
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — `store.nodes.iterator()` visits only the RESIDENT subset
+                // (silently drops evicted/cold rows on a bounded cache).
+                var left_iter = store.iterateNodesInGraph(filter_graph);
+                while (left_iter.next()) |left_node| {
+                    // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -8219,7 +8230,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -8309,7 +8320,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -8429,10 +8440,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 const max_len = var_len_max;
 
                 // Find all starting nodes matching the left pattern
-                var start_node_iter = store.nodes.iterator();
-                while (start_node_iter.next()) |entry| {
-                    const start_node = entry.value_ptr;
-
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — resident-only iteration dropped evicted/cold rows.
+                var start_node_iter = store.iterateNodesInGraph(filter_graph);
+                while (start_node_iter.next()) |start_node| {
                     // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                     // Filter by graph - only include nodes from the current graph
                     if (!std.mem.eql(u8, start_node.graph_name, filter_graph)) continue;
@@ -8501,7 +8512,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
-                        const target_node_ptr = store.nodes.getPtr(target_node_id) orelse continue;
+                        const target_node_ptr = store.getNodePtrForScan(target_node_id) orelse continue;
 
                         // Filter by right node labels (e.g., :Category in MATCH (a)-[*]->(b:Category {name: 'X'}))
                         if (right_labels.len > 0) {
@@ -8593,10 +8604,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Collect all nodes that match the pattern and WHERE clause
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-
+            // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
+            // resident-only iteration dropped evicted/cold rows silently.
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node| {
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
@@ -8993,7 +9004,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     defer label_node_ids.deinit(allocator);
 
                     for (label_node_ids.items) |node_id| {
-                        const node = store.nodes.getPtr(node_id) orelse continue;
+                        const node = store.getNodePtrForScan(node_id) orelse continue;
                         // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator
                         // for the relaxed storageTenantFilter() label scan; also restores
                         // the RLS denied-labels check missing on this fast path.
@@ -9005,9 +9016,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // GAP-0522: Diagnostic warning for full-scan multi-hop initialization
                     _ = g_full_scan_count.fetchAdd(1, .monotonic);
                     match_log.warn("multi-hop MATCH full node scan: no labels on first-hop left node", .{});
-                    var init_iter = store.nodes.iterator();
-                    while (init_iter.next()) |entry| {
-                        const node = entry.value_ptr;
+                    // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed
+                    // scan — resident-only iteration dropped cold rows.
+                    var init_iter = store.iterateNodesInGraph(filter_graph);
+                    while (init_iter.next()) |node| {
                         if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, node.*)) continue;
@@ -9096,7 +9108,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                             // Get the target node based on direction
                             const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                            const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                            const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                             // Filter right node by labels
                             if (hop.right.labels.len > 0) {
@@ -9433,9 +9445,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 try left_nodes_to_process.append(allocator, bln);
             } else {
                 // Iterate over all matching nodes
-                var left_iter = store.nodes.iterator();
-                while (left_iter.next()) |left_entry| {
-                    try left_nodes_to_process.append(allocator, left_entry.value_ptr);
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — resident-only iteration dropped evicted/cold rows.
+                var left_iter = store.iterateNodesInGraph(filter_graph);
+                while (left_iter.next()) |left_node_ptr| {
+                    try left_nodes_to_process.append(allocator, left_node_ptr);
                 }
             }
 
@@ -9593,17 +9607,21 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 use_label_candidates = true;
             }
 
-            var full_iter = store.nodes.iterator();
+            // GAP-ENT-0023 P3 (review I1): the unlabeled fallback used to walk
+            // `store.nodes.iterator()` — the RESIDENT subset only, which
+            // silently drops evicted/cold rows on a bounded cache. Walk the
+            // authoritative per-graph id set instead (engine-fallback bodies,
+            // detached — see getNodePtrForScan).
+            var full_iter = store.iterateNodesInGraph(filter_graph);
             var cand_idx: usize = 0;
             while (true) {
                 const node: *graph_store.Node = if (use_label_candidates) blk: {
                     if (cand_idx >= simple_node_candidates.items.len) break;
                     const nid = simple_node_candidates.items[cand_idx];
                     cand_idx += 1;
-                    break :blk store.nodes.getPtr(nid) orelse continue;
+                    break :blk store.getNodePtrForScan(nid) orelse continue;
                 } else blk: {
-                    const entry = full_iter.next() orelse break;
-                    break :blk entry.value_ptr;
+                    break :blk full_iter.next() orelse break;
                 };
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22

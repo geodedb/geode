@@ -1648,6 +1648,16 @@ pub const MergePropertyIndex = struct {
 const HydrationEntry = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// GAP-ENT-0023 P3 (review C1): set when the first-touch build FAILED and
+    /// the graph was quarantined (`done` stored true so it is not re-scanned
+    /// every access). A failed graph's resident loop2 products are PARTIAL —
+    /// `saveHydrationSnapshots` / `saveIdMapSnapshots` MUST treat it like a
+    /// deferred graph (skip write AND delete stale files) or the next full
+    /// checkpoint would persist the partial products counter-current,
+    /// permanently freezing wrong indexes (the 9b2d42eb hazard class through
+    /// the quarantine door). Never cleared for the process lifetime: the next
+    /// reopen re-registers the graph fresh and re-scans (self-heal).
+    failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 pub const GraphStore = struct {
@@ -1656,6 +1666,19 @@ pub const GraphStore = struct {
     // PHASE 1 (edge-engine-direct): BOUNDED, evict-freely edge-body cache over
     // the engine (hydrate-on-miss). See EdgeCache / freeEdgeValue above.
     edges: EdgeCache, // public edge_id -> Edge body (bounded)
+    // GAP-ENT-0023 P3 (review C2/I1): DETACHED scan-hydration boxes. Nodes
+    // rebuilt from the engine for MATCH-fallback row sourcing when they are
+    // not resident in the bounded cache (`getNodePtrForScan`). Each box is a
+    // heap `*Node` OUTSIDE the cache's shard maps, so handing out its pointer
+    // never inserts/rehashes/evicts the maps other retained `*Node` pointers
+    // live in. Boxes are freed at the SAME per-graph grace boundary as
+    // evicted cache nodes (`reclaimNodeCacheRetiredForGraph`, i.e. the
+    // per-graph EXCLUSIVE checkpoint window that drains readers) — so a
+    // returned pointer has the same lifetime guarantee as a resident one.
+    // Guarded by `scan_hydrated_mutex` (leaf lock: never held across another
+    // lock or an engine read).
+    scan_hydrated_nodes: std.ArrayList(*Node) = .empty,
+    scan_hydrated_mutex: std.Io.Mutex = std.Io.Mutex.init,
     next_node_id: u64,
     next_edge_id: u64,
     // DEPRECATED (GAP-0279): Process-wide tenant_id races under concurrent access.
@@ -1985,6 +2008,9 @@ pub const GraphStore = struct {
         // Deinit the hashmaps
         self.nodes.deinit();
         self.edges.deinit();
+        // GAP-ENT-0023 P3 (review C2/I1): free any remaining detached scan
+        // boxes (clearNodes already purged; this releases the list storage).
+        self.freeAllScanHydrated();
 
         // Clean up graph registry
         var graph_iter = self.graphs.iterator();
@@ -2079,6 +2105,10 @@ pub const GraphStore = struct {
         // the manual per-edge free loop is gone (and a walk would MISS the
         // retired backlog and double-free the resident ones).
         self.edges.clearRetainingCapacity();
+
+        // GAP-ENT-0023 P3 (review C2/I1): the detached scan boxes mirror the
+        // resident node set — drop them whenever the node cache is reset.
+        self.freeAllScanHydrated();
 
         self.next_node_id = 1;
         self.next_edge_id = 1;
@@ -2581,6 +2611,152 @@ pub const GraphStore = struct {
     pub fn reclaimNodeCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
         var gn = graph_name;
         self.nodes.reclaimRetiredWhere(@ptrCast(&gn), retiredNodeInGraph);
+        // GAP-ENT-0023 P3 (review C2/I1): the detached scan boxes share the
+        // node cache's grace discipline — free this graph's boxes inside the
+        // same per-graph exclusive window that drained its readers.
+        self.reclaimScanHydratedForGraph(graph_name);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // GAP-ENT-0023 P3 (review C2/I1): DETACHED scan hydration.
+    //
+    // THE HAZARD THIS CLOSES: the bounded node cache stores `Node` values
+    // INLINE in per-shard AutoHashMaps. `getOrHydratePtr` on a miss INSERTS
+    // (and above cap EVICTS) — an insert that grows a shard REHASHES and MOVES
+    // every value slot; an eviction frees a slot for reuse. MATCH fallback
+    // consumers retain `*Node` across iterations (bindings / base_nodes /
+    // result rows hold `Value{ .Node = ptr }`), so a row-sourcing read that
+    // hydrates INTO the cache invalidates previously returned pointers —
+    // a deterministic single-threaded use-after-move on cold caches.
+    //
+    // THE FIX: row-sourcing reads that may run with retained pointers get
+    // their misses served DETACHED — the node is rebuilt from the engine into
+    // a private heap box that is never inserted into the cache, so no shard
+    // map is ever mutated on the read path. Every miss re-reads the engine
+    // (boxes are NOT served across calls), so a committed write can never be
+    // shadowed by a stale detached copy: the resident cache — which every
+    // write path updates — is always consulted first.
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Resident-first node fetch for MATCH-fallback row sourcing. Cache hit →
+    /// the resident pointer (stable for the caller's read span, exactly the
+    /// pre-bounded-cache contract). Miss → a DETACHED engine rebuild boxed on
+    /// the heap and adopted by `scan_hydrated_nodes` (freed at the per-graph
+    /// grace boundary). Null only when the id exists in neither the cache nor
+    /// the engine. NEVER mutates the bounded cache.
+    pub fn getNodePtrForScan(self: *const GraphStore, node_id: u64) ?*Node {
+        if (self.nodes.getPtr(node_id)) |p| return p;
+        const mut: *GraphStore = @constCast(self);
+        // Engine rebuild OUTSIDE the box-list lock (slow I/O; leaf discipline).
+        var built = (hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null;
+        const box = mut.allocator.create(Node) catch {
+            freeNodeValue(mut.allocator, &built);
+            return null;
+        };
+        box.* = built;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mut.scan_hydrated_mutex.lockUncancelable(io);
+        defer mut.scan_hydrated_mutex.unlock(io);
+        mut.scan_hydrated_nodes.append(mut.allocator, box) catch {
+            // Cannot adopt the box (OOM): free it and report a miss rather
+            // than leak. The caller degrades to the pre-fix "row dropped"
+            // behavior only under allocator exhaustion.
+            freeNodeValue(mut.allocator, box);
+            mut.allocator.destroy(box);
+            return null;
+        };
+        return box;
+    }
+
+    /// Free the detached scan boxes belonging to `graph_name`. MUST only be
+    /// called at that graph's grace boundary (per-graph EXCLUSIVE checkpoint
+    /// window, or store teardown) — see `reclaimNodeCacheRetiredForGraph`.
+    fn reclaimScanHydratedForGraph(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.scan_hydrated_mutex.lockUncancelable(io);
+        defer self.scan_hydrated_mutex.unlock(io);
+        var w: usize = 0;
+        for (self.scan_hydrated_nodes.items) |box| {
+            if (std.mem.eql(u8, box.graph_name, graph_name)) {
+                freeNodeValue(self.allocator, box);
+                self.allocator.destroy(box);
+            } else {
+                self.scan_hydrated_nodes.items[w] = box;
+                w += 1;
+            }
+        }
+        self.scan_hydrated_nodes.shrinkRetainingCapacity(w);
+    }
+
+    /// Free ALL detached scan boxes (deinit / clearNodes reset paths — global
+    /// exclusive contexts).
+    fn freeAllScanHydrated(self: *GraphStore) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.scan_hydrated_mutex.lockUncancelable(io);
+        defer self.scan_hydrated_mutex.unlock(io);
+        for (self.scan_hydrated_nodes.items) |box| {
+            freeNodeValue(self.allocator, box);
+            self.allocator.destroy(box);
+        }
+        self.scan_hydrated_nodes.deinit(self.allocator);
+        self.scan_hydrated_nodes = .empty;
+    }
+
+    /// GAP-ENT-0023 P3 (review I1): existence + EXACT-tenant verification for
+    /// id-sourced index walks (label postings / intersections) on a bounded or
+    /// snapshot-warm COLD cache. Resident hit → in-memory compare. Miss →
+    /// IdMap membership (no engine read) and, only when a tenant filter is
+    /// active, a single engine read of the internal tenant tag. Never mutates
+    /// the cache, never returns pointers. Exact-match semantics on purpose —
+    /// this backs the STORAGE-level tenant filter (hierarchy-aware readers
+    /// pass null here and compensate per row, see storageTenantFilter).
+    fn nodeExistsPassingTenantExact(self: *const GraphStore, node_id: u64, tenant: ?[]const u8) bool {
+        if (self.nodes.get(node_id)) |node| {
+            const tid = tenant orelse return true;
+            return std.mem.eql(u8, node.tenant_id, tid);
+        }
+        const mut: *GraphStore = @constCast(self);
+        const gs_slot = mut.resolveNodeGraphSlot(node_id) orelse return false;
+        const tid = tenant orelse return true;
+        const adapter = global_adapter orelse return false;
+        const tprop = adapter.getNodeProperty(gs_slot.graph_name, gs_slot.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, mut.allocator) catch return false;
+        if (tprop) |p| {
+            defer switch (p) {
+                .string => |s| mut.allocator.free(s),
+                else => {},
+            };
+            switch (p) {
+                .string => |s| return std.mem.eql(u8, s, tid),
+                else => {},
+            }
+        }
+        // Exists but carries no tenant tag → default tenant.
+        return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
+    }
+
+    /// GAP-ENT-0023 P3 (review I1): caller-owned copy of a node's tenant tag,
+    /// served resident-first with an engine fallback (never mutates the
+    /// cache). Null when the node exists nowhere (fail-closed for visibility
+    /// checks). Caller frees with the SAME allocator.
+    pub fn dupeNodeTenantForRead(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ?[]u8 {
+        if (self.nodes.get(node_id)) |node| {
+            return allocator.dupe(u8, node.tenant_id) catch null;
+        }
+        const mut: *GraphStore = @constCast(self);
+        const gs_slot = mut.resolveNodeGraphSlot(node_id) orelse return null;
+        const adapter = global_adapter orelse return null;
+        const tprop = adapter.getNodeProperty(gs_slot.graph_name, gs_slot.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch return null;
+        if (tprop) |p| {
+            defer switch (p) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            switch (p) {
+                .string => |s| return allocator.dupe(u8, s) catch null,
+                else => {},
+            }
+        }
+        return allocator.dupe(u8, DEFAULT_TENANT_ID) catch null;
     }
 
     // ========================================================================
@@ -4289,24 +4465,27 @@ pub const GraphStore = struct {
     pub const NodesByGraphIterator = struct {
         // Empty iterator when the graph is absent.
         inner: ?std.AutoHashMap(u64, void).KeyIterator,
-        nodes: *const NodeCache,
+        store: *const GraphStore,
 
         pub fn next(it: *NodesByGraphIterator) ?*Node {
             const inner = &(it.inner orelse return null);
             while (inner.next()) |id_ptr| {
-                // GAP-ENT-0023 P3: HYDRATE-on-miss, not resident-only getPtr.
+                // GAP-ENT-0023 P3: hydrate-on-miss, DETACHED (review C2).
                 // With a BOUNDED engine-backed cache the resident map is
                 // incomplete (evictions — and after a snapshot-served warm
                 // hydration the cache starts COLD), so a resident-only lookup
                 // would silently drop live rows from every consumer of this
                 // iterator (MATCH fallback scans, getEdgesByType). The id set
-                // (`nodes_by_graph`) is authoritative; the body is rebuilt
-                // from the engine exactly like every other hydrating reader
-                // (same borrow lifetime: grace-point reclaim excluded by the
-                // caller's read lock). A per-node engine failure is skipped
-                // defensively, matching the old stale-id stance.
-                const cache: *NodeCache = @constCast(it.nodes);
-                if (cache.getOrHydratePtr(id_ptr.*) catch null) |node_ptr| return node_ptr;
+                // (`nodes_by_graph`) is authoritative; a missing body is
+                // rebuilt from the engine via `getNodePtrForScan`, which
+                // NEVER inserts into the cache's shard maps — consumers
+                // retain `*Node` across iterations (bindings, base_nodes,
+                // result rows), and a cache insert here would rehash/evict
+                // the very slots those pointers alias (use-after-move). The
+                // detached box shares the resident pointers' grace-boundary
+                // lifetime. A per-node engine failure is skipped defensively,
+                // matching the old stale-id stance.
+                if (it.store.getNodePtrForScan(id_ptr.*)) |node_ptr| return node_ptr;
             }
             return null;
         }
@@ -4331,9 +4510,9 @@ pub const GraphStore = struct {
         @constCast(self).nodes_by_graph_mutex.lockUncancelable(io);
         defer @constCast(self).nodes_by_graph_mutex.unlock(io);
         if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
-            return .{ .inner = inner.keyIterator(), .nodes = &self.nodes };
+            return .{ .inner = inner.keyIterator(), .store = self };
         }
-        return .{ .inner = null, .nodes = &self.nodes };
+        return .{ .inner = null, .store = self };
     }
 
     /// Test-only: returns the size of the per-graph node-id index for the
@@ -4727,6 +4906,16 @@ pub const GraphStore = struct {
     /// Build a merge property index key into a stack buffer.
     /// Format: "graph\x00label\x00prop_key\x00prop_value_bytes"
     /// Returns the slice, or null if the key is too long or value is not indexable.
+    ///
+    /// GAP-ENT-0023 P3 (review M4) — FORMAT-EDITION OBLIGATION: the merge
+    /// hydration snapshot (`hydration_merge.snap`) persists these keys
+    /// verbatim, gated by `mergeIndexConfigHash` (lean flag + registered keys
+    /// + composite specs) — which does NOT cover the key LAYOUT itself. Any
+    /// change to this key format (separator, component order, value
+    /// normalization — here or in `buildCompositeMergeIndexKey` /
+    /// `normalizeMergeValue`) MUST bump `HYDRATION_SNAP_VERSION`, or an
+    /// upgraded binary would accept a counter-current snapshot written in the
+    /// OLD layout and silently miss every MERGE lookup (the gs-F1 lesson).
     fn buildMergeIndexKey(buf: []u8, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue) ?[]const u8 {
         // Calculate required length: graph + 1 + label + 1 + key + 1 + value
         const header_len = graph_name.len + 1 + label.len + 1 + prop_key.len + 1;
@@ -4877,6 +5066,9 @@ pub const GraphStore = struct {
     ///   "graph\0label\0prop0\0val0\0prop1\0val1\0..."
     /// Returns the slice, or null if any value is non-indexable / the key
     /// overflows `buf`. Mirrors `buildMergeIndexKey` for a single prop.
+    ///
+    /// GAP-ENT-0023 P3 (review M4): any key-format change here MUST bump
+    /// `HYDRATION_SNAP_VERSION` — see the obligation on `buildMergeIndexKey`.
     fn buildCompositeMergeIndexKey(
         buf: []u8,
         graph_name: []const u8,
@@ -5197,10 +5389,13 @@ pub const GraphStore = struct {
             try result.ensureTotalCapacity(allocator, nodes.len);
             for (nodes) |node_id| {
                 // Verify node exists (label index may contain stale entries)
-                const node = self.nodes.get(node_id) orelse continue;
-                if (tenant_id) |tid| {
-                    if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-                }
+                // and apply the exact tenant filter. GAP-ENT-0023 P3 (review
+                // I1): residency is NOT existence — on a bounded (or
+                // snapshot-warm, cold) cache a resident-only lookup dropped
+                // every non-resident row. The check verifies via IdMap
+                // membership + engine tenant tag instead, without mutating
+                // the cache (callers may hold retained `*Node` pointers).
+                if (!self.nodeExistsPassingTenantExact(node_id, tenant_id)) continue;
                 result.appendAssumeCapacity(node_id);
             }
             return result;
@@ -5279,14 +5474,12 @@ pub const GraphStore = struct {
         }
 
         // Verify nodes still exist (label index may have stale entries)
-        // and apply tenant filter (GAP-0509).
+        // and apply tenant filter (GAP-0509). GAP-ENT-0023 P3 (review I1):
+        // same residency-is-not-existence fix as the single-label path above.
         {
             var write: usize = 0;
             for (result.items) |node_id| {
-                const node = self.nodes.get(node_id) orelse continue;
-                if (tenant_id) |tid| {
-                    if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-                }
+                if (!self.nodeExistsPassingTenantExact(node_id, tenant_id)) continue;
                 result.items[write] = node_id;
                 write += 1;
             }
@@ -6287,14 +6480,16 @@ pub const GraphStore = struct {
         posting.lock();
         defer posting.unlock();
 
-        const tid = tenant.?;
         var count: usize = 0;
         for (posting.list.items) |node_id| {
-            // GAP-ENT-0023 P3: hydrate-on-miss — a bounded (or snapshot-warm,
-            // cold-cache) resident map would otherwise silently undercount
-            // evicted-but-live nodes for the tenant-filtered path.
-            const node = (mutable_self.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
-            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            // GAP-ENT-0023 P3: engine-fallback tenant check — a bounded (or
+            // snapshot-warm, cold-cache) resident map would otherwise
+            // silently undercount evicted-but-live nodes for the
+            // tenant-filtered path. Review C2/M1 follow-up: the check is
+            // NON-MUTATING (no cache insert under the label locks — the
+            // previous getOrHydratePtr flooded/evicted the cache and could
+            // rehash shard maps while MATCH consumers hold `*Node` pointers).
+            if (!self.nodeExistsPassingTenantExact(node_id, tenant)) continue;
             count += 1;
         }
         return count;
@@ -7868,9 +8063,21 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         tenant_id: ?[]const u8,
     ) !void {
-        var node_iter = self.iterateNodesInGraph(gn);
-        while (node_iter.next()) |node_ptr| {
-            const out_ids = self.getOutgoingEdgeIds(node_ptr.id) orelse continue;
+        // GAP-ENT-0023 P3 (review C2 follow-on): this walk needs only node
+        // IDS — iterate the authoritative `nodes_by_graph` id set directly
+        // instead of hydrating full node bodies through the pointer iterator
+        // (which would box every non-resident node until the next grace
+        // point for no benefit).
+        self.ensureGraphHydrated(gn); // PHASE 1b chokepoint
+        var ids_iter = blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.nodes_by_graph_mutex.lockUncancelable(io);
+            defer self.nodes_by_graph_mutex.unlock(io);
+            const inner = self.nodes_by_graph.getPtr(gn) orelse return;
+            break :blk inner.keyIterator();
+        };
+        while (ids_iter.next()) |id_ptr| {
+            const out_ids = self.getOutgoingEdgeIds(id_ptr.*) orelse continue;
             for (out_ids) |eid| {
                 const edge = self.getEdgePtrHydrated(eid) orelse continue;
                 if (!std.mem.eql(u8, edge.label, edge_type)) continue;
@@ -8806,7 +9013,16 @@ pub const GraphStore = struct {
             // checkpoint must not force full hydration of every idle graph, and
             // skipping avoids taking hydration_build_mutex under the checkpoint
             // path entirely (no lock inversion vs. loadOneGraphFromAdapterFull).
-            if (id_map.mode == .resident and self.isGraphDeferred(graph_name)) {
+            // GAP-ENT-0023 P3 (review C1): a FAILED (quarantined) hydration is
+            // gated exactly like a deferred one for the `.resident` case — the
+            // scan died mid-way, so a resident IdMap may hold a PARTIAL
+            // re-insert set. (`.mmap_backed` is safe either way: the base was
+            // adopted from a counter-valid snapshot before the scan started
+            // and the failed scan's overlay re-inserts are idempotent
+            // duplicates of base entries, so the merged view stays complete.)
+            if (id_map.mode == .resident and
+                (self.isGraphDeferred(graph_name) or self.isGraphHydrationFailed(graph_name)))
+            {
                 id_map_mod.IdMap.deleteSnapshot(dir);
                 continue;
             }
@@ -8834,6 +9050,19 @@ pub const GraphStore = struct {
         defer self.hydration_mutex.unlock(io);
         const entry = self.pending_hydration.get(graph_name) orelse return false;
         return !entry.done.load(.acquire);
+    }
+
+    /// GAP-ENT-0023 P3 (review C1): true iff `graph_name`'s first-touch
+    /// hydration FAILED and the graph is quarantined (done=true, failed=true).
+    /// Its resident loop2 products (label postings / introspection multisets /
+    /// merge index / typed-edge counters) — and, for a `.resident` IdMap, the
+    /// IdMap itself — are PARTIAL and must never be persisted counter-current.
+    fn isGraphHydrationFailed(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        return entry.failed.load(.acquire);
     }
 
     // ── GAP-ENT-0023 P3: per-graph loop2-product snapshots ─────────────────
@@ -8930,7 +9159,11 @@ pub const GraphStore = struct {
     ///     preserved files fail the counter gate on the next open and that
     ///     graph pays one scan — safe direction.
     fn saveHydrationSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
-        if (hydrationSnapshotsDisabled()) return;
+        // M2 hardening: when the kill switch is on we still run the DELETE
+        // gates below (deferred case B + failed-hydration), so files written
+        // before the switch was flipped cannot linger while disabled — only
+        // the WRITE side is disabled.
+        const disabled = hydrationSnapshotsDisabled();
         const io = std.Io.Threaded.global_single_threaded.io();
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
@@ -8941,10 +9174,27 @@ pub const GraphStore = struct {
             var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch continue;
             defer dir.close(io);
 
+            // GAP-ENT-0023 P3 (review C1): a graph whose first-touch hydration
+            // FAILED is quarantined with done=true, so it reads as "hydrated"
+            // — but its resident loop2 products are PARTIAL (the scan died
+            // mid-way). Persisting them would stamp partial indexes with the
+            // CURRENT manifest counter: the next open would accept them and
+            // every later checkpoint would re-bless them — permanent silent
+            // wrong results (missing rows, duplicate MERGEs). Treat it like
+            // deferred case B regardless of IdMap mode: delete any files
+            // (theirs is a dead generation now) and write nothing, so the
+            // next reopen re-scans cleanly (the pre-P3 self-heal).
+            if (self.isGraphHydrationFailed(graph_name)) {
+                deleteHydrationSnapshotFiles(dir);
+                continue;
+            }
+
             if (self.isGraphDeferred(graph_name)) {
                 if (id_map.mode == .resident) deleteHydrationSnapshotFiles(dir);
                 continue;
             }
+
+            if (disabled) continue;
 
             const counter = adapter.graphManifestCounter(graph_name) orelse continue;
             self.saveHydrationCountersSnapshot(dir, graph_name, counter) catch |err| {
@@ -9514,6 +9764,13 @@ pub const GraphStore = struct {
             });
             // Quarantine: mark done so a broken graph is not re-scanned on every
             // access. Matches the open-path catch+continue policy.
+            //
+            // GAP-ENT-0023 P3 (review C1): record the failure. The resident
+            // loop2 products are PARTIAL now; the checkpoint writers consult
+            // this flag to skip persisting them (and delete stale snapshot
+            // files) so the next reopen re-scans cleanly instead of loading a
+            // partial-but-counter-current snapshot forever.
+            entry.failed.store(true, .release);
         };
         entry.done.store(true, .release);
     }
@@ -9599,8 +9856,12 @@ pub const GraphStore = struct {
     /// format module), manifest-counter currency (here), and a full dry-run
     /// parse BEFORE any mutation (so a malformed-but-CRC-valid file can never
     /// leave a half-applied product behind; after the dry run the only
-    /// possible apply failure is OOM, which propagates and quarantines the
-    /// graph exactly like a scan failure would).
+    /// possible apply failure is OOM). Apply failures are CAUGHT per product
+    /// and fall back to the engine scan for that product. Labels and merge
+    /// are idempotent against a partial apply (dedup insert / putOrUpdate);
+    /// counters is NOT (absolute-set + scan re-bump would double-count), so
+    /// its catch arm first deletes every contribution the partial apply made
+    /// (review I2 — see removeHydrationCounterContributionsForGraph).
     fn loadHydrationSnapshotsForGraph(
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
@@ -9632,6 +9893,15 @@ pub const GraphStore = struct {
                     Attr.string("graph", graph_name),
                     Attr.string("error", @errorName(err)),
                 });
+                // GAP-ENT-0023 P3 (review I2): the apply may have already
+                // absolute-SET some of this graph's per-(graph,type) edge
+                // counters and per-(graph,tenant) introspection refcounts.
+                // The scan fallback re-bumps them from zero, so any leftover
+                // contribution would double-count (inflated count(r:TYPE) /
+                // listNodeLabels refcounts — served silently by the fast
+                // paths). The composite outer keys make this graph's
+                // contribution disjoint — delete it exactly, then fall back.
+                self.removeHydrationCounterContributionsForGraph(graph_name);
                 break :counters;
             };
             out.counters = true;
@@ -9924,6 +10194,71 @@ pub const GraphStore = struct {
         return node_count;
     }
 
+    /// GAP-ENT-0023 P3 (review I2): delete EVERY contribution `graph_name`
+    /// made to the counters product — its "graph:type" keys in
+    /// `edge_type_counts_by_graph` and its "graph\x00tenant" outer entries in
+    /// the three tenant-introspection multisets. Called when
+    /// `applyHydrationCountersSnapshot` fails mid-apply (only OOM can get past
+    /// the dry-run parse) so the engine-scan fallback re-bumps from a clean
+    /// zero baseline instead of double-counting on top of the partial apply.
+    ///
+    /// Exact by construction: at first-touch hydration time nothing else has
+    /// written this graph's composite keys (writes hydrate first; other
+    /// graphs' keys have a different graph component), so removing the outer
+    /// entries removes precisely the partial apply's effect.
+    ///
+    /// Deliberately ALLOCATION-FREE (re-scan after each removal instead of
+    /// collecting victims) — the trigger condition IS allocator exhaustion,
+    /// so the cleanup itself must not be able to fail on OOM.
+    fn removeHydrationCounterContributionsForGraph(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        {
+            self.edge_type_count_rwlock.lockUncancelable(io);
+            defer self.edge_type_count_rwlock.unlock(io);
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = self.edge_type_counts_by_graph.iterator();
+                while (it.next()) |e| {
+                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (self.edge_type_counts_by_graph.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                }
+            }
+        }
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+        const outers = [_]*std.StringHashMap(std.StringHashMap(usize)){
+            &self.node_labels_by_tenant,
+            &self.edge_types_by_tenant,
+            &self.label_properties_by_tenant,
+        };
+        for (outers) |outer| {
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = outer.iterator();
+                while (it.next()) |e| {
+                    if (std.mem.eql(u8, graphTenantKeyGraph(e.key_ptr.*), graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (outer.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var inner = kv.value;
+                    var iit = inner.iterator();
+                    while (iit.next()) |ie| self.allocator.free(ie.key_ptr.*);
+                    inner.deinit();
+                }
+            }
+        }
+    }
+
     fn applyHydrationTenantSection(
         self: *GraphStore,
         cur: *hydration_snapshot.Cursor,
@@ -10165,6 +10500,19 @@ pub const GraphStore = struct {
                 // resident-index scan (loop2). MUST be 0 at the "server ready"
                 // point — proves the O(graph) scan was not run at open.
                 _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
+                // GAP-ENT-0023 P3 (review C1) TDD hook — TEST BUILDS ONLY:
+                // deterministically fail the loop2 scan after N nodes so the
+                // quarantine-then-checkpoint hazard (partial products
+                // persisted counter-current) is reproducible. Compiles out of
+                // production binaries.
+                if (comptime @import("builtin").is_test) {
+                    const lim = g_test_hydration_fail_after.load(.monotonic);
+                    if (lim != std.math.maxInt(u64) and
+                        g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
+                    {
+                        return error.TestInjectedHydrationFailure;
+                    }
+                }
                 const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
                 const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
 
@@ -11730,6 +12078,19 @@ var g_idmap_from_snapshot: std.atomic.Value(u64) = std.atomic.Value(u64).init(0)
 var g_hydration_snapshot_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_hydration_scan_fallbacks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_hydration_full_scan_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0023 P3 (review C1) TDD hook — test builds only (the check site is
+// gated on `builtin.is_test`). maxInt = disabled; otherwise the loop2 scan
+// fails with error.TestInjectedHydrationFailure once `seen >= limit`.
+var g_test_hydration_fail_after: std.atomic.Value(u64) = std.atomic.Value(u64).init(std.math.maxInt(u64));
+var g_test_hydration_scan_seen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// GAP-ENT-0023 P3 (review C1) TDD hook: make the NEXT loop2 hydration scan
+/// fail after `limit` nodes (null = disable). Test builds only — production
+/// builds compile the check out entirely.
+pub fn setTestHydrationFailAfterNodes(limit: ?u64) void {
+    g_test_hydration_scan_seen.store(0, .release);
+    g_test_hydration_fail_after.store(limit orelse std.math.maxInt(u64), .release);
+}
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
 var initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);

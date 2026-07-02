@@ -1755,3 +1755,168 @@ test "P3: full checkpoint on an idle mmap-adopted (case A) graph preserves loop2
         graph_store.deinitGlobalStore();
     }
 }
+
+// ---------------------------------------------------------------------------
+// GAP-ENT-0023 P3 adversarial-review fixes (C1 / C2).
+// ---------------------------------------------------------------------------
+
+test "P3 C1: failed (quarantined) hydration never persists partial loop2 snapshots; reopen self-heals via scan" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+
+    // Session 1: build + FULL checkpoint (valid IdMap + loop2 snapshots).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Force the next first-touch hydration onto the SCAN path: remove the
+    // loop2 product snapshots (the IdMap snapshot stays, so the open still
+    // defers the graph).
+    deleteFileUnder(allocator, data_dir, "hydration_counters.snap");
+    deleteFileUnder(allocator, data_dir, "hydration_labels.snap");
+    deleteFileUnder(allocator, data_dir, "hydration_merge.snap");
+
+    // Session 2: the first touch fails MID-SCAN (fault injection, 50 of 200
+    // nodes) -> the graph is QUARANTINED (done=true) with PARTIAL resident
+    // products. A full checkpoint follows. C1 gate: the checkpoint must NOT
+    // serialize the partial products (they would be stamped with the CURRENT
+    // post-checkpoint counter -> accepted by every later open -> permanently
+    // frozen wrong indexes: count=50, MERGE misses -> silent duplicates).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        graph_store.setTestHydrationFailAfterNodes(50);
+        defer graph_store.setTestHydrationFailAfterNodes(null);
+        _ = store.countNodesByLabel(GRAPH, LABEL, null); // first touch: scan dies at 50
+        graph_store.setTestHydrationFailAfterNodes(null);
+
+        try store.saveToFile(); // FULL checkpoint on the quarantined graph
+
+        // No loop2 product snapshot may survive for the failed graph.
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+
+        graph_store.deinitGlobalStore();
+    }
+
+    // Session 3: reopen WITHOUT injection. The pre-P3 self-heal must survive:
+    // hydration falls back to the engine scan and serves the FULL data set.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        // Served by the scan rebuild (self-heal), never by a partial snapshot.
+        try testing.expect(graph_store.hydrationScanFallbackCount() >= 3);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+        // MERGE must be authoritative again for a node BEYOND the failure
+        // point (a frozen partial merge index would return not_found for it
+        // -> the create branch -> silent duplicates).
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        const mr = store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb, 150) }, &out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, mr);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "P3 C2: graph-scoped scan never mutates the node cache; retained node pointers stay valid" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 250;
+
+    // Session 1: build + FULL checkpoint so the reopen is snapshot-served
+    // (the state P3 creates by design: hydrated indexes, COLD node cache).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Session 2: warm reopen -> cache COLD. Iterate the graph the way the
+    // MATCH fallbacks do, RETAINING every yielded pointer (bindings /
+    // base_nodes / Value{ .Node } all do this in production).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        var it = store.iterateNodesInGraph(GRAPH); // first touch hydrates
+        try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1); // snapshot-served
+        const resident_before = store.nodes.residentCount();
+
+        var ptrs = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, N);
+        defer ptrs.deinit(allocator);
+        var ids = try std.ArrayList(u64).initCapacity(allocator, N);
+        defer ids.deinit(allocator);
+
+        var n_seen: usize = 0;
+        while (it.next()) |node_ptr| {
+            ptrs.appendAssumeCapacity(node_ptr);
+            ids.appendAssumeCapacity(node_ptr.id);
+            n_seen += 1;
+        }
+
+        // Completeness: every live row is yielded even though the cache
+        // started cold (the original P3 silent-drop defect).
+        try testing.expectEqual(N, n_seen);
+
+        // C2 gate (RED pre-fix): iteration must NOT have inserted into the
+        // bounded cache — an insert rehashes/evicts the shard maps that
+        // earlier retained pointers alias (single-threaded use-after-move).
+        try testing.expectEqual(resident_before, store.nodes.residentCount());
+
+        // Every retained pointer still dereferences to the node it was
+        // yielded for, after the full scan (pointer stability contract).
+        for (ptrs.items, ids.items) |p, expect_id| {
+            try testing.expectEqual(expect_id, p.id);
+            try testing.expect(std.mem.eql(u8, p.graph_name, GRAPH));
+        }
+
+        graph_store.deinitGlobalStore();
+    }
+}
