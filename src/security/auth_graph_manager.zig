@@ -700,6 +700,35 @@ pub const AuthGraphManager = struct {
     /// 5. Seal chain
     /// 6. Return BootstrapResult (caller prints password to stderr)
     pub fn bootstrapDefaultAdmin(self: *Self, hmac_key: *const [32]u8) !BootstrapResult {
+        // 0. Persisted-credential precedence guard (2026-07-01 live incident:
+        //    restart with a changed GEODE_ADMIN_PASSWORD silently rotated the
+        //    persisted admin credential to the env value).
+        //
+        //    Callers gate bootstrap on `hasAuthRecords()`, which reflects only
+        //    the IN-MEMORY user_cache populated by `loadUsersFromGraph`. Any
+        //    boot where that load comes up empty while persisted records still
+        //    exist on disk (lazy-hydration failure, storage-layout drift,
+        //    partial crash recovery) looks exactly like a first boot, so the
+        //    caller re-runs bootstrap and re-seeds the admin from the env —
+        //    destroying the persisted credential with no warning.
+        //
+        //    Ask the storage ENGINE directly (per-shard label index, on-disk
+        //    truth, independent of the GraphStore in-memory load) whether any
+        //    :User records are persisted for __geode_security. If yes, REFUSE:
+        //    the persisted credential wins; env seeding is first-boot only.
+        //    Errors (e.g. graph not yet registered on a genuine first boot)
+        //    and the no-adapter case (pure in-memory store, unit tests) count
+        //    as zero — bootstrap proceeds exactly as before.
+        if (graph_store.getGlobalAdapter()) |adapter| {
+            const persisted_users = adapter.countNodesByLabel(SECURITY_GRAPH_NAME, user_storage.USER_LABEL) catch 0;
+            if (persisted_users > 0) {
+                log.err("ADMIN BOOTSTRAP REFUSED: persisted admin user records exist on disk but none were loaded into memory; refusing to re-seed the admin credential (GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD are IGNORED — a persisted credential always wins). Investigate __geode_security storage health.", &.{
+                    Attr.uint("persisted_user_records", persisted_users),
+                });
+                return error.PersistedAdminExists;
+            }
+        }
+
         // 1. Resolve admin username
         const username = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
 

@@ -103,6 +103,19 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
 
     // Bootstrap
     const result = mgr.bootstrapDefaultAdmin(&kr.key) catch |err| {
+        if (err == error.PersistedAdminExists) {
+            // Persisted-credential precedence (2026-07-01 incident guard):
+            // the in-memory load saw no records, but the engine still holds
+            // persisted :User records on disk. Refuse to re-seed — the
+            // persisted credential wins over any env password.
+            std.debug.print(
+                "Error: Persisted admin records exist on disk (in-memory load was empty).\n" ++
+                    "Refusing to re-seed the admin credential from the environment.\n" ++
+                    "Run 'geode auth verify' to check chain health, or rotate via 'geode user reset-password'.\n",
+                .{},
+            );
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
         std.debug.print("Error: Failed to bootstrap admin user: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };

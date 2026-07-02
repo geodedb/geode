@@ -48,7 +48,7 @@ const Attr = logging.Attr;
 // security-graph name cannot drift across the FLE guard, auth manager, and
 // user storage.
 const SECURITY_GRAPH_NAME = graph_store.SECURITY_GRAPH_NAME;
-const USER_LABEL = "User";
+pub const USER_LABEL = "User";
 const ROLE_LABEL = "Role";
 const PERMISSION_LABEL = "Permission";
 const POLICY_LABEL = "Policy";

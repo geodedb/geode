@@ -391,14 +391,24 @@ pub fn initialize(
                 // Honour both env-var spellings: `GEODE_ADMIN_PASSWORD`
                 // (legacy / backward compat) and `GEODE_DEFAULT_PASSWORD`
                 // (documented).  Either one being set when records already
-                // exist is logged as ignored.
+                // exist is IGNORED — env seeding is first-boot only, the
+                // persisted credential always wins. WARN (not info) so
+                // operators whose serve script still carries the env var get
+                // a breadcrumb explaining why that password does not work.
                 if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
                     allocator.free(env_pw);
-                    log.info("GEODE_ADMIN_PASSWORD ignored because auth records already exist", &.{});
+                    log.warn("GEODE_ADMIN_PASSWORD is set but IGNORED: a persisted admin credential already exists (env seeds the admin only on first boot; rotate via ALTER USER or 'geode user reset-password')", &.{});
+                    // Secret-free breadcrumb via std.debug.print so it is
+                    // visible at ALL log levels (the structured sink may not
+                    // surface pre-listener warns) — same rationale as the
+                    // other `[startup]` lines and the first-boot password
+                    // pointer below.
+                    std.debug.print("[startup] GEODE_ADMIN_PASSWORD is set but IGNORED: a persisted admin credential already exists (env seeds the admin only on first boot; rotate via ALTER USER or 'geode user reset-password')\n", .{});
                 } else |_| {}
                 if (getEnvVarOwned(allocator, "GEODE_DEFAULT_PASSWORD")) |env_pw| {
                     allocator.free(env_pw);
-                    log.info("GEODE_DEFAULT_PASSWORD ignored because auth records already exist", &.{});
+                    log.warn("GEODE_DEFAULT_PASSWORD is set but IGNORED: a persisted admin credential already exists (env seeds the admin only on first boot; rotate via ALTER USER or 'geode user reset-password')", &.{});
+                    std.debug.print("[startup] GEODE_DEFAULT_PASSWORD is set but IGNORED: a persisted admin credential already exists (env seeds the admin only on first boot; rotate via ALTER USER or 'geode user reset-password')\n", .{});
                 } else |_| {}
 
                 // Verify HMAC chain integrity
@@ -458,6 +468,25 @@ pub fn initialize(
             } else {
                 // First boot: bootstrap default admin user
                 const result = agm.bootstrapDefaultAdmin(&kr.key) catch |err| {
+                    if (err == error.PersistedAdminExists) {
+                        // 2026-07-01 incident guard: the in-memory load saw
+                        // zero auth records, but the engine still holds
+                        // persisted :User records on disk. Re-seeding from
+                        // GEODE_ADMIN_PASSWORD here is what silently rotated
+                        // a live server's admin credential to the env value.
+                        // Fail CLOSED instead: keep the auth graph manager
+                        // (so the persistent resolver stays wired and we
+                        // never fall through to the in-memory env-seeded
+                        // `ensureDefaultUser` path) and skip bootstrap. The
+                        // persisted credential remains authoritative; admin
+                        // login may fail this session until the operator
+                        // repairs the store — strictly better than silently
+                        // destroying the persisted credential.
+                        log.err("ADMIN BOOTSTRAP SKIPPED: persisted admin records exist on disk but none were loaded; GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD are IGNORED (persisted credential wins). Investigate __geode_security storage health, then restart.", &.{});
+                        std.debug.print("[startup] admin bootstrap SKIPPED: persisted admin records exist on disk but failed to load; GEODE_ADMIN_PASSWORD env ignored (persisted credential wins)\n", .{});
+                        agm.hmac_key = kr.key;
+                        break :agm_blk agm;
+                    }
                     log.err("Failed to bootstrap default admin user", &.{
                         Attr.string("error", @errorName(err)),
                     });
