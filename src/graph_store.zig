@@ -8805,6 +8805,9 @@ pub const GraphStore = struct {
     const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
     const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
     const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";
+    const HYDRATION_LABELS_MAGIC: [8]u8 = "GHYDLBL1".*;
+    const HYDRATION_LABELS_FILE = "hydration_labels.snap";
+    const HYDRATION_LABELS_TMP = "hydration_labels.snap.tmp";
 
     /// Kill switch: GEODE_DISABLE_HYDRATION_SNAPSHOTS=1 disables both writing
     /// and loading the loop2-product snapshots (hydration falls back to the
@@ -8818,6 +8821,7 @@ pub const GraphStore = struct {
 
     fn deleteHydrationSnapshotFiles(dir: std.Io.Dir) void {
         hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
+        hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
     }
 
     /// True when `key` ("graph:label" / "graph:type", see formatGraphLabelKey)
@@ -8882,7 +8886,60 @@ pub const GraphStore = struct {
                     Attr.string("error", @errorName(err)),
                 });
             };
+            self.saveHydrationLabelsSnapshot(dir, graph_name, counter) catch |err| {
+                hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
+                log.warn("failed to write hydration label-postings snapshot", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
         }
+    }
+
+    /// Serialize one hydrated graph's label-index postings. Payload layout:
+    ///   n_entries u32, n x { label bytes (u32-len), id_count u64,
+    ///                        id_count x node_id u64 (strictly ascending) }
+    /// Labels are stored WITHOUT the graph prefix (per-graph file).
+    fn saveHydrationLabelsSnapshot(
+        self: *GraphStore,
+        dir: std.Io.Dir,
+        graph_name: []const u8,
+        counter: u64,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var w = try hydration_snapshot.AtomicWriter.init(
+            self.allocator,
+            dir,
+            HYDRATION_LABELS_TMP,
+            HYDRATION_LABELS_FILE,
+            HYDRATION_LABELS_MAGIC,
+        );
+        errdefer w.abort();
+
+        // Hold the outer mutex across both passes so the key set is stable;
+        // take each posting's leaf lock while copying its ids (same order as
+        // addToLabelIndex: label_index_mutex -> posting lock).
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        var n: u32 = 0;
+        var it = self.label_index.iterator();
+        while (it.next()) |e| {
+            if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) n += 1;
+        }
+        try w.writeInt(u32, n);
+        it = self.label_index.iterator();
+        while (it.next()) |e| {
+            if (!graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) continue;
+            try w.writeBytes(e.key_ptr.*[graph_name.len + 1 ..]);
+            const posting = e.value_ptr;
+            posting.lock();
+            defer posting.unlock();
+            try w.writeInt(u64, @intCast(posting.list.items.len));
+            for (posting.list.items) |id| try w.writeInt(u64, id);
+        }
+
+        try w.finish(HYDRATION_SNAP_VERSION, counter);
     }
 
     /// Serialize one hydrated graph's counter products. Payload layout
@@ -9436,7 +9493,115 @@ pub const GraphStore = struct {
             _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
         }
         if (!out.counters) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
+
+        labels: {
+            var loaded = hydration_snapshot.load(
+                dir,
+                HYDRATION_LABELS_FILE,
+                HYDRATION_LABELS_MAGIC,
+                HYDRATION_SNAP_VERSION,
+            ) orelse break :labels;
+            defer loaded.deinit();
+            if (loaded.manifest_counter != cur_counter) break :labels;
+            if (!validateHydrationLabelsPayload(loaded.payload)) break :labels;
+            self.applyHydrationLabelsSnapshot(graph_name, loaded.payload) catch |err| {
+                log.warn("hydration label-postings snapshot apply failed; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                break :labels;
+            };
+            out.labels = true;
+            _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
+        }
+        if (!out.labels) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
         return out;
+    }
+
+    /// Dry-run structural parse of the label-postings payload. Also verifies
+    /// each posting is STRICTLY ascending — the resident posting lists are
+    /// binary-searched, so accepting an unsorted (corrupt-but-CRC-valid) list
+    /// would corrupt lookups silently.
+    fn validateHydrationLabelsPayload(payload: []const u8) bool {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        const n = cur.readInt(u32) catch return false;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            _ = cur.readBytes() catch return false; // label
+            const id_count = cur.readInt(u64) catch return false;
+            var j: u64 = 0;
+            var prev: u64 = 0;
+            while (j < id_count) : (j += 1) {
+                const id = cur.readInt(u64) catch return false;
+                if (j != 0 and id <= prev) return false;
+                prev = id;
+            }
+        }
+        return cur.remaining() == 0;
+    }
+
+    /// Populate `label_index` postings (and the exact per-(graph,label)
+    /// counts, which by invariant equal the posting lengths) from a validated
+    /// payload. Same lock order as addToLabelIndex.
+    fn applyHydrationLabelsSnapshot(
+        self: *GraphStore,
+        graph_name: []const u8,
+        payload: []const u8,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        const n = try cur.readInt(u32);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const label = try cur.readBytes();
+            const id_count = try cur.readInt(u64);
+            const count: usize = std.math.cast(usize, id_count) orelse return error.SnapshotTruncated;
+
+            self.label_index_mutex.lockUncancelable(io);
+            defer self.label_index_mutex.unlock(io);
+            const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+            try self.ensureGraphLabelCount(graph_name, label);
+            posting.lock();
+            defer posting.unlock();
+            if (posting.list.items.len != 0) {
+                // Already populated (only reachable via the pre-existing
+                // "graph:label" composite-key ambiguity, where an identical
+                // entry restored under an aliased graph/label split) — skip
+                // rather than append duplicates into a sorted list.
+                var j: u64 = 0;
+                while (j < id_count) : (j += 1) _ = try cur.readInt(u64);
+                continue;
+            }
+            try posting.list.ensureUnusedCapacity(self.allocator, count);
+            var j: u64 = 0;
+            while (j < id_count) : (j += 1) {
+                posting.list.appendAssumeCapacity(try cur.readInt(u64));
+            }
+            self.setGraphLabelCountAbsolute(graph_name, label, count);
+        }
+    }
+
+    /// Set the exact (graph,label) count to `count` (snapshot restore only —
+    /// live paths use the bump/dec refcount discipline).
+    fn setGraphLabelCountAbsolute(self: *GraphStore, graph_name: []const u8, label: []const u8, count: usize) void {
+        var key_buf: [512]u8 = undefined;
+        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_rwlock.lockUncancelable(io);
+        defer self.label_count_rwlock.unlock(io);
+        if (self.label_counts_by_graph.getPtr(formatted.key)) |existing| {
+            existing.store(count, .monotonic);
+            return;
+        }
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(count)) catch {
+            self.allocator.free(owned_key);
+        };
     }
 
     /// Dry-run structural parse of the counters payload (no allocation, no
@@ -9793,9 +9958,13 @@ pub const GraphStore = struct {
                     self.next_node_id = node_uuid + 1;
                 }
 
-                // Rebuild label index
-                for (labels) |label| {
-                    try self.addToLabelIndex(graph_name, label, node_uuid);
+                // Rebuild label index. GAP-ENT-0023 P3: skipped when the
+                // postings came from the labels snapshot (the insert would be
+                // a dedup no-op per id — pure wasted binary-search work).
+                if (!snap.labels) {
+                    for (labels) |label| {
+                        try self.addToLabelIndex(graph_name, label, node_uuid);
+                    }
                 }
 
                 // GAP-825 (issue #825): the adapter hydration path used to
