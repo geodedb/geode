@@ -2855,20 +2855,28 @@ pub const StorageAdapter = struct {
             const candidate_slots = try src_engine.probeEdge(from_slot, rel_label_id, to_slot, &probe_buf);
             for (candidate_slots) |edge_slot| {
                 // Engine slot -> geode PUBLIC edge id (the id space the dedup
-                // match/return + prop-upsert operate in). Read directly off the
-                // source-shard engine, addressing the edge by its SOURCE slot (no
-                // self.mutex). A slot with no public-id tag is an orphan /
-                // not-yet-mapped edge → skip.
-                const stored = (src_engine.getEdgeProperty(
-                    from_slot,
-                    edge_slot,
-                    graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
-                    self.allocator,
-                ) catch null) orelse continue;
-                defer freeOwnedStorageProperty(self.allocator, stored);
-                const public_id = switch (stored) {
-                    .string => |text| graph_store.parsePersistedPublicId(text) orelse continue,
-                    else => continue,
+                // match/return + prop-upsert operate in). GAP-ENT-0024
+                // inline-first: the edge_index entry carries the public id for
+                // v2 edges (O(1), no props-page read); legacy edges
+                // (public_id == 0) fall back to the persisted property, read
+                // directly off the source-shard engine (no self.mutex). A slot
+                // with neither is an orphan / not-yet-mapped edge → skip.
+                const public_id = blk_pub: {
+                    if ((src_engine.getEdge(edge_slot) catch null)) |rec| {
+                        if (rec.public_id != 0) break :blk_pub rec.public_id;
+                    }
+                    _ = graph_store.edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                    const stored = (src_engine.getEdgeProperty(
+                        from_slot,
+                        edge_slot,
+                        graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
+                        self.allocator,
+                    ) catch null) orelse continue;
+                    defer freeOwnedStorageProperty(self.allocator, stored);
+                    switch (stored) {
+                        .string => |text| break :blk_pub graph_store.parsePersistedPublicId(text) orelse continue,
+                        else => continue,
+                    }
                 };
                 // Apply the IDENTICAL scope/type/tenant predicates on the tested
                 // public-id path (hydrate-on-miss for an evicted body). probeEdge
@@ -3895,7 +3903,36 @@ pub const StorageAdapter = struct {
     // ------------------------------------------------------------------
 
     /// Create an edge between two nodes. Returns the edge ID.
+    ///
+    /// LEGACY surface (public_id = 0): the engine writes no inline public id,
+    /// so the edge belongs to the property-fallback class. Kept for
+    /// engine-level tests and the orphan-injection fixtures
+    /// (tests/test_edge_durability_churn_repro.zig); geode's create paths go
+    /// through `createEdgeWithPublicId` (GAP-ENT-0024).
     pub fn createEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) !u64 {
+        return self.createEdgeInternal(graph_name, from_id, to_id, label, 0);
+    }
+
+    /// GAP-ENT-0024: create an edge carrying the geode-minted 64-bit PUBLIC id
+    /// INLINE in the durable adjacency records (graph-storage v0.2.24 v2
+    /// blocks) — the edge needs NO `__geode_internal_edge_id` property page.
+    ///
+    /// `public_id == 0` is REJECTED loudly (release-review checklist:
+    /// adapter-side id==0 guard). 0 is the engine's reserved "no inline id"
+    /// sentinel: silently passing it would degrade the edge to the legacy
+    /// fallback class WITHOUT the property being written — the edge would have
+    /// no durable public id anywhere (silent data loss on restart). Geode
+    /// mints nonzero time-based ids, so a 0 here is always a caller bug.
+    pub fn createEdgeWithPublicId(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) !u64 {
+        std.debug.assert(public_id != 0); // caller bug — see doc comment
+        if (public_id == 0) {
+            log.err("createEdgeWithPublicId called with reserved public_id=0 on graph '{s}' — refusing (edge would lose its durable public id)", .{graph_name});
+            return error.InvalidEdgePublicId;
+        }
+        return self.createEdgeInternal(graph_name, from_id, to_id, label, public_id);
+    }
+
+    fn createEdgeInternal(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) !u64 {
         // OTel Task 12: record write_edge op duration + outcome.
         const _om12e = @import("otel_metrics");
         const _t0_12e = @import("otel").internal.clock.unixNanoNow();
@@ -3935,7 +3972,15 @@ pub const StorageAdapter = struct {
             const stmt_txn = currentStatementTxnForGraph(graph_name);
             if (stmt_txn) |s| {
                 if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                    const _edge_id = try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+                    // GAP-ENT-0024: the public-id-carrying path uses the
+                    // CO-LOCATED txn add (the id rides both durable adjacency
+                    // records; strictly fewer pages than addEdgeTxn's two-node
+                    // write and no `to`-record read). The legacy public_id==0
+                    // surface keeps the historical addEdgeTxn byte-for-byte.
+                    const _edge_id = if (public_id != 0)
+                        try mg.shardEngineForNode(from_id).addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
+                    else
+                        try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
                     _ok_12e = true;
                     // OTel Task 13: graph data model mutation counter (fast path).
                     _om12e.recordEdgeMutation(.create, graph_name, .success);
@@ -3943,7 +3988,13 @@ pub const StorageAdapter = struct {
                 }
             }
         }
-        const _edge_id2 = try mg.engine.addEdge(from_id, to_id, rel_type);
+        // GAP-ENT-0024: auto-commit — ShardedGraphEngine.addEdge already
+        // routes to the co-located add on shard(from); the WithPublicId
+        // variant is the same single-shard WAL txn carrying the inline id.
+        const _edge_id2 = if (public_id != 0)
+            try mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
+        else
+            try mg.engine.addEdge(from_id, to_id, rel_type);
         _ok_12e = true;
         // OTel Task 13: graph data model mutation counter.
         _om12e.recordEdgeMutation(.create, graph_name, .success);

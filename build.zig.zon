@@ -440,8 +440,17 @@
             // putPropertyLegacyTxn (adapter sites switched). Whole-branch
             // review: READY TO RELEASE (no blockers). Supersedes the v0.2.22
             // tag (points pre-version-bump; do not pin it).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.23#1c56523c6ffdf35dc0618d417eefa923b3e574da",
-            .hash = "graph_storage-0.2.23-9UyJS7hOFgB2zRCzljvioi2WQWD6M_tnf24HoZfRYpj_",
+            // v0.2.24 (2026-07-02): INLINE EDGE PUBLIC ID (GAP-ENT-0024) —
+            // adjacency EdgeEntry carries `public_id: u64` in v2 blocks (v1
+            // blocks surface 0; block-granular read-both, no store migration);
+            // addEdgeColocatedWithPublicId on GraphEngine + ShardedGraphEngine;
+            // EdgeIndexEntry / FanInEdgeIterator / edge-index snapshot carry the
+            // id. Manifest V3: pre-v0.2.24 binaries loudly reject v0.2.24
+            // stores; v2 stores auto-upgrade at open. Lets geode stop writing
+            // the `__geode_internal_edge_id` property page per edge (~8 KB/edge
+            // -> 0 for propertyless edges). Same transitive deps (no diamond).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.24#0d6fd4fa2902cff5e2cc27c4f7906b90bd9e2d04",
+            .hash = "graph_storage-0.2.24-9UyJS-egFgBjfDfMcUWh6w3E4ZzolG17JUDzwKnNV8zb",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

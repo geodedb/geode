@@ -747,6 +747,14 @@ pub const DEFAULT_TENANT_ID = "default";
 pub const INTERNAL_NODE_ID_PROPERTY_KEY = "__geode_internal_node_id";
 pub const INTERNAL_EDGE_ID_PROPERTY_KEY = "__geode_internal_edge_id";
 
+/// GAP-ENT-0024 instrumentation: counts per-edge `__geode_internal_edge_id`
+/// PROPERTY-FALLBACK reads on the edge-id read paths (loop1 IdMap rebuild,
+/// adjacency hydrate, MERGE dedup probe fallback in the adapter). New (v2)
+/// edges carry the public id INLINE in the adjacency entry, so on a fresh
+/// store this counter must stay 0 — tests assert exactly that. Legacy v1
+/// blocks / old stores legitimately bump it (read-both is permanent).
+pub var edge_id_property_fallback_reads: std.atomic.Value(u64) = .init(0);
+
 /// GAP-0891 (RC-2): reserved storage key used to round-trip a node/edge's
 /// `tenant_id` tag across restart. Before this, the adapter persisted only the
 /// public id and `loadOneGraphFromAdapter` rebuilt every row with
@@ -2572,14 +2580,23 @@ pub const GraphStore = struct {
         errdefer list.deinit(allocator);
 
         while (try iter.next()) |edge_entry| {
-            // Reverse-map engine edge_id -> PUBLIC id. The canonical edge prop
-            // lives on the edge's SOURCE node: for an OUTGOING edge that is this
-            // node (slot_id); for an INCOMING edge it is the other endpoint
-            // (entry.neighbor == the source, per the engine's in-adjacency).
+            // GAP-ENT-0024 inline-first: v2 adjacency entries carry the PUBLIC
+            // id inline — no per-edge property fetch (the whole point).
+            if (edge_entry.public_id != 0) {
+                try list.append(allocator, edge_entry.public_id);
+                continue;
+            }
+            // Legacy fallback (v1 blocks / pre-v0.2.24 stores): reverse-map
+            // engine edge_id -> PUBLIC id via the persisted property. The
+            // canonical edge prop lives on the edge's SOURCE node: for an
+            // OUTGOING edge that is this node (slot_id); for an INCOMING edge
+            // it is the other endpoint (entry.neighbor == the source, per the
+            // engine's in-adjacency).
             const source_slot = switch (dir) {
                 .outgoing => slot_id,
                 .incoming => edge_entry.neighbor,
             };
+            _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
             const stored = (adapter.getEdgeProperty(
                 graph_name,
                 source_slot,
@@ -2818,26 +2835,13 @@ pub const GraphStore = struct {
         );
     }
 
-    fn persistEdgePublicId(
-        vt: AdapterVTable,
-        graph_name: []const u8,
-        from_slot: u64,
-        to_slot: u64,
-        edge_slot: u64,
-        public_id: u64,
-    ) !void {
-        const set_edge_property = vt.setEdgePropertyFn orelse return error.Unsupported;
-        var id_buf: [16]u8 = undefined;
-        try set_edge_property(
-            vt.ctx,
-            graph_name,
-            from_slot,
-            to_slot,
-            edge_slot,
-            INTERNAL_EDGE_ID_PROPERTY_KEY,
-            .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-        );
-    }
+    // GAP-ENT-0024: `persistEdgePublicId` (the per-edge
+    // `__geode_internal_edge_id` property write — one ≥8 KB props page per
+    // edge) was DELETED. New edges carry the public id INLINE in the durable
+    // adjacency records (graph-storage v0.2.24 v2 blocks) via
+    // `createEdgeFn(..., public_id)`. Readers stay read-both forever:
+    // `public_id == 0` (legacy v1 blocks / old stores) falls back to the
+    // property fetch — see hydrateAdjFromEngine and the loop1 edge rebuild.
 
     /// GAP-0891 (RC-2): edge analog of `persistNodeTenantId`. No-op for
     /// `DEFAULT_TENANT_ID`; absent-on-read means default. When the adapter has
@@ -6823,6 +6827,11 @@ pub const GraphStore = struct {
         // before the adapter is wired).  Every other failure must propagate.
         // See `createEdgeWithIdInternal` (~50 lines below) for the reference
         // pattern.
+        // Generate UUIDv7-based time-sortable unique ID. Minted BEFORE the
+        // adapter create so it rides INLINE in the durable adjacency records
+        // (GAP-ENT-0024) — no `__geode_internal_edge_id` property page.
+        const id = generateTimeBasedId();
+
         const adapter_edge: ?struct {
             vt: AdapterVTable,
             from_slot: u64,
@@ -6833,7 +6842,7 @@ pub const GraphStore = struct {
             const im = try self.getOrCreateIdMap(graph_name);
             const from_slot = im.nodeSlot(@as(u128, from_id)) orelse return error.SourceNodeNotFound;
             const to_slot = im.nodeSlot(@as(u128, to_id)) orelse return error.TargetNodeNotFound;
-            const edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
+            const edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type, id);
             break :blk .{
                 .vt = vt,
                 .from_slot = from_slot,
@@ -6842,28 +6851,12 @@ pub const GraphStore = struct {
             };
         };
         try self.ensureGraph(graph_name);
-        // Generate UUIDv7-based time-sortable unique ID
-        const id = generateTimeBasedId();
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_edge) |persisted_edge| {
-            persistEdgePublicId(
-                persisted_edge.vt,
-                graph_name,
-                persisted_edge.from_slot,
-                persisted_edge.to_slot,
-                persisted_edge.edge_slot,
-                id,
-            ) catch |err| {
-                persisted_edge.vt.deleteEdgeFn(
-                    persisted_edge.vt.ctx,
-                    graph_name,
-                    persisted_edge.from_slot,
-                    persisted_edge.to_slot,
-                    persisted_edge.edge_slot,
-                ) catch {};
-                return err;
-            };
+            // GAP-ENT-0024: the public id is already durable INLINE in the
+            // adjacency records (written by createEdgeFn above) — the legacy
+            // per-edge `__geode_internal_edge_id` property write is gone.
             // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
             persistEdgeTenantId(
                 persisted_edge.vt,
@@ -6963,7 +6956,9 @@ pub const GraphStore = struct {
                 .vt = vt,
                 .from_slot = from_slot,
                 .to_slot = to_slot,
-                .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type),
+                // GAP-ENT-0024: the replicated/minted public edge id rides
+                // INLINE in the durable adjacency records (v2 blocks).
+                .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type, edge_id),
             };
         } else null;
 
@@ -6973,23 +6968,9 @@ pub const GraphStore = struct {
         const tenant = fle_integration.tenantPreferringActiveContext();
 
         if (adapter_edge) |persisted_edge| {
-            persistEdgePublicId(
-                persisted_edge.vt,
-                graph_name,
-                persisted_edge.from_slot,
-                persisted_edge.to_slot,
-                persisted_edge.edge_slot,
-                edge_id,
-            ) catch |err| {
-                persisted_edge.vt.deleteEdgeFn(
-                    persisted_edge.vt.ctx,
-                    graph_name,
-                    persisted_edge.from_slot,
-                    persisted_edge.to_slot,
-                    persisted_edge.edge_slot,
-                ) catch {};
-                return err;
-            };
+            // GAP-ENT-0024: the public id is already durable INLINE in the
+            // adjacency records (written by createEdgeFn above) — no
+            // `__geode_internal_edge_id` property write on the create path.
             // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
             persistEdgeTenantId(
                 persisted_edge.vt,
@@ -9344,17 +9325,18 @@ pub const GraphStore = struct {
                 defer out_edges.deinit();
 
                 // Hydration self-heal: physical outgoing edge slots with no
-                // __geode_internal_edge_id and no legacy mapping are ORPHANS
-                // left behind by the pre-fix createEdgeWithIdInternal ordering
-                // bug (one per idempotent Raft re-apply). They have no IdMap
-                // entry, so the read path can never reverse-map them
+                // INLINE public id (GAP-ENT-0024), no __geode_internal_edge_id
+                // property and no legacy mapping are ORPHANS left behind by the
+                // pre-fix createEdgeWithIdInternal ordering bug (one per
+                // idempotent Raft re-apply). They have no IdMap entry, so the
+                // read path can never reverse-map them
                 // (-> error.EdgeSlotMappingMissing). Collect them while the
                 // adjacency iterator is live and DELETE them after the iterator
                 // is exhausted (deleting mid-iteration would invalidate the
                 // adjacency cursor). The canonical slot for any public id always
-                // carries __geode_internal_edge_id, so it never lands here — and
-                // a legitimate distinct parallel edge carries its own id and is
-                // likewise never collected. See
+                // carries its id (inline for v2 edges, property for legacy), so
+                // it never lands here — and a legitimate distinct parallel edge
+                // carries its own id and is likewise never collected. See
                 // tests/test_edge_durability_churn_repro.zig.
                 const OrphanEdgeSlot = struct { to_slot: u64, edge_slot: u64 };
                 var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
@@ -9363,6 +9345,12 @@ pub const GraphStore = struct {
                 while (try out_edges.next()) |edge_entry| {
                     // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
                     const edge_uuid = blk: {
+                        // GAP-ENT-0024 inline-first: v2 adjacency entries carry
+                        // the PUBLIC id inline — no per-edge property fetch.
+                        // 0 = legacy v1 block / pre-v0.2.24 store → fall back.
+                        if (edge_entry.public_id != 0) break :blk edge_entry.public_id;
+
+                        _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
                         if (try adapter.getEdgeProperty(
                             graph_name,
                             slot_id,
@@ -10270,7 +10258,11 @@ const AdapterVTable = struct {
     getOrCreateGraphFn: *const fn (*anyopaque, []const u8) anyerror!*anyopaque,
     dropGraphFn: *const fn (*anyopaque, []const u8) void,
     createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
-    createEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, []const u8) anyerror!u64,
+    // GAP-ENT-0024: the trailing u64 is the geode-minted PUBLIC edge id,
+    // stored INLINE in the durable adjacency records (v2 blocks) so a
+    // propertyless edge allocates NO props page. MUST be nonzero (0 is the
+    // engine's reserved "no inline id" legacy sentinel).
+    createEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, []const u8, u64) anyerror!u64,
     deleteNodeFn: *const fn (*anyopaque, []const u8, u64) anyerror!void,
     deleteEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, u64) anyerror!void,
     setNodePropertyFn: *const fn (*anyopaque, []const u8, u64, []const u8, PropertyValue) anyerror!void,
@@ -10623,8 +10615,9 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {
             return castAdapter(ctx).createNode(graph_name, labels);
         }
-        fn createEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) anyerror!u64 {
-            return castAdapter(ctx).createEdge(graph_name, from_id, to_id, label);
+        fn createEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) anyerror!u64 {
+            // GAP-ENT-0024: inline public id — the adapter guards public_id != 0.
+            return castAdapter(ctx).createEdgeWithPublicId(graph_name, from_id, to_id, label, public_id);
         }
         fn deleteNode(ctx: *anyopaque, graph_name: []const u8, node_id: u64) anyerror!void {
             return castAdapter(ctx).deleteNode(graph_name, node_id);
@@ -12035,10 +12028,26 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     var node_id_buf: [16]u8 = undefined;
     try testing.expectEqualStrings(encodePersistedPublicId(&node_id_buf, 1001), persisted_node_id.string);
 
-    const persisted_edge_id = try adapter.getEdgeProperty("default", node_slot, edge_slot, INTERNAL_EDGE_ID_PROPERTY_KEY, testing.allocator) orelse return error.PropertyNotFound;
-    defer graph_storage_adapter.freeOwnedStorageProperty(testing.allocator, persisted_edge_id);
-    var edge_id_buf: [16]u8 = undefined;
-    try testing.expectEqualStrings(encodePersistedPublicId(&edge_id_buf, 9001), persisted_edge_id.string);
+    // GAP-ENT-0024: NEW edges carry the public id INLINE in the durable
+    // adjacency entry (v2 blocks) and write NO `__geode_internal_edge_id`
+    // property (that was one ≥8 KB props page per edge).
+    const persisted_edge_id = try adapter.getEdgeProperty("default", node_slot, edge_slot, INTERNAL_EDGE_ID_PROPERTY_KEY, testing.allocator);
+    if (persisted_edge_id) |leaked_prop| {
+        graph_storage_adapter.freeOwnedStorageProperty(testing.allocator, leaked_prop);
+        return error.LegacyEdgeIdPropertyStillWritten;
+    }
+    {
+        var adj_iter = try adapter.iterateOutgoingEdges("default", node_slot, testing.allocator);
+        defer adj_iter.deinit();
+        var found_inline = false;
+        while (try adj_iter.next()) |entry| {
+            if (entry.edge_id == edge_slot) {
+                try testing.expectEqual(@as(u64, 9001), entry.public_id);
+                found_inline = true;
+            }
+        }
+        try testing.expect(found_inline);
+    }
 
     const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
     // Per-graph artifact directory layout was consolidated to

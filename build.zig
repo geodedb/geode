@@ -7905,6 +7905,25 @@ pub fn build(b: *std.Build) void {
     const edge_durability_churn_repro_step = b.step("test-edge-durability-churn-repro", "Regression: GNC2 edge re-apply orphans a durable edge slot -> EdgeSlotMappingMissing after restart (edge durability under churn)");
     edge_durability_churn_repro_step.dependOn(&run_edge_durability_churn_repro_tests.step);
 
+    // GAP-ENT-0024 (inline edge public id, graph-storage v0.2.24): new edges
+    // carry the 64-bit public id INLINE in the durable adjacency records and
+    // write NO `__geode_internal_edge_id` property page (~8 KB/edge saved);
+    // loop1 / hydrate resolve v2 edges without the per-edge property fetch;
+    // legacy property-tagged edges keep resolving forever (read-both).
+    const edge_inline_public_id_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_edge_inline_public_id.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    edge_inline_public_id_test_mod.addImport("geode", root_mod);
+    edge_inline_public_id_test_mod.addImport("graph_storage", graph_storage_mod);
+    const edge_inline_public_id_tests = b.addTest(.{ .root_module = edge_inline_public_id_test_mod });
+    const run_edge_inline_public_id_tests = b.addRunArtifact(edge_inline_public_id_tests);
+    shardDep(test_step, &run_edge_inline_public_id_tests.step, 1, test_shard_loads, test_shard_index);
+    const edge_inline_public_id_step = b.step("test-edge-inline-public-id", "GAP-ENT-0024: inline edge public id — no per-edge __geode_internal_edge_id props page; loop1 inline-first + legacy property fallback");
+    edge_inline_public_id_step.dependOn(&run_edge_inline_public_id_tests.step);
+
     // Task #34: bulk-edge ingest slowness on edges_app_role_assignment.jsonl.
     // Level 1 regression — contract tests for the future
     // `StorageAdapter.setEdgePropertiesBatch` helper.  See
