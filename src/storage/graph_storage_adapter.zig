@@ -5230,7 +5230,7 @@ pub const StorageAdapter = struct {
         if (currentStatementTxnForGraph(graph_name)) |s| {
             // R12: manual setEdgeProperty using Txn variants, routed to the
             // from_id's shard. Mirrors engine_edge_props.setEdgeProperty 1:1.
-            const edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+            const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
             if (edge_entry.from != from_id or edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
             const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
@@ -5257,9 +5257,13 @@ pub const StorageAdapter = struct {
                 const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
                 _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
 
-                if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
-                    idx_entry.prop_head = new_head;
-                }
+                // v0.2.26: copy-on-write API (getPtr removed — mmap base is
+                // immutable). Also set edge_index_dirty (the F1 blessed-stale
+                // lesson): this manual mirror mutates the index outside
+                // engine_edge_props.setEdgeProperty, so the restamp gate must
+                // see it dirty or a checkpoint would re-bless a stale snapshot.
+                try from_shard.edge_index.updatePropHead(edge_id, new_head);
+                from_shard.edge_index_dirty = true;
             }
 
             if (found_prop_head != 0 and found_prop_head != new_head) {
@@ -5280,7 +5284,7 @@ pub const StorageAdapter = struct {
         // does not exist on from_shard, so the call raises NodeNotFound and
         // every inline `CREATE (a)-[:R]->(b) RETURN ...` (where the
         // persistEdgePublicId post-hook is the only setter) crashes.
-        const fb_edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        const fb_edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         if (fb_edge_entry.from != from_id or fb_edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
         const fb_from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
@@ -5300,9 +5304,9 @@ pub const StorageAdapter = struct {
             const fb_to_rec = (try fb_to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
             _ = try fb_to_shard.adj_in.updateEdgePropHead(fb_to_rec.in_head, edge_id, fb_new_head);
 
-            if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
-                idx_entry.prop_head = fb_new_head;
-            }
+            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
+            try from_shard.edge_index.updatePropHead(edge_id, fb_new_head);
+            from_shard.edge_index_dirty = true;
         }
 
         if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
@@ -5351,7 +5355,7 @@ pub const StorageAdapter = struct {
         // Edges live on the source-node's shard (edge_id is shard-striped
         // by allocNode on the source shard).
         const from_shard = mg.shardEngineForNode(edge_id);
-        const edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
         const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
@@ -5391,9 +5395,9 @@ pub const StorageAdapter = struct {
             const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
             _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
 
-            if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
-                idx_entry.prop_head = running_prop_head;
-            }
+            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
+            try from_shard.edge_index.updatePropHead(edge_id, running_prop_head);
+            from_shard.edge_index_dirty = true;
         }
 
         if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
@@ -5454,7 +5458,7 @@ pub const StorageAdapter = struct {
         // shard (same addressing setEdgePropertiesBatch / getAllEdgeProperties
         // rely on).
         const from_shard = mg.shardEngineForNode(edge_slot);
-        const idx_entry = from_shard.edge_index.get(edge_slot) orelse return null;
+        const idx_entry = (try from_shard.edge_index.get(edge_slot)) orelse return null;
         const label_str = mg.label_dict.getString(idx_entry.rel_type) orelse "UNKNOWN";
         const label_copy = try allocator.dupe(u8, label_str);
         return EdgeRecord{
