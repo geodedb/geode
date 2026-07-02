@@ -3924,7 +3924,6 @@ pub const StorageAdapter = struct {
     /// no durable public id anywhere (silent data loss on restart). Geode
     /// mints nonzero time-based ids, so a 0 here is always a caller bug.
     pub fn createEdgeWithPublicId(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) !u64 {
-        std.debug.assert(public_id != 0); // caller bug — see doc comment
         if (public_id == 0) {
             log.err("createEdgeWithPublicId called with reserved public_id=0 on graph '{s}' — refusing (edge would lose its durable public id)", .{graph_name});
             return error.InvalidEdgePublicId;
