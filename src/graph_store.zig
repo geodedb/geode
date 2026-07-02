@@ -1679,7 +1679,18 @@ pub const GraphStore = struct {
     // so the index never reports labels/types/properties no node still
     // carries. `filter_tenant == null` (admin path) aggregates across every
     // tenant via the outer map.
-    // Outer key: tenant_id (owned by store allocator)
+    //
+    // GAP-ENT-0023 P3 (loop2 snapshot persistence): the outer key is the
+    // COMPOSITE "graph\x00tenant" (see formatGraphTenantKey) instead of the
+    // bare tenant. Grouping by graph makes each graph's contribution to the
+    // introspection counters a DISJOINT set of outer entries, so the per-graph
+    // hydration snapshot can persist / restore them exactly (a bare-tenant key
+    // aggregates across graphs and cannot be decomposed at checkpoint time).
+    // The tenant-filtered readers match on the tenant COMPONENT
+    // (graphTenantKeyTenant) — the outer map is tiny (graphs x tenants), so
+    // the scan is O(outer_entries) and preserves the GAP-0509 tenant-isolation
+    // property exactly (component match, never substring).
+    // Outer key: "graph\x00tenant_id" (owned by store allocator)
     // Inner key: label / edge type / property — owned by store allocator
     node_labels_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
     edge_types_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
@@ -2258,14 +2269,14 @@ pub const GraphStore = struct {
         }
         try self.addNodeToGraphIndex(src_node.graph_name, src_node.id);
         for (src_node.labels) |label| {
-            try self.bumpLabelCount(src_node.tenant_id, label);
+            try self.bumpLabelCount(src_node.graph_name, src_node.tenant_id, label);
         }
         var prop_replay = src_node.properties.iterator();
         while (prop_replay.next()) |p| {
             const pkey = p.key_ptr.*;
             if (isInternalPersistedPropertyKey(pkey)) continue;
             for (src_node.labels) |label| {
-                try self.bumpLabelPropertyCount(src_node.tenant_id, label, pkey);
+                try self.bumpLabelPropertyCount(src_node.graph_name, src_node.tenant_id, label, pkey);
             }
         }
     }
@@ -2353,7 +2364,7 @@ pub const GraphStore = struct {
             // PERF-P0-001: Maintain edge-type index during clone
             try self.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
             // PERF-C (issue #814): tenant-keyed edge-type counter.
-            try self.bumpEdgeTypeCount(src_edge.tenant_id, src_edge.label);
+            try self.bumpEdgeTypeCount(src_edge.graph_name, src_edge.tenant_id, src_edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
             self.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
         }
@@ -2973,9 +2984,14 @@ pub const GraphStore = struct {
         }
 
         if (filter_tenant) |tid| {
-            // Single-tenant fast path: scan only the inner map for `tid`.
-            if (self.edge_types_by_tenant.getPtr(tid)) |inner| {
-                var it = inner.keyIterator();
+            // Tenant-filtered path. GAP-ENT-0023 P3: the outer key is the
+            // composite "graph\x00tenant", so match on the tenant COMPONENT
+            // (exact component equality — preserves GAP-0509 isolation) and
+            // union across graphs. The outer map is tiny (graphs x tenants).
+            var outer_it = self.edge_types_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
+                var it = outer_entry.value_ptr.keyIterator();
                 while (it.next()) |kp| {
                     if (type_set.contains(kp.*)) continue;
                     const copy = try allocator.dupe(u8, kp.*);
@@ -3075,8 +3091,12 @@ pub const GraphStore = struct {
         }.run;
 
         if (filter_tenant) |tid| {
-            if (self.label_properties_by_tenant.getPtr(tid)) |inner| {
-                try collect(&prop_set, allocator, inner, label);
+            // GAP-ENT-0023 P3: composite "graph\x00tenant" outer key — match
+            // the tenant component, union across graphs (see listEdgeTypes).
+            var outer_it = self.label_properties_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
+                try collect(&prop_set, allocator, outer_entry.value_ptr, label);
             }
         } else {
             var outer_it = self.label_properties_by_tenant.iterator();
@@ -3145,8 +3165,12 @@ pub const GraphStore = struct {
         }
 
         if (filter_tenant) |tid| {
-            if (self.node_labels_by_tenant.getPtr(tid)) |inner| {
-                var it = inner.keyIterator();
+            // GAP-ENT-0023 P3: composite "graph\x00tenant" outer key — match
+            // the tenant component, union across graphs (see listEdgeTypes).
+            var outer_it = self.node_labels_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
+                var it = outer_entry.value_ptr.keyIterator();
                 while (it.next()) |kp| {
                     if (label_set.contains(kp.*)) continue;
                     const copy = try allocator.dupe(u8, kp.*);
@@ -3538,7 +3562,7 @@ pub const GraphStore = struct {
         // carry no user properties at create time, so only the label
         // dimension fires here.
         for (labels) |label| {
-            try self.bumpLabelCount(tenant, label);
+            try self.bumpLabelCount(graph_name, tenant, label);
         }
 
         self.dirty.store(true, .release);
@@ -3614,7 +3638,7 @@ pub const GraphStore = struct {
         try self.addNodeToGraphIndex(graph_name, id);
         // PERF-C (issue #814): tenant-keyed label counters.
         for (labels) |label| {
-            try self.bumpLabelCount(tenant, label);
+            try self.bumpLabelCount(graph_name, tenant, label);
         }
 
         // Mark store as dirty - persistence happens at query completion, not per-node
@@ -3794,7 +3818,7 @@ pub const GraphStore = struct {
             // negligible and the simpler call shape matches the other
             // create paths.
             for (labels) |label| {
-                try self.bumpLabelCount(tenant, label);
+                try self.bumpLabelCount(graph_name, tenant, label);
             }
 
             // WAL / mutation notification per node.
@@ -4135,7 +4159,7 @@ pub const GraphStore = struct {
         // PERF-C (issue #814): tenant-keyed label counters. GAP-0891 (RC-3):
         // bump the SAME tenant bucket the node is tagged with.
         for (labels) |label| {
-            try self.bumpLabelCount(tenant, label);
+            try self.bumpLabelCount(graph_name, tenant, label);
         }
 
         if (node_id >= self.next_node_id) {
@@ -4341,20 +4365,75 @@ pub const GraphStore = struct {
         }
     }
 
-    fn bumpLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) !void {
-        try self.bumpRefcount(&self.node_labels_by_tenant, tenant_id, label);
+    /// GAP-ENT-0023 P3: compose the COMPOSITE outer key "graph\x00tenant" for
+    /// the tenant-introspection maps (`node_labels_by_tenant`,
+    /// `edge_types_by_tenant`, `label_properties_by_tenant`) into a stack
+    /// buffer when small enough, else heap-allocate. NUL is the separator —
+    /// graph names cannot contain NUL (the merge-index key convention already
+    /// relies on this), so the split is unambiguous.
+    fn formatGraphTenantKey(
+        scratch: []u8,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        tenant_id: []const u8,
+    ) !struct { key: []const u8, owned: ?[]u8 } {
+        const total = std.math.add(usize, graph_name.len, 1) catch return error.GraphTenantKeyTooLarge;
+        const total2 = std.math.add(usize, total, tenant_id.len) catch return error.GraphTenantKeyTooLarge;
+        const max_graph_tenant_key_len: usize = 1 << 20; // corruption guard (mirrors formatLabelPropKey)
+        if (total2 > max_graph_tenant_key_len) return error.GraphTenantKeyTooLarge;
+        if (total2 <= scratch.len) {
+            @memcpy(scratch[0..graph_name.len], graph_name);
+            scratch[graph_name.len] = 0;
+            @memcpy(scratch[graph_name.len + 1 ..][0..tenant_id.len], tenant_id);
+            return .{ .key = scratch[0..total2], .owned = null };
+        }
+        const buf = try allocator.alloc(u8, total2);
+        @memcpy(buf[0..graph_name.len], graph_name);
+        buf[graph_name.len] = 0;
+        @memcpy(buf[graph_name.len + 1 ..][0..tenant_id.len], tenant_id);
+        return .{ .key = buf, .owned = buf };
     }
 
-    fn decLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) void {
-        self.decRefcount(&self.node_labels_by_tenant, tenant_id, label);
+    /// Graph component of a "graph\x00tenant" outer key. A key with no NUL
+    /// (never produced by formatGraphTenantKey) yields the whole key as graph
+    /// and an empty tenant — such an entry can never match a real tenant/graph.
+    fn graphTenantKeyGraph(outer_key: []const u8) []const u8 {
+        const idx = std.mem.indexOfScalar(u8, outer_key, 0) orelse return outer_key;
+        return outer_key[0..idx];
     }
 
-    fn bumpEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) !void {
-        try self.bumpRefcount(&self.edge_types_by_tenant, tenant_id, edge_type);
+    /// Tenant component of a "graph\x00tenant" outer key (see above).
+    fn graphTenantKeyTenant(outer_key: []const u8) []const u8 {
+        const idx = std.mem.indexOfScalar(u8, outer_key, 0) orelse return "";
+        return outer_key[idx + 1 ..];
     }
 
-    fn decEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) void {
-        self.decRefcount(&self.edge_types_by_tenant, tenant_id, edge_type);
+    fn bumpLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) !void {
+        var scratch: [512]u8 = undefined;
+        const k = try formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id);
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        try self.bumpRefcount(&self.node_labels_by_tenant, k.key, label);
+    }
+
+    fn decLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) void {
+        var scratch: [512]u8 = undefined;
+        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        self.decRefcount(&self.node_labels_by_tenant, k.key, label);
+    }
+
+    fn bumpEdgeTypeCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, edge_type: []const u8) !void {
+        var scratch: [512]u8 = undefined;
+        const k = try formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id);
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        try self.bumpRefcount(&self.edge_types_by_tenant, k.key, edge_type);
+    }
+
+    fn decEdgeTypeCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, edge_type: []const u8) void {
+        var scratch: [512]u8 = undefined;
+        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        self.decRefcount(&self.edge_types_by_tenant, k.key, edge_type);
     }
 
     /// Compose "label\x00prop_key" into a stack buffer when small enough;
@@ -4398,26 +4477,34 @@ pub const GraphStore = struct {
 
     fn bumpLabelPropertyCount(
         self: *GraphStore,
+        graph_name: []const u8,
         tenant_id: []const u8,
         label: []const u8,
         prop_key: []const u8,
     ) !void {
+        var oscratch: [512]u8 = undefined;
+        const ok = try formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant_id);
+        defer if (ok.owned) |buf| self.allocator.free(buf);
         var scratch: [512]u8 = undefined;
         const k = try formatLabelPropKey(&scratch, self.allocator, label, prop_key);
         defer if (k.owned) |buf| self.allocator.free(buf);
-        try self.bumpRefcount(&self.label_properties_by_tenant, tenant_id, k.key);
+        try self.bumpRefcount(&self.label_properties_by_tenant, ok.key, k.key);
     }
 
     fn decLabelPropertyCount(
         self: *GraphStore,
+        graph_name: []const u8,
         tenant_id: []const u8,
         label: []const u8,
         prop_key: []const u8,
     ) void {
+        var oscratch: [512]u8 = undefined;
+        const ok = formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant_id) catch return;
+        defer if (ok.owned) |buf| self.allocator.free(buf);
         var scratch: [512]u8 = undefined;
         const k = formatLabelPropKey(&scratch, self.allocator, label, prop_key) catch return;
         defer if (k.owned) |buf| self.allocator.free(buf);
-        self.decRefcount(&self.label_properties_by_tenant, tenant_id, k.key);
+        self.decRefcount(&self.label_properties_by_tenant, ok.key, k.key);
     }
 
     /// Per-node helper: bump (tenant, label) and (tenant, label\x00prop_key)
@@ -4425,14 +4512,14 @@ pub const GraphStore = struct {
     /// (excluding internal IDs). Used by the node-create paths.
     fn bumpIntrospectionForNode(self: *GraphStore, node: *const Node) !void {
         for (node.labels) |label| {
-            try self.bumpLabelCount(node.tenant_id, label);
+            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
         }
         var prop_it = node.properties.iterator();
         while (prop_it.next()) |prop| {
             const key = prop.key_ptr.*;
             if (isInternalPersistedPropertyKey(key)) continue;
             for (node.labels) |label| {
-                try self.bumpLabelPropertyCount(node.tenant_id, label, key);
+                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key);
             }
         }
     }
@@ -4444,11 +4531,11 @@ pub const GraphStore = struct {
             const key = prop.key_ptr.*;
             if (isInternalPersistedPropertyKey(key)) continue;
             for (node.labels) |label| {
-                self.decLabelPropertyCount(node.tenant_id, label, key);
+                self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, key);
             }
         }
         for (node.labels) |label| {
-            self.decLabelCount(node.tenant_id, label);
+            self.decLabelCount(node.graph_name, node.tenant_id, label);
         }
     }
 
@@ -5227,14 +5314,14 @@ pub const GraphStore = struct {
             // and tenant-keyed introspection counters for this node.
             try self.addNodeToGraphIndex(node.graph_name, node.id);
             for (node.labels) |label| {
-                try self.bumpLabelCount(node.tenant_id, label);
+                try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
             }
             var prop_iter_for_pc = node.properties.iterator();
             while (prop_iter_for_pc.next()) |prop_entry| {
                 const pkey = prop_entry.key_ptr.*;
                 if (isInternalPersistedPropertyKey(pkey)) continue;
                 for (node.labels) |label| {
-                    try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                    try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
                 }
             }
             // Rebuild merge property index entries for this node
@@ -5256,7 +5343,7 @@ pub const GraphStore = struct {
             // PERF-P0-001: Rebuild edge-type index
             try self.addToEdgeTypeIndex(edge.graph_name, edge.label, edge.id);
             // PERF-C (issue #814): rebuild tenant-keyed edge-type counter.
-            try self.bumpEdgeTypeCount(edge.tenant_id, edge.label);
+            try self.bumpEdgeTypeCount(edge.graph_name, edge.tenant_id, edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
             self.bumpGraphEdgeTypeCount(edge.graph_name, edge.label);
         }
@@ -5370,7 +5457,7 @@ pub const GraphStore = struct {
             // time too).
             if (was_new and !isInternalPersistedPropertyKey(key)) {
                 for (node.labels) |label| {
-                    self.bumpLabelPropertyCount(node.tenant_id, label, key) catch {};
+                    self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
                 }
             }
 
@@ -5685,7 +5772,7 @@ pub const GraphStore = struct {
                 // are filtered out (they were never bumped on insert).
                 if (!isInternalPersistedPropertyKey(kv.key)) {
                     for (node.labels) |label| {
-                        self.decLabelPropertyCount(node.tenant_id, label, kv.key);
+                        self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
                     }
                 }
                 self.allocator.free(kv.key);
@@ -5772,12 +5859,12 @@ pub const GraphStore = struct {
             // — because the new label "inherits" all the node's properties
             // for introspection purposes (`listPropertiesForLabel` reports
             // every property carried by any node holding `label`).
-            try self.bumpLabelCount(node.tenant_id, label);
+            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
             var prop_it_for_pc = node.properties.iterator();
             while (prop_it_for_pc.next()) |p| {
                 const pkey = p.key_ptr.*;
                 if (isInternalPersistedPropertyKey(pkey)) continue;
-                try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
 
             // Mark as dirty - persistence happens at query completion
@@ -5843,9 +5930,9 @@ pub const GraphStore = struct {
                 while (prop_it_for_pc_rm.next()) |p| {
                     const pkey = p.key_ptr.*;
                     if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.tenant_id, label, pkey);
+                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
                 }
-                self.decLabelCount(node.tenant_id, label);
+                self.decLabelCount(node.graph_name, node.tenant_id, label);
                 self.allocator.free(removed_label);
 
                 // Mark as dirty - persistence happens at query completion
@@ -6901,7 +6988,7 @@ pub const GraphStore = struct {
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
         try self.addToEdgeTypeIndex(graph_name, edge_type, id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
-        try self.bumpEdgeTypeCount(tenant, edge_type);
+        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
         self.bumpGraphEdgeTypeCount(graph_name, edge_type);
 
@@ -7013,7 +7100,7 @@ pub const GraphStore = struct {
         try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for LSP
         // introspection. GAP-0891 (RC-3): bump the SAME bucket as the tag.
-        try self.bumpEdgeTypeCount(tenant, edge_type);
+        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
         self.bumpGraphEdgeTypeCount(graph_name, edge_type);
 
@@ -9877,7 +9964,7 @@ pub const GraphStore = struct {
             // PERF-C (issue #814): tenant-keyed edge-type counter. Decrement
             // before we free label/tenant_id strings (they're still alive in
             // the `edge` struct copy we own here).
-            self.decEdgeTypeCount(edge.tenant_id, edge.label);
+            self.decEdgeTypeCount(edge.graph_name, edge.tenant_id, edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
             self.decGraphEdgeTypeCount(edge.graph_name, edge.label);
 
@@ -10033,7 +10120,7 @@ pub const GraphStore = struct {
             // sync with the in-memory state.
             if (was_new and !isInternalPersistedPropertyKey(key)) {
                 for (node.labels) |label| {
-                    self.bumpLabelPropertyCount(node.tenant_id, label, key) catch {};
+                    self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
                 }
             }
         }
@@ -10052,7 +10139,7 @@ pub const GraphStore = struct {
                 // PERF-C (issue #814): mirror the dec from removeNodeProperty.
                 if (!isInternalPersistedPropertyKey(kv.key)) {
                     for (node.labels) |label| {
-                        self.decLabelPropertyCount(node.tenant_id, label, kv.key);
+                        self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
                     }
                 }
                 self.allocator.free(kv.key);
@@ -10120,7 +10207,7 @@ pub const GraphStore = struct {
         // separately), so only label-level counters fire here.
         try self.addNodeToGraphIndex(graph_name, node_id);
         for (labels) |label| {
-            try self.bumpLabelCount(DEFAULT_TENANT_ID, label);
+            try self.bumpLabelCount(graph_name, DEFAULT_TENANT_ID, label);
         }
     }
 
@@ -10147,7 +10234,7 @@ pub const GraphStore = struct {
         // PERF-P0-001: Maintain edge-type index during rollback restore
         try self.addToEdgeTypeIndex(graph_name, label, edge_id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for rollback.
-        try self.bumpEdgeTypeCount(DEFAULT_TENANT_ID, label);
+        try self.bumpEdgeTypeCount(graph_name, DEFAULT_TENANT_ID, label);
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
         self.bumpGraphEdgeTypeCount(graph_name, label);
     }
@@ -10183,12 +10270,12 @@ pub const GraphStore = struct {
 
             try self.addToLabelIndex(node.graph_name, label, node_id);
             // PERF-C (issue #814): mirror addNodeLabel.
-            try self.bumpLabelCount(node.tenant_id, label);
+            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
             var prop_it_nosave_add = node.properties.iterator();
             while (prop_it_nosave_add.next()) |p| {
                 const pkey = p.key_ptr.*;
                 if (isInternalPersistedPropertyKey(pkey)) continue;
-                try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
         }
     }
@@ -10238,9 +10325,9 @@ pub const GraphStore = struct {
                 while (prop_it_nosave_rm.next()) |p| {
                     const pkey = p.key_ptr.*;
                     if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.tenant_id, label, pkey);
+                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
                 }
-                self.decLabelCount(node.tenant_id, label);
+                self.decLabelCount(node.graph_name, node.tenant_id, label);
             }
         }
     }
