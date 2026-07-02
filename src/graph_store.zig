@@ -287,6 +287,51 @@ pub fn shouldIndexProperty(key: []const u8) bool {
     return false;
 }
 
+/// GAP-ENT-0023 P3: fingerprint of the merge-index CONFIGURATION — the lean
+/// flag, the registered lean key set (lean mode only), and the registered
+/// composite specs. The merge-prop-index snapshot stores this hash and is
+/// rejected on any mismatch: which entries the index CONTAINS depends on this
+/// configuration, so restoring a snapshot written under a different one could
+/// leave lookups authoritative-but-incomplete (`.not_found` -> a re-MERGE
+/// takes the create branch -> silent duplicates). Key/spec contributions are
+/// combined order-independently (registration order varies across runs; the
+/// sets are what matters — both are persisted to sidecars loaded at adapter
+/// init, BEFORE any hydration runs).
+fn mergeIndexConfigHash() u64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_lean_index_mutex.lockUncancelable(io);
+    defer g_lean_index_mutex.unlock(io);
+    var h = std.hash.Wyhash.init(0x6d65_7267_6573_6e70); // "mergesnp"
+    const lean = leanIndexEnabledLocked();
+    h.update(&[_]u8{@intFromBool(lean)});
+    if (lean) {
+        var acc: u64 = 0;
+        var i: usize = 0;
+        while (i < g_lean_index_key_count) : (i += 1) {
+            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
+        }
+        var b: [8]u8 = undefined;
+        std.mem.writeInt(u64, &b, acc, .little);
+        h.update(&b);
+    }
+    var acc2: u64 = 0;
+    var k: usize = 0;
+    while (k < g_composite_key_count) : (k += 1) {
+        var sh = std.hash.Wyhash.init(2);
+        const spec = &g_composite_keys[k];
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            sh.update(spec.prop_bufs[i][0..spec.prop_lens[i]]);
+            sh.update("\x00");
+        }
+        acc2 ^= sh.final();
+    }
+    var b2: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b2, acc2, .little);
+    h.update(&b2);
+    return h.final();
+}
+
 // ============================================================================
 // COMPOSITE merge keys (caveat "B": from-dump edge endpoint resolution).
 //
@@ -8808,6 +8853,9 @@ pub const GraphStore = struct {
     const HYDRATION_LABELS_MAGIC: [8]u8 = "GHYDLBL1".*;
     const HYDRATION_LABELS_FILE = "hydration_labels.snap";
     const HYDRATION_LABELS_TMP = "hydration_labels.snap.tmp";
+    const HYDRATION_MERGE_MAGIC: [8]u8 = "GHYDMRG1".*;
+    const HYDRATION_MERGE_FILE = "hydration_merge.snap";
+    const HYDRATION_MERGE_TMP = "hydration_merge.snap.tmp";
 
     /// Kill switch: GEODE_DISABLE_HYDRATION_SNAPSHOTS=1 disables both writing
     /// and loading the loop2-product snapshots (hydration falls back to the
@@ -8822,6 +8870,17 @@ pub const GraphStore = struct {
     fn deleteHydrationSnapshotFiles(dir: std.Io.Dir) void {
         hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
         hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
+        hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
+    }
+
+    /// True when a merge-index key ("graph\x00label\x00...", see
+    /// buildMergeIndexKey / buildCompositeMergeIndexKey) belongs to
+    /// `graph_name`. The NUL separator makes this unambiguous (graph names
+    /// cannot contain NUL).
+    fn mergeKeyMatchesGraph(key: []const u8, graph_name: []const u8) bool {
+        return key.len > graph_name.len and
+            key[graph_name.len] == 0 and
+            std.mem.eql(u8, key[0..graph_name.len], graph_name);
     }
 
     /// True when `key` ("graph:label" / "graph:type", see formatGraphLabelKey)
@@ -8893,7 +8952,81 @@ pub const GraphStore = struct {
                     Attr.string("error", @errorName(err)),
                 });
             };
+            self.saveHydrationMergeSnapshot(dir, graph_name, counter) catch |err| {
+                hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
+                log.warn("failed to write hydration merge-index snapshot", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
         }
+    }
+
+    /// Serialize one hydrated graph's merge-property-index entries (single-key
+    /// AND composite — both live in `merge_prop_index` under "graph\x00..."
+    /// keys). Payload layout, designed fixed-width-record + per-shard-sorted
+    /// so a future mmap adoption (per-shard binary search) is trivial while a
+    /// plain re-insert load stays valid today:
+    ///   config_hash u64  (mergeIndexConfigHash at save time — load gate)
+    ///   shard_count u32  (write-time shard grouping; load re-verifies hashes)
+    ///   shard_count x {
+    ///     entry_count u64, blob_len u64,
+    ///     entry_count x { key_off u64, key_len u32, node_id u64 }  (20 B,
+    ///                    sorted by key bytes within the shard),
+    ///     blob bytes (concatenated keys, WITH the graph prefix)
+    ///   }
+    fn saveHydrationMergeSnapshot(
+        self: *GraphStore,
+        dir: std.Io.Dir,
+        graph_name: []const u8,
+        counter: u64,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var w = try hydration_snapshot.AtomicWriter.init(
+            self.allocator,
+            dir,
+            HYDRATION_MERGE_TMP,
+            HYDRATION_MERGE_FILE,
+            HYDRATION_MERGE_MAGIC,
+        );
+        errdefer w.abort();
+
+        try w.writeInt(u64, mergeIndexConfigHash());
+        try w.writeInt(u32, @intCast(merge_property_index_shard_count));
+
+        const Entry = struct { key: []const u8, node_id: u64 };
+        var entries: std.ArrayList(Entry) = .empty;
+        defer entries.deinit(self.allocator);
+
+        for (&self.merge_prop_index.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            entries.clearRetainingCapacity();
+            var it = shard.map.iterator();
+            while (it.next()) |e| {
+                if (!mergeKeyMatchesGraph(e.key_ptr.*, graph_name)) continue;
+                try entries.append(self.allocator, .{ .key = e.key_ptr.*, .node_id = e.value_ptr.* });
+            }
+            std.sort.pdq(Entry, entries.items, {}, struct {
+                fn lt(_: void, a: Entry, b: Entry) bool {
+                    return std.mem.lessThan(u8, a.key, b.key);
+                }
+            }.lt);
+            try w.writeInt(u64, @intCast(entries.items.len));
+            var blob_len: u64 = 0;
+            for (entries.items) |en| blob_len += en.key.len;
+            try w.writeInt(u64, blob_len);
+            var off: u64 = 0;
+            for (entries.items) |en| {
+                try w.writeInt(u64, off);
+                try w.writeInt(u32, @intCast(en.key.len));
+                try w.writeInt(u64, en.node_id);
+                off += en.key.len;
+            }
+            for (entries.items) |en| try w.writeAll(en.key);
+        }
+
+        try w.finish(HYDRATION_SNAP_VERSION, counter);
     }
 
     /// Serialize one hydrated graph's label-index postings. Payload layout:
@@ -9515,7 +9648,95 @@ pub const GraphStore = struct {
             _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
         }
         if (!out.labels) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
+
+        merge: {
+            var loaded = hydration_snapshot.load(
+                dir,
+                HYDRATION_MERGE_FILE,
+                HYDRATION_MERGE_MAGIC,
+                HYDRATION_SNAP_VERSION,
+            ) orelse break :merge;
+            defer loaded.deinit();
+            if (loaded.manifest_counter != cur_counter) break :merge;
+            if (!validateHydrationMergePayload(loaded.payload)) break :merge;
+            // Config gate: which entries the index contains depends on the
+            // lean flag / registered keys / composite specs. A mismatch means
+            // the snapshot may be authoritative-but-INCOMPLETE for the current
+            // configuration (-> .not_found -> duplicate MERGE creates), so
+            // reject and rebuild from the scan.
+            {
+                var cfg = hydration_snapshot.Cursor{ .buf = loaded.payload };
+                const stored_hash = cfg.readInt(u64) catch break :merge;
+                if (stored_hash != mergeIndexConfigHash()) break :merge;
+            }
+            self.applyHydrationMergeSnapshot(loaded.payload) catch |err| {
+                // Partial application is SAFE here: entries came from a
+                // counter-current file (same generation), and the scan
+                // fallback's putOrUpdate re-adds/overwrites idempotently.
+                log.warn("hydration merge-index snapshot apply failed; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                break :merge;
+            };
+            out.merge = true;
+            _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
+        }
+        if (!out.merge) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
         return out;
+    }
+
+    /// Dry-run structural parse of the merge payload: every record's
+    /// key_off/key_len must land inside its shard's blob.
+    fn validateHydrationMergePayload(payload: []const u8) bool {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        _ = cur.readInt(u64) catch return false; // config hash (gated separately)
+        const shard_count = cur.readInt(u32) catch return false;
+        if (shard_count == 0 or shard_count > (1 << 16)) return false;
+        var s: u32 = 0;
+        while (s < shard_count) : (s += 1) {
+            const n = cur.readInt(u64) catch return false;
+            const blob_len = cur.readInt(u64) catch return false;
+            var i: u64 = 0;
+            while (i < n) : (i += 1) {
+                const off = cur.readInt(u64) catch return false;
+                const klen = cur.readInt(u32) catch return false;
+                _ = cur.readInt(u64) catch return false; // node_id
+                if (off > blob_len or blob_len - off < klen) return false;
+            }
+            const blen = std.math.cast(usize, blob_len) orelse return false;
+            _ = cur.readSlice(blen) catch return false;
+        }
+        return cur.remaining() == 0;
+    }
+
+    /// Re-insert the merge-index entries from a validated payload. Every key
+    /// re-verifies its shard hash: entries are inserted into the shard their
+    /// key HASHES to (never blindly into the stored grouping), so a
+    /// corrupt-but-CRC-valid grouping can never plant an entry where lookups
+    /// (which lock the hash-correct shard) would miss it.
+    fn applyHydrationMergeSnapshot(self: *GraphStore, payload: []const u8) !void {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        _ = try cur.readInt(u64); // config hash
+        const shard_count = try cur.readInt(u32);
+        var s: u32 = 0;
+        while (s < shard_count) : (s += 1) {
+            const n = try cur.readInt(u64);
+            const blob_len = try cur.readInt(u64);
+            const rec_bytes = std.math.mul(u64, n, 20) catch return error.SnapshotTruncated;
+            const rec_len = std.math.cast(usize, rec_bytes) orelse return error.SnapshotTruncated;
+            const records = try cur.readSlice(rec_len);
+            const blen = std.math.cast(usize, blob_len) orelse return error.SnapshotTruncated;
+            const blob = try cur.readSlice(blen);
+            var i: usize = 0;
+            while (i < rec_len) : (i += 20) {
+                const off = std.mem.readInt(u64, records[i..][0..8], .little);
+                const klen = std.mem.readInt(u32, records[i + 8 ..][0..4], .little);
+                const node_id = std.mem.readInt(u64, records[i + 12 ..][0..8], .little);
+                const key = blob[@intCast(off)..][0..klen];
+                try self.merge_prop_index.putOrUpdate(key, node_id);
+            }
+        }
     }
 
     /// Dry-run structural parse of the label-postings payload. Also verifies
@@ -9790,6 +10011,46 @@ pub const GraphStore = struct {
                 self.outgoing_edges.effectiveCap() != 0 and
                 self.incoming_edges.effectiveCap() != 0;
 
+            // GAP-ENT-0023 P3 FULL scan skip: every node-side product came
+            // from a snapshot (counters + label postings + merge index), the
+            // edge side is covered (skip_edge_scan), loop1 is served in place
+            // by the mmap IdMap base, and the node cache is engine-backed
+            // (hydrate-on-miss — warm-up optional). The only resident
+            // structure left is `nodes_by_graph` (PERF-B), which is rebuilt
+            // from the IdMap directly — memory-speed, ZERO engine reads — so
+            // hydration is O(snapshot) instead of O(graph-scan).
+            //
+            // Cross-check: the IdMap-derived node count must equal the count
+            // the counters snapshot recorded. Both passed the same manifest-
+            // counter gate, so a mismatch means a save-side bug — log loudly
+            // and fall through to the scan (with the per-product skips still
+            // honored: postings/merge re-inserts are idempotent, so the light
+            // scan is safe; nodes_by_graph puts dedupe).
+            if (snap.counters and snap.labels and snap.merge and
+                id_map.mode == .mmap_backed and legacy_map == null and
+                self.nodes.effectiveCap() != 0 and skip_edge_scan)
+            {
+                var rebuilt: u64 = 0;
+                var nit = id_map.nodeUuidIterator();
+                while (nit.next()) |nuuid| {
+                    try self.addNodeToGraphIndex(graph_name, @as(u64, @truncate(nuuid)));
+                    rebuilt += 1;
+                }
+                if (rebuilt == snap.node_count) {
+                    _ = g_hydration_full_scan_skips.fetchAdd(1, .monotonic);
+                    log.info("graph hydration served from loop2 snapshots (engine scan skipped)", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.int("nodes", @intCast(rebuilt)),
+                    });
+                    return;
+                }
+                log.err("hydration snapshot node count disagrees with IdMap at the same manifest counter; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.int("idmap_nodes", @intCast(rebuilt)),
+                    Attr.int("snapshot_nodes", @intCast(snap.node_count)),
+                });
+            }
+
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
@@ -9993,7 +10254,11 @@ pub const GraphStore = struct {
                 // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
                 // fresh server process) are backfilled at registration time by
                 // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
-                {
+                // GAP-ENT-0023 P3: the whole merge product (single-key AND
+                // composite entries) came from the merge snapshot — skip the
+                // per-node rebuild (putOrUpdate would be an idempotent
+                // overwrite; pure wasted hashing).
+                if (!snap.merge) {
                     var merge_prop_iter = stored_node_ptr.properties.iterator();
                     while (merge_prop_iter.next()) |prop_entry| {
                         self.addToMergePropertyIndex(

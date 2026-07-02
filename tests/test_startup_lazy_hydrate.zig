@@ -1337,3 +1337,408 @@ test "GAP regression: getEdgeCount/allEdgeIds/getNodeCount as FIRST access after
 
     graph_store.deinitGlobalStore();
 }
+
+// ---------------------------------------------------------------------------
+// GAP-ENT-0023 P3: per-graph loop2-product snapshots (hydration_counters.snap /
+// hydration_labels.snap / hydration_merge.snap). A warm reopen's first-access
+// hydration must load them O(snapshot) and SKIP the O(graph) engine scan; any
+// stale/missing/invalid file falls back to the scan per product; a FULL
+// checkpoint on a still-deferred graph must DELETE (case B) or PRESERVE
+// (case A) them — never persist the empty resident state (9b2d42eb class).
+// ---------------------------------------------------------------------------
+
+fn fileExistsUnder(allocator: std.mem.Allocator, data_dir: []const u8, basename: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return false;
+    defer dir.close(io);
+    var walker = dir.walk(allocator) catch return false;
+    defer walker.deinit();
+    while (walker.next(io) catch return false) |entry| {
+        if (std.mem.eql(u8, entry.basename, basename)) return true;
+    }
+    return false;
+}
+
+fn deleteFileUnder(allocator: std.mem.Allocator, data_dir: []const u8, basename: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var walker = dir.walk(allocator) catch return;
+    defer walker.deinit();
+    while (walker.next(io) catch return) |entry| {
+        if (std.mem.eql(u8, entry.basename, basename)) {
+            dir.deleteFile(io, entry.path) catch {};
+            return;
+        }
+    }
+}
+
+/// Production parity: activate the bounded, engine-backed caches (the server
+/// init path installs these; the bare test global-store path does not). The
+/// full-scan skip is deliberately gated on engine-backed caches, so the warm
+/// tests must run in that mode.
+fn installBoundedCaches(store: *GraphStore) void {
+    store.installNodeCacheHydrate();
+    store.installAdjCacheHydrate();
+    store.installEdgeCacheHydrate();
+}
+
+test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skipped, results correct" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 250;
+    const E: usize = 120;
+    var seed_ids: [250]u64 = undefined;
+
+    // --- Session 1: build + FULL checkpoint (writes all three snapshots). ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            seed_ids[i] = id;
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        var e: usize = 0;
+        while (e < E) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // All three product snapshots exist on disk.
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+
+    // --- Session 2: warm reopen. First access must hydrate WITHOUT the scan. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+
+        const store = graph_store.getGlobalStore(allocator); // "server ready"
+        installBoundedCaches(store); // production parity (server init does this)
+
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+
+        // First query hydrates FROM SNAPSHOTS: the O(graph) loop2 scan and the
+        // per-node loop1 engine read must BOTH stay at zero.
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+        try testing.expect(graph_store.hydrationSnapshotLoadCount() >= 3);
+        try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
+
+        // Counts: label refcount, per-graph node count, untyped + typed edge
+        // counts (typed comes straight from the counters snapshot).
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+        try testing.expectEqual(@as(usize, 0), store.countEdgesByTypeForGraph(GRAPH, "NO_SUCH_TYPE"));
+
+        // MERGE lookup: authoritative found AND authoritative miss.
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        const mr = store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb, 7) }, &out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, mr);
+        try testing.expectEqual(seed_ids[7], out);
+        const miss = store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = "no-such-name" }, &out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.not_found, miss);
+
+        // Point read through the hydrate-on-miss node cache (no warm-up ran).
+        try testing.expect(store.getNodeProperty(seed_ids[3], "name") != null);
+
+        // Introspection (tenant multisets restored from the counters snapshot).
+        const labels_list = try store.listNodeLabels(allocator, null);
+        defer {
+            for (labels_list) |l| allocator.free(l);
+            allocator.free(labels_list);
+        }
+        var found_label = false;
+        for (labels_list) |l| {
+            if (std.mem.eql(u8, l, LABEL)) found_label = true;
+        }
+        try testing.expect(found_label);
+
+        // Still no scan after the whole read mix.
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+        // CREATE after snapshot-hydration: fresh id, counts advance exactly.
+        const new_id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        for (seed_ids[0..N]) |sid| try testing.expect(sid != new_id);
+        try testing.expectEqual(N + 1, store.countNodesByLabel(GRAPH, LABEL, null));
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "P3: crash before checkpoint — stale loop2 snapshots rejected, scan fallback correct" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const K: usize = 140;
+    const M: usize = 60;
+    const E2: usize = 50;
+    var seed_ids: [200]u64 = undefined;
+
+    // Session 1: full checkpoint (snapshots @ C1, K nodes), then K..K+M nodes +
+    // E2 edges, LIGHT checkpoint (engine counter advances past C1), CRASH.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < K) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(seed_ids[i], "name", .{ .String = nameFor(&nb, i) });
+        }
+        try store.saveToFile();
+        while (i < K + M) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        var e: usize = 0;
+        while (e < E2) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFileEx(true); // LIGHT: no snapshot refresh
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    // Stale files are still on disk.
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+
+    // Session 2: reopen. The counter gate must REJECT all three products and
+    // rebuild everything from the scan — with the full, post-crash data.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(K + M, got.len);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= K + M); // scan ran
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationSnapshotLoadCount());
+        try testing.expect(graph_store.hydrationScanFallbackCount() >= 3);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
+
+        try testing.expectEqual(K + M, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expectEqual(E2, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        const mr = store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb, 5) }, &out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, mr);
+        try testing.expectEqual(seed_ids[5], out);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snapshots (never persists empty state)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const K: usize = 120;
+    const M: usize = 70;
+    var seed_ids: [190]u64 = undefined;
+
+    // Session 1: snapshots @ C1 (K nodes), advance counter (LIGHT), CRASH.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < K) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        try store.saveToFile();
+        while (i < K + M) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        try store.saveToFileEx(true);
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+
+    // Session 2: open (stale IdMap snapshot rejected -> case-B .resident
+    // deferred), FULL checkpoint BEFORE any hydrating access. RED (pre-gate):
+    // this would serialize the EMPTY resident loop2 products at the CURRENT
+    // counter — the next open would trust them and every count/index read of
+    // the graph would come back empty. GREEN: the gate deletes the stale
+    // files and skips, without triggering hydration.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
+        try store.saveToFileEx(false);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount()); // no hydration side effect
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+    try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+    try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+
+    // Session 3: reopen — the data is fully intact via the scan rebuild.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        try testing.expectEqual(K + M, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K + M, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expect(graph_store.loop2ScanNodeCount() >= K + M);
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "P3: partial snapshot set — only the uncovered product is scan-rebuilt, no double counts" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 180;
+    const E: usize = 90;
+    var seed_ids: [180]u64 = undefined;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(seed_ids[i], "name", .{ .String = nameFor(&nb, i) });
+        }
+        var e: usize = 0;
+        while (e < E) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Knock out ONLY the label-postings snapshot.
+    deleteFileUnder(allocator, data_dir, "hydration_labels.snap");
+    try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        // The scan ran (labels product uncovered)...
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
+        // ...but counters + merge still came from their snapshots.
+        try testing.expect(graph_store.hydrationSnapshotLoadCount() >= 2);
+        try testing.expect(graph_store.hydrationScanFallbackCount() >= 1);
+
+        // EXACT counts everywhere — the per-product skips must prevent any
+        // double-count between restored products and the scan rebuild.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        const mr = store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb, 11) }, &out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, mr);
+        try testing.expectEqual(seed_ids[11], out);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "P3: full checkpoint on an idle mmap-adopted (case A) graph preserves loop2 snapshots" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 100;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            _ = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Session 2: reopen (case A: valid IdMap snapshot adopted, graph stays
+    // deferred), FULL checkpoint WITHOUT ever touching the graph. The loop2
+    // files must survive UNCHANGED — deleting would forfeit the warm reopen;
+    // rewriting would persist the empty resident state (data-loss class).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1); // case A
+        try store.saveToFileEx(false);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+        try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+        try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Session 3: whichever path hydration takes (snapshots if the engine
+    // counter is unchanged, scan rebuild otherwise), the data must be exact
+    // and NEVER empty — the preserved files must not poison the reopen.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        graph_store.deinitGlobalStore();
+    }
+}
