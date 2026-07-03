@@ -637,6 +637,12 @@ pub const ShardedCoordinator = struct {
     pub fn registerWithRuntimeMetrics(self: *ShardedCoordinator) void {
         const runtime_metrics = @import("runtime_metrics");
         const reg = runtime_metrics.globalRegistry() orelse return;
+        // GAP-ENT-0038: piggy-back the adapter's checkpoint-cadence counters
+        // (adapter_checkpoints_total / adapter_pending_bulk_ops) on the first
+        // coordinator registration — the registry is guaranteed live here and
+        // the adapter guards its own once-only latch, so a second coordinator
+        // (another graph) is a no-op.
+        self.adapter.registerCheckpointMetrics();
         // CANARY: REQ=REQ-QUIC-HC-133; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorMetricsHotPath; STATUS=TESTED; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-28
         //
         // getOrStartCoordinator() sits on the mutation fast path. Re-registering

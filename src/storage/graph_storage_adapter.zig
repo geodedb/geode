@@ -22,6 +22,21 @@ const adapter_mod = @import("fts_storage_adapter.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
+// GAP-ENT-0038: checkpoint-cadence observability MUST use geode's structured
+// logger, not `std.log`. This repo defines no `std_options`, so in ReleaseFast
+// builds `std.log.default_level == .err` and every `log.info`/`log.warn` in
+// this file is compiled OUT of the production server. That made the inline
+// load-driven checkpoint (the PRIMARY deferred-mode cadence driver — it wins
+// the threshold race against the persistence loop on virtually every crossing)
+// completely invisible in the live server log, which read as "exactly one
+// auto-checkpoint in 11 hours" during the 14.27M ingest while on-disk evidence
+// (graph_registry.dat rewritten every ~33 s, 32 shard WALs totalling ~118 MB
+// after 22.4M ops) proved checkpoints were landing continuously. Scope
+// "storage" matches the persistence loop's visible cadence lines so operators
+// can grep one scope for the full checkpoint sawtooth.
+const structured_logging = @import("logging");
+const slog = structured_logging.scoped("storage");
+const SAttr = structured_logging.Attr;
 
 // Re-export edge type for callers that need EdgeEntry from scan results.
 pub const EdgeEntry = gs.edge.EdgeEntry;
@@ -1810,6 +1825,10 @@ pub const StorageAdapter = struct {
     // spike). 0 disables backpressure. Set from env at init (default = a multiple
     // of `checkpoint_ops_threshold`).
     checkpoint_max_pending: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // GAP-ENT-0038: once-only guard for registerCheckpointMetrics (0 = not yet
+    // registered). Registration is retried until the global runtime-metrics
+    // registry exists, then latches.
+    checkpoint_metrics_registered: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Create a new `StorageAdapter`.
     ///
@@ -5948,7 +5967,14 @@ pub const StorageAdapter = struct {
                     _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
                     any_skipped = true;
                     const busy_state = @atomicLoad(usize, &mg.rwlock.state, .seq_cst);
-                    log.warn("light checkpoint skipped for graph '{s}': rwlock busy past deadline (will retry next cycle) rwlock_state=0x{x}", .{ mg.name, busy_state });
+                    // GAP-ENT-0038: structured logger — this skip warning was a
+                    // `std.log.warn`, compiled out of ReleaseFast, so a graph
+                    // whose LIGHT checkpoints were being starved would look
+                    // exactly like a healthy silent cadence in the server log.
+                    slog.warn("light checkpoint skipped: rwlock busy past deadline (will retry next cycle)", &.{
+                        SAttr.string("graph", mg.name),
+                        SAttr.uint("rwlock_state", @intCast(busy_state)),
+                    });
                     continue;
                 }
             }
@@ -6104,6 +6130,25 @@ pub const StorageAdapter = struct {
         return self.checkpoints_total.load(.monotonic);
     }
 
+    /// GAP-ENT-0038: export the checkpoint-cadence counters on the /metrics
+    /// endpoint so operators can verify the deferred-mode checkpoint cadence
+    /// directly (`adapter_checkpoints_total` should climb steadily during a
+    /// bulk ingest; `adapter_pending_bulk_ops` should sawtooth below the
+    /// GEODE_CHECKPOINT_OPS threshold) instead of inferring it from log lines
+    /// — the inference that misread the 14.27M ingest as "checkpointing
+    /// stopped" when three of the four checkpoint drivers simply never logged.
+    /// Best-effort and idempotent: no-op until the global registry exists,
+    /// latched after the first successful registration. Called from
+    /// coordinator metric registration (first mutation after bring-up) and
+    /// safe to call from anywhere else.
+    pub fn registerCheckpointMetrics(self: *StorageAdapter) void {
+        const runtime_metrics = @import("runtime_metrics");
+        const reg = runtime_metrics.globalRegistry() orelse return;
+        if (self.checkpoint_metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
+        reg.register("adapter_checkpoints_total", &self.checkpoints_total) catch {};
+        reg.register("adapter_pending_bulk_ops", &self.pending_bulk_ops) catch {};
+    }
+
     /// Bulk write ops applied since the last checkpoint.
     ///
     /// GAP-0900: the FIX wires the group-commit bulk fast paths
@@ -6210,10 +6255,19 @@ pub const StorageAdapter = struct {
         // GAP-0900 L2: the load-driven trigger uses the bounded (light)
         // checkpoint so it stays O(dirty) and keeps pace during bulk ingest.
         self.checkpointAllLight() catch |err| {
-            log.warn("GAP-0900 load-driven checkpoint failed: {s}", .{@errorName(err)});
+            // GAP-ENT-0038: structured logger — `std.log.warn` is compiled out
+            // of ReleaseFast (no std_options override), which would hide a
+            // repeatedly-failing cadence checkpoint from the live server log.
+            slog.warn("GAP-0900 load-driven checkpoint failed", &.{
+                SAttr.string("error", @errorName(err)),
+            });
             return;
         };
-        log.info("GAP-0900 load-driven checkpoint fired total={d}", .{self.checkpoints_total.load(.monotonic)});
+        // GAP-ENT-0038: structured logger so the PRIMARY deferred-mode cadence
+        // driver is visible in production logs (see header comment at `slog`).
+        slog.info("load-driven auto-checkpoint fired", &.{
+            SAttr.uint("checkpoints_total", self.checkpoints_total.load(.monotonic)),
+        });
     }
 
     // ------------------------------------------------------------------

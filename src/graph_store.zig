@@ -12051,6 +12051,11 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         const default_max_pending = ckpt_ops *| DEFAULT_CHECKPOINT_MAX_PENDING_MULT;
         adapter.setCheckpointMaxPending(envU64("GEODE_CHECKPOINT_MAX_PENDING", default_max_pending));
     }
+    // GAP-ENT-0038: expose checkpoints_total / pending_bulk_ops on /metrics.
+    // Best-effort: no-op if the runtime-metrics registry is not up yet — the
+    // first coordinator registration (group_commit.registerWithRuntimeMetrics)
+    // retries after server bring-up.
+    adapter.registerCheckpointMetrics();
 
     // Build vtable with type-erased function pointers
     const Dispatch = struct {
@@ -12671,11 +12676,24 @@ fn persistenceLoop() void {
                     // GAP-0900 Layer-2: LIGHT — a runtime checkpoint must stay
                     // O(dirty); a full O(graph) checkpoint here stalls a large
                     // ingest for minutes under the exclusive store lock.
-                    adapter.checkpointAllLight() catch |err| {
+                    if (adapter.checkpointAllLight()) |_| {
+                        // GAP-ENT-0038: this legacy CDC-WAL-triggered branch was
+                        // completely SILENT on success while resetting the
+                        // deferred cadence state (pending ops zeroed, clock
+                        // restarted), so during the 14.27M edge phase (edge
+                        // creates feed notifyMutation/dirty) it did ALL the
+                        // checkpointing at a ~33 s cadence with zero log lines —
+                        // which was misread as "auto-checkpoint never re-armed".
+                        // Log it like the deferred trigger so the checkpoint
+                        // sawtooth is visible whichever driver wins.
+                        log.info("periodic WAL-triggered light checkpoint fired", &.{
+                            Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
+                        });
+                    } else |err| {
                         log.err("per-graph storage checkpoint failed", &.{
                             Attr.string("error", @errorName(err)),
                         });
-                    };
+                    }
                 } else {
                     // Fallback: global shared lock
                     g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -12716,6 +12734,12 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
             });
             return;
         };
+        // GAP-ENT-0038: like the WAL-triggered branch above, this dirty-flush
+        // backstop silently resets the deferred cadence state — make it
+        // visible so operators can account for every checkpoint driver.
+        log.info("periodic dirty-flush light checkpoint fired", &.{
+            Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
+        });
 
         // Remove any stale sidecar files after the checkpoint lands.
         // Use per-graph read locks so only one graph is locked at a time.
