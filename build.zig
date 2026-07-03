@@ -6779,6 +6779,26 @@ pub fn build(b: *std.Build) void {
     const admin_bootstrap_step = b.step("test-admin-bootstrap", "Reproduction tests for admin-bootstrap env-var + offline-reset bugs (must fail pre-fix)");
     admin_bootstrap_step.dependOn(&run_admin_bootstrap_tests.step);
 
+    // Gap 0026 (data-ingest security review): security-graph mutations must
+    // stay crash-durable under GEODE_WAL_SYNC=deferred. The bulk-load knob
+    // (GAP-0900) relaxed per-commit WAL fsync globally; an admin credential
+    // rotation acknowledged without fsync is silently lost on a hard crash
+    // (old credential resurrects). Tests pin the per-graph
+    // `.sync_each_commit` carve-out for `__geode_security` (create + reopen
+    // paths), the fsync-before-ack observable, a bulk-write still-defers
+    // regression, and the end-to-end rotate → crash → reopen sequence.
+    const sec_wal_durability_mod = b.createModule(.{ .root_source_file = b.path("tests/test_security_wal_durability.zig"), .target = target, .optimize = optimize });
+    sec_wal_durability_mod.addImport("geode", root_mod);
+    sec_wal_durability_mod.addImport("geode_auth", auth_mod);
+    sec_wal_durability_mod.addImport("user_storage", user_storage_mod);
+    sec_wal_durability_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sec_wal_durability_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sec_wal_durability_tests = b.addTest(.{ .root_module = sec_wal_durability_mod });
+    const run_sec_wal_durability_tests = b.addRunArtifact(sec_wal_durability_tests);
+    shardDep(test_step, &run_sec_wal_durability_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_wal_durability_step = b.step("test-security-wal-durability", "Gap 0026: security-graph mutations crash-durable under GEODE_WAL_SYNC=deferred (per-graph sync_each_commit carve-out)");
+    sec_wal_durability_step.dependOn(&run_sec_wal_durability_tests.step);
+
     // Issue #819: admin-bootstrap data-dir permission hardening (CWE-538 /
     // CWE-732).  Exercises the pure permission-check helper in
     // src/server/data_dir_permissions.zig via std.testing.tmpDir fixtures.

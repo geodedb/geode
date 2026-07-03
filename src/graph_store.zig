@@ -11628,6 +11628,31 @@ pub fn deinitGlobalStoreForTestCrash() void {
     deinitGlobalStoreEx(false);
 }
 
+/// TEST-ONLY: simulate a HARD process kill (SIGKILL / power loss) for
+/// WAL-durability crash tests (gap 0026). Drops every global reference
+/// WITHOUT closing, checkpointing, or freeing the store/adapter — exactly
+/// the on-disk state a hard kill leaves behind. The abandoned objects LEAK
+/// (memory + fds), so the crashed phase MUST have been initialised with a
+/// non-leak-checking allocator (e.g. the std.heap page-backed allocator),
+/// never `std.testing.allocator`.
+///
+/// `deinitGlobalStoreForTestCrash` is NOT sufficient for WAL-durability
+/// tests: it still runs `adapter.checkpointAll()` inside
+/// `deinitGlobalAdapter`, which flushes dirty pages and makes even
+/// deferred-WAL commits durable — masking exactly the loss window under
+/// test. Group-commit coordinator threads are stopped first so no
+/// background apply touches the abandoned adapter (or its WAL files, which
+/// the caller may be about to truncate to simulate an unsynced tail).
+pub fn abandonGlobalStoreForCrashSim() void {
+    const group_commit = @import("storage/group_commit.zig");
+    group_commit.shutdownAllCoordinators();
+    global_store = null;
+    global_store_allocator = null;
+    initialized.store(false, .release);
+    global_adapter = null;
+    global_vtable = null;
+}
+
 fn deinitGlobalStoreEx(clean: bool) void {
     if (initialized.load(.acquire) and global_store != null) {
         // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
