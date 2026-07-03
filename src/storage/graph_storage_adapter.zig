@@ -1267,7 +1267,133 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     // so checkpoint/reopen can recover nodes with label IDs whose names were
     // never persisted. Use the engine API for first sight of a label: it
     // broadcasts the mapping to every shard and dirties the dictionaries.
-    return mg.engine.getOrAssignLabel(label);
+    const id = try mg.engine.getOrAssignLabel(label);
+
+    // Security-graph durability (gap 0026, twin of the sync-mode carve-out
+    // in createGraphLocked): the label dictionary is NOT WAL-logged — it is
+    // persisted only at checkpoint (labels.dict). Per-commit WAL fsync alone
+    // is therefore insufficient on a FRESH (never-checkpointed) security
+    // graph: after a crash, recovery replays the user/role/policy node
+    // records from the fsynced WAL but has lost the "User"/"Role"/... name→id
+    // mappings, leaving every security record unreachable by label — the
+    // same silent auth-state loss this gap is about. Persist the (tiny,
+    // bounded — a handful of labels ever) per-shard dictionaries
+    // synchronously on FIRST sight of a security-graph label, and fail the
+    // mutation if the persist fails: durability before ack, fail closed.
+    // saveToFile is atomic (tmp + fsync + rename), matching the checkpoint
+    // writer, so a crash mid-save leaves the previous dictionary intact.
+    if (std.mem.eql(u8, mg.name, "__geode_security")) {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        for (mg.engine.shards) |shard| {
+            const labels_path = try std.fmt.bufPrint(&path_buf, "{s}/labels.dict", .{shard.graph_dir.path});
+            try shard.label_dict.saveToFile(labels_path);
+        }
+    }
+    return id;
+}
+
+/// Security-graph durability (gap 0026), workaround for an upstream
+/// graph-storage WAL mis-log: `GraphEngine.addLabelTxn` logs the label block
+/// with `logPage(txn, .var_store, result.head)`, but a var_store head is a
+/// REFERENCE `(page_id << 16 | offset)`, not a page id — so the page image
+/// that actually holds the node's label list is never WAL-logged (a bogus
+/// sparse page id is logged instead). Crash recovery then replays the node
+/// record (whose `label_head` points at the ref) but the referenced
+/// var_store page is missing/zeroed: the node survives, its LABEL LINKAGE is
+/// silently lost, and every label-indexed lookup (`getNodesByLabel(:User)`,
+/// the persisted-admin probe, user reload) stops seeing the record — auth
+/// state loss. Until the upstream fix ships (log `head >> 16`), re-log the
+/// CORRECT var_store page inside the same txn so the corrected image commits
+/// (and, on the security graph's `sync_each_commit` engines, fsyncs) with
+/// the mutation. Scoped to `__geode_security`: on bulk graphs this would add
+/// an extra ~8 KB WAL image per label-add (prohibitive at ingest scale), and
+/// their deferred-mode durability barrier is the checkpoint, which flushes
+/// the real pages directly and is unaffected by the mis-logged WAL image.
+/// No-op for non-security graphs and label-less nodes.
+fn relogSecurityLabelPageTxn(mg: *ManagedGraph, node_shard: anytype, node_id: u64, txn: gs.TxnId) !void {
+    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
+    const rec = (try node_shard.getNode(node_id)) orelse return;
+    if (rec.label_head == 0) return;
+    try node_shard.logPagePublic(txn, .var_store, rec.label_head >> 16);
+}
+
+/// Auto-commit variant of `relogSecurityLabelPageTxn` for the
+/// `mg.engine.addLabel` (self-committing) call sites: the label add has
+/// already committed, so the corrected page image is logged in its own tiny
+/// follow-up txn. Security-graph only; the second commit is one extra WAL
+/// fsync on an admin-rare path.
+fn relogSecurityLabelPageAutoCommit(mg: *ManagedGraph, node_shard: anytype, node_id: u64) !void {
+    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
+    const txn = try node_shard.beginTxn();
+    errdefer node_shard.abortTxn(txn) catch {};
+    try relogSecurityLabelPageTxn(mg, node_shard, node_id, txn);
+    try node_shard.commitTxn(txn);
+}
+
+/// Security-graph durability (gap 0026): crash-recovery self-heal for the
+/// per-shard manifest counters. graph-storage's WAL replay restores PAGE
+/// contents but does NOT advance `manifest.next_node_id` / `node_count` /
+/// `next_txn_id` — those are persisted only at checkpoint. After a crash
+/// that followed WAL-fsynced security commits, any node created since the
+/// last checkpoint exists in the replayed pages, but:
+///   * every scan path bounds itself by `manifest.next_node_id`
+///     (`engine.scanNodes`, the derived label-index rebuild, `scanAllNodes`
+///     hydration) — so the recovered user/role/policy record is INVISIBLE to
+///     the persisted-admin probe, user reload, and label lookups, and
+///   * `allocNode` hands out ids from the stale `next_node_id` — RE-ISSUING
+///     the recovered records' slots and silently overwriting them on the
+///     next insert.
+/// Heal by scanning the actually-allocated node pages (bounded by on-disk
+/// page counts — the security graph is tiny) and advancing the counters past
+/// the highest live slot. `next_txn_id` is bumped past the WAL's replayed
+/// LSN so a reused txn id can never let a later crash-recovery misclassify
+/// (and discard) an older committed txn's records. Idempotent: no-ops when
+/// the manifest is already current (clean restart). Scoped to
+/// `__geode_security` at open; bulk graphs keep the upstream behavior —
+/// their deferred-mode durability contract is checkpoint-based, and the
+/// checkpoint persists the manifest.
+fn healSecurityEngineCounters(mg: *ManagedGraph) void {
+    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
+    const stride: u64 = gs.sharded_engine.SHARD_COUNT;
+    for (mg.engine.shards) |shard| {
+        const pager = shard.file_manager.getPager(.nodes) orelse continue;
+        const page_count = pager.pageCount() catch continue;
+        if (page_count == 0) continue;
+        const npp: u64 = shard.node_store.nodes_per_page;
+
+        const Ctx = struct {
+            max_id: u64 = 0,
+            live: u64 = 0,
+            fn cb(ctx: *@This(), id: u64, rec: gs.node.NodeRec) void {
+                _ = rec;
+                ctx.live += 1;
+                if (id > ctx.max_id) ctx.max_id = id;
+            }
+        };
+        var ctx = Ctx{};
+        // error-policy: A — a failed heal scan leaves the stale (upstream)
+        // counters in place; strictly no worse than before this fix.
+        shard.node_store.scanNodes(page_count * npp, &ctx, Ctx.cb) catch continue;
+
+        // Reused txn ids are a corruption hazard regardless of whether any
+        // node survived; heal unconditionally for this shard.
+        const healed_txn = shard.wal.current_lsn + 1;
+        if (healed_txn > shard.manifest.next_txn_id) {
+            shard.manifest.next_txn_id = healed_txn;
+        }
+        if (healed_txn > shard.txn_manager.next_txn_id) {
+            shard.txn_manager.next_txn_id = healed_txn;
+        }
+
+        if (ctx.live == 0) continue;
+        const healed_next = ctx.max_id + stride;
+        if (healed_next > shard.manifest.next_node_id) {
+            shard.manifest.next_node_id = healed_next;
+        }
+        if (ctx.live > shard.manifest.node_count) {
+            shard.manifest.node_count = ctx.live;
+        }
+    }
 }
 
 fn initMergeTupleLocks(allocator: Allocator) ![]std.Io.Mutex {
@@ -2219,6 +2345,9 @@ pub const StorageAdapter = struct {
             const label_id = try resolvePersistedLabelId(mg, lbl);
             try node_shard.addLabelTxn(node_id, label_id, local_txn);
         }
+        // gap 0026: WAL-log the node's REAL label page (see
+        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+        try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
 
         if (own_txn) try node_shard.commitTxn(local_txn);
         _ok_12 = true;
@@ -2498,6 +2627,9 @@ pub const StorageAdapter = struct {
         for (label_ids) |label_id| {
             try node_shard.addLabelTxn(slot_id, label_id, local_txn);
         }
+        // gap 0026: WAL-log the node's REAL label page (see
+        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+        try relogSecurityLabelPageTxn(mg, node_shard, slot_id, local_txn);
 
         rec = (try node_shard.getNode(slot_id)) orelse return error.NodeNotFound;
         var id_buf: [16]u8 = undefined;
@@ -3819,6 +3951,9 @@ pub const StorageAdapter = struct {
             for (label_ids) |label_id| {
                 try node_shard.addLabelTxn(node_id, label_id, local_txn);
             }
+            // gap 0026: WAL-log the node's REAL label page (see
+            // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+            try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
             out[i] = node_id;
         }
 
@@ -6372,6 +6507,25 @@ pub const StorageAdapter = struct {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
+        // Security-graph WAL durability carve-out (2026-07-01, data-ingest
+        // security review, gap 0026): `GEODE_WAL_SYNC=deferred` (GAP-0900)
+        // relaxes the per-commit WAL fsync GLOBALLY for replayable bulk
+        // loads. That contract can never hold for `__geode_security`: an
+        // admin credential rotation, user/role/policy/grant mutation, or
+        // HMAC chain reseal is NOT replayable — losing it on an unclean
+        // shutdown silently resurrects the OLD credential (observed live:
+        // persisted admin hash == env seed with an empty security-graph WAL
+        // after a crash). Force the security graph's engines to
+        // `.sync_each_commit` regardless of the operator knob so every
+        // security mutation is durable BEFORE its commit is acknowledged.
+        // Cost: one WAL fsync per security-graph commit — admin ops are
+        // rare; bulk ingest on other graphs keeps the adapter-wide mode
+        // untouched (this `cfg` is a per-graph copy of `self.config`).
+        // Mirrored in `openGraphLocked`. Test:
+        // tests/test_security_wal_durability.zig.
+        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
+        if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+
         const engine = gs.ShardedGraphEngine.create(
             self.allocator,
             self.data_dir,
@@ -6396,7 +6550,7 @@ pub const StorageAdapter = struct {
         // GAP-0512: Only create per-graph audit for the security graph.
         // Other graphs use the global audit logger. Per-graph audit on every
         // graph caused recursive mutex deadlocks and unnecessary I/O.
-        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
+        // (`is_security_graph` hoisted above for the WAL-sync carve-out.)
         mg.* = .{
             .engine = engine,
             // ShardedGraphEngine synchronises the label dictionary across all
@@ -6469,6 +6623,13 @@ pub const StorageAdapter = struct {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
+        // Security-graph WAL durability carve-out — see the twin comment in
+        // `createGraphLocked` (gap 0026): the security graph always runs
+        // per-commit WAL fsync, even when the adapter-wide mode is
+        // `.deferred` (GEODE_WAL_SYNC=deferred bulk-load knob).
+        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
+        if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+
         const engine = gs.ShardedGraphEngine.open(
             self.allocator,
             self.data_dir,
@@ -6490,7 +6651,6 @@ pub const StorageAdapter = struct {
         const merge_tuple_locks = try initMergeTupleLocks(self.allocator);
         errdefer self.allocator.free(merge_tuple_locks);
 
-        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
@@ -6501,6 +6661,12 @@ pub const StorageAdapter = struct {
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
+
+        // gap 0026: after a crash restart, advance the security graph's
+        // manifest counters past the WAL-replayed state (see
+        // healSecurityEngineCounters) — otherwise recovered security records
+        // are scan-invisible and their slots get re-issued.
+        if (is_security_graph) healSecurityEngineCounters(mg);
 
         // Load per-graph FTS from disk (existing graphs may have persisted data).
         if (initFtsForGraph(self.allocator, self.data_dir, graph_uuid, true)) |fts_result| {
@@ -6775,11 +6941,16 @@ pub const StorageAdapter = struct {
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
                 try node_shard.addLabelTxn(node_id, label_id, local);
+                // gap 0026: WAL-log the node's REAL label page (see
+                // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+                try relogSecurityLabelPageTxn(mg, node_shard, node_id, local);
             } else {
                 try mg.engine.addLabel(node_id, label_id);
+                try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
             }
         } else {
             try mg.engine.addLabel(node_id, label_id);
+            try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
         }
         try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
