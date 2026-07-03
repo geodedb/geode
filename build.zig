@@ -6799,6 +6799,24 @@ pub fn build(b: *std.Build) void {
     const sec_wal_durability_step = b.step("test-security-wal-durability", "Gap 0026: security-graph mutations crash-durable under GEODE_WAL_SYNC=deferred (per-graph sync_each_commit carve-out)");
     sec_wal_durability_step.dependOn(&run_sec_wal_durability_tests.step);
 
+    // Gap 0034 (data-ingest enterprise review): fresh-store FALSE "POSSIBLE
+    // TAMPERING" alarms. The periodic HMAC verifier read the AuthChainRoot
+    // node body via the non-hydrating getNodePtr; once a bulk ingest evicted
+    // it from the bounded resident node cache, every verify round reported
+    // MissingChainRoot until restart. Tests pin: bootstrap seals the root
+    // synchronously; eviction must NOT raise the tamper alarm (the verifier
+    // hydrates the durable truth from the engine); a root genuinely deleted
+    // or corrupted in the engine still fails loudly (the real tamper signal
+    // is preserved).
+    const hmac_root_eviction_mod = b.createModule(.{ .root_source_file = b.path("tests/test_hmac_chain_root_eviction.zig"), .target = target, .optimize = optimize });
+    hmac_root_eviction_mod.addImport("geode", root_mod);
+    hmac_root_eviction_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const hmac_root_eviction_tests = b.addTest(.{ .root_module = hmac_root_eviction_mod });
+    const run_hmac_root_eviction_tests = b.addRunArtifact(hmac_root_eviction_tests);
+    shardDep(test_step, &run_hmac_root_eviction_tests.step, 1, test_shard_loads, test_shard_index);
+    const hmac_root_eviction_step = b.step("test-hmac-chain-root-eviction", "Gap 0034: periodic HMAC verify must not raise false POSSIBLE TAMPERING when the chain-root node body is evicted from the bounded node cache");
+    hmac_root_eviction_step.dependOn(&run_hmac_root_eviction_tests.step);
+
     // Issue #819: admin-bootstrap data-dir permission hardening (CWE-538 /
     // CWE-732).  Exercises the pure permission-check helper in
     // src/server/data_dir_permissions.zig via std.testing.tmpDir fixtures.

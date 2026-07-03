@@ -862,7 +862,17 @@ pub const UserStorageBackend = struct {
         if (nodes.len == 0) return null;
 
         const node_id = nodes[0];
-        const node = self.store.getNodePtr(node_id) orelse return null;
+        // Gap 0034: read the root's node body HYDRATE-ON-MISS. The raw
+        // `getNodePtr` conflated "evicted from the bounded resident node
+        // cache" with "missing from the store": a bulk ingest evicts the
+        // bootstrap-era AuthChainRoot body (FIFO-oldest), the raw lookup
+        // returns null, and every periodic HMAC verify round then reports
+        // MissingChainRoot — a false "POSSIBLE TAMPERING" alarm on a
+        // perfectly healthy fresh store, every 5 minutes until restart.
+        // Hydration rebuilds the body from the durable engine, so null here
+        // now really means "no chain root exists" — the genuine tamper
+        // signal (root deleted/corrupted on disk) stays loud.
+        const node = self.store.getNodePtrHydrated(node_id) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         self.chain_root_node = node_id;
