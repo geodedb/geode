@@ -449,8 +449,8 @@
             // stores; v2 stores auto-upgrade at open. Lets geode stop writing
             // the `__geode_internal_edge_id` property page per edge (~8 KB/edge
             // -> 0 for propertyless edges). Same transitive deps (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.26#7ddf92712968312c980f71c02094ce596a5c6998",
-            .hash = "graph_storage-0.2.26-9UyJS0uJGACwhs4VWOKr1hEVaWhCdy2-FPtj4aQOGeLG",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.27#8990836de0cc40f740e485559344859d2d0b9460",
+            .hash = "graph_storage-0.2.27-9UyJSwrKGAAkpkhpxlUPq9CALxBYnZsFv5dIyMHpoiEH",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
