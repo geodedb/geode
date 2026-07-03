@@ -5470,6 +5470,83 @@ pub const StorageAdapter = struct {
         };
     }
 
+    /// GAP typed-edge enumeration (`getEdgesByType` under a bounded edge
+    /// cache): append the PUBLIC id of every live edge of `rel_type` in
+    /// `graph_name` to `out` by scanning each shard's edge_index — the
+    /// merged mmap-BASE ⊕ OVERLAY ⊖ tombstones view via
+    /// `EdgeIndexMap.forEachLive`. ONE O(total edges) sequential index-record
+    /// scan: NO node iteration, NO adjacency hydration, and NO edge-body /
+    /// property pages for v2 edges (each 40-byte index record already carries
+    /// `rel_type` and the inline `public_id`). Legacy entries
+    /// (`public_id == 0`, pre-v0.2.24 stores) fall back to the persisted
+    /// `__geode_internal_edge_id` property read off the source shard —
+    /// counted via `graph_store.edge_id_property_fallback_reads`, exactly
+    /// like every other inline-first reader (loop1, adjacency hydrate, MERGE
+    /// dedup probe).
+    ///
+    /// Graph scoping is structural: each geode graph owns its own
+    /// ShardedGraphEngine, so scanning `graph_name`'s shards can never see
+    /// another graph's edges. Tenant filtering stays with the CALLER
+    /// (graph_store), which compares the hydrated edge body's tenant tag —
+    /// the engine index carries no tenant information.
+    ///
+    /// An unseen `rel_type` (absent from the graph's label dictionary) has no
+    /// edges of that type — returns without touching any shard.
+    pub fn collectEdgePublicIdsByType(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        rel_type: []const u8,
+        allocator: Allocator,
+        out: *std.ArrayList(u64),
+    ) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const rel_label_id = mg.label_dict.getId(rel_type) orelse return;
+
+        const Ctx = struct {
+            out: *std.ArrayList(u64),
+            alloc: Allocator,
+            rel: u32,
+            shard: *gs.GraphEngine,
+        };
+        for (mg.engine.shards) |shard| {
+            // Phase A (deferred derived indexes): materialize this shard's
+            // edge_index before iterating it, mirroring every other
+            // edge_index reader in the engine (getEdge / edgeIndexCount).
+            try shard.ensureDerivedHydrated();
+            var ctx = Ctx{ .out = out, .alloc = allocator, .rel = rel_label_id, .shard = shard };
+            try shard.edge_index.forEachLive(&ctx, struct {
+                fn visit(c: *Ctx, edge_slot: u64, entry: gs.engine.EdgeIndexEntry) anyerror!void {
+                    if (entry.rel_type != c.rel) return;
+                    if (entry.public_id != 0) {
+                        try c.out.append(c.alloc, entry.public_id);
+                        return;
+                    }
+                    // Legacy (v1 / pre-inline) edge: resolve the public id
+                    // from the persisted property on the source shard.
+                    _ = graph_store.edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                    const stored = (c.shard.getEdgeProperty(
+                        entry.from,
+                        edge_slot,
+                        graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
+                        c.alloc,
+                    ) catch null) orelse return; // orphan / not-yet-mapped: skip
+                    defer freeOwnedStorageProperty(c.alloc, stored);
+                    switch (stored) {
+                        .string => |text| {
+                            const pid = graph_store.parsePersistedPublicId(text) orelse return;
+                            try c.out.append(c.alloc, pid);
+                        },
+                        else => {},
+                    }
+                }
+            }.visit);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Full node scanning
     // ------------------------------------------------------------------

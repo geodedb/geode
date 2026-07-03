@@ -801,6 +801,19 @@ pub const INTERNAL_EDGE_ID_PROPERTY_KEY = "__geode_internal_edge_id";
 /// blocks / old stores legitimately bump it (read-both is permanent).
 pub var edge_id_property_fallback_reads: std.atomic.Value(u64) = .init(0);
 
+/// GAP-ENT-0004 instrumentation: typed-edge enumeration route counters for
+/// `getEdgesByType` under a BOUNDED edge cache (the engine-derived path).
+/// `typed_edge_index_scan_total` counts servings from the engine's per-shard
+/// edge_index scan (O(total edges) sequential index-record scan, no node
+/// iteration, no adjacency hydration). `typed_edge_node_walk_total` counts
+/// servings from the legacy every-node adjacency walk (adapterless fallback
+/// ONLY), and `typed_edge_node_walk_nodes_total` counts the nodes that walk
+/// visited. With a storage adapter present the walk must NEVER run — path
+/// tests assert the walk counters stay flat while the scan counter moves.
+pub var typed_edge_index_scan_total: std.atomic.Value(u64) = .init(0);
+pub var typed_edge_node_walk_total: std.atomic.Value(u64) = .init(0);
+pub var typed_edge_node_walk_nodes_total: std.atomic.Value(u64) = .init(0);
+
 /// GAP-0891 (RC-2): reserved storage key used to round-trip a node/edge's
 /// `tenant_id` tag across restart. Before this, the adapter persisted only the
 /// public id and `loadOneGraphFromAdapter` rebuilt every row with
@@ -8112,6 +8125,49 @@ pub const GraphStore = struct {
         // (which would box every non-resident node until the next grace
         // point for no benefit).
         self.ensureGraphHydrated(gn); // PHASE 1b chokepoint
+
+        // GAP-ENT-0004: with a storage adapter present, serve the typed
+        // enumeration from the ENGINE's per-shard edge_index (mmap base ⊕
+        // overlay merged view) — ONE O(total edges) sequential index-record
+        // scan with NO node iteration, NO adjacency hydration and, for
+        // tenantless callers, NO edge-body reads (each index entry carries
+        // rel_type + the inline public id). The previous behaviour walked
+        // EVERY node of the graph and expanded its outgoing adjacency
+        // (hydrate-on-miss) just to derive type membership — O(nodes+edges)
+        // engine reads + cache thrash at enterprise scale.
+        //
+        // Tenant semantics IDENTICAL to the walk: when a concrete tenant
+        // filter is present, resolve each candidate edge's body
+        // (hydrate-on-miss, bounded residency) and compare its tenant tag —
+        // the same `edge.tenant_id` equality the walk applied.
+        if (global_adapter) |adapter| {
+            _ = typed_edge_index_scan_total.fetchAdd(1, .monotonic);
+            const start_len = id_list.items.len;
+            adapter.collectEdgePublicIdsByType(gn, edge_type, allocator, id_list) catch |err| switch (err) {
+                // Graph unknown to the adapter (e.g. created purely in-memory
+                // in a test): nothing durable to enumerate — same empty result
+                // the walk would produce from an absent nodes_by_graph entry.
+                error.GraphNotFound => return,
+                else => return err,
+            };
+            if (tenant_id) |tid| {
+                var w: usize = start_len;
+                for (id_list.items[start_len..]) |eid| {
+                    const edge = self.getEdgePtrHydrated(eid) orelse continue;
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+                    id_list.items[w] = eid;
+                    w += 1;
+                }
+                id_list.shrinkRetainingCapacity(w);
+            }
+            return;
+        }
+
+        // Adapterless fallback (pure in-memory store configured with a bounded
+        // edge cache — test-only shape): the original every-node adjacency
+        // walk. Instrumented so path tests can prove it never runs when an
+        // adapter is present.
+        _ = typed_edge_node_walk_total.fetchAdd(1, .monotonic);
         var ids_iter = blk: {
             const io = std.Io.Threaded.global_single_threaded.io();
             self.nodes_by_graph_mutex.lockUncancelable(io);
@@ -8120,6 +8176,7 @@ pub const GraphStore = struct {
             break :blk inner.keyIterator();
         };
         while (ids_iter.next()) |id_ptr| {
+            _ = typed_edge_node_walk_nodes_total.fetchAdd(1, .monotonic);
             const out_ids = self.getOutgoingEdgeIds(id_ptr.*) orelse continue;
             for (out_ids) |eid| {
                 const edge = self.getEdgePtrHydrated(eid) orelse continue;

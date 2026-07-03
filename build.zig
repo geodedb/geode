@@ -7325,6 +7325,20 @@ pub fn build(b: *std.Build) void {
     const edge_engine_direct_step = b.step("test-edge-engine-direct", "Run Phase-1 bounded engine-direct edge-body mirror regression (bounded edge residency + hydrate-on-miss correctness + engine-served edge-type queries)");
     edge_engine_direct_step.dependOn(&run_edge_engine_direct_tests.step);
 
+    // GAP-ENT-0004: typed-edge enumeration must be served from the engine's
+    // per-shard edge_index (O(edges) sequential index scan, no every-node walk
+    // / adjacency hydration). Correctness vs oracle (2 types, bounded cache,
+    // reopen base+overlay merged view), path proof via the typed_edge_*
+    // counters, concrete-tenant executor routing, and a 50k scale shape with
+    // zero node-body reads.
+    const typed_edge_scan_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_typed_edge_index_scan.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    typed_edge_scan_test_mod.addImport("geode", root_mod);
+    const typed_edge_scan_tests = b.addTest(.{ .root_module = typed_edge_scan_test_mod });
+    const run_typed_edge_scan_tests = b.addRunArtifact(typed_edge_scan_tests);
+    shardDep(test_step, &run_typed_edge_scan_tests.step, 1, test_shard_loads, test_shard_index);
+    const typed_edge_scan_step = b.step("test-typed-edge-index-scan", "GAP typed-edge enumeration: engine edge_index scan (no every-node walk) — correctness vs oracle, path counters, tenant routing, reopen base+overlay, 50k scale shape");
+    typed_edge_scan_step.dependOn(&run_typed_edge_scan_tests.step);
+
     // PHASE 1 bounded-RSS plateau PROBE (standalone exe): ingest K edges with a
     // tiny edge+adj cap and print resident counts + MaxRSS. Run at two K values
     // to prove residency + RSS do not scale with K.
