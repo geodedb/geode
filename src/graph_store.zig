@@ -6429,14 +6429,45 @@ pub const GraphStore = struct {
         // after a no-snapshot open (same bug class as countEdgesForGraph).
         // No-op once hydrated / on snapshot-resident opens, so O(1) is preserved.
         @constCast(self).ensureGraphHydrated(graph_name);
-        // Bounded cache: the resident map is incomplete — count from the
-        // per-graph IdMap (fully resident). With no tenant filter, the graph's
-        // IdMap node count IS the answer (O(1)). With a tenant filter, resolve
-        // each node's tenant without populating the cache.
-        if (self.nodes.effectiveCap() != 0) {
+        // GAP-ENT-0013: with no tenant filter, the graph's IdMap node count IS
+        // the answer — O(1) in BOTH cache modes (the IdMap is fully resident
+        // whenever an engine adapter backs the graph, bounded or unbounded
+        // node cache alike). Hoisted out of the bounded-cache branch so an
+        // unbounded cache no longer pays an O(N) `nodes.iterator()` walk.
+        //
+        // Review I-1: gate the O(1) return on `global_vtable != null`. The
+        // IdMap is only WRITE-maintained when an engine vtable backs node
+        // creation (`createNode*` inserts into the IdMap solely inside the
+        // `adapter_node != null` arm), but `createGraph` /
+        // `openOrCreateGraphWithUuid` unconditionally create an EMPTY IdMap
+        // even with no disk adapter (GAP-0839). Without the gate, an
+        // adapterless `CREATE GRAPH` + node creates + `count(n)` returned 0
+        // from that empty IdMap. Adapterless stores never bound the node
+        // cache (hydrate-on-miss is engine-backed), so falling through to
+        // the resident iteration below is exact there.
+        if (tenant == null) {
+            if (global_vtable != null) {
+                if (@constCast(self).getIdMap(graph_name)) |id_map| {
+                    // GAP-ENT-0013 path counter: O(1) IdMap total served the count.
+                    _ = g_count_nodes_idmap_fast.fetchAdd(1, .monotonic);
+                    return id_map.nodeCount();
+                }
+            }
+            // No IdMap for this graph (purely in-memory graph with no
+            // adapter). Bounded cache: the resident map is incomplete and
+            // there is no authoritative source — preserve the pre-existing
+            // bounded behavior (0). Unbounded cache: fall through to the
+            // resident iteration below, which IS exact (O(resident)).
+            if (self.nodes.effectiveCap() != 0) return 0;
+        } else if (self.nodes.effectiveCap() != 0) {
+            // Bounded cache + tenant filter: the resident map is incomplete —
+            // resolve each node's tenant from the IdMap without populating
+            // the cache.
             const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
-            if (tenant == null) return id_map.nodeCount();
             const tid = tenant.?;
+            // GAP-ENT-0013 path counter: tenant-filtered per-uuid iteration
+            // (O(N) `nodeMatchesTenant` property reads).
+            _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
             var count: usize = 0;
             var nit = id_map.nodeUuidIterator();
             while (nit.next()) |nuuid| {
@@ -6445,6 +6476,9 @@ pub const GraphStore = struct {
             }
             return count;
         }
+        // GAP-ENT-0013 path counter: unbounded-cache resident node iteration
+        // (tenant-filtered count, or the no-IdMap in-memory fallback above).
+        _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
         var count: usize = 0;
         var iter = self.nodes.iterator();
         while (iter.next()) |entry| {
@@ -12193,6 +12227,17 @@ var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u6
 // path serves the query) instead of relying on wall-clock timing.
 var g_clone_nodes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0013 (unlabeled count(n) IdMap pushdown) instrumentation.
+// `g_count_nodes_idmap_fast` counts every `countNodesForGraph` call that
+// returned via the O(1) `IdMap.nodeCount()` path. `g_count_nodes_iter_fallback`
+// counts every call that fell back to a per-node iteration — either the
+// unbounded-cache full `nodes.iterator()` walk or the tenant-filtered IdMap
+// uuid walk (`nodeMatchesTenant` per node). A bare unlabeled
+// `MATCH (n) RETURN count(n)` with no tenant filter MUST take the O(1) path:
+// the regression test in tests/test_count_nodes_pushdown_perf.zig asserts the
+// fast counter moves and the fallback counter does not.
+var g_count_nodes_idmap_fast: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_count_nodes_iter_fallback: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // PHASE 1b (lazy hydration) instrumentation. `g_loop2_scan_nodes` counts every
 // node iterated by the DEFERRED resident-index scan (`hydrateGraphLoop2`); it
 // MUST be 0 at the "server ready" point (open registers + loads the IdMap but
@@ -12257,6 +12302,20 @@ pub fn resetGetNodesByLabelsCount() void {
 
 pub fn getNodesByLabelsCallCount() u64 {
     return g_get_nodes_by_labels_count.load(.acquire);
+}
+
+/// GAP-ENT-0013: number of `countNodesForGraph` calls served O(1) from
+/// `IdMap.nodeCount()`. Mirrors the `g_full_scan_count` diagnostic pattern
+/// in src/execution/match_operations.zig.
+pub fn getCountNodesIdMapFastTotal() u64 {
+    return g_count_nodes_idmap_fast.load(.acquire);
+}
+
+/// GAP-ENT-0013: number of `countNodesForGraph` calls that ran a per-node
+/// iteration (the unbounded-cache full `nodes.iterator()` walk OR the
+/// tenant-filtered IdMap uuid walk).
+pub fn getCountNodesIterFallbackTotal() u64 {
+    return g_count_nodes_iter_fallback.load(.acquire);
 }
 
 // PHASE 1b lazy-hydration instrumentation accessors (used by

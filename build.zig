@@ -2261,6 +2261,10 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0811_aggregation_fastpath_tests.root_module.addImport("geode", root_mod);
     const run_gap0811_aggregation_fastpath_tests = b.addRunArtifact(gap0811_aggregation_fastpath_tests);
+    // Named step so the count-fastpath suite can run standalone (it previously
+    // was only reachable through the sharded aggregate `test` step).
+    const gap0811_aggregation_fastpath_step = b.step("test-gap0811-aggregation-fastpath", "Run GAP-0811 label-scoped count fast-path regression (countNodesByLabel O(1) posting-list cardinality)");
+    gap0811_aggregation_fastpath_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
 
     // FTS latency gate: CALL geode.fts.search must return matching :Doc rows
     // within a (CI-skipped) latency budget. CI-aware perf gate mirroring the
