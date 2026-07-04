@@ -1612,6 +1612,23 @@ pub const MergePropertyIndex = struct {
         return @intCast(std.hash.Wyhash.hash(0, key) % merge_property_index_shard_count);
     }
 
+    /// T2b (hydration merge): best-effort pre-size for a bulk load of
+    /// ~`additional_total` inserts spread across the shards. Distinct-key
+    /// counts are unknowable before the inserts (duplicates collapse), so
+    /// this reserves the per-shard UPPER bound — at 43M keys the rehash-growth
+    /// churn it eliminates dominates the single-digit-% table over-provision.
+    /// OOM on a shard is swallowed: reservation is an optimization only.
+    fn reserveAdditional(self: *MergePropertyIndex, additional_total: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const per_shard64 = additional_total / merge_property_index_shard_count + 1;
+        const per_shard: u32 = @intCast(@min(per_shard64, std.math.maxInt(u32)));
+        for (&self.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            shard.map.ensureUnusedCapacity(per_shard) catch {};
+        }
+    }
+
     fn putOrUpdate(self: *MergePropertyIndex, key: []const u8, node_id: u64) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
@@ -4192,6 +4209,42 @@ pub const GraphStore = struct {
         };
     }
 
+    /// T2b (hydration merge, label family): bulk variant of
+    /// `bumpGraphLabelCount` — one refcount add for `n` freshly inserted
+    /// posting ids. Final counter value is identical to calling the
+    /// single-bump version `n` times (atomic adds commute).
+    fn bumpGraphLabelCountBy(self: *GraphStore, graph_name: []const u8, label: []const u8, n: usize) void {
+        if (n == 0) return;
+        var key_buf: [512]u8 = undefined;
+        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_rwlock.lockSharedUncancelable(io);
+        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
+            _ = count.fetchAdd(n, .monotonic);
+            self.label_count_rwlock.unlockShared(io);
+            return;
+        }
+        self.label_count_rwlock.unlockShared(io);
+
+        self.label_count_rwlock.lockUncancelable(io);
+        defer self.label_count_rwlock.unlock(io);
+        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
+            _ = count.fetchAdd(n, .monotonic);
+            return;
+        }
+
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(n)) catch {
+            self.allocator.free(owned_key);
+            return;
+        };
+    }
+
     fn decGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
         var key_buf: [512]u8 = undefined;
         const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
@@ -4480,6 +4533,23 @@ pub const GraphStore = struct {
             result.value_ptr.* = std.AutoHashMap(u64, void).init(self.allocator);
         }
         try result.value_ptr.put(node_id, {});
+    }
+
+    /// T2b (hydration merge): pre-size the per-graph node-id index for a bulk
+    /// load of `additional` ids (the count is exact post-scan). Same locking
+    /// and getOrPut shape as `addNodeToGraphIndex`.
+    fn reserveGraphNodeIndex(self: *GraphStore, graph_name: []const u8, additional: u32) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.nodes_by_graph_mutex.lockUncancelable(io);
+        defer self.nodes_by_graph_mutex.unlock(io);
+        const result = try self.nodes_by_graph.getOrPut(graph_name);
+        if (!result.found_existing) {
+            const key_copy = try self.allocator.dupe(u8, graph_name);
+            errdefer self.allocator.free(key_copy);
+            result.key_ptr.* = key_copy;
+            result.value_ptr.* = std.AutoHashMap(u64, void).init(self.allocator);
+        }
+        try result.value_ptr.ensureUnusedCapacity(additional);
     }
 
     // PERF-B (issue #811): Remove a node-id from the per-graph node-id index.
@@ -4876,6 +4946,98 @@ pub const GraphStore = struct {
         const before_len = posting.list.items.len;
         try sortedInsertLocked(&posting.list, allocator, node_id);
         return posting.list.items.len > before_len;
+    }
+
+    /// T2b (hydration merge, label family): batch-apply one hydration batch's
+    /// label postings. Semantically identical to calling `addToLabelIndex`
+    /// once per (node, label) — the posting is a SORTED, DEDUPED id set and
+    /// the per-(graph,label) refcount counts genuine inserts — but O(n log n)
+    /// instead of the per-insert `ArrayList.insert` memmove that degenerates
+    /// to O(n²) when uuid order interleaves across shards (the at-scale merge
+    /// pathology: shard-major row order inserts every later shard's uuids
+    /// into the MIDDLE of the posting).
+    fn applyLabelPostingsForBatch(self: *GraphStore, graph_name: []const u8, batch: []const Node) !void {
+        var groups = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
+        defer {
+            var vit = groups.valueIterator();
+            while (vit.next()) |list| list.deinit(self.allocator);
+            groups.deinit();
+        }
+        for (batch) |*node| {
+            for (node.labels) |label| {
+                const gop = try groups.getOrPut(label);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(self.allocator, node.id);
+            }
+        }
+        var it = groups.iterator();
+        while (it.next()) |entry| {
+            std.sort.pdq(u64, entry.value_ptr.items, {}, std.sort.asc(u64));
+            try self.mergeIntoLabelPosting(graph_name, entry.key_ptr.*, entry.value_ptr.items);
+        }
+    }
+
+    /// Sorted bulk merge of `sorted_ids` (ascending, may contain duplicates)
+    /// into one (graph,label) posting. Locking discipline identical to
+    /// `addToLabelIndex` (label_index_mutex -> posting.mutex; refcount bump
+    /// while both held). The replaced backing buffer is freed inline — legal
+    /// here for the same reason `sortedInsert`'s reallocating `insert` is on
+    /// this path: hydration's entry gate blocks every reader of this graph's
+    /// postings until the build completes.
+    fn mergeIntoLabelPosting(self: *GraphStore, graph_name: []const u8, label: []const u8, sorted_ids: []const u64) !void {
+        if (sorted_ids.len == 0) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+        try self.ensureGraphLabelCount(graph_name, label);
+        posting.lock();
+        defer posting.unlock();
+
+        const old = posting.list.items;
+        // Pass 1: count genuine inserts (not already present, not a repeat).
+        var inserted: usize = 0;
+        {
+            var oi: usize = 0;
+            var ni: usize = 0;
+            var last_new: ?u64 = null;
+            while (ni < sorted_ids.len) : (ni += 1) {
+                const id = sorted_ids[ni];
+                if (last_new != null and last_new.? == id) continue;
+                last_new = id;
+                while (oi < old.len and old[oi] < id) oi += 1;
+                if (oi < old.len and old[oi] == id) continue;
+                inserted += 1;
+            }
+        }
+        if (inserted == 0) return;
+
+        // Pass 2: build the merged sorted set and swap it in.
+        var merged = try std.ArrayList(u64).initCapacity(self.allocator, old.len + inserted);
+        {
+            var oi: usize = 0;
+            var ni: usize = 0;
+            var last_new: ?u64 = null;
+            while (ni < sorted_ids.len) : (ni += 1) {
+                const id = sorted_ids[ni];
+                if (last_new != null and last_new.? == id) continue;
+                last_new = id;
+                while (oi < old.len and old[oi] < id) {
+                    merged.appendAssumeCapacity(old[oi]);
+                    oi += 1;
+                }
+                if (oi < old.len and old[oi] == id) continue;
+                merged.appendAssumeCapacity(id);
+            }
+            while (oi < old.len) {
+                merged.appendAssumeCapacity(old[oi]);
+                oi += 1;
+            }
+        }
+        posting.list.deinit(self.allocator);
+        posting.list = merged;
+        self.bumpGraphLabelCountBy(graph_name, label, inserted);
     }
 
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
@@ -10612,6 +10774,29 @@ pub const GraphStore = struct {
         return @max(1, @min(shard_count, cpus));
     }
 
+    /// T2b (hydration merge): merge-phase parallelism switch.
+    /// GEODE_HYDRATION_MERGE_WORKERS:
+    ///   unset/invalid -> default min(4, logical CPUs)
+    ///   1             -> fully single-threaded merge (the pre-T2b order;
+    ///                    kill switch and the family-parity baseline)
+    ///   >=2           -> the node-side product FAMILIES (label postings /
+    ///                    introspection counters / merge index) run on their
+    ///                    own threads, pipelined one shard behind the core
+    ///                    (id_map + node bodies + graph index) thread.
+    /// The value is a mode switch, not a thread-pool size: distinct product
+    /// families go to distinct global structures, so at most 3 family threads
+    /// (+ the core thread) ever exist.
+    fn hydrationMergeWorkerCount() usize {
+        if (std.c.getenv("GEODE_HYDRATION_MERGE_WORKERS")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            if (std.fmt.parseInt(usize, raw, 10)) |v| {
+                if (v >= 1) return v;
+            } else |_| {}
+        }
+        const cpus = std.Thread.getCpuCount() catch 1;
+        return @max(1, @min(4, cpus));
+    }
+
     /// Find a decoded stream-scan property entry's STRING payload by key.
     /// Returns null when the key is absent OR the value is not a string —
     /// exactly the legacy switch-on-`.string`-else-fallthrough behavior of
@@ -10629,6 +10814,235 @@ pub const GraphStore = struct {
         }
         return null;
     }
+
+    /// T2b (hydration merge core): build ONE scan row's node-side CORE
+    /// products — loop1 IdMap insert (resident mode), the Node body, the
+    /// bounded-cache insert, next_node_id, and the per-graph node-id index.
+    /// Returns a SHALLOW COPY of the stored Node, or null when the row is
+    /// skipped (corrupt blob / missing public id / unmapped slot).
+    ///
+    /// WHY a copy: the family consumers (label postings / introspection
+    /// counters / merge index) must not re-read the bounded node cache — a
+    /// `*Node` into the cache's inline map storage is invalidated by any
+    /// later put's rehash/evict, and a getPtr on an already-EVICTED id would
+    /// hydrate-on-miss straight back into the per-node random engine reads
+    /// this scan exists to avoid. The copy's sub-heap (labels/props/strings)
+    /// is cache-owned and — including for evicted entries — freed only at the
+    /// per-graph grace window (retire discipline), which cannot run while
+    /// this graph's hydration holds its entry mutex; the merge joins every
+    /// family thread before returning.
+    fn hydrateStreamNodeRowCore(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+        resident: bool,
+        row: *const graph_storage_adapter.hydration_scan.NodeRow,
+        skipped_node_mappings: *u64,
+    ) !?Node {
+        // Instrumentation + injected-failure hook: identical placement to
+        // the legacy loop2 (per live scan row, before any skip).
+        _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
+        if (comptime @import("builtin").is_test) {
+            const lim = g_test_hydration_fail_after.load(.monotonic);
+            if (lim != std.math.maxInt(u64) and
+                g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
+            {
+                return error.TestInjectedHydrationFailure;
+            }
+        }
+
+        if (resident) {
+            // loop1 equivalent: recover the persisted public id from the
+            // decoded blob (one engine read's worth of work per node in the
+            // legacy scan — counter kept for the tests' "no loop1 at ready /
+            // loop1 ran on fallback" contract).
+            _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
+            if (row.corrupt_skip) {
+                log.warn("skipping node with corrupt property page during load", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.int("slot_id", @intCast(row.slot)),
+                    Attr.string("error", @errorName(error.DataCorruption)),
+                });
+                skipped_node_mappings.* += 1;
+                return null;
+            }
+            const node_public_id: ?u64 = blk: {
+                const text = findStreamPropString(row.props, INTERNAL_NODE_ID_PROPERTY_KEY) orelse break :blk null;
+                break :blk parsePersistedPublicId(text);
+            };
+            if (node_public_id) |pid| {
+                try id_map.insertNodeWithSlot(@as(u128, pid), row.slot);
+            } else {
+                skipped_node_mappings.* += 1;
+                return null;
+            }
+        }
+
+        const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse return null));
+
+        // Labels: dictionary resolution with getNodeLabels' exact
+        // drop-unknown-ids rule; the Node owns the resulting slice.
+        var labels_list: std.ArrayList([]const u8) = .empty;
+        for (row.label_ids) |label_id| {
+            if (adapter.hydrationLabelString(graph_name, label_id)) |name| {
+                try labels_list.append(self.allocator, try self.allocator.dupe(u8, name));
+            }
+        }
+        const labels = try labels_list.toOwnedSlice(self.allocator);
+
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = blk_tenant: {
+            if (findStreamPropString(row.props, INTERNAL_TENANT_ID_PROPERTY_KEY)) |text| {
+                break :blk_tenant try self.allocator.dupe(u8, text);
+            }
+            break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+        };
+
+        var node = Node{
+            .id = node_uuid,
+            .labels = labels,
+            .properties = CompactPropertyMap.init(self.allocator),
+            .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
+        };
+
+        for (row.props) |pe| {
+            if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+            // C3 (review-0023): `.null` is the adapter's REMOVE tombstone —
+            // never materialize it as a present property.
+            if (pe.value == .null) continue;
+            const key_copy = try self.allocator.dupe(u8, pe.key);
+            const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, pe.value);
+            try node.properties.put(key_copy, pv);
+        }
+
+        try self.nodes.put(node_uuid, node);
+
+        if (node_uuid >= self.next_node_id) {
+            self.next_node_id = node_uuid + 1;
+        }
+
+        const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
+        try self.addNodeToGraphIndex(graph_name, node_uuid);
+        return stored_node_ptr.*;
+    }
+
+    /// T2b (hydration merge): 2-stage per-shard pipeline that runs the
+    /// node-side product FAMILIES on their own threads while the core thread
+    /// processes the NEXT shard:
+    ///
+    ///   core(s):    id_map + Node bodies + bounded-cache put + graph index
+    ///   labels(s):  label postings + (graph,label) refcounts     [thread 0]
+    ///   counters(s): PERF-C tenant introspection refcounts       [thread 1]
+    ///   merge(s):   merge_prop_index (+ composite entries)       [thread 2]
+    ///
+    /// SAFETY: distinct families mutate DISJOINT global structures, so the
+    /// three threads share no write destination; each family processes the
+    /// shard batches strictly in shard-major order (submit() joins shard
+    /// s-1's threads before spawning shard s's), so every family's insert
+    /// order — including merge-index last-wins on duplicate keys — is
+    /// IDENTICAL to the single-threaded merge. The batches hold shallow Node
+    /// copies (see hydrateStreamNodeRowCore) so families never touch the
+    /// node cache. Family errors surface at the next submit()/finish() and
+    /// fail the hydration exactly like an inline error (C1 quarantine).
+    const FamilyPipeline = struct {
+        store: *GraphStore,
+        graph_name: []const u8,
+        do_labels: bool,
+        do_counters: bool,
+        do_merge: bool,
+        batch: std.ArrayList(Node) = .empty,
+        threads: [3]?std.Thread = .{ null, null, null },
+        errs: [3]?anyerror = .{ null, null, null },
+
+        fn joinRunning(p: *FamilyPipeline) void {
+            for (&p.threads) |*slot| {
+                if (slot.*) |t| {
+                    t.join();
+                    slot.* = null;
+                }
+            }
+        }
+
+        fn pendingError(p: *const FamilyPipeline) ?anyerror {
+            for (p.errs) |e| {
+                if (e) |err| return err;
+            }
+            return null;
+        }
+
+        /// Join the previous shard's family threads (preserving each
+        /// family's global shard-major order), then take ownership of
+        /// `new_batch` and spawn its families.
+        fn submit(p: *FamilyPipeline, new_batch: std.ArrayList(Node)) !void {
+            p.joinRunning();
+            p.batch.deinit(p.store.allocator);
+            p.batch = new_batch;
+            if (p.pendingError()) |err| return err;
+            if (p.batch.items.len == 0) return;
+            p.spawnFamily(0, runLabels, p.do_labels);
+            p.spawnFamily(1, runCounters, p.do_counters);
+            p.spawnFamily(2, runMerge, p.do_merge);
+        }
+
+        fn spawnFamily(p: *FamilyPipeline, idx: usize, comptime f: fn (*FamilyPipeline) void, enabled: bool) void {
+            if (!enabled) return;
+            const t = std.Thread.spawn(.{}, f, .{p}) catch {
+                // Spawn failure: run this family inline (degraded
+                // parallelism, never a correctness change) — same policy as
+                // the scan workers.
+                f(p);
+                return;
+            };
+            p.threads[idx] = t;
+        }
+
+        fn finish(p: *FamilyPipeline) !void {
+            p.joinRunning();
+            if (p.pendingError()) |err| return err;
+        }
+
+        /// Idempotent cleanup for EVERY exit path (including a core error
+        /// mid-shard): joins outstanding family threads BEFORE their batch
+        /// memory is freed.
+        fn abort(p: *FamilyPipeline) void {
+            p.joinRunning();
+            p.batch.deinit(p.store.allocator);
+            p.batch = .empty;
+        }
+
+        fn runLabels(p: *FamilyPipeline) void {
+            p.store.applyLabelPostingsForBatch(p.graph_name, p.batch.items) catch |err| {
+                p.errs[0] = err;
+            };
+        }
+
+        fn runCounters(p: *FamilyPipeline) void {
+            for (p.batch.items) |*node| {
+                p.store.bumpIntrospectionForNode(node) catch |err| {
+                    p.errs[1] = err;
+                    return;
+                };
+            }
+        }
+
+        fn runMerge(p: *FamilyPipeline) void {
+            for (p.batch.items) |*node| {
+                var it = node.properties.iterator();
+                while (it.next()) |prop_entry| {
+                    p.store.addToMergePropertyIndex(
+                        node.graph_name,
+                        node.labels,
+                        prop_entry.key_ptr.*,
+                        prop_entry.value_ptr.*,
+                        node.id,
+                    ) catch {};
+                }
+                p.store.addNodeCompositeMergeEntries(node);
+            }
+        }
+    };
 
     /// GAP hydration fast-scan: build the loop1/loop2 products from the
     /// per-shard SEQUENTIAL stream scan instead of the per-node engine-read
@@ -10677,10 +11091,12 @@ pub const GraphStore = struct {
         // Per-shard streaming scan — Task 2: up to shard_count DEDICATED
         // worker threads (no thread-pool reentrancy), each sweeping its own
         // shard's files linearly into a private ShardAccum (per-worker
-        // accumulation; the global-product merge below stays single-threaded
-        // by design — no lock soup). Shards are fully independent: each owns
-        // its files, pagers and buffer pool, and workers never touch shared
-        // geode state (label dict resolution happens in the merge).
+        // accumulation; the global-product merge below runs the CORE inserts
+        // single-threaded and fans the independent product FAMILIES out to
+        // their own threads — see FamilyPipeline). Shards are fully
+        // independent: each owns its files, pagers and buffer pool, and
+        // workers never touch shared geode state (label dict resolution
+        // happens in the merge).
         const worker_count = hydrationScanWorkerCount(shard_count);
         if (worker_count <= 1) {
             for (accums, acc_ready, 0..) |*acc, *ready, shard_idx| {
@@ -10756,120 +11172,133 @@ pub const GraphStore = struct {
 
         _ = g_hydration_streaming_scans.fetchAdd(1, .monotonic);
 
-        // ---- phase A: node products (loop1 + loop2 node side) -------------
+        // ---- T2b pre-size: every product count is KNOWN post-scan ----------
+        // Eliminates the rehash-growth churn that dominated the single-
+        // threaded merge at 14.27M rows (each doubling re-inserts the whole
+        // table; ~log2(n) full passes without reservation).
+        var total_rows: u64 = 0;
+        var total_edges: u64 = 0;
+        var merge_key_estimate: u64 = 0;
         for (accums) |*acc| {
+            total_rows += acc.rows.len;
             for (acc.rows) |*row| {
-                // Instrumentation + injected-failure hook: identical placement
-                // to the legacy loop2 (per live scan row, before any skip).
-                _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
-                if (comptime @import("builtin").is_test) {
-                    const lim = g_test_hydration_fail_after.load(.monotonic);
-                    if (lim != std.math.maxInt(u64) and
-                        g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
-                    {
-                        return error.TestInjectedHydrationFailure;
+                total_edges += row.edges.len;
+                if (!snap.merge and row.label_ids.len != 0) {
+                    var indexable: u64 = 0;
+                    for (row.props) |pe| {
+                        if (pe.value == .null) continue;
+                        if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+                        if (!shouldIndexProperty(pe.key)) continue;
+                        indexable += 1;
                     }
-                }
-
-                if (resident) {
-                    // loop1 equivalent: recover the persisted public id from
-                    // the decoded blob (one engine read's worth of work per
-                    // node in the legacy scan — counter kept for the tests'
-                    // "no loop1 at ready / loop1 ran on fallback" contract).
-                    _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
-                    if (row.corrupt_skip) {
-                        log.warn("skipping node with corrupt property page during load", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.int("slot_id", @intCast(row.slot)),
-                            Attr.string("error", @errorName(error.DataCorruption)),
-                        });
-                        skipped_node_mappings.* += 1;
-                        continue;
-                    }
-                    const node_public_id: ?u64 = blk: {
-                        const text = findStreamPropString(row.props, INTERNAL_NODE_ID_PROPERTY_KEY) orelse break :blk null;
-                        break :blk parsePersistedPublicId(text);
-                    };
-                    if (node_public_id) |pid| {
-                        try id_map.insertNodeWithSlot(@as(u128, pid), row.slot);
-                    } else {
-                        skipped_node_mappings.* += 1;
-                        continue;
-                    }
-                }
-
-                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse continue));
-
-                // Labels: dictionary resolution with getNodeLabels' exact
-                // drop-unknown-ids rule; the Node owns the resulting slice.
-                var labels_list: std.ArrayList([]const u8) = .empty;
-                for (row.label_ids) |label_id| {
-                    if (adapter.hydrationLabelString(graph_name, label_id)) |name| {
-                        try labels_list.append(self.allocator, try self.allocator.dupe(u8, name));
-                    }
-                }
-                const labels = try labels_list.toOwnedSlice(self.allocator);
-
-                const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                const tenant_id_copy = blk_tenant: {
-                    if (findStreamPropString(row.props, INTERNAL_TENANT_ID_PROPERTY_KEY)) |text| {
-                        break :blk_tenant try self.allocator.dupe(u8, text);
-                    }
-                    break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-                };
-
-                var node = Node{
-                    .id = node_uuid,
-                    .labels = labels,
-                    .properties = CompactPropertyMap.init(self.allocator),
-                    .graph_name = graph_name_copy,
-                    .tenant_id = tenant_id_copy,
-                };
-
-                for (row.props) |pe| {
-                    if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
-                    // C3 (review-0023): `.null` is the adapter's REMOVE
-                    // tombstone — never materialize it as a present property.
-                    if (pe.value == .null) continue;
-                    const key_copy = try self.allocator.dupe(u8, pe.key);
-                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, pe.value);
-                    try node.properties.put(key_copy, pv);
-                }
-
-                try self.nodes.put(node_uuid, node);
-
-                if (node_uuid >= self.next_node_id) {
-                    self.next_node_id = node_uuid + 1;
-                }
-
-                // GAP-ENT-0023 P3: label postings restored from snapshot —
-                // re-inserting would be pure wasted binary-search work.
-                if (!snap.labels) {
-                    for (labels) |label| {
-                        try self.addToLabelIndex(graph_name, label, node_uuid);
-                    }
-                }
-
-                const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
-                try self.addNodeToGraphIndex(graph_name, node_uuid);
-                // GAP-ENT-0023 P3 / 0012 discipline: counters restored from
-                // snapshot must not be re-bumped (double count).
-                if (!snap.counters) try self.bumpIntrospectionForNode(stored_node_ptr);
-
-                if (!snap.merge) {
-                    var merge_prop_iter = stored_node_ptr.properties.iterator();
-                    while (merge_prop_iter.next()) |prop_entry| {
-                        self.addToMergePropertyIndex(
-                            stored_node_ptr.graph_name,
-                            stored_node_ptr.labels,
-                            prop_entry.key_ptr.*,
-                            prop_entry.value_ptr.*,
-                            stored_node_ptr.id,
-                        ) catch {};
-                    }
-                    self.addNodeCompositeMergeEntries(stored_node_ptr);
+                    merge_key_estimate += @as(u64, row.label_ids.len) * indexable;
                 }
             }
+        }
+        const rows32: u32 = @intCast(@min(total_rows, std.math.maxInt(u32)));
+        const edges32: u32 = @intCast(@min(total_edges, std.math.maxInt(u32)));
+        if (resident) {
+            try id_map.reserveNodes(rows32);
+            if (!skip_edge_scan) try id_map.reserveEdges(edges32);
+        }
+        // Bounded caches clamp the reservation to their resident cap
+        // internally, so a huge graph never pre-allocates an unbounded table.
+        try self.nodes.ensureUnusedCapacity(rows32);
+        try self.reserveGraphNodeIndex(graph_name, rows32);
+        if (!skip_edge_scan) {
+            try self.edges.ensureUnusedCapacity(edges32);
+            try self.outgoing_edges.ensureUnusedCapacity(rows32);
+            try self.incoming_edges.ensureUnusedCapacity(rows32);
+        }
+        if (!snap.merge and merge_key_estimate != 0) {
+            self.merge_prop_index.reserveAdditional(merge_key_estimate);
+        }
+
+        // ---- phase A: node products (loop1 + loop2 node side) -------------
+        // Each shard's node-side arena (decoded props + label ids) is freed
+        // the moment its rows are consumed, so the peak becomes
+        //   (global products built so far) + (remaining arenas) + (ONE shard
+        //   in flight)
+        // instead of (full global products) + (ALL shards' decoded copies).
+        const merge_workers = hydrationMergeWorkerCount();
+        if (merge_workers <= 1) {
+            // Single-threaded merge (kill switch / family-parity baseline):
+            // the pre-T2b per-row product order, family steps inline.
+            for (accums) |*acc| {
+                for (acc.rows) |*row| {
+                    const copy = (try self.hydrateStreamNodeRowCore(
+                        adapter,
+                        graph_name,
+                        id_map,
+                        resident,
+                        row,
+                        skipped_node_mappings,
+                    )) orelse continue;
+
+                    // GAP-ENT-0023 P3: label postings restored from snapshot —
+                    // re-inserting would be pure wasted binary-search work.
+                    if (!snap.labels) {
+                        for (copy.labels) |label| {
+                            try self.addToLabelIndex(graph_name, label, copy.id);
+                        }
+                    }
+                    // GAP-ENT-0023 P3 / 0012 discipline: counters restored
+                    // from snapshot must not be re-bumped (double count).
+                    if (!snap.counters) try self.bumpIntrospectionForNode(&copy);
+                    if (!snap.merge) {
+                        var merge_prop_iter = copy.properties.iterator();
+                        while (merge_prop_iter.next()) |prop_entry| {
+                            self.addToMergePropertyIndex(
+                                copy.graph_name,
+                                copy.labels,
+                                prop_entry.key_ptr.*,
+                                prop_entry.value_ptr.*,
+                                copy.id,
+                            ) catch {};
+                        }
+                        self.addNodeCompositeMergeEntries(&copy);
+                    }
+                }
+                acc.releaseNodeSide();
+            }
+        } else {
+            // Pipelined family merge (see FamilyPipeline): core thread builds
+            // shard s while the family threads apply shard s-1's postings /
+            // counters / merge-index entries. Same per-family insert order as
+            // the single-threaded merge -> identical products.
+            var pipeline = FamilyPipeline{
+                .store = self,
+                .graph_name = graph_name,
+                .do_labels = !snap.labels,
+                .do_counters = !snap.counters,
+                .do_merge = !snap.merge,
+            };
+            defer pipeline.abort();
+
+            for (accums) |*acc| {
+                var batch: std.ArrayList(Node) = .empty;
+                // Owned by this frame only until submit() takes it (submit
+                // adopts the list BEFORE any of its error returns, so freeing
+                // here too would double-free — pipeline.abort() covers it).
+                var batch_owned = true;
+                errdefer if (batch_owned) batch.deinit(self.allocator);
+                try batch.ensureTotalCapacity(self.allocator, acc.rows.len);
+                for (acc.rows) |*row| {
+                    const copy = (try self.hydrateStreamNodeRowCore(
+                        adapter,
+                        graph_name,
+                        id_map,
+                        resident,
+                        row,
+                        skipped_node_mappings,
+                    )) orelse continue;
+                    batch.appendAssumeCapacity(copy);
+                }
+                acc.releaseNodeSide();
+                batch_owned = false;
+                try pipeline.submit(batch);
+            }
+            try pipeline.finish();
         }
 
         // ---- phase B: edge products (loop2 edge side) ----------------------
@@ -10879,6 +11308,7 @@ pub const GraphStore = struct {
             defer orphan_edge_slots.deinit(self.allocator);
 
             for (accums) |*acc| {
+                defer acc.deinit(); // T2b: edge-side arena freed per shard (idempotent vs the outer blanket defer)
                 for (acc.rows) |*row| {
                     const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse continue));
                     for (row.edges) |er| {
@@ -10979,12 +11409,12 @@ pub const GraphStore = struct {
         const merge_done_ns = monoNanosNow();
         _ = g_hydration_stream_scan_ns.fetchAdd(scan_done_ns - scan_started_ns, .monotonic);
         _ = g_hydration_stream_merge_ns.fetchAdd(merge_done_ns - scan_done_ns, .monotonic);
-        var total_rows: u64 = 0;
-        for (accums) |*acc| total_rows += acc.rows.len;
         log.info("graph hydration served by per-shard stream scan", &.{
             Attr.string("graph", graph_name),
             Attr.int("nodes", @intCast(total_rows)),
+            Attr.int("edges", @intCast(total_edges)),
             Attr.int("scan_workers", @intCast(worker_count)),
+            Attr.int("merge_workers", @intCast(merge_workers)),
             Attr.int("scan_ms", @intCast(@divTrunc(scan_done_ns - scan_started_ns, std.time.ns_per_ms))),
             Attr.int("merge_ms", @intCast(@divTrunc(merge_done_ns - scan_done_ns, std.time.ns_per_ms))),
         });
@@ -12785,6 +13215,20 @@ var global_store: ?GraphStore = null;
 // left the backing allocator outside the thread-safe path used elsewhere.
 // Zig 0.16: ThreadSafeAllocator removed; allocators are inherently thread-safe.
 var global_store_allocator: ?std.mem.Allocator = null;
+
+// T2b TEST HOOK: allocator override applied at the NEXT global-store (re)init.
+// The production store always uses `global_allocator()`; the hydration merge
+// peak-memory test wraps it in a thread-safe counting allocator to measure
+// live/peak bytes of the hydration build deterministically (VmHWM is polluted
+// by the in-process store build that precedes the measured reopen). The
+// caller must keep the allocator valid until the store is deinitialized and
+// clear the hook afterwards. null = production default.
+var g_test_store_allocator: ?std.mem.Allocator = null;
+
+/// T2b test hook — see `g_test_store_allocator`.
+pub fn setTestGlobalStoreAllocator(a: ?std.mem.Allocator) void {
+    g_test_store_allocator = a;
+}
 threadlocal var g_active_query_read_store: ?*GraphStore = null;
 var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-0900 (scan-no-clone): per-node counter incremented once for every node
@@ -13724,7 +14168,7 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     syncGlobalAdapterForDataDir(last_data_dir);
 
-    global_store_allocator = global_allocator();
+    global_store_allocator = g_test_store_allocator orelse global_allocator();
     global_store = GraphStore.init(global_store_allocator.?) catch @panic("OOM: failed to initialize global graph store");
     // Set data_dir for per-graph storage
     if (last_data_dir) |dir| {

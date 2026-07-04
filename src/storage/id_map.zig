@@ -261,6 +261,30 @@ pub const IdMap = struct {
         }
     }
 
+    /// T2b (hydration merge): pre-size the RESIDENT node maps for a bulk load
+    /// of `count` mappings so the per-insert path never pays rehash-growth
+    /// churn (the dominant single-threaded merge cost at 14.27M rows).
+    /// No-op in mmap_backed mode — loop1 inserts are skipped there (the base
+    /// serves the mappings in place) and pre-sizing the overlay would defeat
+    /// its bounded-RSS purpose.
+    pub fn reserveNodes(self: *IdMap, count: u32) !void {
+        self.lockMu();
+        defer self.unlockMu();
+        if (self.mode != .resident) return;
+        try self.node_uuid_to_slot.ensureTotalCapacity(count);
+        try self.node_slot_to_uuid.ensureTotalCapacity(count);
+    }
+
+    /// T2b: edge-side companion of `reserveNodes` (same resident-only rule —
+    /// the hydration merge inserts edge mappings only in resident mode).
+    pub fn reserveEdges(self: *IdMap, count: u32) !void {
+        self.lockMu();
+        defer self.unlockMu();
+        if (self.mode != .resident) return;
+        try self.edge_uuid_to_slot.ensureTotalCapacity(count);
+        try self.edge_slot_to_uuid.ensureTotalCapacity(count);
+    }
+
     /// Insert a node mapping with a specific slot ID (used during load).
     pub fn insertNodeWithSlot(self: *IdMap, uuid: u128, slot: u64) !void {
         self.lockMu();

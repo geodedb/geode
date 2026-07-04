@@ -43,10 +43,15 @@
 //! scan runs — `ensureGraphHydrated`'s entry mutex serializes them).
 //!
 //! The module produces per-shard accumulations (`ShardAccum`) that the
-//! GraphStore merges single-threaded, issuing the SAME product-insert calls
-//! in the SAME per-shard, ascending-slot order as the legacy scan — the
-//! 0021 hydration-guard/0012 no-double-count disciplines live entirely in
-//! the merge (graph_store.zig) and are unchanged.
+//! GraphStore merges (core inserts shard-major on one thread, independent
+//! product families on their own threads — see graph_store.zig
+//! FamilyPipeline), issuing the SAME product-insert calls in the SAME
+//! per-shard, ascending-slot order as the legacy scan — the 0021
+//! hydration-guard/0012 no-double-count disciplines live entirely in the
+//! merge (graph_store.zig) and are unchanged. Each accumulation is split
+//! into a node-side and an edge-side arena so the merge frees each side
+//! incrementally (T2b: the at-scale merge OOMed holding every shard's full
+//! decoded copy while the global maps grew to full size).
 
 const std = @import("std");
 const gs = @import("graph_storage");
@@ -109,13 +114,52 @@ pub const NodeRow = struct {
     edges: []EdgeRow = &.{},
 };
 
-/// Per-shard accumulation. Everything inside is owned by `arena`.
+/// Per-shard accumulation, split into two independently-releasable arenas so
+/// the merge can free each side INCREMENTALLY (T2b memory fix — the at-scale
+/// merge OOMed holding every shard's full decoded copy alive while the global
+/// resident maps grew to full size):
+///
+///   * `node_arena` — node-side payloads only: node `PropEntry` slices (keys +
+///     decoded values) and `label_ids`. The merge's NODE phase is its only
+///     consumer; `releaseNodeSide()` frees it the moment that shard's node
+///     products are built.
+///   * `edge_arena` — the `rows` array itself plus everything the EDGE phase
+///     needs: `EdgeRow` slices and edge `PropEntry` payloads. Freed by
+///     `deinit()` once the edge phase consumed the shard.
+///
+/// Scan-internal scaffolding (page buffers, adjacency block maps, chain
+/// bookkeeping, var-store chunks) lives in a scratch arena local to
+/// `scanShard` and is freed before it returns — it never survives into the
+/// accumulation.
 pub const ShardAccum = struct {
-    arena: std.heap.ArenaAllocator,
+    node_arena: std.heap.ArenaAllocator,
+    edge_arena: std.heap.ArenaAllocator,
     rows: []NodeRow = &.{},
+    node_side_released: bool = false,
+    released: bool = false,
 
+    /// Free the node-side payloads (props + label ids) once the merge's node
+    /// phase has consumed this shard. Also clears every row's node-side
+    /// slices so a late reader can never dangle into the freed arena.
+    /// Idempotent.
+    pub fn releaseNodeSide(self: *ShardAccum) void {
+        if (self.node_side_released) return;
+        self.node_side_released = true;
+        for (self.rows) |*row| {
+            row.props = &.{};
+            row.label_ids = &.{};
+        }
+        self.node_arena.deinit();
+    }
+
+    /// Idempotent full release (safe under the caller's blanket cleanup even
+    /// after an explicit per-shard deinit during the merge).
     pub fn deinit(self: *ShardAccum) void {
-        self.arena.deinit();
+        if (self.released) return;
+        self.releaseNodeSide();
+        self.released = true;
+        self.rows = &.{};
+        self.edge_arena.deinit();
     }
 };
 
@@ -209,6 +253,20 @@ fn makeReader(
     };
 }
 
+/// Allocator routing for one shard scan (T2b memory fix):
+///   * `node` — durable node-side payloads (node props, label ids); freed
+///     first by the merge via `ShardAccum.releaseNodeSide()`.
+///   * `edge` — durable edge-side payloads (rows array, EdgeRow slices, edge
+///     props); freed by `ShardAccum.deinit()`.
+///   * `scratch` — scan-internal scaffolding (page buffer, adjacency block
+///     map, chain bookkeeping, var chunks, growth-churn ArrayLists); freed
+///     before `scanShard` returns, so it never inflates the held accumulation.
+const ScanAllocs = struct {
+    node: Allocator,
+    edge: Allocator,
+    scratch: Allocator,
+};
+
 /// Scan ONE shard engine's store files sequentially and accumulate decoded
 /// rows. Read-only against the engine (the only pool interaction is pinning
 /// pages from the dirty snapshot, normally none). Thread-safe versus other
@@ -218,17 +276,32 @@ pub fn scanShard(
     engine: *gs.engine.GraphEngine,
     opts: ScanOptions,
 ) !ShardAccum {
-    var accum = ShardAccum{ .arena = std.heap.ArenaAllocator.init(base_allocator) };
+    var accum = ShardAccum{
+        .node_arena = std.heap.ArenaAllocator.init(base_allocator),
+        .edge_arena = std.heap.ArenaAllocator.init(base_allocator),
+    };
     errdefer accum.deinit();
-    const arena = accum.arena.allocator();
+
+    // Scan-internal scaffolding arena: freed on return (success or error).
+    var scratch_arena = std.heap.ArenaAllocator.init(base_allocator);
+    defer scratch_arena.deinit();
+
+    const allocs = ScanAllocs{
+        .node = accum.node_arena.allocator(),
+        .edge = accum.edge_arena.allocator(),
+        .scratch = scratch_arena.allocator(),
+    };
 
     var dirty = DirtySet{};
-    try dirty.collect(arena, &engine.buffer_pool);
+    try dirty.collect(allocs.scratch, &engine.buffer_pool);
 
     const page_size = engine.buffer_pool.page_size;
-    const page_buf = try arena.alloc(u8, page_size);
+    const page_buf = try allocs.scratch.alloc(u8, page_size);
 
     // ---- pass 1: nodes.store ------------------------------------------------
+    // Rows accumulate in SCRATCH (ArrayList doubling leaves dead capacity
+    // behind in an arena) and are copied exact-size into the edge arena at the
+    // end — the edge phase is the last consumer of the rows array.
     var rows: std.ArrayList(NodeRow) = .empty;
     {
         var reader = try makeReader(engine, .nodes, &dirty, page_buf);
@@ -249,7 +322,7 @@ pub fn scanShard(
                     const rec = std.mem.bytesToValue(gs.node.NodeRec, data[off..][0..@sizeOf(gs.node.NodeRec)]);
                     if (gs.node.isEmpty(&rec)) continue;
                     if (gs.node.isDeleted(&rec)) continue;
-                    try rows.append(arena, .{
+                    try rows.append(allocs.scratch, .{
                         .slot = first_node + slot,
                         .prop_head = rec.prop_head,
                         .label_head = rec.label_head,
@@ -262,16 +335,16 @@ pub fn scanShard(
 
     // ---- pass 2: adj_out.store (sequential read + in-memory chain walk) -----
     if (opts.include_edges) {
-        try scanAdjacency(arena, engine, &dirty, page_buf, rows.items);
+        try scanAdjacency(allocs, engine, &dirty, page_buf, rows.items);
     }
 
     // ---- pass 3: props.store (node blobs + edge blobs, ascending pages) -----
-    try scanProps(arena, engine, &dirty, page_buf, rows.items, opts);
+    try scanProps(allocs, engine, &dirty, page_buf, rows.items, opts);
 
     // ---- pass 4: var.store label chains (ascending pages per round) ---------
-    try scanLabels(arena, engine, &dirty, page_buf, rows.items, opts);
+    try scanLabels(allocs, engine, &dirty, page_buf, rows.items, opts);
 
-    accum.rows = rows.items;
+    accum.rows = try allocs.edge.dupe(NodeRow, rows.items);
     return accum;
 }
 
@@ -285,7 +358,7 @@ const AdjBlock = struct {
 };
 
 fn scanAdjacency(
-    arena: Allocator,
+    allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
     dirty: *const DirtySet,
     page_buf: []u8,
@@ -295,6 +368,9 @@ fn scanAdjacency(
     const page_size = engine.buffer_pool.page_size;
     const block_header_size: u32 = @sizeOf(gs.edge.EdgeBlockHeader);
 
+    // The block map (a full decoded copy of the adjacency store) is SCRATCH:
+    // the per-row chain walk below copies each entry by value into the exact-
+    // size edge-arena rows, so nothing references the blocks afterwards.
     var blocks: std.AutoHashMapUnmanaged(u64, AdjBlock) = .empty;
 
     // Sequential read of every allocated adjacency page. Every reachable
@@ -315,7 +391,7 @@ fn scanAdjacency(
         if (bh.count > gs.edge.entriesPerBlock(page_size, bh.entry_format)) return error.DataCorruption;
 
         const stride = gs.edge.entrySize(bh.entry_format);
-        const entries = try arena.alloc(gs.edge.EdgeEntry, bh.count);
+        const entries = try allocs.scratch.alloc(gs.edge.EdgeEntry, bh.count);
         var i: u16 = 0;
         while (i < bh.count) : (i += 1) {
             const off = PAGE_HEADER_SIZE + block_header_size + @as(u32, i) * stride;
@@ -334,14 +410,16 @@ fn scanAdjacency(
                 entries[i] = e;
             }
         }
-        try blocks.put(arena, page_id, .{ .next = bh.next_block, .entries = entries });
+        try blocks.put(allocs.scratch, page_id, .{ .next = bh.next_block, .entries = entries });
     }
 
     // In-memory chain walk per node: head block first, entries in block
     // order, then overflow blocks — identical to AdjEdgeIterator order.
+    // Two-pass per node (count, then fill) so the durable edge arena holds
+    // an EXACT-size slice — no ArrayList doubling waste surviving the scan.
     for (rows) |*row| {
         if (row.out_head == 0) continue;
-        var edge_rows: std.ArrayList(EdgeRow) = .empty;
+        var total: usize = 0;
         var current = row.out_head;
         var hops: u32 = 0;
         while (current != 0) : (hops += 1) {
@@ -350,10 +428,21 @@ fn scanAdjacency(
             // the chain escapes the allocated file — the legacy pool walk
             // would have failed the pin/read on that page.
             const block = blocks.get(current) orelse return error.DataCorruption;
-            for (block.entries) |e| try edge_rows.append(arena, .{ .entry = e });
+            total += block.entries.len;
             current = block.next;
         }
-        row.edges = edge_rows.items;
+        const edge_rows = try allocs.edge.alloc(EdgeRow, total);
+        var idx: usize = 0;
+        current = row.out_head;
+        while (current != 0) {
+            const block = blocks.get(current).?; // validated by the count pass
+            for (block.entries) |e| {
+                edge_rows[idx] = .{ .entry = e };
+                idx += 1;
+            }
+            current = block.next;
+        }
+        row.edges = edge_rows;
     }
 }
 
@@ -374,11 +463,24 @@ const PendingChain = struct {
     /// True once the internal-id key has been decoded for this consumer
     /// (resident-mode corrupt-skip semantics — see NodeRow.corrupt_skip).
     saw_internal_id: bool,
+    /// Entry LIST lives in scratch (append churn); the entries' key/value
+    /// payloads are decoded straight into the consumer's durable arena. On
+    /// chain completion the list is copied exact-size into that same arena.
     entries: std.ArrayList(PropEntry),
 };
 
+/// The durable arena a consumer's decoded property payloads belong to:
+/// node blobs go to the node arena (released first by the merge), edge
+/// blobs to the edge arena.
+fn durableFor(allocs: ScanAllocs, consumer: PropConsumer) Allocator {
+    return switch (consumer) {
+        .node => allocs.node,
+        .edge => allocs.edge,
+    };
+}
+
 fn scanProps(
-    arena: Allocator,
+    allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
     dirty: *const DirtySet,
     page_buf: []u8,
@@ -392,7 +494,8 @@ fn scanProps(
     const logical_len: u32 = page_size - engine.prop_store.tail_reserve;
 
     // wanted: page -> consumers that start on it. Slab pages typically carry
-    // MANY nodes' blobs — the whole point of the sequential pass.
+    // MANY nodes' blobs — the whole point of the sequential pass. Pure
+    // scaffolding: scratch.
     var wanted: std.AutoHashMapUnmanaged(u64, std.ArrayList(PendingChain)) = .empty;
 
     for (rows, 0..) |*row, ri| {
@@ -402,9 +505,9 @@ fn scanProps(
             gs.prop_store.slabPageId(row.prop_head)
         else
             row.prop_head;
-        const gop = try wanted.getOrPut(arena, page);
+        const gop = try wanted.getOrPut(allocs.scratch, page);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(arena, .{
+        try gop.value_ptr.append(allocs.scratch, .{
             .consumer = .{ .node = ri },
             .next_page = page,
             .hops = 0,
@@ -415,9 +518,9 @@ fn scanProps(
             for (row.edges, 0..) |er, ei| {
                 if (er.entry.prop_head == 0) continue;
                 const epage: u64 = er.entry.prop_head; // edge heads are legacy page ids
-                const egop = try wanted.getOrPut(arena, epage);
+                const egop = try wanted.getOrPut(allocs.scratch, epage);
                 if (!egop.found_existing) egop.value_ptr.* = .empty;
-                try egop.value_ptr.append(arena, .{
+                try egop.value_ptr.append(allocs.scratch, .{
                     .consumer = .{ .edge = .{ .row = ri, .edge = ei } },
                     .next_page = epage,
                     .hops = 0,
@@ -435,7 +538,7 @@ fn scanProps(
     // page for the following round (multi-page chains are rare — one round
     // suffices for slab stores).
     while (wanted.size != 0) {
-        var pages = try std.ArrayList(u64).initCapacity(arena, wanted.size);
+        var pages = try std.ArrayList(u64).initCapacity(allocs.scratch, wanted.size);
         var kit = wanted.keyIterator();
         while (kit.next()) |k| pages.appendAssumeCapacity(k.*);
         std.sort.pdq(u64, pages.items, {}, std.sort.asc(u64));
@@ -452,12 +555,12 @@ fn scanProps(
                     .node => |ri| {
                         const row = &rows[ri];
                         if (gs.prop_store.isSlabHead(row.prop_head) and chain.hops == 0) {
-                            try consumeSlabBlob(arena, logical, row, opts, chain);
+                            try consumeSlabBlob(allocs, logical, row, opts, chain);
                             continue;
                         }
-                        try consumeLegacyPage(arena, logical, chain, rows, opts, &next_wanted);
+                        try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted);
                     },
-                    .edge => try consumeLegacyPage(arena, logical, chain, rows, opts, &next_wanted),
+                    .edge => try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted),
                 }
             }
         }
@@ -468,7 +571,7 @@ fn scanProps(
 
 /// Decode one slab blob (page already read) into the node row.
 fn consumeSlabBlob(
-    arena: Allocator,
+    allocs: ScanAllocs,
     logical: []const u8,
     row: *NodeRow,
     opts: ScanOptions,
@@ -479,11 +582,11 @@ fn consumeSlabBlob(
     };
     if (blob.len < 4) return nodeBlobCorrupt(row, opts, chain.saw_internal_id, error.DataCorruption);
     const entry_count = std.mem.readInt(u32, blob[0..4], .little);
-    parseEntries(arena, blob[4..], entry_count, opts.internal_id_key, chain) catch |err| switch (err) {
+    parseEntries(allocs, blob[4..], entry_count, opts.internal_id_key, chain) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return nodeBlobCorrupt(row, opts, chain.saw_internal_id, err),
     };
-    row.props = chain.entries.items;
+    row.props = try allocs.node.dupe(PropEntry, chain.entries.items);
 }
 
 /// Validate + slice a slab blob out of a logical slab page. Mirrors
@@ -511,7 +614,7 @@ fn slabBlobSlice(logical: []const u8, prop_head: u64) ![]const u8 {
 /// consumer, then either finish (next_page == 0) or enqueue the
 /// continuation page for the next round.
 fn consumeLegacyPage(
-    arena: Allocator,
+    allocs: ScanAllocs,
     logical: []const u8,
     chain: *PendingChain,
     rows: []NodeRow,
@@ -527,7 +630,7 @@ fn consumeLegacyPage(
         // Mirror gs readEntryCountChecked: min entry 3 bytes + 4 dir bytes.
         const capacity = @as(u32, @intCast(logical.len)) - PROP_DATA_OFFSET - PROP_DIR_COUNT_SIZE;
         if (entry_count > capacity / (3 + PROP_DIR_ENTRY_SIZE)) break :blk error.DataCorruption;
-        parseEntriesRegion(arena, logical[PROP_DATA_OFFSET..], entry_count, opts.internal_id_key, chain) catch |err| switch (err) {
+        parseEntriesRegion(allocs, logical[PROP_DATA_OFFSET..], entry_count, opts.internal_id_key, chain) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => break :blk err,
         };
@@ -546,17 +649,18 @@ fn consumeLegacyPage(
 
     const next_page = std.mem.bytesToValue(u64, logical[PAGE_HEADER_SIZE..][0..8]);
     if (next_page != 0) {
-        const gop = try next_wanted.getOrPut(arena, next_page);
+        const gop = try next_wanted.getOrPut(allocs.scratch, next_page);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         var moved = chain.*;
         moved.next_page = next_page;
-        try gop.value_ptr.append(arena, moved);
+        try gop.value_ptr.append(allocs.scratch, moved);
         return;
     }
 
+    const durable = durableFor(allocs, chain.consumer);
     switch (chain.consumer) {
-        .node => |ri| rows[ri].props = chain.entries.items,
-        .edge => |e| rows[e.row].edges[e.edge].props = chain.entries.items,
+        .node => |ri| rows[ri].props = try durable.dupe(PropEntry, chain.entries.items),
+        .edge => |e| rows[e.row].edges[e.edge].props = try durable.dupe(PropEntry, chain.entries.items),
     }
 }
 
@@ -577,26 +681,31 @@ fn nodeBlobCorrupt(row: *NodeRow, opts: ScanOptions, saw_internal_id: bool, err:
 
 /// Parse `entry_count` property entries out of a slab blob's entry region.
 fn parseEntries(
-    arena: Allocator,
+    allocs: ScanAllocs,
     region: []const u8,
     entry_count: u32,
     internal_id_key: []const u8,
     chain: *PendingChain,
 ) !void {
-    return parseEntriesRegion(arena, region, entry_count, internal_id_key, chain);
+    return parseEntriesRegion(allocs, region, entry_count, internal_id_key, chain);
 }
 
 /// Shared entry-region parser (slab blob body / legacy page entry region):
 /// entry_count x { key_len u16, key bytes, self-delimiting encoded value }.
 /// Duplicate keys keep their first position with the LAST value — the same
 /// observable outcome as the legacy StringHashMap.put collection.
+///
+/// Key/value payloads go straight into the consumer's DURABLE arena (they
+/// outlive the scan); the entry list itself appends in scratch and is copied
+/// exact-size to the durable arena on chain completion.
 fn parseEntriesRegion(
-    arena: Allocator,
+    allocs: ScanAllocs,
     region: []const u8,
     entry_count: u32,
     internal_id_key: []const u8,
     chain: *PendingChain,
 ) !void {
+    const durable = durableFor(allocs, chain.consumer);
     var off: usize = 0;
     var i: u32 = 0;
     while (i < entry_count) : (i += 1) {
@@ -606,7 +715,7 @@ fn parseEntriesRegion(
         if (off + key_len > region.len) return error.DataCorruption;
         const key_src = region[off..][0..key_len];
         off += key_len;
-        const decoded = gs.property.decode(arena, region[off..]) catch return error.DataCorruption;
+        const decoded = gs.property.decode(durable, region[off..]) catch return error.DataCorruption;
         off += decoded.bytes_read;
 
         if (std.mem.eql(u8, key_src, internal_id_key)) chain.saw_internal_id = true;
@@ -621,8 +730,8 @@ fn parseEntriesRegion(
             }
         }
         if (!replaced) {
-            const key_copy = try arena.dupe(u8, key_src);
-            try chain.entries.append(arena, .{ .key = key_copy, .value = decoded.value });
+            const key_copy = try durable.dupe(u8, key_src);
+            try chain.entries.append(allocs.scratch, .{ .key = key_copy, .value = decoded.value });
         }
     }
 }
@@ -637,7 +746,7 @@ const VarChunk = struct {
 };
 
 fn scanLabels(
-    arena: Allocator,
+    allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
     dirty: *const DirtySet,
     page_buf: []u8,
@@ -649,6 +758,8 @@ fn scanLabels(
     const page_size = engine.buffer_pool.page_size;
     const cap: u32 = page_size - PAGE_HEADER_SIZE - VAR_META_SIZE;
 
+    // Chunk map / rounds / blob assembly are scratch; only the decoded
+    // label-id slices (node side) are durable.
     var chunks: std.AutoHashMapUnmanaged(u64, VarChunk) = .empty;
     var round: std.ArrayList(u64) = .empty;
     var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
@@ -660,8 +771,8 @@ fn scanLabels(
         // Mirrors VarStore.read: a ref whose first page decodes to 0 is
         // invalid (the legacy getNodeLabels raised the same error).
         if (first == 0) return error.InvalidPageId;
-        const gop = try seen.getOrPut(arena, first);
-        if (!gop.found_existing) try round.append(arena, first);
+        const gop = try seen.getOrPut(allocs.scratch, first);
+        if (!gop.found_existing) try round.append(allocs.scratch, first);
     }
 
     // Ascending sweep per round; multi-page label chains (>4052 bytes of
@@ -674,11 +785,11 @@ fn scanLabels(
             const next = std.mem.bytesToValue(u64, data[PAGE_HEADER_SIZE..][0..8]);
             const data_len = std.mem.bytesToValue(u32, data[PAGE_HEADER_SIZE + 8 ..][0..4]);
             if (data_len > cap) return error.DataCorruption;
-            const chunk = try arena.dupe(u8, data[PAGE_HEADER_SIZE + VAR_META_SIZE ..][0..data_len]);
-            try chunks.put(arena, page_id, .{ .next = next, .data = chunk });
+            const chunk = try allocs.scratch.dupe(u8, data[PAGE_HEADER_SIZE + VAR_META_SIZE ..][0..data_len]);
+            try chunks.put(allocs.scratch, page_id, .{ .next = next, .data = chunk });
             if (next != 0) {
-                const gop = try seen.getOrPut(arena, next);
-                if (!gop.found_existing) try next_round.append(arena, next);
+                const gop = try seen.getOrPut(allocs.scratch, next);
+                if (!gop.found_existing) try next_round.append(allocs.scratch, next);
             }
         }
         round = next_round;
@@ -695,10 +806,10 @@ fn scanLabels(
         while (current != 0) : (hops += 1) {
             if (hops >= MAX_CHAIN_HOPS) return error.CircularChainDetected;
             const chunk = chunks.get(current) orelse return error.DataCorruption;
-            try blob.appendSlice(arena, chunk.data);
+            try blob.appendSlice(allocs.scratch, chunk.data);
             current = chunk.next;
         }
-        row.label_ids = decodeLabelIds(arena, blob.items) catch return error.DataCorruption;
+        row.label_ids = decodeLabelIds(allocs.node, blob.items) catch return error.DataCorruption;
     }
 }
 
