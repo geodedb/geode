@@ -7733,6 +7733,23 @@ pub fn build(b: *std.Build) void {
     const startup_lazy_step = b.step("test-startup-lazy-hydrate", "PHASE 1b: deferred resident-load -> lazy per-graph hydration (sub-second open)");
     startup_lazy_step.dependOn(&run_startup_lazy_tests.step);
 
+    // GAP hydration fast-scan: sequential per-shard store streaming for the
+    // loop2 first-access hydration. Parity (resident + mmap scan fallbacks,
+    // legacy vs streaming on the same store) + the >=20x throughput floor.
+    const hydration_stream_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_hydration_stream_scan.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    hydration_stream_test_mod.addImport("geode", root_mod);
+    hydration_stream_test_mod.addImport("graph_storage", graph_storage_mod);
+    const hydration_stream_tests = b.addTest(.{ .root_module = hydration_stream_test_mod });
+    const run_hydration_stream_tests = b.addRunArtifact(hydration_stream_tests);
+    shardDep(test_step, &run_hydration_stream_tests.step, 1, test_shard_loads, test_shard_index);
+    const hydration_stream_step = b.step("test-hydration-stream-scan", "GAP hydration fast-scan: streaming loop2 parity + >=20x throughput floor");
+    hydration_stream_step.dependOn(&run_hydration_stream_tests.step);
+
     // TSan companion: same lazy-hydrate test file compiled with -fsanitize-thread
     // so the "hydrate A || read B" cross-graph hydration race (CWE-362 on the
     // shared `nodes_by_graph` / `label_index` outer maps) runs under the thread

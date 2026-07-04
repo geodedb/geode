@@ -10457,6 +10457,316 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Kill switch: GEODE_DISABLE_STREAMING_HYDRATION=1 forces the legacy
+    /// per-node engine-read hydration scan (the pre-fast-scan behavior).
+    /// Read per call — hydration is a cold path. Also the comparison lever
+    /// for the fast-scan parity tests (same store, both paths, equal
+    /// products).
+    fn streamingHydrationDisabled() bool {
+        const raw_z = std.c.getenv("GEODE_DISABLE_STREAMING_HYDRATION") orelse return false;
+        const raw = std.mem.span(raw_z);
+        return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+    }
+
+    /// Find a decoded stream-scan property entry's STRING payload by key.
+    /// Returns null when the key is absent OR the value is not a string —
+    /// exactly the legacy switch-on-`.string`-else-fallthrough behavior of
+    /// the per-node internal-id / tenant reads.
+    fn findStreamPropString(
+        props: []const graph_storage_adapter.hydration_scan.PropEntry,
+        key: []const u8,
+    ) ?[]const u8 {
+        for (props) |pe| {
+            if (!std.mem.eql(u8, pe.key, key)) continue;
+            return switch (pe.value) {
+                .string => |text| text,
+                else => null,
+            };
+        }
+        return null;
+    }
+
+    /// GAP hydration fast-scan: build the loop1/loop2 products from the
+    /// per-shard SEQUENTIAL stream scan instead of the per-node engine-read
+    /// walk. Produces byte-identical products via the SAME insert calls in
+    /// the same shard-major, ascending-slot order:
+    ///   * the P3 snapshot skips (`snap.*`) and the 0021/0012 count
+    ///     disciplines are honored at exactly the legacy call sites;
+    ///   * phase A (nodes) then phase B (edges) — legal because loop1 fully
+    ///     preceded loop2's edge resolution in the legacy resident flow, and
+    ///     the mmap base serves lookups position-independently;
+    ///   * the C1 quarantine contract is unchanged: any error out of here
+    ///     makes `ensureGraphHydrated` mark the graph failed, exactly like a
+    ///     legacy scan error.
+    fn hydrateGraphFromStreamScan(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+        snap: HydrationSnapshotProducts,
+        skip_edge_scan: bool,
+        skipped_node_mappings: *u64,
+        skipped_edge_mappings: *u64,
+        repaired_edge_slots: *u64,
+    ) !void {
+        const hydration_scan = graph_storage_adapter.hydration_scan;
+        const resident = id_map.mode == .resident;
+        const opts = hydration_scan.ScanOptions{
+            .include_edges = !skip_edge_scan,
+            .resident_mode = resident,
+            .internal_id_key = INTERNAL_NODE_ID_PROPERTY_KEY,
+        };
+
+        const scan_started_ns = monoNanosNow();
+        const shard_count = try adapter.hydrationStreamShardCount(graph_name);
+        const accums = try self.allocator.alloc(hydration_scan.ShardAccum, shard_count);
+        var scanned: usize = 0;
+        defer {
+            for (accums[0..scanned]) |*acc| acc.deinit();
+            self.allocator.free(accums);
+        }
+
+        // Per-shard streaming scan. Task 1: sequential; each shard is a
+        // linear sweep of its own store files (see hydration_scan.zig).
+        for (accums, 0..) |*acc, shard_idx| {
+            acc.* = try adapter.hydrationStreamScanShard(graph_name, shard_idx, self.allocator, opts);
+            scanned += 1;
+        }
+        const scan_done_ns = monoNanosNow();
+
+        _ = g_hydration_streaming_scans.fetchAdd(1, .monotonic);
+
+        // ---- phase A: node products (loop1 + loop2 node side) -------------
+        for (accums) |*acc| {
+            for (acc.rows) |*row| {
+                // Instrumentation + injected-failure hook: identical placement
+                // to the legacy loop2 (per live scan row, before any skip).
+                _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
+                if (comptime @import("builtin").is_test) {
+                    const lim = g_test_hydration_fail_after.load(.monotonic);
+                    if (lim != std.math.maxInt(u64) and
+                        g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
+                    {
+                        return error.TestInjectedHydrationFailure;
+                    }
+                }
+
+                if (resident) {
+                    // loop1 equivalent: recover the persisted public id from
+                    // the decoded blob (one engine read's worth of work per
+                    // node in the legacy scan — counter kept for the tests'
+                    // "no loop1 at ready / loop1 ran on fallback" contract).
+                    _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
+                    if (row.corrupt_skip) {
+                        log.warn("skipping node with corrupt property page during load", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.int("slot_id", @intCast(row.slot)),
+                            Attr.string("error", @errorName(error.DataCorruption)),
+                        });
+                        skipped_node_mappings.* += 1;
+                        continue;
+                    }
+                    const node_public_id: ?u64 = blk: {
+                        const text = findStreamPropString(row.props, INTERNAL_NODE_ID_PROPERTY_KEY) orelse break :blk null;
+                        break :blk parsePersistedPublicId(text);
+                    };
+                    if (node_public_id) |pid| {
+                        try id_map.insertNodeWithSlot(@as(u128, pid), row.slot);
+                    } else {
+                        skipped_node_mappings.* += 1;
+                        continue;
+                    }
+                }
+
+                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse continue));
+
+                // Labels: dictionary resolution with getNodeLabels' exact
+                // drop-unknown-ids rule; the Node owns the resulting slice.
+                var labels_list: std.ArrayList([]const u8) = .empty;
+                for (row.label_ids) |label_id| {
+                    if (adapter.hydrationLabelString(graph_name, label_id)) |name| {
+                        try labels_list.append(self.allocator, try self.allocator.dupe(u8, name));
+                    }
+                }
+                const labels = try labels_list.toOwnedSlice(self.allocator);
+
+                const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                const tenant_id_copy = blk_tenant: {
+                    if (findStreamPropString(row.props, INTERNAL_TENANT_ID_PROPERTY_KEY)) |text| {
+                        break :blk_tenant try self.allocator.dupe(u8, text);
+                    }
+                    break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                };
+
+                var node = Node{
+                    .id = node_uuid,
+                    .labels = labels,
+                    .properties = CompactPropertyMap.init(self.allocator),
+                    .graph_name = graph_name_copy,
+                    .tenant_id = tenant_id_copy,
+                };
+
+                for (row.props) |pe| {
+                    if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+                    // C3 (review-0023): `.null` is the adapter's REMOVE
+                    // tombstone — never materialize it as a present property.
+                    if (pe.value == .null) continue;
+                    const key_copy = try self.allocator.dupe(u8, pe.key);
+                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, pe.value);
+                    try node.properties.put(key_copy, pv);
+                }
+
+                try self.nodes.put(node_uuid, node);
+
+                if (node_uuid >= self.next_node_id) {
+                    self.next_node_id = node_uuid + 1;
+                }
+
+                // GAP-ENT-0023 P3: label postings restored from snapshot —
+                // re-inserting would be pure wasted binary-search work.
+                if (!snap.labels) {
+                    for (labels) |label| {
+                        try self.addToLabelIndex(graph_name, label, node_uuid);
+                    }
+                }
+
+                const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
+                try self.addNodeToGraphIndex(graph_name, node_uuid);
+                // GAP-ENT-0023 P3 / 0012 discipline: counters restored from
+                // snapshot must not be re-bumped (double count).
+                if (!snap.counters) try self.bumpIntrospectionForNode(stored_node_ptr);
+
+                if (!snap.merge) {
+                    var merge_prop_iter = stored_node_ptr.properties.iterator();
+                    while (merge_prop_iter.next()) |prop_entry| {
+                        self.addToMergePropertyIndex(
+                            stored_node_ptr.graph_name,
+                            stored_node_ptr.labels,
+                            prop_entry.key_ptr.*,
+                            prop_entry.value_ptr.*,
+                            stored_node_ptr.id,
+                        ) catch {};
+                    }
+                    self.addNodeCompositeMergeEntries(stored_node_ptr);
+                }
+            }
+        }
+
+        // ---- phase B: edge products (loop2 edge side) ----------------------
+        if (!skip_edge_scan) {
+            const OrphanEdgeSlot = struct { from_slot: u64, to_slot: u64, edge_slot: u64 };
+            var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
+            defer orphan_edge_slots.deinit(self.allocator);
+
+            for (accums) |*acc| {
+                for (acc.rows) |*row| {
+                    const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse continue));
+                    for (row.edges) |er| {
+                        const edge_entry = er.entry;
+                        const edge_uuid = blk: {
+                            // GAP-ENT-0024 inline-first: v2 entries carry the
+                            // public id inline — no property fallback.
+                            if (edge_entry.public_id != 0) break :blk edge_entry.public_id;
+
+                            _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                            if (findStreamPropString(er.props, INTERNAL_EDGE_ID_PROPERTY_KEY)) |text| {
+                                if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                            }
+                            // No legacy sidecar on this path (the streaming
+                            // scan is gated on legacy_map == null).
+                            break :blk null;
+                        } orelse {
+                            // Orphan physical edge slot (pre-fix re-apply
+                            // leftovers): queue the durable self-heal delete.
+                            skipped_edge_mappings.* += 1;
+                            try orphan_edge_slots.append(self.allocator, .{
+                                .from_slot = row.slot,
+                                .to_slot = edge_entry.neighbor,
+                                .edge_slot = edge_entry.edge_id,
+                            });
+                            continue;
+                        };
+
+                        if (resident)
+                            try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
+
+                        if (self.edges.contains(edge_uuid)) continue;
+
+                        const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
+
+                        const edge_label_str = adapter.hydrationLabelString(graph_name, edge_entry.rel_type) orelse "UNKNOWN";
+                        const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
+                        const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                        const edge_tenant_id_copy = blk_edge_tenant: {
+                            if (findStreamPropString(er.props, INTERNAL_TENANT_ID_PROPERTY_KEY)) |text| {
+                                break :blk_edge_tenant try self.allocator.dupe(u8, text);
+                            }
+                            break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                        };
+
+                        var edge = Edge{
+                            .id = edge_uuid,
+                            .from_id = node_uuid,
+                            .to_id = target_uuid,
+                            .label = edge_label_copy,
+                            .properties = CompactPropertyMap.init(self.allocator),
+                            .graph_name = edge_graph_name_copy,
+                            .tenant_id = edge_tenant_id_copy,
+                        };
+
+                        if (edge_entry.prop_head != 0) {
+                            for (er.props) |pe| {
+                                if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+                                // C3: skip the `.null` REMOVE tombstone.
+                                if (pe.value == .null) continue;
+                                const key_copy = try self.allocator.dupe(u8, pe.key);
+                                const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, pe.value);
+                                try edge.properties.put(key_copy, pv);
+                            }
+                        }
+
+                        try self.edges.put(edge_uuid, edge);
+                        try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                        try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
+                        // GAP-ENT-0023 P3 / 0012: restored counters are never
+                        // re-bumped.
+                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
+
+                        if (edge_uuid >= self.next_edge_id) {
+                            self.next_edge_id = edge_uuid + 1;
+                        }
+                    }
+                }
+            }
+
+            // Self-heal: durably delete the orphan slots AFTER the streaming
+            // read completed (no live adjacency cursor to invalidate; the
+            // legacy walk deferred exactly the same way per node).
+            for (orphan_edge_slots.items) |orphan| {
+                adapter.deleteEdge(graph_name, orphan.from_slot, orphan.to_slot, orphan.edge_slot) catch |err| {
+                    log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.int("from_slot", @intCast(orphan.from_slot)),
+                        Attr.int("edge_slot", @intCast(orphan.edge_slot)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    continue;
+                };
+                repaired_edge_slots.* += 1;
+            }
+        }
+
+        const merge_done_ns = monoNanosNow();
+        var total_rows: u64 = 0;
+        for (accums) |*acc| total_rows += acc.rows.len;
+        log.info("graph hydration served by sequential stream scan", &.{
+            Attr.string("graph", graph_name),
+            Attr.int("nodes", @intCast(total_rows)),
+            Attr.int("scan_ms", @intCast(@divTrunc(scan_done_ns - scan_started_ns, std.time.ns_per_ms))),
+            Attr.int("merge_ms", @intCast(@divTrunc(merge_done_ns - scan_done_ns, std.time.ns_per_ms))),
+        });
+    }
+
     /// Load a single graph from the storage adapter. Returns an error if
     /// any per-graph load step fails; the caller (`loadFromAdapter`) wraps
     /// this in catch+continue so one bad graph does not block service
@@ -10555,437 +10865,459 @@ pub const GraphStore = struct {
                 });
             }
 
-            const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
-            defer self.allocator.free(scan_entries);
+            // GAP hydration fast-scan: the default build path is the
+            // SEQUENTIAL per-shard store stream (linear file reads instead of
+            // ~O(nodes) random page-chain walks — 13h09m -> minutes at 14.27M).
+            // Products and count disciplines are byte-identical (same insert
+            // calls, same order; see hydrateGraphFromStreamScan). The legacy
+            // per-node walk remains for (a) the GEODE_DISABLE_STREAMING_HYDRATION
+            // kill switch / parity harness and (b) stores with a legacy IdMap
+            // sidecar, whose loop1 backfill WRITES through the engine mid-scan
+            // (the streaming reader is strictly read-only by design).
+            if (legacy_map == null and !streamingHydrationDisabled()) {
+                try self.hydrateGraphFromStreamScan(
+                    adapter,
+                    graph_name,
+                    id_map,
+                    snap,
+                    skip_edge_scan,
+                    &skipped_node_mappings,
+                    &skipped_edge_mappings,
+                    &repaired_edge_slots,
+                );
+            } else {
+                const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
+                defer self.allocator.free(scan_entries);
 
-            // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
-            // adopted as base at open), the node uuid->slot mappings already
-            // live in the immutable base. Re-inserting them here (loop1) would
-            // dump the entire base into the in-memory overlay — defeating the
-            // O(1)-open / bounded-RSS win and re-doing the per-node engine read.
-            // Skip loop1 entirely; loop2 below reads node uuids straight from
-            // base via id_map.nodeUuid(slot_id).
-            if (id_map.mode == .resident) {
-                // Cold-open loop1 I/O locality: sort scan_entries by
-                // (shard, prop_head) so the per-node props-page fetch below
-                // (getNodePropertyByHead) visits each shard's props pages in
-                // ascending prop_head order instead of raw slot-scan order.
-                // Reorder-only — both loop1 (id_map keyed by uuid) and loop2
-                // (self.nodes keyed by uuid) are insertion-order-independent, so
-                // this changes I/O locality only, not the resulting IdMap or
-                // skipped-mapping count. The slice is function-local and freed
-                // above; no other scanAllNodes caller observes this order.
-                // Gated to the .resident rebuild path: this is loop1's only
-                // consumer. On .mmap_backed (lazy-hydrate / fast-restart) loop1
-                // is skipped entirely, so sorting scan_entries there would be
-                // pure wasted O(n log n) work undercutting the sub-second
-                // restart goal.
-                const ScanEntry = graph_storage_adapter.StorageAdapter.ScanEntry;
-                std.sort.pdq(ScanEntry, scan_entries, adapter, struct {
-                    fn less(a: *graph_storage_adapter.StorageAdapter, x: ScanEntry, y: ScanEntry) bool {
-                        const sx = a.shardOfSlot(x.slot_id);
-                        const sy = a.shardOfSlot(y.slot_id);
-                        if (sx != sy) return sx < sy;
-                        return x.rec.prop_head < y.rec.prop_head;
+                // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
+                // adopted as base at open), the node uuid->slot mappings already
+                // live in the immutable base. Re-inserting them here (loop1) would
+                // dump the entire base into the in-memory overlay — defeating the
+                // O(1)-open / bounded-RSS win and re-doing the per-node engine read.
+                // Skip loop1 entirely; loop2 below reads node uuids straight from
+                // base via id_map.nodeUuid(slot_id).
+                if (id_map.mode == .resident) {
+                    // Cold-open loop1 I/O locality: sort scan_entries by
+                    // (shard, prop_head) so the per-node props-page fetch below
+                    // (getNodePropertyByHead) visits each shard's props pages in
+                    // ascending prop_head order instead of raw slot-scan order.
+                    // Reorder-only — both loop1 (id_map keyed by uuid) and loop2
+                    // (self.nodes keyed by uuid) are insertion-order-independent, so
+                    // this changes I/O locality only, not the resulting IdMap or
+                    // skipped-mapping count. The slice is function-local and freed
+                    // above; no other scanAllNodes caller observes this order.
+                    // Gated to the .resident rebuild path: this is loop1's only
+                    // consumer. On .mmap_backed (lazy-hydrate / fast-restart) loop1
+                    // is skipped entirely, so sorting scan_entries there would be
+                    // pure wasted O(n log n) work undercutting the sub-second
+                    // restart goal.
+                    const ScanEntry = graph_storage_adapter.StorageAdapter.ScanEntry;
+                    std.sort.pdq(ScanEntry, scan_entries, adapter, struct {
+                        fn less(a: *graph_storage_adapter.StorageAdapter, x: ScanEntry, y: ScanEntry) bool {
+                            const sx = a.shardOfSlot(x.slot_id);
+                            const sy = a.shardOfSlot(y.slot_id);
+                            if (sx != sy) return sx < sy;
+                            return x.rec.prop_head < y.rec.prop_head;
+                        }
+                    }.less);
+
+                    for (scan_entries) |entry| {
+                        const slot_id = entry.slot_id;
+                        // PHASE 1b instrumentation: per-node engine read of the IdMap
+                        // scan-rebuild (loop1). Stays 0 at open when a valid snapshot
+                        // was bulk-loaded instead.
+                        _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
+                        const node_uuid = blk: {
+                            // 2026-05-22: tolerate per-node property page corruption.
+                            // A torn/partially-flushed property page (e.g. WAL+TDE
+                            // hard-crash mid-write) used to bubble up through
+                            // `adapter.getNodeProperty` -> `PropStore.getProperty`
+                            // and either panic on unsigned underflow inside
+                            // `readDirEntry` or quarantine the entire graph. We now
+                            // catch DataCorruption / OutOfBounds / CircularChain at
+                            // the per-node level so the rest of the graph still
+                            // hydrates and the bad node is dropped to the
+                            // legacy-uuid fallback (or skipped) below.
+                            const maybe_stored = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
+                                error.DataCorruption, error.CircularChainDetected => {
+                                    log.warn("skipping node with corrupt property page during load", &.{
+                                        Attr.string("graph", graph_name),
+                                        Attr.int("slot_id", @intCast(slot_id)),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                    break :blk null;
+                                },
+                                else => return err,
+                            };
+                            if (maybe_stored) |stored_prop| {
+                                defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                                switch (stored_prop) {
+                                    .string => |text| {
+                                        if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                                    },
+                                    else => {},
+                                }
+                            }
+
+                            if (legacy_map) |*map| {
+                                const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
+                                const public_id = @as(u64, @truncate(legacy_uuid_128));
+                                var id_buf: [16]u8 = undefined;
+                                try adapter.setNodeProperty(
+                                    graph_name,
+                                    slot_id,
+                                    INTERNAL_NODE_ID_PROPERTY_KEY,
+                                    .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                                );
+                                backfilled_from_legacy = true;
+                                break :blk public_id;
+                            }
+
+                            break :blk null;
+                        } orelse {
+                            skipped_node_mappings += 1;
+                            continue;
+                        };
+                        try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
                     }
-                }.less);
+                }
 
                 for (scan_entries) |entry| {
                     const slot_id = entry.slot_id;
-                    // PHASE 1b instrumentation: per-node engine read of the IdMap
-                    // scan-rebuild (loop1). Stays 0 at open when a valid snapshot
-                    // was bulk-loaded instead.
-                    _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
-                    const node_uuid = blk: {
-                        // 2026-05-22: tolerate per-node property page corruption.
-                        // A torn/partially-flushed property page (e.g. WAL+TDE
-                        // hard-crash mid-write) used to bubble up through
-                        // `adapter.getNodeProperty` -> `PropStore.getProperty`
-                        // and either panic on unsigned underflow inside
-                        // `readDirEntry` or quarantine the entire graph. We now
-                        // catch DataCorruption / OutOfBounds / CircularChain at
-                        // the per-node level so the rest of the graph still
-                        // hydrates and the bad node is dropped to the
-                        // legacy-uuid fallback (or skipped) below.
-                        const maybe_stored = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
-                            error.DataCorruption, error.CircularChainDetected => {
-                                log.warn("skipping node with corrupt property page during load", &.{
-                                    Attr.string("graph", graph_name),
-                                    Attr.int("slot_id", @intCast(slot_id)),
-                                    Attr.string("error", @errorName(err)),
-                                });
-                                break :blk null;
-                            },
-                            else => return err,
-                        };
-                        if (maybe_stored) |stored_prop| {
-                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                            switch (stored_prop) {
-                                .string => |text| {
-                                    if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
-                                },
-                                else => {},
-                            }
-                        }
-
-                        if (legacy_map) |*map| {
-                            const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
-                            const public_id = @as(u64, @truncate(legacy_uuid_128));
-                            var id_buf: [16]u8 = undefined;
-                            try adapter.setNodeProperty(
-                                graph_name,
-                                slot_id,
-                                INTERNAL_NODE_ID_PROPERTY_KEY,
-                                .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-                            );
-                            backfilled_from_legacy = true;
-                            break :blk public_id;
-                        }
-
-                        break :blk null;
-                    } orelse {
-                        skipped_node_mappings += 1;
-                        continue;
-                    };
-                    try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
-                }
-            }
-
-            for (scan_entries) |entry| {
-                const slot_id = entry.slot_id;
-                // PHASE 1b instrumentation: per-node iteration of the DEFERRED
-                // resident-index scan (loop2). MUST be 0 at the "server ready"
-                // point — proves the O(graph) scan was not run at open.
-                _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
-                // GAP-ENT-0023 P3 (review C1) TDD hook — TEST BUILDS ONLY:
-                // deterministically fail the loop2 scan after N nodes so the
-                // quarantine-then-checkpoint hazard (partial products
-                // persisted counter-current) is reproducible. Compiles out of
-                // production binaries.
-                if (comptime @import("builtin").is_test) {
-                    const lim = g_test_hydration_fail_after.load(.monotonic);
-                    if (lim != std.math.maxInt(u64) and
-                        g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
-                    {
-                        return error.TestInjectedHydrationFailure;
-                    }
-                }
-                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
-                const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
-
-                const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                // GAP-0891 (RC-2): recover the persisted tenant tag. Absent
-                // (legacy / single-tenant data, or a default-tagged row we
-                // intentionally never persisted) -> DEFAULT_TENANT_ID. A corrupt
-                // tenant property is non-fatal: fall back to default rather than
-                // quarantine the node.
-                const tenant_id_copy = blk_tenant: {
-                    // Cold-open H1: read the tenant tag WITHOUT triggering the
-                    // engine's full derived property-chain index build
-                    // (ensureDerivedHydrated). Like the node-id read above, use
-                    // the known prop_head; getNodePropertyByHead walks the chain
-                    // directly. Using plain getNodeProperty here forced a
-                    // one-time O(graph) refreshPropertyChainIndex build (~71% of
-                    // loop1 CPU) on the FIRST node — pure waste for loop1.
-                    const maybe_t = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
-                    if (maybe_t) |stored_prop| {
-                        defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                        switch (stored_prop) {
-                            .string => |text| break :blk_tenant try self.allocator.dupe(u8, text),
-                            else => {},
+                    // PHASE 1b instrumentation: per-node iteration of the DEFERRED
+                    // resident-index scan (loop2). MUST be 0 at the "server ready"
+                    // point — proves the O(graph) scan was not run at open.
+                    _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
+                    // GAP-ENT-0023 P3 (review C1) TDD hook — TEST BUILDS ONLY:
+                    // deterministically fail the loop2 scan after N nodes so the
+                    // quarantine-then-checkpoint hazard (partial products
+                    // persisted counter-current) is reproducible. Compiles out of
+                    // production binaries.
+                    if (comptime @import("builtin").is_test) {
+                        const lim = g_test_hydration_fail_after.load(.monotonic);
+                        if (lim != std.math.maxInt(u64) and
+                            g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
+                        {
+                            return error.TestInjectedHydrationFailure;
                         }
                     }
-                    break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-                };
+                    const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
+                    const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
 
-                var node = Node{
-                    .id = node_uuid,
-                    .labels = labels,
-                    .properties = CompactPropertyMap.init(self.allocator),
-                    .graph_name = graph_name_copy,
-                    .tenant_id = tenant_id_copy,
-                };
-
-                var storage_props = try adapter.getAllNodeProperties(graph_name, slot_id, self.allocator);
-                defer {
-                    var sp_iter = storage_props.iterator();
-                    while (sp_iter.next()) |sp_entry| {
-                        self.allocator.free(sp_entry.key_ptr.*);
-                        // GAP-0862: getAllNodeProperties hands back decoded
-                        // StorageProperty VALUES whose String/Ext payloads are
-                        // freshly allocated; fromStorageProperty above made an
-                        // independent store-owned copy, so the source value must
-                        // be freed here or every loaded string/ext property leaks
-                        // on each restart/restore load.
-                        graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                    }
-                    storage_props.deinit();
-                }
-
-                var sp_iter = storage_props.iterator();
-                while (sp_iter.next()) |sp_entry| {
-                    // C3 (review-0023): `.null` is the adapter's REMOVE tombstone —
-                    // never materialize it as a present Null property (see
-                    // materializeNodeFromEngine).
-                    if (sp_entry.value_ptr.* == .null) continue;
-                    const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                    try node.properties.put(key_copy, pv);
-                }
-
-                try self.nodes.put(node_uuid, node);
-
-                // Update next_node_id
-                if (node_uuid >= self.next_node_id) {
-                    self.next_node_id = node_uuid + 1;
-                }
-
-                // Rebuild label index. GAP-ENT-0023 P3: skipped when the
-                // postings came from the labels snapshot (the insert would be
-                // a dedup no-op per id — pure wasted binary-search work).
-                if (!snap.labels) {
-                    for (labels) |label| {
-                        try self.addToLabelIndex(graph_name, label, node_uuid);
-                    }
-                }
-
-                // GAP-825 (issue #825): the adapter hydration path used to
-                // rebuild `label_index` only, leaving `nodes_by_graph`
-                // (PERF-B) and `node_labels_by_tenant` /
-                // `label_properties_by_tenant` (PERF-C) empty after a
-                // restart.  That made `iterateNodesInGraph`,
-                // `nodesInGraphCount`, and `listNodeLabels` silently
-                // return zero rows even though `getNodesByLabel` worked.
-                // Mirror the introspection counters now so the in-memory
-                // store matches a freshly-created one.
-                const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
-                try self.addNodeToGraphIndex(graph_name, node_uuid);
-                // GAP-ENT-0023 P3: the tenant introspection multisets came
-                // from the counters snapshot — re-bumping per node here would
-                // double-count them.
-                if (!snap.counters) try self.bumpIntrospectionForNode(stored_node_ptr);
-
-                // GAP-0900 Layer-3 (Fix 3): rebuild the merge property index for
-                // this hydrated node. Without this, a re-MERGE of an existing
-                // key after shutdown+reopen finds an empty index, takes the
-                // create branch, and produces a DUPLICATE — breaking resumable /
-                // idempotent seeding. `addToMergePropertyIndex` honors lean mode:
-                // off (default) indexes every key; on
-                // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
-                // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
-                // fresh server process) are backfilled at registration time by
-                // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
-                // GAP-ENT-0023 P3: the whole merge product (single-key AND
-                // composite entries) came from the merge snapshot — skip the
-                // per-node rebuild (putOrUpdate would be an idempotent
-                // overwrite; pure wasted hashing).
-                if (!snap.merge) {
-                    var merge_prop_iter = stored_node_ptr.properties.iterator();
-                    while (merge_prop_iter.next()) |prop_entry| {
-                        self.addToMergePropertyIndex(
-                            stored_node_ptr.graph_name,
-                            stored_node_ptr.labels,
-                            prop_entry.key_ptr.*,
-                            prop_entry.value_ptr.*,
-                            stored_node_ptr.id,
-                        ) catch {};
-                    }
-                    // Caveat "B": rebuild the COMPOSITE merge entry for this
-                    // hydrated node so the from-dump EDGE phase (which runs as a
-                    // SEPARATE process after the NODE load) resolves endpoints by
-                    // {source, source_id} in ONE zero-read probe. No extra engine
-                    // read — uses the already-loaded property map. No-op unless a
-                    // composite key is registered (loaded from the sidecar in
-                    // adapter init, before this load runs).
-                    self.addNodeCompositeMergeEntries(stored_node_ptr);
-                }
-
-                // GAP-ENT-0023 P3: edge-side products fully covered by
-                // snapshots + mmap IdMap base + bounded caches — skip the
-                // per-node edge iteration (see skip_edge_scan above).
-                if (skip_edge_scan) continue;
-
-                var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
-                defer out_edges.deinit();
-
-                // Hydration self-heal: physical outgoing edge slots with no
-                // INLINE public id (GAP-ENT-0024), no __geode_internal_edge_id
-                // property and no legacy mapping are ORPHANS left behind by the
-                // pre-fix createEdgeWithIdInternal ordering bug (one per
-                // idempotent Raft re-apply). They have no IdMap entry, so the
-                // read path can never reverse-map them
-                // (-> error.EdgeSlotMappingMissing). Collect them while the
-                // adjacency iterator is live and DELETE them after the iterator
-                // is exhausted (deleting mid-iteration would invalidate the
-                // adjacency cursor). The canonical slot for any public id always
-                // carries its id (inline for v2 edges, property for legacy), so
-                // it never lands here — and a legitimate distinct parallel edge
-                // carries its own id and is likewise never collected. See
-                // tests/test_edge_durability_churn_repro.zig.
-                const OrphanEdgeSlot = struct { to_slot: u64, edge_slot: u64 };
-                var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
-                defer orphan_edge_slots.deinit(self.allocator);
-
-                while (try out_edges.next()) |edge_entry| {
-                    // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
-                    const edge_uuid = blk: {
-                        // GAP-ENT-0024 inline-first: v2 adjacency entries carry
-                        // the PUBLIC id inline — no per-edge property fetch.
-                        // 0 = legacy v1 block / pre-v0.2.24 store → fall back.
-                        if (edge_entry.public_id != 0) break :blk edge_entry.public_id;
-
-                        _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
-                        if (try adapter.getEdgeProperty(
-                            graph_name,
-                            slot_id,
-                            edge_entry.edge_id,
-                            INTERNAL_EDGE_ID_PROPERTY_KEY,
-                            self.allocator,
-                        )) |stored_prop| {
-                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                            switch (stored_prop) {
-                                .string => |text| {
-                                    if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
-                                },
-                                else => {},
-                            }
-                        }
-
-                        if (legacy_map) |*map| {
-                            const legacy_uuid_128 = map.edgeUuid(edge_entry.edge_id) orelse break :blk null;
-                            const public_id = @as(u64, @truncate(legacy_uuid_128));
-                            var id_buf: [16]u8 = undefined;
-                            try adapter.setEdgeProperty(
-                                graph_name,
-                                slot_id,
-                                edge_entry.neighbor,
-                                edge_entry.edge_id,
-                                INTERNAL_EDGE_ID_PROPERTY_KEY,
-                                .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-                            );
-                            backfilled_from_legacy = true;
-                            break :blk public_id;
-                        }
-
-                        break :blk null;
-                    } orelse {
-                        // Orphan physical edge slot: no persisted public id, no
-                        // legacy mapping. Queue it for durable deletion (the
-                        // self-heal) and account it as a repair rather than a
-                        // silent skip.
-                        skipped_edge_mappings += 1;
-                        try orphan_edge_slots.append(self.allocator, .{
-                            .to_slot = edge_entry.neighbor,
-                            .edge_slot = edge_entry.edge_id,
-                        });
-                        continue;
-                    };
-                    // PHASE 4: skip the edge IdMap re-insert when mmap_backed —
-                    // base already holds the edge uuid->slot mapping; loop2's
-                    // reads (below and id_map.nodeUuid) are served by base.
-                    if (id_map.mode == .resident)
-                        try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
-
-                    if (self.edges.contains(edge_uuid)) continue;
-
-                    const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
-
-                    // Get edge label from label dict
-                    const mg = try adapter.getOrCreateGraph(graph_name);
-                    const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
-                    const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
-                    const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                    // GAP-0891 (RC-2): recover the persisted edge tenant tag
-                    // (absent / corrupt -> DEFAULT_TENANT_ID). Mirrors the node
-                    // path and the edge-id read above (node slot + edge slot).
-                    const edge_tenant_id_copy = blk_edge_tenant: {
-                        const maybe_t = adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                    const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                    // GAP-0891 (RC-2): recover the persisted tenant tag. Absent
+                    // (legacy / single-tenant data, or a default-tagged row we
+                    // intentionally never persisted) -> DEFAULT_TENANT_ID. A corrupt
+                    // tenant property is non-fatal: fall back to default rather than
+                    // quarantine the node.
+                    const tenant_id_copy = blk_tenant: {
+                        // Cold-open H1: read the tenant tag WITHOUT triggering the
+                        // engine's full derived property-chain index build
+                        // (ensureDerivedHydrated). Like the node-id read above, use
+                        // the known prop_head; getNodePropertyByHead walks the chain
+                        // directly. Using plain getNodeProperty here forced a
+                        // one-time O(graph) refreshPropertyChainIndex build (~71% of
+                        // loop1 CPU) on the FIRST node — pure waste for loop1.
+                        const maybe_t = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
                         if (maybe_t) |stored_prop| {
                             defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
                             switch (stored_prop) {
-                                .string => |text| break :blk_edge_tenant try self.allocator.dupe(u8, text),
+                                .string => |text| break :blk_tenant try self.allocator.dupe(u8, text),
                                 else => {},
                             }
                         }
-                        break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                        break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
                     };
 
-                    var edge = Edge{
-                        .id = edge_uuid,
-                        .from_id = node_uuid,
-                        .to_id = target_uuid,
-                        .label = edge_label_copy,
+                    var node = Node{
+                        .id = node_uuid,
+                        .labels = labels,
                         .properties = CompactPropertyMap.init(self.allocator),
-                        .graph_name = edge_graph_name_copy,
-                        .tenant_id = edge_tenant_id_copy,
+                        .graph_name = graph_name_copy,
+                        .tenant_id = tenant_id_copy,
                     };
 
-                    if (edge_entry.prop_head != 0) {
-                        // Pass the source-node SLOT id (shard-striped) so
-                        // adapter.getAllEdgeProperties routes via the
-                        // correct per-shard engine. node_uuid is the
-                        // public id (not stripe-aligned) and would
-                        // misroute through shardOfNode(uuid). See
-                        // graph_storage_adapter.getAllEdgeProperties for
-                        // why prop_head alone is the wrong key.
-                        var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, slot_id, edge_entry.prop_head, self.allocator);
-                        defer {
+                    var storage_props = try adapter.getAllNodeProperties(graph_name, slot_id, self.allocator);
+                    defer {
+                        var sp_iter = storage_props.iterator();
+                        while (sp_iter.next()) |sp_entry| {
+                            self.allocator.free(sp_entry.key_ptr.*);
+                            // GAP-0862: getAllNodeProperties hands back decoded
+                            // StorageProperty VALUES whose String/Ext payloads are
+                            // freshly allocated; fromStorageProperty above made an
+                            // independent store-owned copy, so the source value must
+                            // be freed here or every loaded string/ext property leaks
+                            // on each restart/restore load.
+                            graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                        }
+                        storage_props.deinit();
+                    }
+
+                    var sp_iter = storage_props.iterator();
+                    while (sp_iter.next()) |sp_entry| {
+                        // C3 (review-0023): `.null` is the adapter's REMOVE tombstone —
+                        // never materialize it as a present Null property (see
+                        // materializeNodeFromEngine).
+                        if (sp_entry.value_ptr.* == .null) continue;
+                        const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                        const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                        try node.properties.put(key_copy, pv);
+                    }
+
+                    try self.nodes.put(node_uuid, node);
+
+                    // Update next_node_id
+                    if (node_uuid >= self.next_node_id) {
+                        self.next_node_id = node_uuid + 1;
+                    }
+
+                    // Rebuild label index. GAP-ENT-0023 P3: skipped when the
+                    // postings came from the labels snapshot (the insert would be
+                    // a dedup no-op per id — pure wasted binary-search work).
+                    if (!snap.labels) {
+                        for (labels) |label| {
+                            try self.addToLabelIndex(graph_name, label, node_uuid);
+                        }
+                    }
+
+                    // GAP-825 (issue #825): the adapter hydration path used to
+                    // rebuild `label_index` only, leaving `nodes_by_graph`
+                    // (PERF-B) and `node_labels_by_tenant` /
+                    // `label_properties_by_tenant` (PERF-C) empty after a
+                    // restart.  That made `iterateNodesInGraph`,
+                    // `nodesInGraphCount`, and `listNodeLabels` silently
+                    // return zero rows even though `getNodesByLabel` worked.
+                    // Mirror the introspection counters now so the in-memory
+                    // store matches a freshly-created one.
+                    const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
+                    try self.addNodeToGraphIndex(graph_name, node_uuid);
+                    // GAP-ENT-0023 P3: the tenant introspection multisets came
+                    // from the counters snapshot — re-bumping per node here would
+                    // double-count them.
+                    if (!snap.counters) try self.bumpIntrospectionForNode(stored_node_ptr);
+
+                    // GAP-0900 Layer-3 (Fix 3): rebuild the merge property index for
+                    // this hydrated node. Without this, a re-MERGE of an existing
+                    // key after shutdown+reopen finds an empty index, takes the
+                    // create branch, and produces a DUPLICATE — breaking resumable /
+                    // idempotent seeding. `addToMergePropertyIndex` honors lean mode:
+                    // off (default) indexes every key; on
+                    // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
+                    // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
+                    // fresh server process) are backfilled at registration time by
+                    // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
+                    // GAP-ENT-0023 P3: the whole merge product (single-key AND
+                    // composite entries) came from the merge snapshot — skip the
+                    // per-node rebuild (putOrUpdate would be an idempotent
+                    // overwrite; pure wasted hashing).
+                    if (!snap.merge) {
+                        var merge_prop_iter = stored_node_ptr.properties.iterator();
+                        while (merge_prop_iter.next()) |prop_entry| {
+                            self.addToMergePropertyIndex(
+                                stored_node_ptr.graph_name,
+                                stored_node_ptr.labels,
+                                prop_entry.key_ptr.*,
+                                prop_entry.value_ptr.*,
+                                stored_node_ptr.id,
+                            ) catch {};
+                        }
+                        // Caveat "B": rebuild the COMPOSITE merge entry for this
+                        // hydrated node so the from-dump EDGE phase (which runs as a
+                        // SEPARATE process after the NODE load) resolves endpoints by
+                        // {source, source_id} in ONE zero-read probe. No extra engine
+                        // read — uses the already-loaded property map. No-op unless a
+                        // composite key is registered (loaded from the sidecar in
+                        // adapter init, before this load runs).
+                        self.addNodeCompositeMergeEntries(stored_node_ptr);
+                    }
+
+                    // GAP-ENT-0023 P3: edge-side products fully covered by
+                    // snapshots + mmap IdMap base + bounded caches — skip the
+                    // per-node edge iteration (see skip_edge_scan above).
+                    if (skip_edge_scan) continue;
+
+                    var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
+                    defer out_edges.deinit();
+
+                    // Hydration self-heal: physical outgoing edge slots with no
+                    // INLINE public id (GAP-ENT-0024), no __geode_internal_edge_id
+                    // property and no legacy mapping are ORPHANS left behind by the
+                    // pre-fix createEdgeWithIdInternal ordering bug (one per
+                    // idempotent Raft re-apply). They have no IdMap entry, so the
+                    // read path can never reverse-map them
+                    // (-> error.EdgeSlotMappingMissing). Collect them while the
+                    // adjacency iterator is live and DELETE them after the iterator
+                    // is exhausted (deleting mid-iteration would invalidate the
+                    // adjacency cursor). The canonical slot for any public id always
+                    // carries its id (inline for v2 edges, property for legacy), so
+                    // it never lands here — and a legitimate distinct parallel edge
+                    // carries its own id and is likewise never collected. See
+                    // tests/test_edge_durability_churn_repro.zig.
+                    const OrphanEdgeSlot = struct { to_slot: u64, edge_slot: u64 };
+                    var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
+                    defer orphan_edge_slots.deinit(self.allocator);
+
+                    while (try out_edges.next()) |edge_entry| {
+                        // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
+                        const edge_uuid = blk: {
+                            // GAP-ENT-0024 inline-first: v2 adjacency entries carry
+                            // the PUBLIC id inline — no per-edge property fetch.
+                            // 0 = legacy v1 block / pre-v0.2.24 store → fall back.
+                            if (edge_entry.public_id != 0) break :blk edge_entry.public_id;
+
+                            _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                            if (try adapter.getEdgeProperty(
+                                graph_name,
+                                slot_id,
+                                edge_entry.edge_id,
+                                INTERNAL_EDGE_ID_PROPERTY_KEY,
+                                self.allocator,
+                            )) |stored_prop| {
+                                defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                                switch (stored_prop) {
+                                    .string => |text| {
+                                        if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                                    },
+                                    else => {},
+                                }
+                            }
+
+                            if (legacy_map) |*map| {
+                                const legacy_uuid_128 = map.edgeUuid(edge_entry.edge_id) orelse break :blk null;
+                                const public_id = @as(u64, @truncate(legacy_uuid_128));
+                                var id_buf: [16]u8 = undefined;
+                                try adapter.setEdgeProperty(
+                                    graph_name,
+                                    slot_id,
+                                    edge_entry.neighbor,
+                                    edge_entry.edge_id,
+                                    INTERNAL_EDGE_ID_PROPERTY_KEY,
+                                    .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                                );
+                                backfilled_from_legacy = true;
+                                break :blk public_id;
+                            }
+
+                            break :blk null;
+                        } orelse {
+                            // Orphan physical edge slot: no persisted public id, no
+                            // legacy mapping. Queue it for durable deletion (the
+                            // self-heal) and account it as a repair rather than a
+                            // silent skip.
+                            skipped_edge_mappings += 1;
+                            try orphan_edge_slots.append(self.allocator, .{
+                                .to_slot = edge_entry.neighbor,
+                                .edge_slot = edge_entry.edge_id,
+                            });
+                            continue;
+                        };
+                        // PHASE 4: skip the edge IdMap re-insert when mmap_backed —
+                        // base already holds the edge uuid->slot mapping; loop2's
+                        // reads (below and id_map.nodeUuid) are served by base.
+                        if (id_map.mode == .resident)
+                            try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
+
+                        if (self.edges.contains(edge_uuid)) continue;
+
+                        const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
+
+                        // Get edge label from label dict
+                        const mg = try adapter.getOrCreateGraph(graph_name);
+                        const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
+                        const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
+                        const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                        // GAP-0891 (RC-2): recover the persisted edge tenant tag
+                        // (absent / corrupt -> DEFAULT_TENANT_ID). Mirrors the node
+                        // path and the edge-id read above (node slot + edge slot).
+                        const edge_tenant_id_copy = blk_edge_tenant: {
+                            const maybe_t = adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                            if (maybe_t) |stored_prop| {
+                                defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                                switch (stored_prop) {
+                                    .string => |text| break :blk_edge_tenant try self.allocator.dupe(u8, text),
+                                    else => {},
+                                }
+                            }
+                            break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                        };
+
+                        var edge = Edge{
+                            .id = edge_uuid,
+                            .from_id = node_uuid,
+                            .to_id = target_uuid,
+                            .label = edge_label_copy,
+                            .properties = CompactPropertyMap.init(self.allocator),
+                            .graph_name = edge_graph_name_copy,
+                            .tenant_id = edge_tenant_id_copy,
+                        };
+
+                        if (edge_entry.prop_head != 0) {
+                            // Pass the source-node SLOT id (shard-striped) so
+                            // adapter.getAllEdgeProperties routes via the
+                            // correct per-shard engine. node_uuid is the
+                            // public id (not stripe-aligned) and would
+                            // misroute through shardOfNode(uuid). See
+                            // graph_storage_adapter.getAllEdgeProperties for
+                            // why prop_head alone is the wrong key.
+                            var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, slot_id, edge_entry.prop_head, self.allocator);
+                            defer {
+                                var edge_sp_iter = edge_storage_props.iterator();
+                                while (edge_sp_iter.next()) |sp_entry| {
+                                    self.allocator.free(sp_entry.key_ptr.*);
+                                    // GAP-0862: free decoded String/Ext value bytes
+                                    // (fromStorageProperty made an independent copy).
+                                    graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                                }
+                                edge_storage_props.deinit();
+                            }
+
                             var edge_sp_iter = edge_storage_props.iterator();
                             while (edge_sp_iter.next()) |sp_entry| {
-                                self.allocator.free(sp_entry.key_ptr.*);
-                                // GAP-0862: free decoded String/Ext value bytes
-                                // (fromStorageProperty made an independent copy).
-                                graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                                // C3 (review-0023): skip the `.null` REMOVE tombstone
+                                // (same convention as node properties).
+                                if (sp_entry.value_ptr.* == .null) continue;
+                                const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                                const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                                try edge.properties.put(key_copy, pv);
                             }
-                            edge_storage_props.deinit();
                         }
 
-                        var edge_sp_iter = edge_storage_props.iterator();
-                        while (edge_sp_iter.next()) |sp_entry| {
-                            // C3 (review-0023): skip the `.null` REMOVE tombstone
-                            // (same convention as node properties).
-                            if (sp_entry.value_ptr.* == .null) continue;
-                            const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                            const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                            try edge.properties.put(key_copy, pv);
+                        try self.edges.put(edge_uuid, edge);
+                        try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                        // PERF-P0-001: Maintain edge-type index during adapter load
+                        try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
+                        // DURABILITY: rebuild the per-(graph,type) exact counter on the
+                        // restart edge-scan so typed count(r:TYPE) survives reopen
+                        // (replay-on-load, like the label refcount + untyped edge count).
+                        // GAP-ENT-0023 P3: restored from the counters snapshot when
+                        // present — re-bumping would double-count.
+                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
+
+                        if (edge_uuid >= self.next_edge_id) {
+                            self.next_edge_id = edge_uuid + 1;
                         }
                     }
 
-                    try self.edges.put(edge_uuid, edge);
-                    try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
-                    // PERF-P0-001: Maintain edge-type index during adapter load
-                    try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
-                    // DURABILITY: rebuild the per-(graph,type) exact counter on the
-                    // restart edge-scan so typed count(r:TYPE) survives reopen
-                    // (replay-on-load, like the label refcount + untyped edge count).
-                    // GAP-ENT-0023 P3: restored from the counters snapshot when
-                    // present — re-bumping would double-count.
-                    if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
-
-                    if (edge_uuid >= self.next_edge_id) {
-                        self.next_edge_id = edge_uuid + 1;
+                    // Self-heal: now that this node's adjacency cursor is exhausted,
+                    // physically delete the orphan edge slots collected above so an
+                    // already-corrupted PVC converges to one durable slot per logical
+                    // edge on restart. Deletion is best-effort per slot (a failure
+                    // leaves the slot orphaned but unmapped — still no read-path
+                    // regression, since it was already unqueryable).
+                    for (orphan_edge_slots.items) |orphan| {
+                        adapter.deleteEdge(graph_name, slot_id, orphan.to_slot, orphan.edge_slot) catch |err| {
+                            log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
+                                Attr.string("graph", graph_name),
+                                Attr.int("from_slot", @intCast(slot_id)),
+                                Attr.int("edge_slot", @intCast(orphan.edge_slot)),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            continue;
+                        };
+                        repaired_edge_slots += 1;
                     }
                 }
-
-                // Self-heal: now that this node's adjacency cursor is exhausted,
-                // physically delete the orphan edge slots collected above so an
-                // already-corrupted PVC converges to one durable slot per logical
-                // edge on restart. Deletion is best-effort per slot (a failure
-                // leaves the slot orphaned but unmapped — still no read-path
-                // regression, since it was already unqueryable).
-                for (orphan_edge_slots.items) |orphan| {
-                    adapter.deleteEdge(graph_name, slot_id, orphan.to_slot, orphan.edge_slot) catch |err| {
-                        log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.int("from_slot", @intCast(slot_id)),
-                            Attr.int("edge_slot", @intCast(orphan.edge_slot)),
-                            Attr.string("error", @errorName(err)),
-                        });
-                        continue;
-                    };
-                    repaired_edge_slots += 1;
-                }
-            }
+            } // end legacy per-node scan (streaming fast-scan branch above)
 
             // Flush the legacy backfill AND any orphan-slot repairs so the
             // durable store reflects the self-heal on next open (idempotent
@@ -12062,11 +12394,23 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     // above 65536 to exceed that cap for very large working sets in RAM-rich
     // environments. Bad/missing values fall back to the 1024 default.
     const buffer_pool_pages: u32 = @intCast(envU64("GEODE_BUFFER_POOL_PAGES", 1024));
+    // GEODE_BUFFER_POOL_AUTO_SIZE=0 disables the manifest-driven auto-sizing
+    // (grow-to-fit up to 512 MB per shard) so GEODE_BUFFER_POOL_PAGES becomes
+    // an EXACT per-shard pool size. Operator control for RAM-bounded
+    // deployments (auto-size costs up to 8 GB resident on a 16-shard large
+    // store) and the lever the hydration throughput-floor test uses to
+    // reproduce the production pool:store ratio on a CI-sized store.
+    const pool_auto_size = blk: {
+        const raw_z = std.c.getenv("GEODE_BUFFER_POOL_AUTO_SIZE") orelse break :blk true;
+        const raw = std.mem.span(raw_z);
+        break :blk !(std.mem.eql(u8, raw, "0") or std.mem.eql(u8, raw, "false") or std.mem.eql(u8, raw, "no"));
+    };
     const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
         .data_dir = data_dir,
         .encryption_key = tde_key,
         .sync_mode = sync_mode,
         .buffer_pool_pages = buffer_pool_pages,
+        .buffer_pool_auto_size = pool_auto_size,
     });
     global_adapter = adapter;
 
@@ -12258,6 +12602,10 @@ var g_idmap_from_snapshot: std.atomic.Value(u64) = std.atomic.Value(u64).init(0)
 var g_hydration_snapshot_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_hydration_scan_fallbacks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_hydration_full_scan_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP hydration fast-scan instrumentation: graphs hydrated via the SEQUENTIAL
+// per-shard stream scan (vs the legacy per-node engine-read walk). The parity
+// tests assert on this to prove which path served a hydration.
+var g_hydration_streaming_scans: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-ENT-0023 P3 (review C1) TDD hook — test builds only (the check site is
 // gated on `builtin.is_test`). maxInt = disabled; otherwise the loop2 scan
 // fails with error.TestInjectedHydrationFailure once `seen >= limit`.
@@ -12327,6 +12675,13 @@ pub fn resetLazyHydrateCounters() void {
     g_hydration_snapshot_loads.store(0, .release);
     g_hydration_scan_fallbacks.store(0, .release);
     g_hydration_full_scan_skips.store(0, .release);
+    g_hydration_streaming_scans.store(0, .release);
+}
+
+/// GAP hydration fast-scan: graphs hydrated via the sequential per-shard
+/// stream scan since the last counter reset.
+pub fn hydrationStreamingScanCount() u64 {
+    return g_hydration_streaming_scans.load(.acquire);
 }
 
 /// GAP-ENT-0023 P3: number of loop2 hydration PRODUCTS restored from

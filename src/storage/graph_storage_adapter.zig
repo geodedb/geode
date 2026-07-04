@@ -41,6 +41,11 @@ const SAttr = structured_logging.Attr;
 // Re-export edge type for callers that need EdgeEntry from scan results.
 pub const EdgeEntry = gs.edge.EdgeEntry;
 
+/// GAP hydration fast-scan: sequential per-shard store streaming for the
+/// loop2 first-access hydration. Re-exported so graph_store.zig can name the
+/// accumulation types without importing graph_storage directly.
+pub const hydration_scan = @import("hydration_scan.zig");
+
 const LabelScanContext = struct {
     mg: *ManagedGraph,
     label_id: gs.LabelId,
@@ -749,7 +754,12 @@ fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
     return std.hash.Wyhash.hash(0, encoded_value);
 }
 
-fn shouldExposePropertyKey(key: []const u8) bool {
+/// Pub for the hydration fast-scan merge (graph_store.zig): the streaming
+/// scan accumulates ALL decoded property entries (internal keys included, the
+/// merge needs the internal id/tenant tags) and applies this exact filter
+/// when building the resident node/edge property maps — byte-identical to
+/// the legacy getAllNodeProperties/getAllEdgeProperties exposure rule.
+pub fn shouldExposePropertyKey(key: []const u8) bool {
     return !std.mem.eql(u8, key, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY) and
         !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY) and
         // GAP-0891 (RC-2): the persisted tenant tag must never surface as a
@@ -5610,6 +5620,55 @@ pub const StorageAdapter = struct {
         if (ctx.had_error) return error.OutOfMemory;
 
         return ctx.entries.toOwnedSlice(allocator);
+    }
+
+    // ------------------------------------------------------------------
+    // Hydration fast-scan surface (GAP hydration streaming)
+    // ------------------------------------------------------------------
+
+    /// Number of per-shard engines behind the named graph (the unit of
+    /// hydration stream-scan parallelism). Errors if the graph is unknown.
+    pub fn hydrationStreamShardCount(self: *StorageAdapter, graph_name: []const u8) !usize {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.engine.shards.len;
+    }
+
+    /// Stream-scan ONE shard's store files sequentially and return the
+    /// decoded per-shard accumulation (see hydration_scan.zig for the pass
+    /// structure and the direct-pager-read justification). Read-only against
+    /// the engine; safe to run for different shards on dedicated threads
+    /// (each shard owns its files and buffer pool).
+    pub fn hydrationStreamScanShard(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        shard_idx: usize,
+        allocator: Allocator,
+        opts: hydration_scan.ScanOptions,
+    ) !hydration_scan.ShardAccum {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], opts);
+    }
+
+    /// Resolve a raw label/rel-type id to its dictionary string, or null when
+    /// the id is unknown (the hydration merge mirrors getNodeLabels' drop-
+    /// unknown-ids rule for node labels and the legacy "UNKNOWN" fallback for
+    /// edge rel types). The returned slice is owned by the dictionary and
+    /// stable for the adapter's lifetime — callers dupe what they keep.
+    pub fn hydrationLabelString(self: *StorageAdapter, graph_name: []const u8, label_id: u32) ?[]const u8 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        return mg.label_dict.getString(label_id);
     }
 
     // ------------------------------------------------------------------
