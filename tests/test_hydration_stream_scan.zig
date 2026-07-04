@@ -590,9 +590,14 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
     // chain hop is a pool miss+evict, exactly like 8 GB pool vs 368 GB store.
     _ = setenv("GEODE_BUFFER_POOL_PAGES", "2048", 1);
     _ = setenv("GEODE_BUFFER_POOL_AUTO_SIZE", "0", 1);
+    // T2c: the scan-scaling floor below measures RAW 16-way scan parallelism.
+    // The in-flight gate (default 3) deliberately throttles the scan to merge
+    // pace, so lift the window to all shards for this measurement.
+    _ = setenv("GEODE_HYDRATION_INFLIGHT_SHARDS", "16", 1);
     defer {
         _ = unsetenv("GEODE_BUFFER_POOL_PAGES");
         _ = unsetenv("GEODE_BUFFER_POOL_AUTO_SIZE");
+        _ = unsetenv("GEODE_HYDRATION_INFLIGHT_SHARDS");
     }
 
     // --- LEGACY timing (kill switch), cold cache. ---
@@ -973,6 +978,167 @@ test "T2b merge memory + time: hydration peak <= 1.6x final resident products; m
         // this size.
         try testing.expect(merge_ns <= 8 * scan_ns + 2_000_000_000);
 
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
+
+// ============================================================================
+// T2c — bounded in-flight shard outputs (scan -> merge backpressure)
+// ============================================================================
+//
+// At-scale failure (attempt #2 on the 368 GB / 14.27M store): the 16-worker
+// scan produced decoded shard outputs at up to ~3.3 GB/s while the merge
+// consumed them far slower, and with NO backpressure the completed-but-
+// unmerged outputs accumulated unbounded (RSS +5.7 GB/min -> OOM kill at
+// ~8 min). The 128k CI store cannot reproduce it naturally (the merge keeps
+// up), so the merge is artificially slowed via the per-shard delay hook and
+// the bound is asserted through the in-flight high-water counter — the bound
+// must hold BY CONSTRUCTION, not by luck of relative speeds.
+
+/// Small multi-shard store for the gate tests: enough rows per shard that
+/// the merge does real work, small enough to stay CI-fast. `full_checkpoint`
+/// writes the IdMap snapshot so the reopen DEFERS hydration to first touch
+/// (the injection test needs to arm hooks between open and touch); false
+/// leaves the store snapshot-less (the reopen hydrates during open — fine
+/// when the hooks are armed before the open).
+fn buildGateStore(allocator: std.mem.Allocator, data_dir: []const u8, n: usize, full_checkpoint: bool) !void {
+    graph_store.setDataDirOverride(allocator, data_dir);
+    const store = graph_store.getGlobalStore(allocator);
+    var name_buf: [48]u8 = undefined;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const id = try store.createNodeWithGraph(&[_][]const u8{"Taxon"}, GRAPH);
+        const name = try std.fmt.bufPrint(&name_buf, "taxon-{d}", .{i});
+        try store.setNodeProperty(id, "name", .{ .String = name });
+    }
+    if (full_checkpoint) {
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+    } else {
+        try store.saveToFileEx(true); // light checkpoint: flush, NO snapshots
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+    graph_store.setDataDirOverride(allocator, null);
+}
+
+test "T2c inflight gate: slow merge bounds completed-unmerged shard outputs to N" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 4_000;
+    try buildGateStore(allocator, data_dir, N, false);
+
+    // 16 scan workers vs a merge slowed to >=25 ms/shard: without the gate
+    // every shard output is complete long before the merge touches shard 1.
+    // Hooks/envs are armed BEFORE the reopen: a snapshot-less store hydrates
+    // during the open itself (no-valid-snapshot fallback).
+    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+    _ = setenv("GEODE_HYDRATION_INFLIGHT_SHARDS", "2", 1);
+    defer {
+        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+        _ = unsetenv("GEODE_HYDRATION_INFLIGHT_SHARDS");
+    }
+    graph_store.setTestHydrationMergeDelayMs(25);
+    defer graph_store.setTestHydrationMergeDelayMs(null);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        // The open itself ran the stream-scan hydration (snapshot-less
+        // fallback) under the slow merge; the read verifies the products.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+
+        const hw = graph_store.hydrationInflightShardHighWater();
+        std.debug.print("\n[t2c-gate] inflight shard-output high-water = {d} (limit 2)\n", .{hw});
+        // Sanity: the counter is live (at least one output was in flight).
+        try testing.expect(hw >= 1);
+        // THE BOUND: completed-but-unmerged shard outputs never exceeded the
+        // window. RED pre-gate: the scan completes all 16 shards while the
+        // slowed merge still sits on shard 0 -> high-water == 16.
+        try testing.expect(hw <= 2);
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
+
+test "T2c poisoned gate: merge failure with gate-blocked workers joins all threads and quarantines (C1)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    // FULL checkpoint: the reopen adopts the IdMap snapshot and DEFERS
+    // hydration to first touch, so the fail hook can be armed between open
+    // and touch. Deleting the loop2 product snapshots forces that first
+    // touch onto the streaming scan rebuild.
+    const N: usize = 4_000;
+    try buildGateStore(allocator, data_dir, N, true);
+    try deleteHydrationSnapshots(allocator, data_dir);
+
+    // Window of 2 + a slow merge: while the merge sits in shard 0's delay,
+    // the workers for shards >= 2 are BLOCKED at the gate. The injected
+    // failure (after 20 rows of shard 0) must poison the gate so every
+    // blocked worker wakes and exits — quarantine (C1), no deadlock, all
+    // threads joinable.
+    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+    _ = setenv("GEODE_HYDRATION_INFLIGHT_SHARDS", "2", 1);
+    defer {
+        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+        _ = unsetenv("GEODE_HYDRATION_INFLIGHT_SHARDS");
+    }
+    graph_store.setTestHydrationMergeDelayMs(50);
+    defer graph_store.setTestHydrationMergeDelayMs(null);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        graph_store.setTestHydrationFailAfterNodes(20);
+        defer graph_store.setTestHydrationFailAfterNodes(null);
+
+        const t0 = monoNanos();
+        // First touch: the merge dies 20 rows into shard 0. Must RETURN
+        // (partial count), never hang on the never-sliding window.
+        _ = store.countNodesByLabel(GRAPH, "Taxon", null);
+        const elapsed_ms = (monoNanos() - t0) / 1_000_000;
+        graph_store.setTestHydrationFailAfterNodes(null);
+
+        // The failed hydration went through the streaming path.
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= 1);
+        // Bounded-time tripwire: a deadlocked gate would hang the suite; the
+        // explicit bound also catches a pathologically slow poison drain.
+        try testing.expect(elapsed_ms < 30_000);
+
+        // Quarantined (C1): the graph is latched done+failed — a second
+        // touch must NOT re-run the scan (loop2 row counter stays put).
+        const seen_after_fail = graph_store.loop2ScanNodeCount();
+        _ = store.countNodesByLabel(GRAPH, "Taxon", null);
+        try testing.expectEqual(seen_after_fail, graph_store.loop2ScanNodeCount());
+
+        // Every worker thread was joined before the hydration returned (the
+        // poison+join discipline) — a leaked gate-blocked thread would crash
+        // or wedge this crash-style deinit.
         graph_store.deinitGlobalStoreForTestCrash();
     }
 }

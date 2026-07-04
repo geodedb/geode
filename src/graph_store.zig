@@ -10761,8 +10761,11 @@ pub const GraphStore = struct {
 
     /// Task 2 (hydration fast-scan): number of dedicated per-shard scan
     /// worker threads. GEODE_HYDRATION_SCAN_WORKERS overrides; default is
-    /// min(shard_count, logical CPUs). 1 = fully sequential (the Task 1
-    /// behavior; also the scaling tests' baseline).
+    /// min(shard_count, logical CPUs). 1 = a single scan thread walking the
+    /// shards in order (the Task 1 scan order; also the scaling tests'
+    /// baseline). T2c: EFFECTIVE concurrent scans are additionally capped by
+    /// the in-flight gate (`hydrationInflightShardLimit`) whenever the merge
+    /// lags — see the gate comment for why that is the point.
     fn hydrationScanWorkerCount(shard_count: usize) usize {
         if (std.c.getenv("GEODE_HYDRATION_SCAN_WORKERS")) |raw_z| {
             const raw = std.mem.span(raw_z);
@@ -10795,6 +10798,24 @@ pub const GraphStore = struct {
         }
         const cpus = std.Thread.getCpuCount() catch 1;
         return @max(1, @min(4, cpus));
+    }
+
+    /// T2c: admission-window width for the scan->merge backpressure gate —
+    /// the max shard outputs in flight at once (being-scanned + completed-
+    /// but-unmerged). GEODE_HYDRATION_INFLIGHT_SHARDS overrides; default 3
+    /// (merge consuming one shard + up to two scanned ahead); min 1. Values
+    /// >= shard_count disable the backpressure (the T2b free-running scan).
+    /// NOTE this also caps EFFECTIVE scan parallelism at `limit` — deliberate:
+    /// when the merge is the bottleneck a faster scan only piles up unmerged
+    /// outputs, and when it is not, the window slides at merge speed anyway.
+    fn hydrationInflightShardLimit() usize {
+        if (std.c.getenv("GEODE_HYDRATION_INFLIGHT_SHARDS")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            if (std.fmt.parseInt(usize, raw, 10)) |v| {
+                if (v >= 1) return v;
+            } else |_| {}
+        }
+        return 3;
     }
 
     /// Find a decoded stream-scan property entry's STRING payload by key.
@@ -11044,6 +11065,101 @@ pub const GraphStore = struct {
         }
     };
 
+    /// T2c: per-shard merge pacing for the streaming hydration merge — the
+    /// gate handshake (wait-published before consuming shard s, retire after
+    /// its node side is released) plus incremental projected pre-sizing of
+    /// the node-side products (see the call site for the projection
+    /// rationale). Used by BOTH phase-A merge modes (single-threaded and
+    /// FamilyPipeline) so the gate discipline cannot diverge between them.
+    const StreamMergePacer = struct {
+        store: *GraphStore,
+        id_map: *id_map_mod.IdMap,
+        gate: *graph_storage_adapter.hydration_scan.InflightGate,
+        graph_name: []const u8,
+        resident: bool,
+        snap_merge: bool,
+        shard_count: usize,
+        shards_seen: usize = 0,
+        total_rows: u64 = 0,
+        total_edges: u64 = 0,
+        total_merge_keys: u64 = 0,
+        /// Node-row capacity already granted to the additive containers
+        /// (bounded node cache + per-graph node-id index).
+        granted_rows: u64 = 0,
+        /// Merge-index key capacity already granted.
+        granted_merge_keys: u64 = 0,
+
+        fn clampU32(v: u64) u32 {
+            return @intCast(@min(v, std.math.maxInt(u32)));
+        }
+
+        /// Block until shard `s` is published by its scan worker (errors
+        /// with HydrationGatePoisoned when a worker died), apply the test
+        /// merge-delay hook, tally the shard, and extend the node-side
+        /// reservations toward the projected final totals.
+        fn beforeShard(
+            p: *StreamMergePacer,
+            s: usize,
+            acc: *graph_storage_adapter.hydration_scan.ShardAccum,
+        ) !void {
+            try p.gate.waitPublished(s);
+            applyTestHydrationMergeDelay();
+
+            var shard_edges: u64 = 0;
+            var shard_keys: u64 = 0;
+            for (acc.rows) |*row| {
+                shard_edges += row.edges.len;
+                if (!p.snap_merge and row.label_ids.len != 0) {
+                    var indexable: u64 = 0;
+                    for (row.props) |pe| {
+                        if (pe.value == .null) continue;
+                        if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+                        if (!shouldIndexProperty(pe.key)) continue;
+                        indexable += 1;
+                    }
+                    shard_keys += @as(u64, row.label_ids.len) * indexable;
+                }
+            }
+            p.shards_seen += 1;
+            p.total_rows += acc.rows.len;
+            p.total_edges += shard_edges;
+            p.total_merge_keys += shard_keys;
+
+            // Projection = running mean per shard x shard_count. TOTAL-
+            // capacity APIs (IdMap) take the projection directly; additive
+            // APIs get the delta beyond what was already granted (their
+            // internal ensureUnusedCapacity is a no-op once the projected
+            // capacity is in place). Bounded caches clamp the reservation
+            // to their resident cap internally, so a huge graph never
+            // pre-allocates an unbounded table.
+            const proj_rows = p.total_rows * p.shard_count / p.shards_seen;
+            if (p.resident) try p.id_map.reserveNodes(clampU32(proj_rows));
+            if (proj_rows > p.granted_rows) {
+                const delta = clampU32(proj_rows - p.granted_rows);
+                try p.store.nodes.ensureUnusedCapacity(delta);
+                try p.store.reserveGraphNodeIndex(p.graph_name, delta);
+                p.granted_rows = proj_rows;
+            }
+            if (!p.snap_merge) {
+                const proj_keys = p.total_merge_keys * p.shard_count / p.shards_seen;
+                if (proj_keys > p.granted_merge_keys) {
+                    p.store.merge_prop_index.reserveAdditional(proj_keys - p.granted_merge_keys);
+                    p.granted_merge_keys = proj_keys;
+                }
+            }
+        }
+
+        /// Release the consumed shard's node side and slide the admission
+        /// window — the retire that unblocks the next scan worker.
+        fn afterShard(
+            p: *StreamMergePacer,
+            acc: *graph_storage_adapter.hydration_scan.ShardAccum,
+        ) void {
+            acc.releaseNodeSide();
+            p.gate.retireNext();
+        }
+    };
+
     /// GAP hydration fast-scan: build the loop1/loop2 products from the
     /// per-shard SEQUENTIAL stream scan instead of the per-node engine-read
     /// walk. Produces byte-identical products via the SAME insert calls in
@@ -11088,131 +11204,166 @@ pub const GraphStore = struct {
             self.allocator.free(accums);
         }
 
-        // Per-shard streaming scan — Task 2: up to shard_count DEDICATED
-        // worker threads (no thread-pool reentrancy), each sweeping its own
-        // shard's files linearly into a private ShardAccum (per-worker
-        // accumulation; the global-product merge below runs the CORE inserts
-        // single-threaded and fans the independent product FAMILIES out to
-        // their own threads — see FamilyPipeline). Shards are fully
-        // independent: each owns its files, pagers and buffer pool, and
-        // workers never touch shared geode state (label dict resolution
+        // T2c: scan->merge backpressure gate. Bounds shard outputs in flight
+        // (being-scanned + completed-but-unmerged) to the admission window so
+        // a merge slower than the scan can never let completed outputs
+        // accumulate unbounded (the at-scale OOM: RSS +5.7 GB/min).
+        const published = try self.allocator.alloc(bool, shard_count);
+        @memset(published, false);
+        defer self.allocator.free(published);
+        var gate = hydration_scan.InflightGate{
+            .limit = hydrationInflightShardLimit(),
+            .published = published,
+        };
+
+        // Per-shard streaming scan — Task 2: dedicated worker threads (no
+        // thread-pool reentrancy), each sweeping its own shard's files
+        // linearly into a private ShardAccum. T2c: the workers run
+        // CONCURRENTLY with the merge below, admitted per shard by the gate,
+        // so the merge starts on shard 0 the moment it publishes and no more
+        // than `gate.limit` shard outputs ever exist at once. Shards are
+        // fully independent: each owns its files, pagers and buffer pool,
+        // and workers never touch shared geode state (label dict resolution
         // happens in the merge).
         const worker_count = hydrationScanWorkerCount(shard_count);
-        if (worker_count <= 1) {
-            for (accums, acc_ready, 0..) |*acc, *ready, shard_idx| {
-                acc.* = try adapter.hydrationStreamScanShard(graph_name, shard_idx, self.allocator, opts);
-                ready.* = true;
-            }
-        } else {
-            const Worker = struct {
-                store: *GraphStore,
-                adapter: *graph_storage_adapter.StorageAdapter,
-                graph_name: []const u8,
-                opts: hydration_scan.ScanOptions,
-                accums: []hydration_scan.ShardAccum,
-                acc_ready: []bool,
-                worker_idx: usize,
-                stride: usize,
-                fail: ?anyerror = null,
+        const Worker = struct {
+            store: *GraphStore,
+            adapter: *graph_storage_adapter.StorageAdapter,
+            graph_name: []const u8,
+            opts: hydration_scan.ScanOptions,
+            accums: []hydration_scan.ShardAccum,
+            acc_ready: []bool,
+            gate: *hydration_scan.InflightGate,
+            worker_idx: usize,
+            stride: usize,
+            /// False only for the spawn-failure inline fallback: it runs on
+            /// the merge thread BEFORE the merge loop, so blocking on the
+            /// gate would self-deadlock (nobody retiring). The in-flight
+            /// bound is best-effort in that degraded mode.
+            gated: bool = true,
+            fail: ?anyerror = null,
 
-                fn run(w: *@This()) void {
-                    var shard_idx = w.worker_idx;
-                    while (shard_idx < w.accums.len) : (shard_idx += w.stride) {
-                        w.accums[shard_idx] = w.adapter.hydrationStreamScanShard(
-                            w.graph_name,
-                            shard_idx,
-                            w.store.allocator,
-                            w.opts,
-                        ) catch |err| {
-                            w.fail = err;
-                            return;
-                        };
-                        w.acc_ready[shard_idx] = true;
+            fn run(w: *@This()) void {
+                var shard_idx = w.worker_idx;
+                while (shard_idx < w.accums.len) : (shard_idx += w.stride) {
+                    if (w.gated) {
+                        // Poisoned: another side failed and carries the
+                        // error — exit the stripe without publishing.
+                        w.gate.beginShard(shard_idx) catch return;
                     }
+                    w.accums[shard_idx] = w.adapter.hydrationStreamScanShard(
+                        w.graph_name,
+                        shard_idx,
+                        w.store.allocator,
+                        w.opts,
+                    ) catch |err| {
+                        w.fail = err;
+                        // C1: wake the merge (waiting on this shard) and
+                        // every gate-blocked sibling so the hydration fails
+                        // into quarantine instead of deadlocking.
+                        w.gate.poison();
+                        return;
+                    };
+                    w.acc_ready[shard_idx] = true;
+                    w.gate.publish(shard_idx, monoNanosNow());
                 }
-            };
-
-            const workers = try self.allocator.alloc(Worker, worker_count);
-            defer self.allocator.free(workers);
-            const threads = try self.allocator.alloc(std.Thread, worker_count);
-            defer self.allocator.free(threads);
-
-            var spawned: usize = 0;
-            for (workers, 0..) |*w, wi| {
-                w.* = .{
-                    .store = self,
-                    .adapter = adapter,
-                    .graph_name = graph_name,
-                    .opts = opts,
-                    .accums = accums,
-                    .acc_ready = acc_ready,
-                    .worker_idx = wi,
-                    .stride = worker_count,
-                };
-                const t = std.Thread.spawn(.{}, Worker.run, .{w}) catch |err| {
-                    // Spawn failure: run this worker's stripe inline so the
-                    // scan still completes (degraded parallelism, never a
-                    // correctness change).
-                    log.warn("hydration scan worker spawn failed; running stripe inline", &.{
-                        Attr.string("graph", graph_name),
-                        Attr.string("error", @errorName(err)),
-                    });
-                    Worker.run(w);
-                    continue;
-                };
-                threads[spawned] = t;
-                spawned += 1;
             }
-            for (threads[0..spawned]) |t| t.join();
-            for (workers) |*w| {
-                if (w.fail) |err| return err;
+        };
+
+        const workers = try self.allocator.alloc(Worker, worker_count);
+        defer self.allocator.free(workers);
+        const threads = try self.allocator.alloc(?std.Thread, worker_count);
+        defer self.allocator.free(threads);
+        @memset(threads, null);
+
+        // Poison-and-join on EVERY exit path (merge error, family error,
+        // pacer/reserve OOM, success). Declared AFTER the accums/published
+        // defers so it runs BEFORE them: no worker can touch freed scan
+        // state. On success this is a no-op wake — every shard was retired,
+        // so all workers already exited their stripes.
+        defer {
+            gate.poison();
+            for (threads) |*slot| {
+                if (slot.*) |t| {
+                    t.join();
+                    slot.* = null;
+                }
             }
         }
-        const scan_done_ns = monoNanosNow();
+
+        for (workers, 0..) |*w, wi| {
+            w.* = .{
+                .store = self,
+                .adapter = adapter,
+                .graph_name = graph_name,
+                .opts = opts,
+                .accums = accums,
+                .acc_ready = acc_ready,
+                .gate = &gate,
+                .worker_idx = wi,
+                .stride = worker_count,
+            };
+        }
+        for (workers, 0..) |*w, wi| {
+            threads[wi] = std.Thread.spawn(.{}, Worker.run, .{w}) catch |err| {
+                // Spawn failure: run this worker's stripe inline so the
+                // scan still completes (degraded parallelism, gate bypassed
+                // to avoid self-deadlock — never a correctness change).
+                log.warn("hydration scan worker spawn failed; running stripe inline", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                w.gated = false;
+                Worker.run(w);
+                continue;
+            };
+        }
 
         _ = g_hydration_streaming_scans.fetchAdd(1, .monotonic);
 
-        // ---- T2b pre-size: every product count is KNOWN post-scan ----------
-        // Eliminates the rehash-growth churn that dominated the single-
-        // threaded merge at 14.27M rows (each doubling re-inserts the whole
-        // table; ~log2(n) full passes without reservation).
-        var total_rows: u64 = 0;
-        var total_edges: u64 = 0;
-        var merge_key_estimate: u64 = 0;
-        for (accums) |*acc| {
-            total_rows += acc.rows.len;
-            for (acc.rows) |*row| {
-                total_edges += row.edges.len;
-                if (!snap.merge and row.label_ids.len != 0) {
-                    var indexable: u64 = 0;
-                    for (row.props) |pe| {
-                        if (pe.value == .null) continue;
-                        if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
-                        if (!shouldIndexProperty(pe.key)) continue;
-                        indexable += 1;
+        // T2c gate-poisoned recovery: a poisoned merge-side wait means a
+        // scan worker died (its shard may never publish). Join everyone
+        // (poison already woke them) and surface the WORKER's error — the
+        // same error the pre-gate join-then-check path returned — into the
+        // C1 quarantine path.
+        const GateRecover = struct {
+            fn resolve(
+                g: *hydration_scan.InflightGate,
+                thr: []?std.Thread,
+                wrk: []Worker,
+            ) anyerror {
+                g.poison();
+                for (thr) |*slot| {
+                    if (slot.*) |t| {
+                        t.join();
+                        slot.* = null;
                     }
-                    merge_key_estimate += @as(u64, row.label_ids.len) * indexable;
                 }
+                for (wrk) |*w| {
+                    if (w.fail) |werr| return werr;
+                }
+                return error.HydrationGatePoisoned;
             }
-        }
-        const rows32: u32 = @intCast(@min(total_rows, std.math.maxInt(u32)));
-        const edges32: u32 = @intCast(@min(total_edges, std.math.maxInt(u32)));
-        if (resident) {
-            try id_map.reserveNodes(rows32);
-            if (!skip_edge_scan) try id_map.reserveEdges(edges32);
-        }
-        // Bounded caches clamp the reservation to their resident cap
-        // internally, so a huge graph never pre-allocates an unbounded table.
-        try self.nodes.ensureUnusedCapacity(rows32);
-        try self.reserveGraphNodeIndex(graph_name, rows32);
-        if (!skip_edge_scan) {
-            try self.edges.ensureUnusedCapacity(edges32);
-            try self.outgoing_edges.ensureUnusedCapacity(rows32);
-            try self.incoming_edges.ensureUnusedCapacity(rows32);
-        }
-        if (!snap.merge and merge_key_estimate != 0) {
-            self.merge_prop_index.reserveAdditional(merge_key_estimate);
-        }
+        };
+
+        // T2c pacer: per-shard gate handshake + INCREMENTAL projected
+        // pre-size. T2b reserved everything once post-scan (every count
+        // known); under the streaming gate later shards are not scanned yet
+        // when the merge starts, so node-side totals are PROJECTED from the
+        // shards seen so far (slots stripe round-robin across shards, so
+        // per-shard row counts are near-uniform: the first shard's
+        // projection typically lands within a few percent and the later
+        // reservation calls are no-ops). Edge-side reservations stay EXACT:
+        // they happen after phase A, when every shard has been scanned.
+        var pacer = StreamMergePacer{
+            .store = self,
+            .id_map = id_map,
+            .gate = &gate,
+            .graph_name = graph_name,
+            .resident = resident,
+            .snap_merge = snap.merge,
+            .shard_count = shard_count,
+        };
 
         // ---- phase A: node products (loop1 + loop2 node side) -------------
         // Each shard's node-side arena (decoded props + label ids) is freed
@@ -11224,7 +11375,11 @@ pub const GraphStore = struct {
         if (merge_workers <= 1) {
             // Single-threaded merge (kill switch / family-parity baseline):
             // the pre-T2b per-row product order, family steps inline.
-            for (accums) |*acc| {
+            for (accums, 0..) |*acc, shard_idx| {
+                pacer.beforeShard(shard_idx, acc) catch |err| switch (err) {
+                    error.HydrationGatePoisoned => return GateRecover.resolve(&gate, threads, workers),
+                    else => return err,
+                };
                 for (acc.rows) |*row| {
                     const copy = (try self.hydrateStreamNodeRowCore(
                         adapter,
@@ -11259,7 +11414,7 @@ pub const GraphStore = struct {
                         self.addNodeCompositeMergeEntries(&copy);
                     }
                 }
-                acc.releaseNodeSide();
+                pacer.afterShard(acc);
             }
         } else {
             // Pipelined family merge (see FamilyPipeline): core thread builds
@@ -11275,7 +11430,11 @@ pub const GraphStore = struct {
             };
             defer pipeline.abort();
 
-            for (accums) |*acc| {
+            for (accums, 0..) |*acc, shard_idx| {
+                pacer.beforeShard(shard_idx, acc) catch |err| switch (err) {
+                    error.HydrationGatePoisoned => return GateRecover.resolve(&gate, threads, workers),
+                    else => return err,
+                };
                 var batch: std.ArrayList(Node) = .empty;
                 // Owned by this frame only until submit() takes it (submit
                 // adopts the list BEFORE any of its error returns, so freeing
@@ -11294,11 +11453,29 @@ pub const GraphStore = struct {
                     )) orelse continue;
                     batch.appendAssumeCapacity(copy);
                 }
-                acc.releaseNodeSide();
+                pacer.afterShard(acc);
                 batch_owned = false;
                 try pipeline.submit(batch);
             }
             try pipeline.finish();
+        }
+
+        // Phase A consumed every shard, so every publish has happened: the
+        // scan phase ended at the LAST publish stamp (the scan and merge
+        // overlap under the gate, so there is no join point to measure at).
+        const scan_done_ns = @max(gate.lastPublishNs(), scan_started_ns);
+        const total_rows = pacer.total_rows;
+        const total_edges = pacer.total_edges;
+
+        // ---- phase B pre-size: edge-side totals are EXACT post-phase-A ----
+        // (unchanged T2b discipline — only the node side needed projections).
+        if (!skip_edge_scan) {
+            const rows32: u32 = @intCast(@min(total_rows, std.math.maxInt(u32)));
+            const edges32: u32 = @intCast(@min(total_edges, std.math.maxInt(u32)));
+            if (resident) try id_map.reserveEdges(edges32);
+            try self.edges.ensureUnusedCapacity(edges32);
+            try self.outgoing_edges.ensureUnusedCapacity(rows32);
+            try self.incoming_edges.ensureUnusedCapacity(rows32);
         }
 
         // ---- phase B: edge products (loop2 edge side) ----------------------
@@ -11408,15 +11585,19 @@ pub const GraphStore = struct {
 
         const merge_done_ns = monoNanosNow();
         _ = g_hydration_stream_scan_ns.fetchAdd(scan_done_ns - scan_started_ns, .monotonic);
-        _ = g_hydration_stream_merge_ns.fetchAdd(merge_done_ns - scan_done_ns, .monotonic);
+        // T2c: the merge is pipelined WITH the scan (it consumes shard 0 the
+        // moment it publishes), so its span is measured from hydration start
+        // — scan_ns and merge_ns overlap and no longer sum to wall time.
+        _ = g_hydration_stream_merge_ns.fetchAdd(merge_done_ns - scan_started_ns, .monotonic);
         log.info("graph hydration served by per-shard stream scan", &.{
             Attr.string("graph", graph_name),
             Attr.int("nodes", @intCast(total_rows)),
             Attr.int("edges", @intCast(total_edges)),
             Attr.int("scan_workers", @intCast(worker_count)),
             Attr.int("merge_workers", @intCast(merge_workers)),
+            Attr.int("inflight_limit", @intCast(gate.limit)),
             Attr.int("scan_ms", @intCast(@divTrunc(scan_done_ns - scan_started_ns, std.time.ns_per_ms))),
-            Attr.int("merge_ms", @intCast(@divTrunc(merge_done_ns - scan_done_ns, std.time.ns_per_ms))),
+            Attr.int("merge_ms", @intCast(@divTrunc(merge_done_ns - scan_started_ns, std.time.ns_per_ms))),
         });
     }
 
@@ -13300,6 +13481,50 @@ pub fn setTestHydrationFailAfterNodes(limit: ?u64) void {
     g_test_hydration_fail_after.store(limit orelse std.math.maxInt(u64), .release);
 }
 
+// T2c TDD hook — test builds only (check site gated on `builtin.is_test`):
+// per-shard merge delay in ns applied by the stream-scan merge before it
+// consumes each shard, simulating the at-scale condition (merge far slower
+// than the 16-way scan) that the 128k CI store cannot reproduce naturally.
+// 0 = disabled.
+var g_test_hydration_merge_delay_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// T2c TDD hook: delay the stream-scan merge by `ms` per shard (null =
+/// disable). Test builds only — production builds compile the check out.
+pub fn setTestHydrationMergeDelayMs(ms: ?u64) void {
+    g_test_hydration_merge_delay_ns.store((ms orelse 0) * std.time.ns_per_ms, .release);
+}
+
+/// T2c test-hook check site: per-shard merge delay (no-op in production
+/// builds — the whole body is compiled out).
+inline fn applyTestHydrationMergeDelay() void {
+    if (comptime @import("builtin").is_test) {
+        const delay_ns = g_test_hydration_merge_delay_ns.load(.monotonic);
+        if (delay_ns == 0) return;
+        if (comptime @import("builtin").os.tag == .linux) {
+            const req = std.os.linux.timespec{
+                .sec = @intCast(delay_ns / std.time.ns_per_s),
+                .nsec = @intCast(delay_ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        } else {
+            const req = std.c.timespec{
+                .sec = @intCast(delay_ns / std.time.ns_per_s),
+                .nsec = @intCast(delay_ns % std.time.ns_per_s),
+            };
+            var rem: std.c.timespec = undefined;
+            _ = std.c.nanosleep(&req, &rem);
+        }
+    }
+}
+
+/// T2c: high-water of completed-but-unmerged shard outputs across stream-scan
+/// hydrations since the last `resetLazyHydrateCounters`. The bounded-inflight
+/// tests assert this never exceeds GEODE_HYDRATION_INFLIGHT_SHARDS.
+pub fn hydrationInflightShardHighWater() u64 {
+    return graph_storage_adapter.hydration_scan.hydrationInflightShardHighWater();
+}
+
 // Task 3 TDD hook — test builds only (check site gated on `builtin.is_test`):
 // force the hydration-completion persist to fail (simulates a graph-scoped
 // engine-checkpoint / snapshot-write error at the persist call site).
@@ -13371,6 +13596,7 @@ pub fn resetLazyHydrateCounters() void {
     g_hydration_streaming_scans.store(0, .release);
     g_hydration_stream_scan_ns.store(0, .release);
     g_hydration_stream_merge_ns.store(0, .release);
+    graph_storage_adapter.hydration_scan.resetHydrationInflightShardHighWater();
 }
 
 /// GAP hydration fast-scan: graphs hydrated via the sequential per-shard

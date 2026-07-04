@@ -827,6 +827,141 @@ fn decodeLabelIds(arena: Allocator, data: []const u8) ![]u32 {
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// T2c — bounded in-flight shard outputs (scan -> merge backpressure)
+// ---------------------------------------------------------------------------
+
+/// T2c: cumulative high-water of COMPLETED-BUT-UNMERGED shard outputs
+/// (published by a scan worker, not yet node-side-retired by the merge)
+/// across all stream-scan hydrations since the last reset. The at-scale
+/// failure this instruments: the scan produced decoded shard outputs at up
+/// to ~3.3 GB/s while the merge consumed them far slower, and with no
+/// backpressure the completed outputs accumulated unbounded (RSS +5.7 GB/min
+/// -> OOM kill at ~8 min on the 368 GB store). Hydration builds are
+/// serialized store-wide (`hydration_build_mutex`), so this global is
+/// effectively per-run-max-folded, never concurrently torn.
+var g_inflight_high_water: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+pub fn hydrationInflightShardHighWater() u64 {
+    return g_inflight_high_water.load(.acquire);
+}
+
+pub fn resetHydrationInflightShardHighWater() void {
+    g_inflight_high_water.store(0, .release);
+}
+
+fn foldInflightHighWater(now: u64) void {
+    var prev = g_inflight_high_water.load(.monotonic);
+    while (now > prev) {
+        prev = g_inflight_high_water.cmpxchgWeak(prev, now, .monotonic, .monotonic) orelse break;
+    }
+}
+
+pub const GateError = error{HydrationGatePoisoned};
+
+/// T2c: sliding-window admission gate between the per-shard scan workers and
+/// the shard-major merge. Bounds, BY CONSTRUCTION, the number of shard
+/// outputs alive at once (being-scanned + completed-but-unmerged) to `limit`:
+/// a worker may only BEGIN decoding shard `s` once `s < retired + limit`,
+/// and `retired` advances strictly in shard-major order as the merge
+/// releases each shard's node side. Because the merge consumes shards in
+/// index order and the window always contains the smallest unretired shard,
+/// the worker owning that shard is always admitted — no deadlock.
+///
+/// Error discipline (C1 quarantine interaction): ANY failure — a scan worker
+/// erroring on its shard, or the merge/family side erroring mid-consume —
+/// must `poison()` the gate. Poisoning wakes every blocked worker (they exit
+/// their stripes without publishing) and every merge wait (it returns
+/// `error.HydrationGatePoisoned`), so all threads become joinable and the
+/// hydration fails cleanly into the existing quarantine path instead of
+/// deadlocking on a window that will never slide.
+pub const InflightGate = struct {
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    cond: std.Io.Condition = std.Io.Condition.init,
+    /// Window width: max shard outputs in flight (scanning + completed-
+    /// unmerged). From GEODE_HYDRATION_INFLIGHT_SHARDS, default 3, min 1.
+    limit: usize,
+    /// Shards whose node side the merge has retired. Retirement is strictly
+    /// shard-major (the merge's consume order), so this is a prefix count.
+    retired: usize = 0,
+    /// Completed-but-unmerged outputs (published, not yet retired).
+    inflight_outputs: usize = 0,
+    /// Per-shard published flags; slice owned by the caller, len shard_count.
+    published: []bool,
+    poisoned: bool = false,
+    /// CLOCK_MONOTONIC ns of the LAST publish — the scan-phase end stamp
+    /// (the scan and merge phases overlap under the gate, so the caller can
+    /// no longer derive this from a join point).
+    last_publish_ns: u64 = 0,
+
+    /// Scan worker: block until shard `shard_idx` enters the admission
+    /// window (or the gate is poisoned).
+    pub fn beginShard(g: *InflightGate, shard_idx: usize) GateError!void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        g.mutex.lockUncancelable(io);
+        defer g.mutex.unlock(io);
+        while (!g.poisoned and shard_idx >= g.retired + g.limit) {
+            g.cond.waitUncancelable(io, &g.mutex);
+        }
+        if (g.poisoned) return error.HydrationGatePoisoned;
+    }
+
+    /// Scan worker: shard `shard_idx`'s output is complete and visible to
+    /// the merge. `now_ns` is the caller's CLOCK_MONOTONIC stamp.
+    pub fn publish(g: *InflightGate, shard_idx: usize, now_ns: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        g.mutex.lockUncancelable(io);
+        defer g.mutex.unlock(io);
+        g.published[shard_idx] = true;
+        g.inflight_outputs += 1;
+        foldInflightHighWater(@intCast(g.inflight_outputs));
+        if (now_ns > g.last_publish_ns) g.last_publish_ns = now_ns;
+        g.cond.broadcast(io);
+    }
+
+    /// Merge: block until shard `shard_idx` is published. Fails immediately
+    /// when the gate is poisoned (a worker died — its shard may never
+    /// publish; bail into the quarantine path).
+    pub fn waitPublished(g: *InflightGate, shard_idx: usize) GateError!void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        g.mutex.lockUncancelable(io);
+        defer g.mutex.unlock(io);
+        while (!g.poisoned and !g.published[shard_idx]) {
+            g.cond.waitUncancelable(io, &g.mutex);
+        }
+        if (g.poisoned) return error.HydrationGatePoisoned;
+    }
+
+    /// Merge: the node side of the current head shard has been released —
+    /// slide the window so the next scan may begin.
+    pub fn retireNext(g: *InflightGate) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        g.mutex.lockUncancelable(io);
+        defer g.mutex.unlock(io);
+        g.retired += 1;
+        if (g.inflight_outputs > 0) g.inflight_outputs -= 1;
+        g.cond.broadcast(io);
+    }
+
+    /// Any-side failure: wake every waiter permanently. Idempotent; called
+    /// unconditionally on the hydration's exit path (no-op after success —
+    /// all workers have already exited their stripes).
+    pub fn poison(g: *InflightGate) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        g.mutex.lockUncancelable(io);
+        defer g.mutex.unlock(io);
+        g.poisoned = true;
+        g.cond.broadcast(io);
+    }
+
+    pub fn lastPublishNs(g: *InflightGate) u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        g.mutex.lockUncancelable(io);
+        defer g.mutex.unlock(io);
+        return g.last_publish_ns;
+    }
+};
+
 test {
     std.testing.refAllDecls(@This());
 }
