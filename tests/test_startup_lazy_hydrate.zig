@@ -2132,3 +2132,232 @@ test "C3 e2e: MERGE ... ON MATCH SET on a cold node after warm reopen persists d
         try c3ExpectProp(store, ids.mrg, "matched", "yes");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task 3 (hydration persist-on-complete): hydration products must persist
+// IMMEDIATELY when a first-touch hydration completes, not only at the next
+// full checkpoint / clean shutdown. Two production crashes each lost a 13 h
+// hydration because nothing had persisted. The three tests below cover:
+//   T3a crash-after-hydration : hydrate (scan) -> CRASH with NO explicit
+//        checkpoint -> reopen loads from snapshots (loads counter > 0, zero
+//        scan). RED at HEAD: today the reopen re-scans.
+//   T3b failed hydration      : the quarantine gate extends to the NEW call
+//        site — a failed (partial) hydration must persist NOTHING.
+//   T3c persist failure       : an injected persist failure must NOT fail the
+//        hydrating query; the next reopen re-scans (correct degraded mode).
+// ---------------------------------------------------------------------------
+
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+const T3_PERSIST_KILL_SWITCH = "GEODE_DISABLE_HYDRATION_COMPLETION_PERSIST";
+
+/// Seed a store with N labeled+named nodes and E typed edges, LIGHT-checkpoint
+/// it (durable pages, NO IdMap/loop2 snapshots) and crash-deinit. The next
+/// open is the genuine no-snapshot deferred case: first access pays the scan.
+fn t3SeedLightCheckpointCrash(
+    allocator: std.mem.Allocator,
+    data_dir: []const u8,
+    seed_ids: []u64,
+    edges: usize,
+) !void {
+    graph_store.setDataDirOverride(allocator, data_dir);
+    const store = graph_store.getGlobalStore(allocator);
+    var i: usize = 0;
+    while (i < seed_ids.len) : (i += 1) {
+        const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+        seed_ids[i] = id;
+        var nb: [32]u8 = undefined;
+        try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+    }
+    var e: usize = 0;
+    while (e < edges) : (e += 1) {
+        _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+    }
+    try store.saveToFileEx(true); // LIGHT: flush + WAL truncate, NO snapshots
+    graph_store.deinitGlobalStoreForTestCrash();
+    graph_store.setDataDirOverride(allocator, null);
+}
+
+test "T3a: hydrate (scan) -> crash with NO checkpoint -> reopen hydrates from snapshots (zero scan)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(T3_PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 220;
+    const E: usize = 100;
+    var seed_ids: [220]u64 = undefined;
+
+    // Session 1: durable data, NO snapshots on disk (light + crash).
+    try t3SeedLightCheckpointCrash(allocator, data_dir, &seed_ids, E);
+    try testing.expect(!snapshotExists(allocator, data_dir));
+    try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+
+    // Session 2: first access hydrates via the SCAN, then CRASH — no explicit
+    // checkpoint, no clean shutdown. Task 3: the products must already be on
+    // disk when the crash hits.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N); // scan hydration ran
+        try testing.expectEqual(@as(u64, 1), graph_store.hydrationCompletionPersistCount());
+
+        graph_store.deinitGlobalStoreForTestCrash(); // CRASH
+    }
+
+    // RED at HEAD: nothing persisted at hydration completion — all four
+    // snapshot files are missing and session 3 pays the full scan again.
+    try testing.expect(snapshotExists(allocator, data_dir));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+
+    // Session 3: reopen. Hydration must be served ENTIRELY from the
+    // crash-surviving snapshots: IdMap mmap-adopted, loads counter >= 3,
+    // full-scan skip taken, ZERO scan — and every read correct.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        try testing.expect(graph_store.hydrationSnapshotLoadCount() >= 3);
+        try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+
+        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        const mr = store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb, 7) }, &out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, mr);
+        try testing.expectEqual(seed_ids[7], out);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "T3b: failed (quarantined) hydration persists NOTHING at the completion call site" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(T3_PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 200;
+    var seed_ids: [200]u64 = undefined;
+    try t3SeedLightCheckpointCrash(allocator, data_dir, &seed_ids, 0);
+
+    // Session 2: the first touch fails MID-SCAN (fault injection at 50/200).
+    // The graph is quarantined; the NEW completion-persist call site must
+    // write NOTHING (persisting the partial products counter-current would be
+    // the 9b2d42eb/C1 silent-data-loss hazard through the new door).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        graph_store.setTestHydrationFailAfterNodes(50);
+        defer graph_store.setTestHydrationFailAfterNodes(null);
+        _ = store.countNodesByLabel(GRAPH, LABEL, null); // first touch: scan dies
+        graph_store.setTestHydrationFailAfterNodes(null);
+
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationCompletionPersistCount());
+        try testing.expect(!snapshotExists(allocator, data_dir));
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+
+    // Session 3: reopen without injection — the self-heal scan serves the
+    // FULL data set (nothing partial was blessed).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "T3c: injected persist failure — hydrating query still succeeds; next reopen re-scans (degraded, correct)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(T3_PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 180;
+    var seed_ids: [180]u64 = undefined;
+    try t3SeedLightCheckpointCrash(allocator, data_dir, &seed_ids, 0);
+
+    // Session 2: persist is injected to FAIL. The hydration (and the query
+    // that triggered it) must succeed anyway — persist is best-effort.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        graph_store.setTestHydrationPersistFail(true);
+        defer graph_store.setTestHydrationPersistFail(false);
+
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null)); // query OK
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationCompletionPersistCount());
+        try testing.expect(graph_store.hydrationCompletionPersistFailureCount() >= 1); // loud path taken
+        try testing.expect(!fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+        try testing.expect(!snapshotExists(allocator, data_dir));
+
+        graph_store.setTestHydrationPersistFail(false);
+        graph_store.deinitGlobalStoreForTestCrash(); // CRASH (nothing persisted)
+    }
+
+    // Session 3: reopen — correct degraded behavior is a full re-scan.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationSnapshotLoadCount());
+
+        graph_store.deinitGlobalStore();
+    }
+}

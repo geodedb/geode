@@ -9114,61 +9114,72 @@ pub const GraphStore = struct {
     /// write happened since. Best-effort per graph: a failure to write one
     /// snapshot just means that graph falls back to the scan-rebuild next open.
     fn saveIdMapSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
-            const graph_name = entry.key_ptr.*;
-            const id_map = entry.value_ptr;
-            const dir_path = (self.resolveGraphRootDirPath(graph_name) catch continue) orelse continue;
-            defer self.allocator.free(dir_path);
-            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch continue;
-            defer dir.close(io);
-
-            // CRITICAL (silent-data-loss guard): a graph whose loop1 IdMap build
-            // was DEFERRED at open (no-snapshot fallback: markPendingHydration
-            // with NO snapshot adopted) and has NOT been hydrated yet has an
-            // EMPTY, `.resident` overlay — loop1 never ran. Persisting it here
-            // would write an EMPTY snapshot stamped with the CURRENT manifest
-            // counter; the next open's counter-gate would PASS and adopt the
-            // empty IdMap as base, so the graph would appear empty forever.
-            // Skip the write and INVALIDATE any stale on-disk snapshot so the
-            // next open re-defers + rebuilds from the durable engine pages.
-            // (Crash-safety is preserved: the durable pages are the source of
-            // truth; skipping the snapshot just means the next open rebuilds.)
-            //
-            // A `.mmap_backed` deferred graph is NOT dangerous: it adopted a
-            // valid snapshot as its immutable base at open (case A), so its
-            // merged view still reflects the on-disk mapping and re-serializing
-            // it is correct (and preserves the sub-second-open fast path). Only
-            // the empty `.resident` deferred case (case B) is skipped, so idle
-            // snapshot-backed graphs keep their snapshots across a checkpoint.
-            //
-            // NOTE: we do NOT call ensureGraphHydrated here — a routine
-            // checkpoint must not force full hydration of every idle graph, and
-            // skipping avoids taking hydration_build_mutex under the checkpoint
-            // path entirely (no lock inversion vs. loadOneGraphFromAdapterFull).
-            // GAP-ENT-0023 P3 (review C1): a FAILED (quarantined) hydration is
-            // gated exactly like a deferred one for the `.resident` case — the
-            // scan died mid-way, so a resident IdMap may hold a PARTIAL
-            // re-insert set. (`.mmap_backed` is safe either way: the base was
-            // adopted from a counter-valid snapshot before the scan started
-            // and the failed scan's overlay re-inserts are idempotent
-            // duplicates of base entries, so the merged view stays complete.)
-            if (id_map.mode == .resident and
-                (self.isGraphDeferred(graph_name) or self.isGraphHydrationFailed(graph_name)))
-            {
-                id_map_mod.IdMap.deleteSnapshot(dir);
-                continue;
-            }
-
-            const counter = adapter.graphManifestCounter(graph_name) orelse continue;
-            id_map.saveSnapshot(dir, counter) catch |err| {
-                log.warn("failed to write IdMap snapshot", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            self.saveIdMapSnapshotForGraph(adapter, entry.key_ptr.*, entry.value_ptr);
         }
+    }
+
+    /// Per-graph core of `saveIdMapSnapshots` — shared by the full-checkpoint
+    /// loop above and the Task 3 hydration persist-on-complete path
+    /// (`persistHydrationProductsForGraph`). ALL gates live here so every
+    /// caller inherits them.
+    fn saveIdMapSnapshotForGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+    ) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const dir_path = (self.resolveGraphRootDirPath(graph_name) catch return) orelse return;
+        defer self.allocator.free(dir_path);
+        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return;
+        defer dir.close(io);
+
+        // CRITICAL (silent-data-loss guard): a graph whose loop1 IdMap build
+        // was DEFERRED at open (no-snapshot fallback: markPendingHydration
+        // with NO snapshot adopted) and has NOT been hydrated yet has an
+        // EMPTY, `.resident` overlay — loop1 never ran. Persisting it here
+        // would write an EMPTY snapshot stamped with the CURRENT manifest
+        // counter; the next open's counter-gate would PASS and adopt the
+        // empty IdMap as base, so the graph would appear empty forever.
+        // Skip the write and INVALIDATE any stale on-disk snapshot so the
+        // next open re-defers + rebuilds from the durable engine pages.
+        // (Crash-safety is preserved: the durable pages are the source of
+        // truth; skipping the snapshot just means the next open rebuilds.)
+        //
+        // A `.mmap_backed` deferred graph is NOT dangerous: it adopted a
+        // valid snapshot as its immutable base at open (case A), so its
+        // merged view still reflects the on-disk mapping and re-serializing
+        // it is correct (and preserves the sub-second-open fast path). Only
+        // the empty `.resident` deferred case (case B) is skipped, so idle
+        // snapshot-backed graphs keep their snapshots across a checkpoint.
+        //
+        // NOTE: we do NOT call ensureGraphHydrated here — a routine
+        // checkpoint must not force full hydration of every idle graph, and
+        // skipping avoids taking hydration_build_mutex under the checkpoint
+        // path entirely (no lock inversion vs. loadOneGraphFromAdapterFull).
+        // GAP-ENT-0023 P3 (review C1): a FAILED (quarantined) hydration is
+        // gated exactly like a deferred one for the `.resident` case — the
+        // scan died mid-way, so a resident IdMap may hold a PARTIAL
+        // re-insert set. (`.mmap_backed` is safe either way: the base was
+        // adopted from a counter-valid snapshot before the scan started
+        // and the failed scan's overlay re-inserts are idempotent
+        // duplicates of base entries, so the merged view stays complete.)
+        if (id_map.mode == .resident and
+            (self.isGraphDeferred(graph_name) or self.isGraphHydrationFailed(graph_name)))
+        {
+            id_map_mod.IdMap.deleteSnapshot(dir);
+            return;
+        }
+
+        const counter = adapter.graphManifestCounter(graph_name) orelse return;
+        id_map.saveSnapshot(dir, counter) catch |err| {
+            log.warn("failed to write IdMap snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
     }
 
     /// PHASE 1b: true iff `graph_name` has a deferred-hydration entry that has
@@ -9242,6 +9253,19 @@ pub const GraphStore = struct {
         return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
     }
 
+    /// Task 3 kill switch: GEODE_DISABLE_HYDRATION_COMPLETION_PERSIST=1
+    /// disables the immediate persist at the end of a successful first-touch
+    /// hydration (products then persist only at the next full checkpoint /
+    /// clean shutdown — the pre-Task-3 behaviour). Read per call — this is a
+    /// cold path (once per graph per process lifetime). Also used by the
+    /// stream-scan parity/throughput tests, which need repeated genuine
+    /// scan-rebuild reopens on the same store.
+    fn hydrationCompletionPersistDisabled() bool {
+        const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_COMPLETION_PERSIST") orelse return false;
+        const raw = std.mem.span(raw_z);
+        return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+    }
+
     fn deleteHydrationSnapshotFiles(dir: std.Io.Dir) void {
         hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
         hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
@@ -9293,69 +9317,153 @@ pub const GraphStore = struct {
     ///     preserved files fail the counter gate on the next open and that
     ///     graph pays one scan — safe direction.
     fn saveHydrationSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            self.saveHydrationSnapshotsForOneGraph(adapter, entry.key_ptr.*, entry.value_ptr);
+        }
+    }
+
+    /// Per-graph core of `saveHydrationSnapshots` — shared by the
+    /// full-checkpoint loop above and the Task 3 hydration
+    /// persist-on-complete path (`persistHydrationProductsForGraph`). ALL
+    /// gates (failed-quarantine delete, deferred case-B delete / case-A
+    /// preserve, kill switch) live here so every caller inherits them.
+    fn saveHydrationSnapshotsForOneGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+    ) void {
         // M2 hardening: when the kill switch is on we still run the DELETE
         // gates below (deferred case B + failed-hydration), so files written
         // before the switch was flipped cannot linger while disabled — only
         // the WRITE side is disabled.
         const disabled = hydrationSnapshotsDisabled();
         const io = std.Io.Threaded.global_single_threaded.io();
-        var it = self.id_maps.iterator();
-        while (it.next()) |entry| {
-            const graph_name = entry.key_ptr.*;
-            const id_map = entry.value_ptr;
-            const dir_path = (self.resolveGraphRootDirPath(graph_name) catch continue) orelse continue;
-            defer self.allocator.free(dir_path);
-            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch continue;
-            defer dir.close(io);
+        const dir_path = (self.resolveGraphRootDirPath(graph_name) catch return) orelse return;
+        defer self.allocator.free(dir_path);
+        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return;
+        defer dir.close(io);
 
-            // GAP-ENT-0023 P3 (review C1): a graph whose first-touch hydration
-            // FAILED is quarantined with done=true, so it reads as "hydrated"
-            // — but its resident loop2 products are PARTIAL (the scan died
-            // mid-way). Persisting them would stamp partial indexes with the
-            // CURRENT manifest counter: the next open would accept them and
-            // every later checkpoint would re-bless them — permanent silent
-            // wrong results (missing rows, duplicate MERGEs). Treat it like
-            // deferred case B regardless of IdMap mode: delete any files
-            // (theirs is a dead generation now) and write nothing, so the
-            // next reopen re-scans cleanly (the pre-P3 self-heal).
-            if (self.isGraphHydrationFailed(graph_name)) {
-                deleteHydrationSnapshotFiles(dir);
-                continue;
-            }
-
-            if (self.isGraphDeferred(graph_name)) {
-                if (id_map.mode == .resident) deleteHydrationSnapshotFiles(dir);
-                continue;
-            }
-
-            if (disabled) continue;
-
-            const counter = adapter.graphManifestCounter(graph_name) orelse continue;
-            self.saveHydrationCountersSnapshot(dir, graph_name, counter) catch |err| {
-                // Invalidate rather than leave a possibly half-generation
-                // file set behind (the old file would be counter-stale and
-                // rejected anyway; deleting removes any doubt).
-                hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
-                log.warn("failed to write hydration counters snapshot", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-            self.saveHydrationLabelsSnapshot(dir, graph_name, counter) catch |err| {
-                hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
-                log.warn("failed to write hydration label-postings snapshot", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-            self.saveHydrationMergeSnapshot(dir, graph_name, counter) catch |err| {
-                hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
-                log.warn("failed to write hydration merge-index snapshot", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+        // GAP-ENT-0023 P3 (review C1): a graph whose first-touch hydration
+        // FAILED is quarantined with done=true, so it reads as "hydrated"
+        // — but its resident loop2 products are PARTIAL (the scan died
+        // mid-way). Persisting them would stamp partial indexes with the
+        // CURRENT manifest counter: the next open would accept them and
+        // every later checkpoint would re-bless them — permanent silent
+        // wrong results (missing rows, duplicate MERGEs). Treat it like
+        // deferred case B regardless of IdMap mode: delete any files
+        // (theirs is a dead generation now) and write nothing, so the
+        // next reopen re-scans cleanly (the pre-P3 self-heal).
+        if (self.isGraphHydrationFailed(graph_name)) {
+            deleteHydrationSnapshotFiles(dir);
+            return;
         }
+
+        if (self.isGraphDeferred(graph_name)) {
+            if (id_map.mode == .resident) deleteHydrationSnapshotFiles(dir);
+            return;
+        }
+
+        if (disabled) return;
+
+        const counter = adapter.graphManifestCounter(graph_name) orelse return;
+        self.saveHydrationCountersSnapshot(dir, graph_name, counter) catch |err| {
+            // Invalidate rather than leave a possibly half-generation
+            // file set behind (the old file would be counter-stale and
+            // rejected anyway; deleting removes any doubt).
+            hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
+            log.warn("failed to write hydration counters snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        self.saveHydrationLabelsSnapshot(dir, graph_name, counter) catch |err| {
+            hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
+            log.warn("failed to write hydration label-postings snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        self.saveHydrationMergeSnapshot(dir, graph_name, counter) catch |err| {
+            hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
+            log.warn("failed to write hydration merge-index snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
+
+    /// Task 3 (hydration persist-on-complete): persist ONE graph's hydration
+    /// products IMMEDIATELY after a successful first-touch hydration, so a
+    /// crash right after (two production crashes each lost a 13 h hydration)
+    /// loses nothing. Runs, in the exact `saveToFileEx(false)` order:
+    ///
+    ///   1. `adapter.checkpointGraph` — graph-scoped FULL engine checkpoint:
+    ///      flush + WAL truncate + manifest-counter bump + gs-side derived /
+    ///      Lever-B snapshot disciplines + geode H4 exact-index persist (IF
+    ///      built; invalidated otherwise — the persist-empty gate). A no-op
+    ///      inside gs when nothing is dirty (clean warm reopen), so a
+    ///      read-only hydration cannot strand other counter-stamped
+    ///      snapshots.
+    ///   2. `saveIdMapSnapshotForGraph` + `saveHydrationSnapshotsForOneGraph`
+    ///      — the P3 loop2-product + IdMap snapshots stamped at the NEW
+    ///      post-checkpoint counter, with ALL their existing gates
+    ///      (deferred/failed skip-and-delete — the 9b2d42eb/C1 hazard class —
+    ///      and the GEODE_DISABLE_HYDRATION_SNAPSHOTS kill switch).
+    ///
+    /// BEST-EFFORT AND NON-FATAL: the hydration (and the query that triggered
+    /// it) already succeeded; any persist failure is logged LOUDLY and merely
+    /// costs the next reopen a re-scan (the pre-Task-3 behaviour).
+    ///
+    /// Caller contract: invoked from `ensureGraphHydrated` AFTER
+    /// `entry.done.store(true)` (so the deferred-gate reads the graph as
+    /// hydrated) and ONLY when the build succeeded (never on quarantine).
+    /// Runs under `entry.mutex` + `hydration_build_mutex`; the engine
+    /// checkpoint inside uses a BOUNDED exclusive-rwlock acquire so a
+    /// concurrent SHARED-lock holder blocked on a hydration chokepoint
+    /// degrades this persist instead of deadlocking it.
+    fn persistHydrationProductsForGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+    ) void {
+        if (hydrationCompletionPersistDisabled()) return;
+        // Defense in depth — the per-graph savers re-run these gates, but a
+        // deferred/quarantined graph must not even reach the engine
+        // checkpoint (persist-empty / persist-partial is the #1 hazard).
+        if (self.isGraphDeferred(graph_name) or self.isGraphHydrationFailed(graph_name)) return;
+
+        const failed_injected = if (comptime @import("builtin").is_test)
+            g_test_hydration_persist_fail.load(.acquire)
+        else
+            false;
+
+        if (failed_injected) {
+            _ = g_hydration_completion_persist_failures.fetchAdd(1, .monotonic);
+            log.err("hydration-completion persist FAILED; products stay memory-only until the next full checkpoint (a crash before then re-pays the scan)", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", "TestInjectedPersistFailure"),
+            });
+            return;
+        }
+
+        adapter.checkpointGraph(graph_name) catch |err| {
+            _ = g_hydration_completion_persist_failures.fetchAdd(1, .monotonic);
+            log.err("hydration-completion persist FAILED; products stay memory-only until the next full checkpoint (a crash before then re-pays the scan)", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+
+        const id_map = self.getIdMap(graph_name) orelse return;
+        self.saveIdMapSnapshotForGraph(adapter, graph_name, id_map);
+        self.saveHydrationSnapshotsForOneGraph(adapter, graph_name, id_map);
+        _ = g_hydration_completion_persists.fetchAdd(1, .monotonic);
+        log.info("hydration products persisted on completion (crash-safe)", &.{
+            Attr.string("graph", graph_name),
+        });
     }
 
     /// Serialize one hydrated graph's merge-property-index entries (single-key
@@ -9914,7 +10022,7 @@ pub const GraphStore = struct {
         // build on the store-wide maps it mutates (see `hydration_build_mutex`).
         self.hydration_build_mutex.lockUncancelable(io);
         defer self.hydration_build_mutex.unlock(io);
-        self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| {
+        const outcome: ?HydrationBuildOutcome = self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| blk: {
             log.err("lazy graph hydration failed; graph may be degraded", &.{
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
@@ -9928,8 +10036,21 @@ pub const GraphStore = struct {
             // files) so the next reopen re-scans cleanly instead of loading a
             // partial-but-counter-current snapshot forever.
             entry.failed.store(true, .release);
+            break :blk null;
         };
         entry.done.store(true, .release);
+        // Task 3 (hydration persist-on-complete): make the just-built products
+        // durable NOW — a crash before the next full checkpoint used to re-pay
+        // the whole first-access scan (13 h at 14.27M, twice in production).
+        // Ordering matters: `done` is stored FIRST so the savers' deferred-gate
+        // reads the graph as hydrated. Never on failure/quarantine (`outcome ==
+        // null` — partial products must not be blessed: the 9b2d42eb/C1 hazard
+        // class), and never when the hydration was served entirely from
+        // counter-current snapshots (nothing new to persist). Best-effort:
+        // persist errors are logged inside and never fail the triggering query.
+        if (outcome == .rebuilt) {
+            self.persistHydrationProductsForGraph(adapter, graph_name);
+        }
     }
 
     /// Hydrate EVERY graph that still has deferred resident indexes. Used by the
@@ -9996,6 +10117,14 @@ pub const GraphStore = struct {
         // (and its owning graph) become resident. No-op once all are hydrated.
         self.ensureAllGraphsHydrated();
     }
+
+    /// Task 3: what a per-graph hydration build actually did — drives the
+    /// persist-on-complete decision in `ensureGraphHydrated`. A hydration
+    /// served ENTIRELY from counter-current snapshots has nothing new to
+    /// persist (the on-disk snapshot set already IS what a persist would
+    /// write), and persisting anyway would pay a pointless graph checkpoint +
+    /// snapshot rewrite on every warm first-access.
+    const HydrationBuildOutcome = enum { rebuilt, snapshot_served };
 
     /// GAP-ENT-0023 P3: which loop2 products were restored from counter-gated
     /// snapshots for the graph being hydrated. The scan below skips exactly
@@ -10879,7 +11008,7 @@ pub const GraphStore = struct {
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
         graph_name: []const u8,
-    ) !void {
+    ) !HydrationBuildOutcome {
         {
             // Register graph in the registry
             try self.ensureGraphNoDirty(graph_name);
@@ -10950,7 +11079,7 @@ pub const GraphStore = struct {
                         Attr.string("graph", graph_name),
                         Attr.int("nodes", @intCast(rebuilt)),
                     });
-                    return;
+                    return .snapshot_served;
                 }
                 log.err("hydration snapshot node count disagrees with IdMap at the same manifest counter; falling back to scan", &.{
                     Attr.string("graph", graph_name),
@@ -11436,6 +11565,7 @@ pub const GraphStore = struct {
                 });
             }
         }
+        return .rebuilt;
     }
 
     /// DEPRECATED: Legacy buffer serialization stub — adapter handles persistence.
@@ -12696,6 +12826,12 @@ var g_idmap_from_snapshot: std.atomic.Value(u64) = std.atomic.Value(u64).init(0)
 var g_hydration_snapshot_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_hydration_scan_fallbacks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_hydration_full_scan_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Task 3 (hydration persist-on-complete) instrumentation: completion persists
+// that fully succeeded vs ones that failed LOUDLY (the persist is best-effort;
+// a failure never fails the hydrating query — it only costs the next reopen a
+// re-scan).
+var g_hydration_completion_persists: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_hydration_completion_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP hydration fast-scan instrumentation: graphs hydrated via the SEQUENTIAL
 // per-shard stream scan (vs the legacy per-node engine-read walk). The parity
 // tests assert on this to prove which path served a hydration.
@@ -12718,6 +12854,17 @@ var g_test_hydration_scan_seen: std.atomic.Value(u64) = std.atomic.Value(u64).in
 pub fn setTestHydrationFailAfterNodes(limit: ?u64) void {
     g_test_hydration_scan_seen.store(0, .release);
     g_test_hydration_fail_after.store(limit orelse std.math.maxInt(u64), .release);
+}
+
+// Task 3 TDD hook — test builds only (check site gated on `builtin.is_test`):
+// force the hydration-completion persist to fail (simulates a graph-scoped
+// engine-checkpoint / snapshot-write error at the persist call site).
+var g_test_hydration_persist_fail: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Task 3 TDD hook: make the hydration-completion persist fail while `fail`
+/// is true. Test builds only — production builds compile the check out.
+pub fn setTestHydrationPersistFail(fail: bool) void {
+    g_test_hydration_persist_fail.store(fail, .release);
 }
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
@@ -12775,6 +12922,8 @@ pub fn resetLazyHydrateCounters() void {
     g_hydration_snapshot_loads.store(0, .release);
     g_hydration_scan_fallbacks.store(0, .release);
     g_hydration_full_scan_skips.store(0, .release);
+    g_hydration_completion_persists.store(0, .release);
+    g_hydration_completion_persist_failures.store(0, .release);
     g_hydration_streaming_scans.store(0, .release);
     g_hydration_stream_scan_ns.store(0, .release);
     g_hydration_stream_merge_ns.store(0, .release);
@@ -12815,6 +12964,19 @@ pub fn hydrationScanFallbackCount() u64 {
 /// engine scan entirely (all products from snapshots).
 pub fn hydrationFullScanSkipCount() u64 {
     return g_hydration_full_scan_skips.load(.acquire);
+}
+
+/// Task 3: number of hydration-completion persists that fully succeeded
+/// (graph-scoped engine checkpoint + IdMap snapshot + loop2 product snapshots
+/// written immediately after a successful first-touch hydration).
+pub fn hydrationCompletionPersistCount() u64 {
+    return g_hydration_completion_persists.load(.acquire);
+}
+
+/// Task 3: number of hydration-completion persists that FAILED (logged
+/// loudly, hydration itself unaffected; the next reopen re-scans).
+pub fn hydrationCompletionPersistFailureCount() u64 {
+    return g_hydration_completion_persist_failures.load(.acquire);
 }
 
 /// Number of nodes walked by the DEFERRED resident-index scan so far. 0 at the
@@ -14223,7 +14385,7 @@ test "loadOneGraphFromAdapterFull: sorted-by-prop_head loop1 matches legacy per-
     // ---- ACTUAL: run the function under test (sorted loop1 + by-head fetch). ----
     var store = try GraphStore.init(allocator);
     defer store.deinit();
-    try store.loadOneGraphFromAdapterFull(adapter, graph);
+    _ = try store.loadOneGraphFromAdapterFull(adapter, graph);
 
     const id_map = store.getIdMap(graph) orelse return error.IdMapNotLoaded;
 
@@ -14285,7 +14447,7 @@ test "loadOneGraphFromAdapterFull: countGraphLabel (label-count fast path) is ex
     // both start empty here, mirroring a first-touch hydration.
     var store = try GraphStore.init(allocator);
     defer store.deinit();
-    try store.loadOneGraphFromAdapterFull(adapter, graph);
+    _ = try store.loadOneGraphFromAdapterFull(adapter, graph);
 
     // Cross-check: the actual MATCH (n:L) scan (label posting list) sees N.
     const l_posting = store.getNodesByLabel(graph, "L") orelse return error.LPostingMissing;

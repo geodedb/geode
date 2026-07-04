@@ -31,6 +31,12 @@ extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 const KILL_SWITCH = "GEODE_DISABLE_STREAMING_HYDRATION";
+// Task 3 (hydration persist-on-complete): every test in this suite reopens
+// the SAME store repeatedly expecting a GENUINE scan-rebuild each time. With
+// the completion persist active, the first scan-hydration would write IdMap +
+// loop2 snapshots and every later reopen would be snapshot-served, breaking
+// the parity/throughput comparisons — so the suite disables it wholesale.
+const PERSIST_KILL_SWITCH = "GEODE_DISABLE_HYDRATION_COMPLETION_PERSIST";
 const GRAPH = "hsg";
 
 fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
@@ -280,6 +286,8 @@ test "parity (resident scan fallback): streaming products equal legacy per-node 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -350,6 +358,8 @@ test "parity (mmap scan fallback): missing loop2 snapshots rebuild via streaming
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -422,6 +432,8 @@ test "parallel parity: 16 scan workers produce identical products to 1 worker" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -507,6 +519,8 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

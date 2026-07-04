@@ -5947,160 +5947,18 @@ pub const StorageAdapter = struct {
         // happen, but this keeps the memory bound sound even if it ever does.
         var any_skipped = false;
         for (graphs_buf[0..graph_count]) |mg| {
-            const _t_start = monoNanosNow();
-            // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
-            // lock so the SHARED apply/read paths back off and drain the reader
-            // set (see `exclusiveWaitingBackoff` + `mg.exclusive_waiting`).
-            // `fetchAdd`/`fetchSub` (counter) so this composes with the
-            // edge-phase exclusive acquirers that announce on the same counter.
-            // Cleared at iteration end (defer) regardless of whether we acquire
-            // the lock or hit the LIGHT-path deadline and `continue` — a `defer`
-            // in a `for` body runs at every iteration exit, so a slow/skipped
-            // checkpoint never leaves readers backing off forever (safety valve).
-            if (set_writer_pref) {
-                _ = mg.exclusive_waiting.fetchAdd(1, .release);
+            // Bounded rwlock deadline for the periodic LIGHT checkpoint;
+            // unbounded (null) for the durability-critical FULL checkpoint.
+            const timeout_ns: ?u64 = if (light) 5 * std.time.ns_per_s else null;
+            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns)) {
+                .ok, .engine_failed => {},
+                // GAP-0900 bug #2: an rwlock-deadline skip leaves the graph's
+                // dirty pages un-flushed — any_skipped keeps the backpressure
+                // counter high (see below). An engine checkpoint FAILURE is
+                // handled exactly as before the extraction: logged inside,
+                // loop continues, pending_bulk_ops still reset.
+                .skipped_busy => any_skipped = true,
             }
-            defer if (set_writer_pref) {
-                _ = mg.exclusive_waiting.fetchSub(1, .release);
-            };
-            // HANG FIX (2026-06-21, sustained-ingest single-conn wedge): the
-            // periodic GAP-0900 checkpoint reached this site via
-            // walCheckpointHook → checkpointAllEx and parked unboundedly on the
-            // raw `mg.rwlock.lockUncancelable(io)`. That call's protocol
-            // (std/Io/RwLock.zig `lockUncancelable`) registers the writer, sets
-            // `is_writing`, then — if it observed ANY reader at that instant —
-            // parks FOREVER on the RwLock's internal counting semaphore waiting
-            // for the last reader's `unlockShared` to `post()`. A single missed
-            // `post()` (the same lost-wakeup already fixed for
-            // `acquireGraphWriteLockCancelable` @~5496 and
-            // `acquireWholeGraphExclusive` @~6310) wedges the writer
-            // permanently; it keeps the RwLock's internal mutex, so every
-            // subsequent shard-apply reader (`bulkMergeNodeWithReservedId*` →
-            // `rwlock.lockSharedUncancelable`) blocks behind it. The bulk MERGE
-            // apply never completes → its ApplyResult.done never fires → the
-            // submitter parks in `awaitOp` → the connection response is never
-            // written → the client wedges in ReceiveProto. Reproduced
-            // deterministically (single QUIC conn, ~26.6K MERGE ops) and
-            // captured live via gdb: checkpoint thread in
-            // `Io.Semaphore.waitUncancelable`, RwLock state reader=1/is_writing
-            // with ZERO reader threads on any stack.
-            //
-            // The fix mirrors the two existing exclusive acquirers: never park
-            // on the semaphore — re-probe via `tryLock`, which reads `rl.state`
-            // directly (no semaphore) and is immune to the lost wakeup. The
-            // periodic LIGHT path skips this graph after a bounded deadline (it
-            // retries next checkpoint cycle — the GAP-0900 load-driven trigger
-            // re-fires); the FULL path (clean shutdown / explicit checkpoint)
-            // spins unboundedly via `tryLock` so durability is never sacrificed.
-            const io_cp = std.Io.Threaded.global_single_threaded.io();
-            if (!mg.rwlock.tryLock(io_cp)) {
-                var sleep_ns: u64 = 100 * std.time.ns_per_us;
-                const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
-                // Bounded deadline for the periodic LIGHT checkpoint; unbounded
-                // (null) for the durability-critical FULL checkpoint.
-                const cp_deadline_ns: ?u64 = if (light)
-                    _t_start + 5 * std.time.ns_per_s
-                else
-                    null;
-                var acquired = false;
-                while (true) {
-                    if (cp_deadline_ns) |dl| {
-                        if (monoNanosNow() >= dl) break;
-                    }
-                    const req = std.os.linux.timespec{
-                        .sec = @intCast(sleep_ns / std.time.ns_per_s),
-                        .nsec = @intCast(sleep_ns % std.time.ns_per_s),
-                    };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
-                    if (mg.rwlock.tryLock(io_cp)) {
-                        acquired = true;
-                        break;
-                    }
-                    sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
-                }
-                if (!acquired) {
-                    // LIGHT checkpoint deadline exhausted under sustained write
-                    // contention — skip THIS graph this cycle (no hang, no lock
-                    // held). The next GAP-0900 load-driven trigger retries.
-                    _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-                    any_skipped = true;
-                    const busy_state = @atomicLoad(usize, &mg.rwlock.state, .seq_cst);
-                    // GAP-ENT-0038: structured logger — this skip warning was a
-                    // `std.log.warn`, compiled out of ReleaseFast, so a graph
-                    // whose LIGHT checkpoints were being starved would look
-                    // exactly like a healthy silent cadence in the server log.
-                    slog.warn("light checkpoint skipped: rwlock busy past deadline (will retry next cycle)", &.{
-                        SAttr.string("graph", mg.name),
-                        SAttr.uint("rwlock_state", @intCast(busy_state)),
-                    });
-                    continue;
-                }
-            }
-            _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
-            // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
-            // checkpoint so a restart loads the derived indexes without a rebuild.
-            if (light) {
-                mg.engine.checkpointLight() catch |err| {
-                    log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
-                };
-            } else {
-                mg.engine.checkpoint() catch |err| {
-                    log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
-                };
-            }
-            // Persist the exact property index alongside the engine checkpoint.
-            // This is a FULL O(graph) re-serialize, so the light (periodic) path
-            // skips it to stay O(dirty). The on-disk prop_exact.idx is removed
-            // instead so a reopen (the file has no staleness counter) falls back
-            // to rebuildExactNodePropertyIndex from the durable pages rather than
-            // loading a stale snapshot. The clean-shutdown FULL checkpoint always
-            // rewrites it fresh, so a clean restart still loads it without a rebuild.
-            if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
-                if (light) {
-                    invalidateExactPropertyIndexFile(self.allocator, dir_path);
-                } else if (mg.exact_index_built.load(.acquire)) {
-                    mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
-                        log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
-                    };
-                } else {
-                    // H4: the exact index was DEFERRED at open and never built, so
-                    // the in-memory index is EMPTY. Persisting it would write an
-                    // empty snapshot that loadFromFile accepts as "complete"
-                    // (entry_count == 0 is a valid load), permanently latching
-                    // exact_index_built = true on the next open so the deferred
-                    // rebuild never runs — property-equality queries return empty
-                    // and MERGE silently creates duplicates. Instead, remove any
-                    // stale on-disk index so the next open DEFERS + rebuilds lazily.
-                    invalidateExactPropertyIndexFile(self.allocator, dir_path);
-                }
-                self.allocator.free(dir_path);
-            } else |err| {
-                log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
-            }
-            // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,
-            // which has drained all readers of this graph's nodes. Free the node
-            // cache's retired (evicted/overwritten) entries for THIS graph now —
-            // no reader can hold a pointer to them. This bounds resident RSS to
-            // ~cache cap + retire backlog since the last checkpoint.
-            if (graph_store.getCurrentGlobalStore()) |store| {
-                store.reclaimNodeCacheRetiredForGraph(mg.name);
-                // PHASE 0: same grace boundary for the bounded adjacency caches.
-                // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
-                // graph, so any `[]const u64` adjacency slice handed to an
-                // in-flight reader of THIS graph is no longer live — free this
-                // graph's retired (evicted/removed) adjacency lists now.
-                store.reclaimAdjCacheRetiredForGraph(mg.name);
-                // PHASE 1: same grace boundary for the bounded edge-body cache.
-                // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
-                // graph drained), any `*Edge` handed to an in-flight reader of
-                // this graph is no longer live — free this graph's retired
-                // (evicted/removed) edge bodies now. One consistent grace window
-                // covers nodes + adjacency + edges.
-                store.reclaimEdgeCacheRetiredForGraph(mg.name);
-            }
-            mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
         // Collect manifest counts LOCKLESSLY (no per-graph rwlock, no mutex),
@@ -6178,6 +6036,259 @@ pub const StorageAdapter = struct {
             self.pending_bulk_ops.store(0, .release);
         }
         self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
+    }
+
+    /// Outcome of a single-graph checkpoint pass (`checkpointOneGraph`).
+    const OneGraphCheckpointOutcome = enum {
+        /// Engine checkpoint (and exact-index persist/invalidate + retired-
+        /// cache reclaim) completed under the EXCLUSIVE per-graph rwlock.
+        ok,
+        /// The bounded rwlock-acquisition deadline expired — NOTHING was done
+        /// for this graph (no lock held, no state touched). The caller decides
+        /// whether to retry (periodic LIGHT cycle) or degrade (hydration
+        /// persist-on-complete).
+        skipped_busy,
+        /// The lock was acquired but the ENGINE checkpoint itself failed
+        /// (already logged). The exact-index persist and cache reclaim still
+        /// ran, mirroring the historical checkpointAllEx behaviour.
+        engine_failed,
+    };
+
+    /// Checkpoint ONE managed graph — the per-graph body of `checkpointAllEx`,
+    /// extracted so the Task 3 hydration persist-on-complete path
+    /// (`checkpointGraph`) can run a FULL checkpoint for a single graph
+    /// without touching every other graph's rwlock.
+    ///
+    /// * `light` — bounded `engine.checkpointLight()` vs full `engine.checkpoint()`.
+    /// * `set_writer_pref` — announce the EXCLUSIVE intent on
+    ///   `mg.exclusive_waiting` so SHARED apply/read paths back off (GAP-0900
+    ///   bug #1). Always cleared on exit (defer).
+    /// * `acquire_timeout_ns` — bounded rwlock-acquisition deadline (relative);
+    ///   null spins unboundedly (the durability-critical clean-shutdown FULL
+    ///   path). The acquisition NEVER parks on the RwLock semaphore — see the
+    ///   HANG FIX below.
+    fn checkpointOneGraph(
+        self: *StorageAdapter,
+        mg: *ManagedGraph,
+        light: bool,
+        set_writer_pref: bool,
+        acquire_timeout_ns: ?u64,
+    ) OneGraphCheckpointOutcome {
+        const _t_start = monoNanosNow();
+        // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
+        // lock so the SHARED apply/read paths back off and drain the reader
+        // set (see `exclusiveWaitingBackoff` + `mg.exclusive_waiting`).
+        // `fetchAdd`/`fetchSub` (counter) so this composes with the
+        // edge-phase exclusive acquirers that announce on the same counter.
+        // Cleared on every exit path (defer), so a slow/skipped checkpoint
+        // never leaves readers backing off forever (safety valve).
+        if (set_writer_pref) {
+            _ = mg.exclusive_waiting.fetchAdd(1, .release);
+        }
+        defer if (set_writer_pref) {
+            _ = mg.exclusive_waiting.fetchSub(1, .release);
+        };
+        // HANG FIX (2026-06-21, sustained-ingest single-conn wedge): the
+        // periodic GAP-0900 checkpoint reached this site via
+        // walCheckpointHook → checkpointAllEx and parked unboundedly on the
+        // raw `mg.rwlock.lockUncancelable(io)`. That call's protocol
+        // (std/Io/RwLock.zig `lockUncancelable`) registers the writer, sets
+        // `is_writing`, then — if it observed ANY reader at that instant —
+        // parks FOREVER on the RwLock's internal counting semaphore waiting
+        // for the last reader's `unlockShared` to `post()`. A single missed
+        // `post()` (the same lost-wakeup already fixed for
+        // `acquireGraphWriteLockCancelable` @~5496 and
+        // `acquireWholeGraphExclusive` @~6310) wedges the writer
+        // permanently; it keeps the RwLock's internal mutex, so every
+        // subsequent shard-apply reader (`bulkMergeNodeWithReservedId*` →
+        // `rwlock.lockSharedUncancelable`) blocks behind it. The bulk MERGE
+        // apply never completes → its ApplyResult.done never fires → the
+        // submitter parks in `awaitOp` → the connection response is never
+        // written → the client wedges in ReceiveProto. Reproduced
+        // deterministically (single QUIC conn, ~26.6K MERGE ops) and
+        // captured live via gdb: checkpoint thread in
+        // `Io.Semaphore.waitUncancelable`, RwLock state reader=1/is_writing
+        // with ZERO reader threads on any stack.
+        //
+        // The fix mirrors the two existing exclusive acquirers: never park
+        // on the semaphore — re-probe via `tryLock`, which reads `rl.state`
+        // directly (no semaphore) and is immune to the lost wakeup. A bounded
+        // caller (periodic LIGHT cycle / hydration persist-on-complete) skips
+        // this graph after the deadline; an unbounded caller (clean shutdown /
+        // explicit FULL checkpoint) spins via `tryLock` so durability is never
+        // sacrificed.
+        const io_cp = std.Io.Threaded.global_single_threaded.io();
+        if (!mg.rwlock.tryLock(io_cp)) {
+            var sleep_ns: u64 = 100 * std.time.ns_per_us;
+            const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+            const cp_deadline_ns: ?u64 = if (acquire_timeout_ns) |t| _t_start + t else null;
+            var acquired = false;
+            while (true) {
+                if (cp_deadline_ns) |dl| {
+                    if (monoNanosNow() >= dl) break;
+                }
+                const req = std.os.linux.timespec{
+                    .sec = @intCast(sleep_ns / std.time.ns_per_s),
+                    .nsec = @intCast(sleep_ns % std.time.ns_per_s),
+                };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                if (mg.rwlock.tryLock(io_cp)) {
+                    acquired = true;
+                    break;
+                }
+                sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+            }
+            if (!acquired) {
+                // Bounded deadline exhausted under sustained contention — skip
+                // THIS graph this cycle (no hang, no lock held). The periodic
+                // LIGHT trigger retries next cycle; the hydration persist path
+                // degrades to the next full checkpoint.
+                _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+                const busy_state = @atomicLoad(usize, &mg.rwlock.state, .seq_cst);
+                // GAP-ENT-0038: structured logger — this skip warning was a
+                // `std.log.warn`, compiled out of ReleaseFast, so a graph
+                // whose LIGHT checkpoints were being starved would look
+                // exactly like a healthy silent cadence in the server log.
+                slog.warn("bounded checkpoint skipped: rwlock busy past deadline (will retry)", &.{
+                    SAttr.string("graph", mg.name),
+                    SAttr.uint("rwlock_state", @intCast(busy_state)),
+                });
+                return .skipped_busy;
+            }
+        }
+        _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
+        // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
+        // checkpoint so a restart loads the derived indexes without a rebuild.
+        // NOTE (Task 3): the FULL `engine.checkpoint()` is itself a no-op when
+        // neither pages nor derived-index dirty flags are set (gs
+        // checkpointEx early-return), so a read-only hydration of a clean
+        // store does NOT bump the manifest counter or strand counter-stamped
+        // snapshots.
+        var engine_ok = true;
+        if (light) {
+            mg.engine.checkpointLight() catch |err| {
+                log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                engine_ok = false;
+            };
+        } else {
+            mg.engine.checkpoint() catch |err| {
+                log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                engine_ok = false;
+            };
+        }
+        // Persist the exact property index alongside the engine checkpoint.
+        // This is a FULL O(graph) re-serialize, so the light (periodic) path
+        // skips it to stay O(dirty). The on-disk prop_exact.idx is removed
+        // instead so a reopen (the file has no staleness counter) falls back
+        // to rebuildExactNodePropertyIndex from the durable pages rather than
+        // loading a stale snapshot. The clean-shutdown FULL checkpoint always
+        // rewrites it fresh, so a clean restart still loads it without a rebuild.
+        if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            if (light) {
+                invalidateExactPropertyIndexFile(self.allocator, dir_path);
+            } else if (mg.exact_index_built.load(.acquire)) {
+                mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                    log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+                };
+            } else {
+                // H4: the exact index was DEFERRED at open and never built, so
+                // the in-memory index is EMPTY. Persisting it would write an
+                // empty snapshot that loadFromFile accepts as "complete"
+                // (entry_count == 0 is a valid load), permanently latching
+                // exact_index_built = true on the next open so the deferred
+                // rebuild never runs — property-equality queries return empty
+                // and MERGE silently creates duplicates. Instead, remove any
+                // stale on-disk index so the next open DEFERS + rebuilds lazily.
+                invalidateExactPropertyIndexFile(self.allocator, dir_path);
+            }
+            self.allocator.free(dir_path);
+        } else |err| {
+            log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
+        }
+        // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,
+        // which has drained all readers of this graph's nodes. Free the node
+        // cache's retired (evicted/overwritten) entries for THIS graph now —
+        // no reader can hold a pointer to them. This bounds resident RSS to
+        // ~cache cap + retire backlog since the last checkpoint.
+        if (graph_store.getCurrentGlobalStore()) |store| {
+            store.reclaimNodeCacheRetiredForGraph(mg.name);
+            // PHASE 0: same grace boundary for the bounded adjacency caches.
+            // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
+            // graph, so any `[]const u64` adjacency slice handed to an
+            // in-flight reader of THIS graph is no longer live — free this
+            // graph's retired (evicted/removed) adjacency lists now.
+            store.reclaimAdjCacheRetiredForGraph(mg.name);
+            // PHASE 1: same grace boundary for the bounded edge-body cache.
+            // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
+            // graph drained), any `*Edge` handed to an in-flight reader of
+            // this graph is no longer live — free this graph's retired
+            // (evicted/removed) edge bodies now. One consistent grace window
+            // covers nodes + adjacency + edges.
+            store.reclaimEdgeCacheRetiredForGraph(mg.name);
+        }
+        mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        return if (engine_ok) .ok else .engine_failed;
+    }
+
+    /// Task 3 (hydration persist-on-complete): FULL checkpoint of a SINGLE
+    /// graph's engine — flush pages, truncate the WAL, bump the manifest
+    /// counter, and persist the gs-side derived-index snapshots (Lever-B
+    /// disciplines: dirty indexes saved, clean+trusted restamped, clean+
+    /// untrusted left alone — all inside `engine.checkpoint()`) plus the
+    /// geode-side H4 exact property index IF built (invalidated otherwise —
+    /// the persist-empty gate).
+    ///
+    /// Called by `GraphStore.persistHydrationProductsForGraph` right after a
+    /// successful first-touch hydration so the graph-scoped IdMap/loop2
+    /// snapshots can be stamped at a durable post-checkpoint counter.
+    ///
+    /// The rwlock acquisition is BOUNDED (never the FULL path's unbounded
+    /// spin): the caller holds the store-wide `hydration_build_mutex`, and an
+    /// unbounded exclusive spin here could live-lock against a SHARED-lock
+    /// holder that is itself blocked on a hydration chokepoint (e.g. a bulk
+    /// apply worker in `createNodeWithReservedIdAndSlotGraphAndTenant` →
+    /// `ensureGraphHydrated`). Busy past the deadline => error; the caller
+    /// logs loudly and degrades (products stay memory-only until the next
+    /// full checkpoint — pre-Task-3 behaviour).
+    pub fn checkpointGraph(self: *StorageAdapter, graph_name: []const u8) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s)) {
+            .ok => {},
+            .skipped_busy => return error.CheckpointLockBusy,
+            .engine_failed => return error.CheckpointFailed,
+        }
+
+        // Registry sync for THIS graph — same lockless manifest-count read as
+        // checkpointAllEx (see the EDGE-PHASE 40001 FIX #1 rationale there:
+        // NEVER take the per-graph rwlock SHARED for this metadata read).
+        var nc: u64 = 0;
+        var ec: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            nc += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+            ec += @atomicLoad(u64, &shard.manifest.edge_count, .monotonic);
+        }
+        {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.upsertRegistryEntryLocked(mg.name, mg.uuid, nc, ec);
+            self.saveRegistryLocked() catch |err| {
+                log.warn("failed to persist graph registry: {}", .{err});
+            };
+        }
+        // Deliberately does NOT touch `checkpoints_total` /
+        // `pending_bulk_ops` / `last_checkpoint_mono_ns`: those drive the
+        // GAP-0900 all-graph cadence + backpressure accounting, and a
+        // graph-scoped hydration persist must not masquerade as a full
+        // checkpoint cycle to that machinery.
+        slog.info("graph-scoped full checkpoint complete (hydration persist-on-complete)", &.{
+            SAttr.string("graph", mg.name),
+        });
     }
 
     /// Number of completed `checkpointAll` runs since process start.
