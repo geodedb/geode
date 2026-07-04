@@ -418,6 +418,69 @@ test "parity (mmap scan fallback): missing loop2 snapshots rebuild via streaming
     try testing.expectEqualStrings(legacy_fp, stream_fp);
 }
 
+test "parallel parity: 16 scan workers produce identical products to 1 worker" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 350;
+    var built: BuiltStore = undefined;
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        built = try buildParityStore(allocator, store, N);
+        try store.saveToFileEx(true); // light checkpoint: no snapshots
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    defer built.deinit(allocator);
+
+    const spec = FingerprintSpec{
+        .labels = &parity_spec_labels,
+        .edge_types = &parity_spec_types,
+        .node_ids = built.node_ids.items,
+        .edge_ids = built.edge_ids.items,
+        .merge_names = &parity_merge_names,
+    };
+
+    defer _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+
+    // --- Reopen A: single worker (the Task 1 sequential scan). ---
+    var serial_fp: []u8 = undefined;
+    {
+        _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "1", 1);
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        serial_fp = try captureFingerprint(allocator, store, spec);
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+    defer allocator.free(serial_fp);
+
+    // --- Reopen B: 16 dedicated workers. ---
+    var parallel_fp: []u8 = undefined;
+    {
+        _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        parallel_fp = try captureFingerprint(allocator, store, spec);
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+    defer allocator.free(parallel_fp);
+
+    try testing.expectEqualStrings(serial_fp, parallel_fp);
+}
+
 /// Drop the OS page cache for every file under the data dir (best effort):
 /// forces the next hydration to do REAL disk I/O — the production condition
 /// the legacy walk degenerated under (random 8 KB chain hops at ~7 MB/s).
@@ -536,8 +599,9 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
         graph_store.deinitGlobalStoreForTestCrash();
     }
 
-    // --- STREAMING timing, equally cold cache. ---
+    // --- STREAMING timing (default worker fan-out), equally cold cache. ---
     var stream_ns: u64 = 0;
+    var scan_parallel_ns: u64 = 0;
     {
         dropPageCache(allocator, data_dir);
         graph_store.setDataDirOverride(allocator, data_dir);
@@ -547,8 +611,28 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
         const t0 = monoNanos();
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
         stream_ns = monoNanos() - t0;
+        scan_parallel_ns = graph_store.hydrationStreamScanNanos();
         try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
         try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+
+    // --- STREAMING timing, ONE worker (Task 1 baseline), equally cold. ---
+    var stream_serial_ns: u64 = 0;
+    var scan_serial_ns: u64 = 0;
+    {
+        dropPageCache(allocator, data_dir);
+        _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "1", 1);
+        defer _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        const t0 = monoNanos();
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        stream_serial_ns = monoNanos() - t0;
+        scan_serial_ns = graph_store.hydrationStreamScanNanos();
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
         graph_store.deinitGlobalStoreForTestCrash();
     }
 
@@ -569,6 +653,27 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
             eff_mbps,
         },
     );
+    std.debug.print(
+        "[hydration-fast-scan] scan-phase serial={d} ms parallel={d} ms scaling={d}.{d:0>1}x | wall serial={d} ms parallel={d} ms\n",
+        .{
+            scan_serial_ns / 1_000_000,
+            scan_parallel_ns / 1_000_000,
+            scan_serial_ns / @max(scan_parallel_ns, 1),
+            (scan_serial_ns % @max(scan_parallel_ns, 1)) * 10 / @max(scan_parallel_ns, 1),
+            stream_serial_ns / 1_000_000,
+            stream_ns / 1_000_000,
+        },
+    );
+
+    // Task 2 scaling floor: the parallel SCAN phase (the part that is 13h at
+    // production scale) must scale >=4x over the single-worker baseline on a
+    // >=8-core box with 16 shards. The MERGE phase is single-threaded by
+    // design (per-worker accumulation, no lock soup), so total wall is
+    // Amdahl-bounded at CI store sizes — printed above for the record.
+    const cores = std.Thread.getCpuCount() catch 1;
+    if (cores >= 8) {
+        try testing.expect(scan_serial_ns >= 4 * scan_parallel_ns);
+    }
 
     // Floors (CI-robust, measured 2026-07-04 on this box: legacy 10.8 s vs
     // streaming 4.6 s = 2.3x, streaming ~614 MiB/s effective, Debug build):

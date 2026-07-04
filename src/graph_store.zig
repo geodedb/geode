@@ -10468,6 +10468,21 @@ pub const GraphStore = struct {
         return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
     }
 
+    /// Task 2 (hydration fast-scan): number of dedicated per-shard scan
+    /// worker threads. GEODE_HYDRATION_SCAN_WORKERS overrides; default is
+    /// min(shard_count, logical CPUs). 1 = fully sequential (the Task 1
+    /// behavior; also the scaling tests' baseline).
+    fn hydrationScanWorkerCount(shard_count: usize) usize {
+        if (std.c.getenv("GEODE_HYDRATION_SCAN_WORKERS")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            if (std.fmt.parseInt(usize, raw, 10)) |v| {
+                if (v >= 1) return @min(v, shard_count);
+            } else |_| {}
+        }
+        const cpus = std.Thread.getCpuCount() catch 1;
+        return @max(1, @min(shard_count, cpus));
+    }
+
     /// Find a decoded stream-scan property entry's STRING payload by key.
     /// Returns null when the key is absent OR the value is not a string —
     /// exactly the legacy switch-on-`.string`-else-fallthrough behavior of
@@ -10520,17 +10535,93 @@ pub const GraphStore = struct {
         const scan_started_ns = monoNanosNow();
         const shard_count = try adapter.hydrationStreamShardCount(graph_name);
         const accums = try self.allocator.alloc(hydration_scan.ShardAccum, shard_count);
-        var scanned: usize = 0;
+        const acc_ready = try self.allocator.alloc(bool, shard_count);
+        @memset(acc_ready, false);
         defer {
-            for (accums[0..scanned]) |*acc| acc.deinit();
+            for (accums, acc_ready) |*acc, ready| {
+                if (ready) acc.deinit();
+            }
+            self.allocator.free(acc_ready);
             self.allocator.free(accums);
         }
 
-        // Per-shard streaming scan. Task 1: sequential; each shard is a
-        // linear sweep of its own store files (see hydration_scan.zig).
-        for (accums, 0..) |*acc, shard_idx| {
-            acc.* = try adapter.hydrationStreamScanShard(graph_name, shard_idx, self.allocator, opts);
-            scanned += 1;
+        // Per-shard streaming scan — Task 2: up to shard_count DEDICATED
+        // worker threads (no thread-pool reentrancy), each sweeping its own
+        // shard's files linearly into a private ShardAccum (per-worker
+        // accumulation; the global-product merge below stays single-threaded
+        // by design — no lock soup). Shards are fully independent: each owns
+        // its files, pagers and buffer pool, and workers never touch shared
+        // geode state (label dict resolution happens in the merge).
+        const worker_count = hydrationScanWorkerCount(shard_count);
+        if (worker_count <= 1) {
+            for (accums, acc_ready, 0..) |*acc, *ready, shard_idx| {
+                acc.* = try adapter.hydrationStreamScanShard(graph_name, shard_idx, self.allocator, opts);
+                ready.* = true;
+            }
+        } else {
+            const Worker = struct {
+                store: *GraphStore,
+                adapter: *graph_storage_adapter.StorageAdapter,
+                graph_name: []const u8,
+                opts: hydration_scan.ScanOptions,
+                accums: []hydration_scan.ShardAccum,
+                acc_ready: []bool,
+                worker_idx: usize,
+                stride: usize,
+                fail: ?anyerror = null,
+
+                fn run(w: *@This()) void {
+                    var shard_idx = w.worker_idx;
+                    while (shard_idx < w.accums.len) : (shard_idx += w.stride) {
+                        w.accums[shard_idx] = w.adapter.hydrationStreamScanShard(
+                            w.graph_name,
+                            shard_idx,
+                            w.store.allocator,
+                            w.opts,
+                        ) catch |err| {
+                            w.fail = err;
+                            return;
+                        };
+                        w.acc_ready[shard_idx] = true;
+                    }
+                }
+            };
+
+            const workers = try self.allocator.alloc(Worker, worker_count);
+            defer self.allocator.free(workers);
+            const threads = try self.allocator.alloc(std.Thread, worker_count);
+            defer self.allocator.free(threads);
+
+            var spawned: usize = 0;
+            for (workers, 0..) |*w, wi| {
+                w.* = .{
+                    .store = self,
+                    .adapter = adapter,
+                    .graph_name = graph_name,
+                    .opts = opts,
+                    .accums = accums,
+                    .acc_ready = acc_ready,
+                    .worker_idx = wi,
+                    .stride = worker_count,
+                };
+                const t = std.Thread.spawn(.{}, Worker.run, .{w}) catch |err| {
+                    // Spawn failure: run this worker's stripe inline so the
+                    // scan still completes (degraded parallelism, never a
+                    // correctness change).
+                    log.warn("hydration scan worker spawn failed; running stripe inline", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    Worker.run(w);
+                    continue;
+                };
+                threads[spawned] = t;
+                spawned += 1;
+            }
+            for (threads[0..spawned]) |t| t.join();
+            for (workers) |*w| {
+                if (w.fail) |err| return err;
+            }
         }
         const scan_done_ns = monoNanosNow();
 
@@ -10757,11 +10848,14 @@ pub const GraphStore = struct {
         }
 
         const merge_done_ns = monoNanosNow();
+        _ = g_hydration_stream_scan_ns.fetchAdd(scan_done_ns - scan_started_ns, .monotonic);
+        _ = g_hydration_stream_merge_ns.fetchAdd(merge_done_ns - scan_done_ns, .monotonic);
         var total_rows: u64 = 0;
         for (accums) |*acc| total_rows += acc.rows.len;
-        log.info("graph hydration served by sequential stream scan", &.{
+        log.info("graph hydration served by per-shard stream scan", &.{
             Attr.string("graph", graph_name),
             Attr.int("nodes", @intCast(total_rows)),
+            Attr.int("scan_workers", @intCast(worker_count)),
             Attr.int("scan_ms", @intCast(@divTrunc(scan_done_ns - scan_started_ns, std.time.ns_per_ms))),
             Attr.int("merge_ms", @intCast(@divTrunc(merge_done_ns - scan_done_ns, std.time.ns_per_ms))),
         });
@@ -12606,6 +12700,12 @@ var g_hydration_full_scan_skips: std.atomic.Value(u64) = std.atomic.Value(u64).i
 // per-shard stream scan (vs the legacy per-node engine-read walk). The parity
 // tests assert on this to prove which path served a hydration.
 var g_hydration_streaming_scans: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Task 2: cumulative wall nanos of the stream-scan SCAN phase (parallel
+// per-shard file sweeps) and the single-threaded MERGE phase since the last
+// counter reset. The scaling test asserts the scan phase parallelizes; the
+// merge is single-threaded by design (per-worker accumulation, no lock soup).
+var g_hydration_stream_scan_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_hydration_stream_merge_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-ENT-0023 P3 (review C1) TDD hook — test builds only (the check site is
 // gated on `builtin.is_test`). maxInt = disabled; otherwise the loop2 scan
 // fails with error.TestInjectedHydrationFailure once `seen >= limit`.
@@ -12676,12 +12776,26 @@ pub fn resetLazyHydrateCounters() void {
     g_hydration_scan_fallbacks.store(0, .release);
     g_hydration_full_scan_skips.store(0, .release);
     g_hydration_streaming_scans.store(0, .release);
+    g_hydration_stream_scan_ns.store(0, .release);
+    g_hydration_stream_merge_ns.store(0, .release);
 }
 
 /// GAP hydration fast-scan: graphs hydrated via the sequential per-shard
 /// stream scan since the last counter reset.
 pub fn hydrationStreamingScanCount() u64 {
     return g_hydration_streaming_scans.load(.acquire);
+}
+
+/// Task 2: cumulative SCAN-phase wall nanos (parallel per-shard sweeps) of
+/// stream-scan hydrations since the last counter reset.
+pub fn hydrationStreamScanNanos() u64 {
+    return g_hydration_stream_scan_ns.load(.acquire);
+}
+
+/// Task 2: cumulative MERGE-phase wall nanos (single-threaded product
+/// inserts) of stream-scan hydrations since the last counter reset.
+pub fn hydrationStreamMergeNanos() u64 {
+    return g_hydration_stream_merge_ns.load(.acquire);
 }
 
 /// GAP-ENT-0023 P3: number of loop2 hydration PRODUCTS restored from
