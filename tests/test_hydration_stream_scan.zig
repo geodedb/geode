@@ -713,3 +713,266 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
     try testing.expect(eff_mbps >= 200);
     try testing.expect(legacy_ns >= 2 * stream_ns);
 }
+
+// ============================================================================
+// T2b — merge memory + time (the at-scale 2h50m + OOM merge fix)
+// ============================================================================
+
+test "T2b family parity: pipelined merge (workers>=2) products equal single-threaded merge" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 350;
+    var built: BuiltStore = undefined;
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        built = try buildParityStore(allocator, store, N);
+        try store.saveToFileEx(true); // light checkpoint: no snapshots
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    defer built.deinit(allocator);
+
+    const spec = FingerprintSpec{
+        .labels = &parity_spec_labels,
+        .edge_types = &parity_spec_types,
+        .node_ids = built.node_ids.items,
+        .edge_ids = built.edge_ids.items,
+        .merge_names = &parity_merge_names,
+    };
+
+    defer _ = unsetenv("GEODE_HYDRATION_MERGE_WORKERS");
+
+    // --- Reopen A: single-threaded merge (the pre-T2b product order). ---
+    var serial_fp: []u8 = undefined;
+    {
+        _ = setenv("GEODE_HYDRATION_MERGE_WORKERS", "1", 1);
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        serial_fp = try captureFingerprint(allocator, store, spec);
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+    defer allocator.free(serial_fp);
+
+    // --- Reopen B: pipelined family merge (3 family threads + core). ---
+    var family_fp: []u8 = undefined;
+    {
+        _ = setenv("GEODE_HYDRATION_MERGE_WORKERS", "4", 1);
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        family_fp = try captureFingerprint(allocator, store, spec);
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+    defer allocator.free(family_fp);
+
+    try testing.expectEqualStrings(serial_fp, family_fp);
+}
+
+/// Thread-safe byte-counting allocator wrapper. Tracks LIVE bytes and the
+/// PEAK of live bytes. PRECISION (documented for the assertion below): counts
+/// bytes REQUESTED through this allocator — it excludes child-allocator slack
+/// and metadata, and it counts only allocations routed through the wrapped
+/// store allocator (arenas, products, transient merge state all are). It is
+/// fully deterministic across runs, unlike /proc VmHWM, which is polluted by
+/// the in-process store build that precedes the measured reopen and by OS
+/// page-cache/allocator effects — that is why the assertion uses this and not
+/// VmHWM.
+const CountingAllocator = struct {
+    child: std.mem.Allocator,
+    live: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    peak: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = allocFn,
+        .resize = resizeFn,
+        .remap = remapFn,
+        .free = freeFn,
+    };
+
+    fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn add(self: *CountingAllocator, n: usize) void {
+        const now = self.live.fetchAdd(n, .monotonic) + n;
+        var p = self.peak.load(.monotonic);
+        while (now > p) {
+            p = self.peak.cmpxchgWeak(p, now, .monotonic, .monotonic) orelse break;
+        }
+    }
+
+    fn sub(self: *CountingAllocator, n: usize) void {
+        _ = self.live.fetchSub(n, .monotonic);
+    }
+
+    fn allocFn(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const p = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
+        self.add(len);
+        return p;
+    }
+
+    fn resizeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        if (!self.child.rawResize(memory, alignment, new_len, ret_addr)) return false;
+        if (new_len >= memory.len) self.add(new_len - memory.len) else self.sub(memory.len - new_len);
+        return true;
+    }
+
+    fn remapFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const p = self.child.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
+        if (new_len >= memory.len) self.add(new_len - memory.len) else self.sub(memory.len - new_len);
+        return p;
+    }
+
+    fn freeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.child.rawFree(memory, alignment, ret_addr);
+        self.sub(memory.len);
+    }
+};
+
+test "T2b merge memory + time: hydration peak <= 1.6x final resident products; merge bounded vs scan" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    // ~0.5M products (128k nodes + 384k edges): big enough that the global
+    // maps rehash-grow many times and the per-shard decoded arenas dwarf any
+    // fixed overhead; small enough for CI. Same layout tricks as the
+    // throughput store are NOT needed — this test measures the MERGE, not
+    // the scan's I/O pattern.
+    const N: usize = 128_000;
+    const EDGES_PER_NODE: usize = 3;
+    const expected_edges: usize = N * EDGES_PER_NODE;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var name_buf: [48]u8 = undefined;
+        var ids = try allocator.alloc(u64, N);
+        defer allocator.free(ids);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            ids[i] = try store.createNodeWithGraph(&[_][]const u8{"Taxon"}, GRAPH);
+        }
+        i = 0;
+        while (i < N) : (i += 1) {
+            const name = try std.fmt.bufPrint(&name_buf, "taxon-{d}", .{i});
+            try store.setNodeProperty(ids[i], "name", .{ .String = name });
+            try store.setNodeProperty(ids[i], "rank", .{ .Int = @intCast(i % 40) });
+        }
+        i = 0;
+        while (i < N) : (i += 1) {
+            var k: usize = 0;
+            while (k < EDGES_PER_NODE) : (k += 1) {
+                const to = ids[(i + 1 + k * 131) % N];
+                _ = try store.createEdgeWithGraph(ids[i], to, if (k % 2 == 0) "CHILD_OF" else "SYNONYM_OF", GRAPH);
+            }
+        }
+        try store.saveToFileEx(true); // light checkpoint: flush, NO snapshots
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Cold reopen (like production first-touch) so the scan phase does real
+    // I/O — the merge-vs-scan tripwire below is meaningless against a
+    // page-cache-warm scan.
+    dropPageCache(allocator, data_dir);
+
+    // Child is the untracked smp allocator: the counting wrapper measures
+    // bytes, the testing allocator's leak accounting stays out of the global
+    // store's lifetime (crash-style deinits are part of this harness).
+    var counting = CountingAllocator{ .child = std.heap.smp_allocator };
+    {
+        // Route the REOPENED store's allocator through the counter (the
+        // global store otherwise hardwires its own allocator).
+        graph_store.setTestGlobalStoreAllocator(counting.allocator());
+        defer graph_store.setTestGlobalStoreAllocator(null);
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        // Baseline AFTER open (registry, engines, buffer pools) and BEFORE
+        // the first-touch hydration: the deltas below measure hydration only.
+        const live_before = counting.live.load(.monotonic);
+        counting.peak.store(live_before, .monotonic);
+
+        // First touch -> stream-scan hydration.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+
+        const live_after = counting.live.load(.monotonic);
+        const peak = counting.peak.load(.monotonic);
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= N);
+
+        // (i) product sanity on this store (full parity is covered by the
+        // fingerprint suites above on the same code path).
+        try testing.expectEqual(expected_edges, store.countEdgesForGraph(GRAPH));
+
+        const final_delta = live_after - live_before;
+        const peak_delta = peak - live_before;
+        // Guard against a vacuous measurement (e.g. the allocator hook not
+        // taking effect): ~0.5M resident products cannot fit in 16 MiB.
+        try testing.expect(final_delta > 16 * 1024 * 1024);
+        const scan_ns = graph_store.hydrationStreamScanNanos();
+        const merge_ns = graph_store.hydrationStreamMergeNanos();
+        std.debug.print(
+            "\n[t2b-merge] nodes={d} edges={d} final={d} MiB peak={d} MiB peak/final={d}.{d:0>2}x scan={d} ms merge={d} ms\n",
+            .{
+                N,
+                expected_edges,
+                final_delta / (1024 * 1024),
+                peak_delta / (1024 * 1024),
+                peak_delta / @max(final_delta, 1),
+                (peak_delta % @max(final_delta, 1)) * 100 / @max(final_delta, 1),
+                scan_ns / 1_000_000,
+                merge_ns / 1_000_000,
+            },
+        );
+
+        // (ii) PEAK BOUND — the arena-hold fix. Pre-T2b the merge held EVERY
+        // shard's full decoded copy (plus scan scaffolding) until the end:
+        //   peak = final_products + sum(all shard arenas)  (>= ~2x final).
+        // Post-T2b each shard's node/edge arena is freed as consumed and
+        // scan scaffolding never outlives the scan:
+        //   peak = max(decoded copy, final_products) + ~one shard in flight.
+        // 1.6x leaves honest headroom over the measured post-fix ratio while
+        // staying far below the pre-fix behavior (RED on the old code).
+        try testing.expect(peak_delta * 10 <= final_delta * 16);
+
+        // (iii) MERGE TIME TRIPWIRE — generous: the merge must stay within a
+        // small multiple of the (cold, parallel) scan on the same store. The
+        // at-scale pathology this guards against was merge = 8.5x scan
+        // (2h50m vs 20min) BEFORE it OOMed; the fixed merge lands well under
+        // the scan. +2s absolute slack absorbs CI timer noise on a store
+        // this size.
+        try testing.expect(merge_ns <= 8 * scan_ns + 2_000_000_000);
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
