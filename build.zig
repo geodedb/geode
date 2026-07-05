@@ -4291,6 +4291,34 @@ pub fn build(b: *std.Build) void {
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
 
+    // Gap 0039 (data-ingest enterprise review): `geode serve` SIGTERM shutdown
+    // busy-spun forever draining abandoned QUIC connections (client vanished
+    // without CONNECTION_CLOSE): flush completed, then >= 10 min at ~1.75
+    // cores with the listener still accepting; only SIGKILL ended it. The
+    // subprocess test SIGTERMs a real server that has abandoned client
+    // connections held open and asserts: bounded drain engages
+    // (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), stalled connections are force-closed
+    // at the deadline, the process exits rc=0 within deadline + margin, and
+    // the store reopens clean. Executable (not `test`) for the same
+    // builtin.is_test reason as e2e_quic_high_concurrency above.
+    const shutdown_drain_e2e = b.addExecutable(.{ .name = "e2e_shutdown_drain_timeout", .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_shutdown_drain_timeout.zig"), .target = target, .optimize = optimize }) });
+    shutdown_drain_e2e.root_module.addImport("geode", root_mod);
+    shutdown_drain_e2e.root_module.addImport("protobuf", protobuf_mod);
+    shutdown_drain_e2e.root_module.addImport("schema", schema_mod);
+    shutdown_drain_e2e.root_module.addImport("transport/quic", transport_quic_mod);
+    shutdown_drain_e2e.root_module.link_libc = true;
+    if (enable_openssl) {
+        shutdown_drain_e2e.root_module.linkSystemLibrary("ssl", .{});
+        shutdown_drain_e2e.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        shutdown_drain_e2e.root_module.linkSystemLibrary("dl", .{});
+    }
+    const run_shutdown_drain_e2e = b.addRunArtifact(shutdown_drain_e2e);
+    run_shutdown_drain_e2e.step.dependOn(&install_geode_exe.step);
+    const shutdown_drain_step = b.step("test-shutdown-drain-timeout", "Gap 0039: SIGTERM shutdown must stop accepting, bound the connection drain (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), force-close stalled connections, and exit rc=0");
+    shutdown_drain_step.dependOn(&run_shutdown_drain_e2e.step);
+
     // CANARY: REQ=REQ-QUIC-HC-180; FEATURE="Sequential Single-Connection Upsert Liveness"; ASPECT=FirstStreamSchedulerLostWakeBuild; STATUS=TESTED; OWNER=transport; UPDATED=2026-06-19
     // BUG_STREAM_DESYNC regression: 250+ sequential find+create on ONE connection.
     // Root cause was an O(n^2) per-connection accumulator in the vendored quic lib;
