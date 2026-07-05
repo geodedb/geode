@@ -67,8 +67,11 @@ pub fn budgetBytes() u64 {
     if (override != 0) return override;
     if (g_env_parsed.load(.acquire)) return g_env_bytes.load(.acquire);
     const bytes: u64 = blk: {
-        const raw = std.posix.getenv(env_var_name) orelse
+        // Zig 0.16 compat: std.posix.getenv was removed; use libc getenv
+        // (env_var_name is a comptime literal, so the Z-variant is free).
+        const ptr = std.c.getenv(env_var_name) orelse
             break :blk default_budget_mb * 1024 * 1024;
+        const raw = std.mem.span(ptr);
         const mb = std.fmt.parseInt(u64, raw, 10) catch
             break :blk default_budget_mb * 1024 * 1024;
         if (mb == 0) break :blk unlimited; // 0 = disabled

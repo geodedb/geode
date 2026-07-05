@@ -3,6 +3,9 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+// GAP (write-path OOM, 2026-07-04): working-set budget for the legacy
+// write-carrying MATCH executor (env GEODE_WRITE_EXECUTOR_BUDGET_MB).
+const write_budget = @import("../write_budget.zig");
 
 const logging = @import("logging");
 const qe_log = logging.scoped("execution");
@@ -1692,6 +1695,49 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     if (!match_operations.wouldEvaluateRLS()) {
         if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
             return planned_result;
+        }
+    }
+
+    // GAP (write-path OOM, 2026-07-04): install the write-executor working-set
+    // budget around the LEGACY dispatch of any write-carrying MATCH shape
+    // (SET / REMOVE / DELETE / MATCH..CREATE / MATCH..MERGE — the family whose
+    // candidate materialization is O(label)). While the scope is active:
+    //   * the dispatch runs on a pass-through METERED allocator (net-live
+    //     query-side accounting: candidate lists, env arrays, eval scratch,
+    //     rows) — memory is still owned by `allocator`, so the caller frees
+    //     the returned ExecutionResult exactly as before;
+    //   * graph_store charges detached scan-box adoptions (the O(graph)
+    //     resident-growth family from the incident) via the same scope;
+    //   * the executor's candidate loops poll write_budget.check() and abort
+    //     with error.WriteQueryBudgetExceeded once live > budget — polled
+    //     BETWEEN candidates, before a candidate's mutation, so per-node
+    //     atomicity holds at the abort (no statement-level rollback exists on
+    //     the legacy autocommit path — pre-existing semantics);
+    //   * as a hard backstop the metered allocator refuses NEW memory once
+    //     tripped, so an un-instrumented path degrades to OutOfMemory which is
+    //     translated here — the OOM killer is never the arbiter.
+    // Covered point-write shapes were already served engine-direct inside
+    // executeMatchQueryImpl (pointWriteFastPath) and stay far below any budget.
+    const budget_write_carrying = q.match.chains.len > 0 and
+        (q.set_clauses.len > 0 or q.remove_clauses.len > 0 or q.delete_items.len > 0 or
+            q.create_pattern != null or q.merge_statement != null);
+    if (budget_write_carrying) {
+        var budget_scope = write_budget.Scope.init();
+        if (budget_scope.budget_bytes != write_budget.unlimited) {
+            write_budget.beginScope(&budget_scope);
+            defer write_budget.endScope(&budget_scope);
+            var metered = write_budget.MeteredAllocator{ .inner = allocator };
+            var result = executeLegacyQueryWithResolvedParams(metered.allocator(), q, context, param_names.items, param_values.items) catch |err| {
+                if (budget_scope.exceeded and err == error.OutOfMemory) return error.WriteQueryBudgetExceeded;
+                return err;
+            };
+            if (budget_scope.exceeded) {
+                // A catch-and-continue site may have swallowed the backstop's
+                // refusal: a tripped scope NEVER returns success.
+                result.deinit(allocator);
+                return error.WriteQueryBudgetExceeded;
+            }
+            return result;
         }
     }
 

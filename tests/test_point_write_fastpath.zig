@@ -331,7 +331,7 @@ test "routing table: covered shapes engine-direct; uncovered shapes legacy" {
         .{ .name = "uncovered: SET label", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-2' SET n:PwExtra", .engine_direct = false },
         .{ .name = "uncovered: SET all-properties", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-3' SET n = {m: '9'}", .engine_direct = false },
         .{ .name = "uncovered: REMOVE label", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-3' REMOVE n:PwRoute", .engine_direct = false },
-        .{ .name = "uncovered: ORDER BY tail", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-4' SET n.m = '6' RETURN n.m ORDER BY n.m", .engine_direct = false },
+        .{ .name = "uncovered: aggregated RETURN", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-4' SET n.m = '6' RETURN count(n)", .engine_direct = false },
         .{ .name = "uncovered: AND conjunction", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-4' AND n.seq = 4 SET n.m = '7'", .engine_direct = false },
         .{ .name = "uncovered: unlabeled pattern", .query = "MATCH (n) WHERE n.source_id = 'pw-8' SET n.m = '8'", .engine_direct = false },
     };
