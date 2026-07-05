@@ -224,6 +224,11 @@ pub const getPointWriteFastPathTotal = match_operations.getPointWriteFastPathTot
 pub const resetPointWriteFastPathTotal = match_operations.resetPointWriteFastPathTotal;
 pub const getLegacyWriteScanTotal = match_operations.getLegacyWriteScanTotal;
 pub const resetLegacyWriteScanTotal = match_operations.resetLegacyWriteScanTotal;
+// GAP-ENT-0043 T1: index-served GROUP BY/DISTINCT/count-by-value fast path
+// (routing-table test signals: index-served == 1 AND rows-materialized == 0).
+pub const indexServedGroupByFastPath = match_operations.indexServedGroupByFastPath;
+pub const getIndexServedAggregateTotal = match_operations.getIndexServedAggregateTotal;
+pub const resetIndexServedAggregateTotal = match_operations.resetIndexServedAggregateTotal;
 
 // Re-export statement handler functions for backward compatibility (M1 Phase 7 extraction)
 pub const executeShow = statement_handlers.executeShow;

@@ -1663,6 +1663,14 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         if (try match_operations.propertyAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
             return fast_result;
         }
+        // GAP-ENT-0043 T1: INDEX-SERVED GROUP BY / DISTINCT / count-by-value —
+        // when the single group key is an indexed property and the aggregates
+        // are count-only, serve O(distinct) from the exact-property index
+        // postings (zero node materialization, zero per-node reads). Declines
+        // (null) → the streaming scan below serves the same shape soundly.
+        if (try match_operations.indexServedGroupByFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
         // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —
         // accumulates per-group AggAcc during the label scan, O(groups) space.
         // Intercepts before planned_read_runtime materializes O(nodes) rows.

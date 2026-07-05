@@ -7492,6 +7492,32 @@ pub fn build(b: *std.Build) void {
     const groupby_streaming_step = b.step("test-groupby-streaming", "Run streaming GROUP BY/DISTINCT regression (no row materialization, O(groups) not O(nodes))");
     groupby_streaming_step.dependOn(&run_groupby_streaming_tests.step);
 
+    // GAP-ENT-0043 T1: index-served GROUP BY / DISTINCT / count-by-value.
+    // Pre-fix: served by the O(nodes) streaming scan (index-served counter 0).
+    // Post-fix: O(distinct) from the exact-property index postings —
+    // index-served == 1 AND getPathRowsMaterialized() == 0, results exact.
+    const index_served_agg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0043_index_served_aggregate.zig"), .target = target, .optimize = optimize });
+    index_served_agg_test_mod.addImport("geode", root_mod);
+    const index_served_agg_tests = b.addTest(.{ .root_module = index_served_agg_test_mod });
+    const run_index_served_agg_tests = b.addRunArtifact(index_served_agg_tests);
+    shardDep(test_step, &run_index_served_agg_tests.step, 1, test_shard_loads, test_shard_index);
+    const index_served_agg_step = b.step("test-gap0043-index-served-aggregate", "Run GAP-ENT-0043 T1 index-served GROUP BY/DISTINCT/count-by-value regression (O(distinct) from exact-index postings, zero materialization)");
+    index_served_agg_step.dependOn(&run_index_served_agg_tests.step);
+
+    // GAP-ENT-0043 T2: projection-pushdown streaming for residual scans.
+    // Pre-fix: unlabeled GROUP BY/DISTINCT/aggregate declines every fast path
+    // (all require exactly one label) → planned_read_runtime materializes one
+    // FULL node row per node. Post-fix: labels.len == 0 streams (resident
+    // iteration unbounded / engine page-scan + single-property reads bounded),
+    // getPathRowsMaterialized() == 0, results exact.
+    const projection_pushdown_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0043_projection_pushdown.zig"), .target = target, .optimize = optimize });
+    projection_pushdown_test_mod.addImport("geode", root_mod);
+    const projection_pushdown_tests = b.addTest(.{ .root_module = projection_pushdown_test_mod });
+    const run_projection_pushdown_tests = b.addRunArtifact(projection_pushdown_tests);
+    shardDep(test_step, &run_projection_pushdown_tests.step, 1, test_shard_loads, test_shard_index);
+    const projection_pushdown_step = b.step("test-gap0043-projection-pushdown", "Run GAP-ENT-0043 T2 projection-pushdown regression (unlabeled GROUP BY/DISTINCT/aggregate streams single-property reads, zero materialization)");
+    projection_pushdown_step.dependOn(&run_projection_pushdown_tests.step);
+
     // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
     // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
     // PARENT_OF children.  Counter assertions (label-scan == 0, exact >= 1) are

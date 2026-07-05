@@ -40,6 +40,19 @@ pub fn resetOrderedScanFastPathHits() void {
     g_ordered_scan_fastpath_hits.store(0, .monotonic);
 }
 
+// GAP-ENT-0043 T1: diagnostic counter for GROUP BY / DISTINCT / count-by-value
+// aggregates SERVED from the in-memory exact-property index (O(distinct keys),
+// zero node materialization, zero per-node property reads). The routing tests
+// assert this alongside getPathRowsMaterialized()==0: index-served == 1 proves
+// the query never touched the O(nodes) streaming scan either.
+var g_index_served_aggregate_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getIndexServedAggregateTotal() u64 {
+    return g_index_served_aggregate_total.load(.monotonic);
+}
+pub fn resetIndexServedAggregateTotal() void {
+    g_index_served_aggregate_total.store(0, .monotonic);
+}
+
 // GAP (write-path OOM, 2026-07-04): path counters for the ENGINE-DIRECT point
 // write vs the LEGACY materializing write scan. `pointWriteFastPath` bumps the
 // first when it SERVES a write (including the authoritative 0-match empty);
@@ -1886,6 +1899,280 @@ pub fn countFilteredFastPath(
 
     const col_name: []const u8 = item.alias orelse "count(n)";
     return try buildCountFastPathResult(allocator, col_name, matched);
+}
+
+// CANARY: REQ=GAP-ENT-0043; FEATURE="IndexServedAggregate"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_gap0043_index_served_aggregate.zig; OWNER=execution; UPDATED=2026-07-05
+/// GAP-ENT-0043 T1 — INDEX-SERVED GROUP BY / DISTINCT / count-by-value.
+///
+/// When the single grouping (or DISTINCT) key is one indexed property and every
+/// aggregate is count(*) / count(<var>) / count(<var>.<key>) (key == the group
+/// key), the exact node-property index already holds the whole answer: its
+/// postings for `(label, key)` are exactly the distinct values, and each
+/// posting LENGTH is exactly that group's row count. Serve the query as
+/// O(distinct values): one posting walk + ONE single-property engine read per
+/// distinct value (to recover the value bytes — the index keys by value hash).
+/// ZERO node materialization, ZERO per-node reads — sub-ms for low-cardinality
+/// keys at any graph size (the 2026-07-05 live `GROUP BY source count(*)`
+/// 60s-timeout/OOM headline shape).
+///
+/// The null group (nodes with the label that lack the key) is derived without
+/// a scan: `countNodesByLabel(label) - Σ posting lengths`. Emitted LAST, with
+/// count(*) == the difference and count(n.key) == 0 (GQL count(expr) skips
+/// nulls), matching the streaming/legacy null-group semantics.
+///
+/// MANDATORY soundness gates (the source-split lesson — decline → the caller
+/// falls through to the streaming scan (T2 / groupByAggregateFastPath), which
+/// is slower but always sound):
+///   * in-memory MAINTAINED structures only: `collectPropertyPostingSummaries`
+///     runs `ensureExactNodePropertyIndexBuilt` (H4 deferred-build latch)
+///     before walking, and `store.countNodesByLabel` is the
+///     ensureGraphHydrated-guarded maintained refcount — NEVER the deferred
+///     engine label index;
+///   * `graph_store.shouldIndexProperty(key)` — the SAME per-key completeness
+///     gate every exact-index seek uses (lean mode skips non-merge keys, so
+///     the index would be silently incomplete for them);
+///   * declines under active RLS (countFastPathRlsAllowed — identical to the
+///     0013 count fast path) and under ANY tenant scope (postings are not
+///     tenant-scoped);
+///   * declines when Σ posting lengths > label refcount (inconsistent window /
+///     stale posting — never serve a count we cannot reconcile);
+///   * declines when a representative value read fails or yields a
+///     decimal/ext-typed value (output Value mapping would diverge from the
+///     legacy path for those).
+///
+/// Row/column shape mirrors `groupByAggregateFastPath` exactly (same column
+/// naming, same Value tags), so covered results are byte-parity with the
+/// streaming path they shortcut. LIMIT is NOT applied here (the caller applies
+/// post-return LIMIT, matching the other aggregate fast paths).
+pub fn indexServedGroupByFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // ---- Shape gates on MATCH (identical to groupByAggregateFastPath) ----
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+    const label = head.labels[0];
+
+    // ---- Shape gates on clauses ----
+    if (q.where_clause != null) return null; // any WHERE → streaming scan path
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| if (lim == 0) return null;
+
+    // ---- Classify RETURN items: single group key + count-only aggregates ----
+    const is_distinct_only = q.ret.distinct and q.group_by == null;
+    if (!is_distinct_only and q.group_by == null) return null;
+
+    const MAX_ITEMS = 32;
+    const n_items = q.ret.items.len;
+    if (n_items == 0 or n_items > MAX_ITEMS) return null;
+
+    const ItemKind = enum { group_key, count_star, count_key };
+    var item_kinds: [MAX_ITEMS]ItemKind = undefined;
+
+    var key_prop: []const u8 = undefined;
+    if (is_distinct_only) {
+        // Bare DISTINCT of the key: exactly one RETURN item, `<var>.<key>`.
+        if (n_items != 1) return null;
+        key_prop = extractBoundVarProperty(q.ret.items[0].expr, match_var) orelse return null;
+        item_kinds[0] = .group_key;
+    } else {
+        const gb = q.group_by.?;
+        if (gb.keys.len != 1) return null; // single-key only; multi-key → streaming
+        key_prop = extractBoundVarProperty(gb.keys[0], match_var) orelse return null;
+
+        for (q.ret.items, 0..) |item, i| {
+            if (item.expr == .Call) {
+                const call = item.expr.Call;
+                if (call.callee.* != .Ident) return null;
+                if (!std.ascii.eqlIgnoreCase(call.callee.Ident.orig, "count")) return null;
+                if (call.args.len != 1) return null;
+                const is_star_or_var = switch (call.args[0].*) {
+                    .Ident => |id| std.mem.eql(u8, id.orig, "*") or std.mem.eql(u8, id.orig, match_var),
+                    else => false,
+                };
+                if (is_star_or_var) {
+                    item_kinds[i] = .count_star;
+                } else {
+                    // count(<var>.<prop>) is index-servable ONLY when <prop> is
+                    // the group key itself (non-null by group construction, 0
+                    // for the null group). Any other column → streaming scan.
+                    const prop = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                    if (!std.mem.eql(u8, prop, key_prop)) return null;
+                    item_kinds[i] = .count_key;
+                }
+            } else {
+                const prop = extractBoundVarProperty(item.expr, match_var) orelse return null;
+                if (!std.mem.eql(u8, prop, key_prop)) return null;
+                item_kinds[i] = .group_key;
+            }
+        }
+    }
+
+    // ---- Soundness gates ----
+    if (!countFastPathRlsAllowed()) return null;
+    if (filter_tenant != null) return null; // postings are not tenant-scoped
+    if (!graph_store.shouldIndexProperty(key_prop)) return null; // index completeness per key
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+
+    // ---- Label total from the MAINTAINED refcount (hydration-guarded) ----
+    // Same store resolution as countNodesFastPath (0013): active read store if
+    // the transport installed one, else a ReadView over the global store.
+    var fallback_read_view: graph_store.ReadView = undefined;
+    var fallback_read_view_active = false;
+    defer if (fallback_read_view_active) fallback_read_view.deinit();
+    const store = if (graph_store.getActiveQueryReadStore()) |active_read_store| blk: {
+        break :blk active_read_store;
+    } else blk: {
+        const writable_store = graph_store.getGlobalStore(allocator);
+        fallback_read_view = graph_store.ReadView.init(allocator, writable_store);
+        fallback_read_view_active = true;
+        break :blk fallback_read_view.getReadStore();
+    };
+    const label_total: u64 = store.countNodesByLabel(filter_graph, label, null);
+
+    // ---- Posting walk: O(distinct values), maintained index only ----
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+    const sa = scratch_arena.allocator();
+
+    const summaries = adapter.collectPropertyPostingSummaries(filter_graph, label, key_prop, sa) catch return null;
+
+    var posting_sum: u64 = 0;
+    for (summaries) |s| posting_sum += s.count;
+    if (posting_sum > label_total) return null; // inconsistent window → sound scan path
+    const null_count: u64 = label_total - posting_sum;
+
+    // ---- Recover each distinct value: ONE single-property read per posting ----
+    // (arena-owned; a decline mid-way just drops the arena.)
+    //
+    // MERGE step (legacy parity): the legacy GROUP BY (execution.zig ~3095) and
+    // the streaming fast path both group on the SERIALIZED key — Int "{d}",
+    // Str raw bytes, Bool "true"/"false", any other type (incl. Double) "?" —
+    // so int 5 and string "5" land in ONE group, and all float-valued keys
+    // collapse into the "?" group (first-seen value wins). The index keeps
+    // those as SEPARATE postings (distinct encoded bytes), so we re-serialize
+    // each recovered value with the SAME rules and merge posting counts that
+    // collide, keeping the first-seen value — byte-parity by construction.
+    var merged_vals = try std.ArrayList(Value).initCapacity(sa, summaries.len);
+    var merged_counts = try std.ArrayList(u64).initCapacity(sa, summaries.len);
+    var merged_index = std.StringHashMap(usize).init(sa);
+    for (summaries) |s| {
+        const pv = (adapter.getNodeProperty(filter_graph, s.representative_slot, key_prop, sa) catch return null) orelse return null;
+        const val: Value = switch (pv) {
+            .int => |iv| Value{ .Int = iv },
+            .string => |sv| Value{ .Str = sv }, // arena-owned; duped into the result below
+            .bool => |bv| Value{ .Bool = bv },
+            .float => |fv| Value{ .Double = fv },
+            // .null cannot appear in a posting (a null-valued key is an absent
+            // property — never indexed); decimal/ext value mapping would
+            // diverge from the legacy result tags → decline, streaming path.
+            else => return null,
+        };
+        const ser: []const u8 = switch (val) {
+            .Int => |iv| try std.fmt.allocPrint(sa, "{d}", .{iv}),
+            .Str => |sv| sv,
+            .Bool => |bv| if (bv) "true" else "false",
+            else => "?", // Double (legacy `else` arm)
+        };
+        const gop = try merged_index.getOrPut(ser);
+        if (gop.found_existing) {
+            merged_counts.items[gop.value_ptr.*] += s.count;
+        } else {
+            gop.value_ptr.* = merged_vals.items.len;
+            try merged_vals.append(sa, val);
+            try merged_counts.append(sa, s.count);
+        }
+    }
+    const group_vals = merged_vals.items;
+    const group_counts = merged_counts.items;
+
+    // ---- Output phase (mirrors groupByAggregateFastPath's shape exactly) ----
+    const emit_null_group = null_count > 0;
+    const n_rows = group_vals.len + @intFromBool(emit_null_group);
+
+    const rows = try allocator.alloc([]Value, n_rows);
+    var n_rows_filled: usize = 0;
+    errdefer {
+        for (rows[0..n_rows_filled]) |row| {
+            for (row) |v| switch (v) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            };
+            allocator.free(row);
+        }
+        allocator.free(rows);
+    }
+
+    const columns = try allocator.alloc([]const u8, n_items);
+    var n_cols_filled: usize = 0;
+    errdefer {
+        for (columns[0..n_cols_filled]) |col| allocator.free(col);
+        allocator.free(columns);
+    }
+    for (q.ret.items, 0..) |item, i| {
+        columns[i] = if (item.alias) |a|
+            try allocator.dupe(u8, a)
+        else switch (item_kinds[i]) {
+            .group_key => try allocator.dupe(u8, execution.getExpressionNameFromAst(item.expr)),
+            .count_star => try allocator.dupe(u8, "count(*)"),
+            .count_key => try std.fmt.allocPrint(allocator, "count({s}.{s})", .{ match_var, key_prop }),
+        };
+        n_cols_filled += 1;
+    }
+
+    var ri: usize = 0;
+    while (ri < n_rows) : (ri += 1) {
+        const is_null_group = ri == group_vals.len;
+        const row = try allocator.alloc(Value, n_items);
+        var n_vals_filled: usize = 0;
+        errdefer {
+            for (row[0..n_vals_filled]) |v| switch (v) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            };
+            allocator.free(row);
+        }
+        for (0..n_items) |i| {
+            row[i] = switch (item_kinds[i]) {
+                .group_key => blk: {
+                    if (is_null_group) break :blk Value{ .Null = {} };
+                    break :blk switch (group_vals[ri]) {
+                        .Str => |s| Value{ .Str = try allocator.dupe(u8, s) },
+                        else => group_vals[ri],
+                    };
+                },
+                .count_star => Value{ .Int = @intCast(if (is_null_group) null_count else group_counts[ri]) },
+                // count(n.key): non-null for every member of a value group by
+                // construction; 0 for the null group (count(expr) skips nulls).
+                .count_key => Value{ .Int = @intCast(if (is_null_group) 0 else group_counts[ri]) },
+            };
+            n_vals_filled += 1;
+        }
+        rows[ri] = row;
+        n_rows_filled += 1;
+    }
+
+    _ = g_index_served_aggregate_total.fetchAdd(1, .monotonic);
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
 }
 
 // CANARY: REQ=GAP-ENT-0002; FEATURE="GroupByStreamingFastPath"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_gap_ent0002_groupby_streaming.zig; OWNER=execution; UPDATED=2026-06-26
@@ -7779,6 +8066,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // See `propertyAggregateFastPath` for preconditions — all unsupported
     // shapes fall through to the regular executor below.
     if (try propertyAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-ENT-0043 T1: index-served GROUP BY / DISTINCT / count-by-value —
+    // O(distinct) from the exact-property index postings; declines → the
+    // streaming scan below.
+    if (try indexServedGroupByFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
     // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —

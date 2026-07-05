@@ -5473,6 +5473,85 @@ pub const StorageAdapter = struct {
         return (try mg.exact_node_property_index.postingLenIfPresent(label_id, property_key, value_hash)) orelse 0;
     }
 
+    /// GAP-ENT-0043 T1: one distinct-value posting of the exact node-property
+    /// index for a given `(label, property_key)` pair. `count` is the posting
+    /// length (== the number of live nodes carrying that value — the index is
+    /// maintained on every set/update/delete); `representative_slot` is one
+    /// member of the posting, used by the index-served aggregate fast path to
+    /// recover the actual property VALUE with a single engine-direct
+    /// single-property read (the index keys by value HASH, not value bytes).
+    pub const PropertyPostingSummary = struct {
+        value_hash: u64,
+        representative_slot: u64,
+        count: u64,
+    };
+
+    /// GAP-ENT-0043 T1: collect the distinct-value posting summaries for
+    /// `(label, property_key)` from the IN-MEMORY MAINTAINED exact
+    /// node-property index — O(distinct values) output, ZERO node
+    /// materialization, no engine reads.
+    ///
+    /// Soundness gates (the source-split lesson — never read a deferred-empty
+    /// structure):
+    ///   * `ensureExactNodePropertyIndexBuilt` runs FIRST, so an H4-deferred
+    ///     index is built from the durable pages before the walk (same latch
+    ///     every exact-index seek uses);
+    ///   * an unknown label (never interned) returns an empty slice — there
+    ///     are no nodes with that label, so there are no postings;
+    ///   * callers MUST additionally gate on `graph_store.shouldIndexProperty`
+    ///     (index completeness per key in lean mode) — this walk reports what
+    ///     the index CONTAINS and cannot know whether the key was skipped.
+    ///
+    /// The walk takes each of the 64 shard mutexes once (stable order), so it
+    /// observes a per-shard-consistent snapshot; concurrent writers block only
+    /// for the duration of one shard's iteration.
+    pub fn collectPropertyPostingSummaries(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        allocator: Allocator,
+    ) ![]PropertyPostingSummary {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        // H4: build the exact index on first access if it was deferred at open.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
+        const label_id = mg.label_dict.getId(label) orelse
+            return try allocator.alloc(PropertyPostingSummary, 0);
+
+        var out = std.ArrayList(PropertyPostingSummary).empty;
+        errdefer out.deinit(allocator);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const expected_key_len = 4 + 4 + property_key.len + 8;
+        for (&mg.exact_node_property_index.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| {
+                // Encoded key layout (encodeKeyInto):
+                // [label_id: u32][key_len: u32][key bytes][value_hash: u64]
+                const key = entry.key_ptr.*;
+                if (key.len != expected_key_len) continue;
+                if (std.mem.readInt(u32, key[0..4], .little) != label_id) continue;
+                if (std.mem.readInt(u32, key[4..8], .little) != property_key.len) continue;
+                if (!std.mem.eql(u8, key[8 .. 8 + property_key.len], property_key)) continue;
+                const value_hash = std.mem.readInt(u64, key[8 + property_key.len ..][0..8], .little);
+                const posting = entry.value_ptr.items;
+                if (posting.len == 0) continue; // empty postings are removed; defensive
+                try out.append(allocator, .{
+                    .value_hash = value_hash,
+                    .representative_slot = posting[0],
+                    .count = posting.len,
+                });
+            }
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
     // ------------------------------------------------------------------
     // Edge property operations
     // ------------------------------------------------------------------
