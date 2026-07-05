@@ -2361,3 +2361,109 @@ test "T3c: injected persist failure — hydrating query still succeeds; next reo
         graph_store.deinitGlobalStore();
     }
 }
+
+// ---------------------------------------------------------------------------
+// Read-path source split (2026-07-05 live regression at 14.27M): the QUIC
+// handler's ENGINE-DIRECT single-label count (`MATCH (n:L) RETURN count(n)`
+// served by `node_scan_stream.prepare` when the in-memory count fast paths
+// decline) precomputed its answer from `adapter.countNodesByLabel` — the
+// storage ENGINE's per-shard `label_index`. That index is a DEFERRED derived
+// structure (graph-storage Phase A): after a catalog-mediated reopen it is
+// EMPTY/PARTIAL until an accessor runs `ensureDerivedHydrated`, and the
+// in-memory streaming hydration never fills it. Live capture: the count query
+// blocked ~41 min on the in-memory hydration latch, then returned the EMPTY
+// engine value (0) for a graph whose maintained in-memory refcount held
+// 14,270,791. The fix routes the precompute through the AUTHORITATIVE
+// in-memory maintained refcount (`GraphStore.countNodesByLabel`, which runs
+// the `ensureGraphHydrated` chokepoint) — the engine adapter count must never
+// serve a user count without hydration guarantees.
+//
+// RED at HEAD (5f56a42e): the streamed count page returns 0 after the reopen.
+// GREEN with the fix: it returns the true count (blocking on hydration if
+// that has not run yet), never the deferred-empty engine value.
+// ---------------------------------------------------------------------------
+
+fn parseSingleQuery(arena: *std.heap.ArenaAllocator, src: []const u8) !*const geode.gql.ast.Query {
+    var lx = geode.gql.lexer.Lexer{ .src = src };
+    var p = geode.gql.parser.Parser{ .lx = &lx, .arena = arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    return &program.statements[0].Query;
+}
+
+test "engine-direct single-label count serves the in-memory refcount, never the deferred engine label index" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    execution.cleanupCatalogInstance();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 300;
+
+    // Session 1: seed N :Person nodes in the DEFAULT graph (the graph the
+    // node-scan stream resolves for a context without a session graph), FULL
+    // checkpoint, close. The checkpoint persists the engine stores + snapshots;
+    // the reopen below defers both the in-memory resident products AND the
+    // engine's derived label index.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LABEL}, graph_store.DEFAULT_GRAPH_NAME);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        try testing.expectEqual(N, store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Session 2: catalog-mediated reopen into the deferred-hydration state,
+    // then issue the EXACT live shape engine-direct: single-label count via
+    // node_scan_stream.prepare (this IS the path the QUIC handler falls to
+    // when the in-memory count fast paths decline — prepare consults no
+    // in-memory fast path itself, so no decline-forcing is needed here).
+    {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store); // production parity (server init does this)
+        defer graph_store.deinitGlobalStore();
+
+        const catalog = try execution.ensureCatalogInstance(aa);
+        defer execution.cleanupCatalogInstance();
+        const ctx = execution.ExecutionContext{ .catalog = catalog };
+
+        var qa = std.heap.ArenaAllocator.init(allocator);
+        defer qa.deinit();
+        const count_q = try parseSingleQuery(&qa, "MATCH (n:Person) RETURN count(n) AS c");
+        try testing.expect(geode.node_scan_stream.isEligible(count_q));
+
+        var stream = (try geode.node_scan_stream.prepare(aa, count_q, ctx, &.{}, &.{}, &.{})) orelse
+            return error.StreamPathNotEligible;
+        defer stream.deinit();
+
+        var page = try stream.buildNextPage(aa, 10);
+        defer page.result.deinit(aa);
+
+        try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+        try testing.expectEqual(@as(usize, 1), page.result.rows[0].len);
+        // THE regression assert: the true cardinality — never the
+        // deferred-empty engine label index value (0 at HEAD).
+        try testing.expectEqual(@as(i64, @intCast(N)), page.result.rows[0][0].Int);
+
+        // The authoritative in-memory refcount agrees (hydration-guaranteed).
+        try testing.expectEqual(N, store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+    }
+}

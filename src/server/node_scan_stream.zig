@@ -643,27 +643,53 @@ pub fn prepare(
         where_expr = cloneExpr(aa, w) catch return null;
     }
 
-    // count mode: O(1) cardinality from the label index when TRULY unfiltered.
+    // count mode: O(1) cardinality when TRULY unfiltered.
     //
-    // The O(1) label/graph count is correct ONLY when there is no per-node
-    // filter of any kind. A WHERE/FILTER predicate is one filter; inline
-    // `{prop: val}` patterns on the matched node are ANOTHER. `eligibleQuery`
-    // accepts inline-prop count (it is streamable), but those props must be
-    // applied per node — using `countNodesByLabel` here would count EVERY node
-    // of the label and silently ignore the `{prop: val}` filter (over-count).
-    // So gate the O(1) precompute on having NO inline props as well; inline-
-    // prop counts fall through to the streamed slot-tally path below.
+    // The O(1) count is correct ONLY when there is no per-node filter of any
+    // kind. A WHERE/FILTER predicate is one filter; inline `{prop: val}`
+    // patterns on the matched node are ANOTHER. `eligibleQuery` accepts
+    // inline-prop count (it is streamable), but those props must be applied
+    // per node — an O(1) count here would count EVERY node of the label and
+    // silently ignore the `{prop: val}` filter (over-count). So gate the O(1)
+    // precompute on having NO inline props as well; inline-prop counts fall
+    // through to the streamed slot-tally path below.
+    //
+    // SOURCE (2026-07-05 live regression at 14.27M): the single-label count
+    // MUST read the AUTHORITATIVE in-memory maintained refcount
+    // (`GraphStore.countNodesByLabel`, tenantless arm = `countGraphLabel`,
+    // guarded by the `ensureGraphHydrated` chokepoint) — NEVER
+    // `adapter.countNodesByLabel`, which sums the storage ENGINE's per-shard
+    // `label_index`. That engine index is a DEFERRED derived structure
+    // (graph-storage Phase A): empty/partial after a catalog-mediated reopen
+    // until an accessor materializes it, never filled by the in-memory
+    // streaming hydration, and it retains deleted slots (over-count). Live
+    // capture: this precompute returned 0 for a graph whose in-memory
+    // refcount held 14,270,791 — after the query had already blocked on the
+    // hydration latch. Tenant scope: this engine-direct path has never
+    // applied a tenant filter (the adapter count had no tenant parameter),
+    // so `tenant = null` preserves the path's semantics exactly; tenant- and
+    // RLS-scoped counts are handled by the in-memory fast paths / legacy
+    // executor before the handler falls through to this stream.
+    // Regression: tests/test_startup_lazy_hydrate.zig "engine-direct
+    // single-label count serves the in-memory refcount".
     const has_inline_props = eligibility.pattern.props != null;
     var count_precomputed: ?usize = null;
     if (eligibility.mode == .count and where_expr == null and !has_inline_props) {
         if (graph_store.getGlobalAdapter()) |adapter| {
             if (eligibility.pattern.labels.len == 1) {
-                count_precomputed = @intCast(adapter.countNodesByLabel(graph_name, eligibility.pattern.labels[0]) catch return null);
-            } else {
-                // Unlabeled count: fall back to scanning live nodes (no clone).
+                count_precomputed = graph_store.getGlobalStore(allocator).countNodesByLabel(graph_name, eligibility.pattern.labels[0], null);
+            } else if (eligibility.pattern.labels.len == 0) {
+                // Unlabeled count: scan the engine node store (no clone). The
+                // node store is a PRIMARY structure — complete irrespective of
+                // the deferred derived-index state — so it is safe to source.
                 const entries = adapter.scanAllNodes(graph_name, aa) catch return null;
                 count_precomputed = entries.len;
             }
+            // labels.len > 1: NO precompute — a multi-label conjunction must
+            // fall through to the slot-tally path, whose per-slot
+            // `nodeMatchesPattern` verifies the FULL label set. (The previous
+            // `scanAllNodes` arm counted EVERY node in the graph for
+            // multi-label patterns — silent over-count.)
         } else return null;
     }
 

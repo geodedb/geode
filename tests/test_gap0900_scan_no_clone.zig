@@ -572,3 +572,64 @@ test "GAP-0900: broadened eligibility gate" {
     try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n.name")));
     try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name, m.name")));
 }
+
+// -------------------------------------------------------------------
+// Test 15 — multi-label count precompute must not over-count.
+//
+// The unfiltered count precompute in `node_scan_stream.prepare` used
+// `adapter.scanAllNodes(...).len` for EVERY non-single-label pattern — for a
+// multi-label pattern `(n:A:B)` that counts EVERY node in the graph, silently
+// ignoring the label conjunction (over-count). A multi-label count must fall
+// through to the slot-tally path, whose per-slot `nodeMatchesPattern`
+// verifies the FULL label set.
+//
+// (Sibling of the deferred-engine-label-index count split fixed in the same
+// change: the single-label arm now reads the authoritative in-memory
+// refcount; see tests/test_startup_lazy_hydrate.zig.)
+// -------------------------------------------------------------------
+test "GAP-0900: multi-label count tallies matching nodes, not the whole graph" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const aa = h.arena.allocator();
+
+    // 3 dual-labeled nodes + 5 single-labeled nodes in the default graph.
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const q = try std.fmt.allocPrint(aa, "CREATE (:Dual:Extra {{i: {d}}})", .{i});
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+    }
+    while (i < 8) : (i += 1) {
+        const q = try std.fmt.allocPrint(aa, "CREATE (:Dual {{i: {d}}})", .{i});
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+    }
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const count_q = try parseQuery(&qa, "MATCH (n:Dual:Extra) RETURN count(n) AS c");
+    try testing.expect(node_scan_stream.isEligible(count_q));
+
+    var stream = (try node_scan_stream.prepare(aa, count_q, h.ctx, &.{}, &.{}, &.{})) orelse {
+        return error.StreamPathNotEligible;
+    };
+    defer stream.deinit();
+
+    var page = try stream.buildNextPage(aa, 10);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    // RED at HEAD: 8 (scanAllNodes counted every node). Must be 3.
+    try testing.expectEqual(@as(i64, 3), page.result.rows[0][0].Int);
+
+    // Single-label count on the same population still exact.
+    const single_q = try parseQuery(&qa, "MATCH (n:Extra) RETURN count(n) AS c");
+    var s2 = (try node_scan_stream.prepare(aa, single_q, h.ctx, &.{}, &.{}, &.{})) orelse {
+        return error.StreamPathNotEligible;
+    };
+    defer s2.deinit();
+    var p2 = try s2.buildNextPage(aa, 10);
+    defer p2.result.deinit(aa);
+    try testing.expectEqual(@as(i64, 3), p2.result.rows[0][0].Int);
+}

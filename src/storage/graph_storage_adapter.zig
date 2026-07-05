@@ -4393,7 +4393,27 @@ pub const StorageAdapter = struct {
         return try ctx.mg.storage().scanLabelIter(ctx.label_id, allocator);
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-137; FEATURE="High-Concurrency Label Scans"; ASPECT=ShardLockedLabelCount; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=storage; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-137; FEATURE="High-Concurrency Label Scans"; ASPECT=ShardLockedLabelCount; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=storage; UPDATED=2026-07-05
+    //
+    // ENGINE-INTERNAL / ESTIMATE USE ONLY — NEVER a user-facing count.
+    //
+    // This sums the storage engine's per-shard `label_index` postings. Two
+    // properties make that unfit to serve a user count (2026-07-05 live
+    // regression at 14.27M — silent `count(n:L) = 0` after a reopen):
+    //   1. Postings retain DELETED slots (engine deleteNode sets
+    //      NODE_FLAG_DELETED without removing the posting) — over-count.
+    //   2. The index is a DEFERRED derived structure (graph-storage Phase A):
+    //      empty until materialized, and the in-memory streaming hydration
+    //      never fills it — under-count/zero after a catalog-mediated open.
+    // User-facing counts must read the authoritative in-memory maintained
+    // refcount: `GraphStore.countNodesByLabel` (ensureGraphHydrated-guarded).
+    //
+    // The `ensureDerivedHydrated` guard below upholds the graph-storage
+    // Phase A contract ("MUST be called ... before the index is read") so any
+    // remaining engine-internal caller at least reads a MATERIALIZED index
+    // (counter-gated snapshot load on clean restart, rebuild on crash) instead
+    // of the deferred-empty one. Guard runs BEFORE the shard lock, the same
+    // order `appendLiveNodesForLabelShard` establishes via `scanLabelIter`.
     pub fn countNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !u64 {
         const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return 0;
         const mg = ctx.mg;
@@ -4401,6 +4421,7 @@ pub const StorageAdapter = struct {
 
         var total: u64 = 0;
         for (mg.engine.shards, 0..) |shard, shard_idx| {
+            try shard.ensureDerivedHydrated();
             mg.shard_locks[shard_idx].lockSharedUncancelable(io);
             total += shard.label_index.count(ctx.label_id);
             mg.shard_locks[shard_idx].unlockShared(io);

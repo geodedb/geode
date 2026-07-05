@@ -3353,8 +3353,18 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
     if (!adapter.graphExists(graph_name)) return 0;
 
     if (pattern.labels.len > 0) {
-        _ = allocator;
-        return try adapter.countNodesByLabel(graph_name, pattern.labels[0]);
+        // 2026-07-05 (read-path source split): source the label cardinality
+        // from the AUTHORITATIVE in-memory maintained refcount
+        // (`GraphStore.countNodesByLabel`, hydration-guarded via
+        // `ensureGraphHydrated`), NOT `adapter.countNodesByLabel` — the
+        // engine's per-shard `label_index` is a DEFERRED derived structure
+        // that reads empty/partial after a catalog-mediated reopen and
+        // retains deleted slots. These estimates are user-visible (EXPLAIN
+        // `est_rows`) and steer plan selection, so they get the same
+        // hydration-guaranteed source as user counts. Tenantless refcount
+        // read: O(1), matches this function's historical (tenant-unaware)
+        // semantics.
+        return @intCast(graph_store.getGlobalStore(allocator).countNodesByLabel(graph_name, pattern.labels[0], null));
     }
 
     return adapter.nodeCount(graph_name) catch 0;
