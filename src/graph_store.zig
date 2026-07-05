@@ -12404,18 +12404,114 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-07-04
     // Load from per-graph storage engine instead of legacy graph_store.dat.
     pub fn loadFromFile(self: *GraphStore) !void {
+        // T2c SEGV root-cause fix (14.27M hydration crash): `clearNodes` frees
+        // EVERY resident + retired Node/Edge value inline (freeNodeValue). A
+        // streaming-hydration merge in flight on another thread holds shallow
+        // Node copies (FamilyPipeline batches) whose sub-heap it shares with
+        // those resident cache entries — clearing mid-build is a use-after-free
+        // the moment a family thread touches its batch (at scale: SEGV/garbage
+        // ~100 s in, exactly when the catalog's lazy init reloaded the store
+        // during the first query's hydration). Destructive reloads must
+        // therefore serialize with the store-wide hydration build lock: every
+        // stream-scan/legacy lazy build runs under `hydration_build_mutex`
+        // (see ensureGraphHydrated), so holding it here means no build is in
+        // flight while we clear, and no build can start until the reload is
+        // done. Lock ordering (CLAUDE.md tier): hydration_build_mutex is
+        // acquired BEFORE any leaf lock taken inside clear/load below — the
+        // same order the lazy build itself uses; no caller of loadFromFile
+        // holds hydration_build_mutex (catalog/backup/boot/test are all
+        // top-level control paths).
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_build_mutex.lockUncancelable(io);
+        defer self.hydration_build_mutex.unlock(io);
+
         // Reload semantics replace the in-memory compatibility cache with the
         // latest engine-backed state. This keeps repeated loads idempotent and
         // avoids duplicate indexes / adjacency entries.
         self.clearNodes();
         errdefer self.clearNodes();
+        // Reload coherence: `clearNodes` wipes every resident product but NOT
+        // `pending_hydration`, so a graph hydrated before this reload would
+        // stay latched done=true over now-EMPTY products (reads would see an
+        // empty graph forever). RESET the latches (never destroy the entries —
+        // `ensureGraphHydrated` holds entry pointers outside `hydration_mutex`,
+        // so destroying here would be a fresh use-after-free) so the next
+        // first-touch re-hydrates from the engine. Lock nesting
+        // (hydration_build_mutex -> hydration_mutex) matches the established
+        // build-path order (loadOneGraphFromAdapterFull -> markPendingHydration).
+        {
+            self.hydration_mutex.lockUncancelable(io);
+            defer self.hydration_mutex.unlock(io);
+            var pit = self.pending_hydration.iterator();
+            while (pit.next()) |e| {
+                e.value_ptr.*.done.store(false, .release);
+                e.value_ptr.*.failed.store(false, .release);
+            }
+        }
         if (global_adapter) |adapter| {
             try self.loadFromAdapter(adapter);
         }
         // If no adapter (test mode), just start with empty store
+    }
+
+    /// Catalog-recovery registration (T2c SEGV fix, part 2): register ONLY the
+    /// given just-opened graphs for lazy hydration — the non-destructive
+    /// replacement for the catalog's previous blanket `loadFromFile()`, which
+    /// cleared the ENTIRE global node/edge cache (freeing every resident value)
+    /// and re-registered every graph. On a live server that wipe raced the
+    /// in-flight first-touch hydration (use-after-free of batch sub-heap) and
+    /// reset the lazy-hydration state of graphs that were already registered
+    /// or even fully hydrated.
+    ///
+    /// Each name gets the standard PHASE 1b open step
+    /// (`loadOneGraphFromAdapter`: IdMap snapshot load or deferred scan +
+    /// pending-hydration registration) with the same quarantine-and-continue
+    /// policy as the boot path. Graphs that already have a pending-hydration
+    /// entry (i.e. were registered at open, hydrated or not) are SKIPPED —
+    /// their state, resident products, and any in-flight build stay untouched.
+    pub fn registerAdapterGraphsForLazyHydration(
+        self: *GraphStore,
+        graph_names: []const []const u8,
+    ) !void {
+        const adapter = global_adapter orelse return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // Serialize registration against in-flight lazy builds: the open step
+        // mutates store-wide maps (id_maps via getOrCreateIdMap) whose INLINE
+        // values a running build dereferences — a rehash under the build's
+        // feet is the same use-after-move hazard class the reload fix above
+        // closes. Same lock order as the build path (build -> hydration leaf).
+        self.hydration_build_mutex.lockUncancelable(io);
+        defer self.hydration_build_mutex.unlock(io);
+        for (graph_names) |graph_name| {
+            const already_registered = blk: {
+                self.hydration_mutex.lockUncancelable(io);
+                defer self.hydration_mutex.unlock(io);
+                break :blk self.pending_hydration.contains(graph_name);
+            };
+            if (already_registered) continue;
+            self.loadOneGraphFromAdapter(adapter, graph_name) catch |err| {
+                log.err("catalog graph registration failed; quarantining graph and continuing", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                if (self.markPendingHydration(graph_name)) |_| {
+                    self.hydration_mutex.lockUncancelable(io);
+                    defer self.hydration_mutex.unlock(io);
+                    if (self.pending_hydration.get(graph_name)) |hentry| {
+                        hentry.failed.store(true, .release);
+                    }
+                } else |mark_err| {
+                    log.warn("failed to quarantine catalog graph; checkpoint may bless empty snapshots", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(mark_err)),
+                    });
+                }
+                continue;
+            };
+        }
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23

@@ -499,21 +499,30 @@ fn scanProps(
     var wanted: std.AutoHashMapUnmanaged(u64, std.ArrayList(PendingChain)) = .empty;
 
     for (rows, 0..) |*row, ri| {
-        if (row.prop_head == 0) continue;
         if (row.corrupt_skip) continue;
-        const page: u64 = if (gs.prop_store.isSlabHead(row.prop_head))
-            gs.prop_store.slabPageId(row.prop_head)
-        else
-            row.prop_head;
-        const gop = try wanted.getOrPut(allocs.scratch, page);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(allocs.scratch, .{
-            .consumer = .{ .node = ri },
-            .next_page = page,
-            .hops = 0,
-            .saw_internal_id = false,
-            .entries = .empty,
-        });
+        if (row.prop_head != 0) {
+            const page: u64 = if (gs.prop_store.isSlabHead(row.prop_head))
+                gs.prop_store.slabPageId(row.prop_head)
+            else
+                row.prop_head;
+            const gop = try wanted.getOrPut(allocs.scratch, page);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            try gop.value_ptr.append(allocs.scratch, .{
+                .consumer = .{ .node = ri },
+                .next_page = page,
+                .hops = 0,
+                .saw_internal_id = false,
+                .entries = .empty,
+            });
+        }
+        // Edge-prop consumers register INDEPENDENTLY of the node's blob:
+        // a node with prop_head == 0 (no node property blob — reachable once
+        // node public ids move inline and a node carries no user props) can
+        // still own edges WITH property blobs. The pre-fix loop `continue`d
+        // the whole row on prop_head == 0, silently dropping those edges'
+        // property decode (latent data loss; the resident-mode public-id
+        // recovery separately skips such rows in the merge, but non-resident
+        // scans and edge props must not depend on the NODE blob's presence).
         if (opts.include_edges) {
             for (row.edges, 0..) |er, ei| {
                 if (er.entry.prop_head == 0) continue;
@@ -530,8 +539,6 @@ fn scanProps(
             }
         }
     }
-    // Edge consumers for rows whose NODE blob is on a shared slab page but
-    // which themselves were registered above; nothing else to add.
 
     // Multi-round ascending sweep: each round reads the currently-wanted
     // pages in ascending order; legacy chain continuations enqueue the next

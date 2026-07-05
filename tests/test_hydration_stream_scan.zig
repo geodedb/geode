@@ -1142,3 +1142,145 @@ test "T2c poisoned gate: merge failure with gate-blocked workers joins all threa
         graph_store.deinitGlobalStoreForTestCrash();
     }
 }
+
+// ============================================================================
+// T2c SEGV root-cause regression — destructive reload vs in-flight merge
+// ============================================================================
+//
+// At-scale failure (three captured crashes on the 368 GB / 14.27M store, all
+// ~100-105 s in): the FIRST catalog-touching message on a live connection ran
+// the catalog's lazy init, whose `Catalog.load` called the global store's
+// `loadFromFile()` — whose first act is `clearNodes()`: an inline
+// `freeNodeValue` of EVERY resident + retired cache Node. The streaming
+// hydration triggered by the first query was mid-merge on another thread,
+// holding FamilyPipeline batches of SHALLOW Node copies whose label/property
+// sub-heap is shared with exactly those resident entries. The families then
+// read freed memory: ReleaseSafe caught it as a wyhash SEGV (labels family) /
+// integer-overflow panic (merge family reading a freed CompactPropertyMap);
+// ReleaseFast crashed at 1 min 44 s twice. gdb evidence: freeNodeValue
+// backtraces through catalog.Catalog.load -> GraphStore.loadFromFile ->
+// clearNodes landing between the merge's beforeShard(0) and the family joins.
+//
+// THE INVARIANT (encoded here at unit scale): a destructive store reload
+// (`loadFromFile`) must SERIALIZE with the store-wide hydration build lock —
+// it may run before or after a first-touch hydration build, never inside it.
+
+test "loadFromFile during an in-flight pipelined stream-scan merge serializes (no use-after-free)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 4_000;
+    try buildGateStore(allocator, data_dir, N, false);
+
+    // 16-way scan + slow merge stretches the phase-A merge across >= 400 ms
+    // (16 shards x 25 ms), guaranteeing the reload poker below lands INSIDE
+    // the build window on every run.
+    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+    _ = setenv("GEODE_HYDRATION_INFLIGHT_SHARDS", "2", 1);
+    defer {
+        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+        _ = unsetenv("GEODE_HYDRATION_INFLIGHT_SHARDS");
+    }
+    graph_store.setTestHydrationMergeDelayMs(25);
+    defer graph_store.setTestHydrationMergeDelayMs(null);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        // Reload poker: the catalog-lazy-init stand-in. Fires ~120 ms into
+        // the slow merge; pre-fix it cleared the node cache mid-build and the
+        // family threads crashed on their freed batch sub-heap (the at-scale
+        // SEGV, which IS this test's red — see the header note). Post-fix it
+        // blocks on hydration_build_mutex until the build completes.
+        const Poker = struct {
+            store: *GraphStore,
+            err: ?anyerror = null,
+            fn run(p: *@This()) void {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 120 * std.time.ns_per_ms };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                p.store.loadFromFile() catch |e| {
+                    p.err = e;
+                };
+            }
+        };
+        var poker = Poker{ .store = store };
+        const poker_thread = try std.Thread.spawn(.{}, Poker.run, .{&poker});
+
+        // First touch: drive the slow-merge streaming BUILD directly (no
+        // post-build index read on this thread — reader-vs-reload is the
+        // separate, pre-existing loadFromFile contract; this test pins the
+        // BUILD-vs-reload serialization the at-scale crash violated). The
+        // poker fires ~120 ms into the >=400 ms build: pre-fix its clearNodes
+        // freed the family batches' sub-heap mid-build (the crash); post-fix
+        // it blocks on hydration_build_mutex until the build returns.
+        store.ensureGraphHydrated(GRAPH);
+        const scans_after_build = graph_store.hydrationStreamingScanCount();
+        try testing.expect(scans_after_build >= 1);
+
+        // The reload strictly follows the build.
+        poker_thread.join();
+        try testing.expect(poker.err == null);
+
+        // The serialized reload wiped the products and reset the lazy-
+        // hydration latches, so a read re-hydrates cleanly from the engine
+        // and still sees every node — an ordered wipe, never a mid-build one.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= scans_after_build);
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
+
+test "registerAdapterGraphsForLazyHydration skips registered graphs (catalog init must not reset hydration)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 500;
+    try buildGateStore(allocator, data_dir, N, false);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+
+        // First touch hydrates via the streaming scan.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        const scans_after_hydration = graph_store.hydrationStreamingScanCount();
+        const rows_after_hydration = graph_store.loop2ScanNodeCount();
+        try testing.expect(scans_after_hydration >= 1);
+
+        // Catalog-recovery registration with an ALREADY-registered graph must
+        // be a no-op: hydration state, resident products, and counters stay
+        // untouched (the pre-fix blanket loadFromFile wiped and re-deferred
+        // everything here).
+        const names = [_][]const u8{GRAPH};
+        try store.registerAdapterGraphsForLazyHydration(&names);
+
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        try testing.expectEqual(scans_after_hydration, graph_store.hydrationStreamingScanCount());
+        try testing.expectEqual(rows_after_hydration, graph_store.loop2ScanNodeCount());
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
