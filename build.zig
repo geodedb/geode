@@ -7750,6 +7750,23 @@ pub fn build(b: *std.Build) void {
     const hydration_stream_step = b.step("test-hydration-stream-scan", "GAP hydration fast-scan: streaming loop2 parity + >=20x throughput floor");
     hydration_stream_step.dependOn(&run_hydration_stream_tests.step);
 
+    // GAP (write-path OOM, 2026-07-04): engine-direct point writes (exact-index
+    // seek -> durable store property write) + legacy write-executor working-set
+    // budget (GEODE_WRITE_EXECUTOR_BUDGET_MB). Routing-table + budget-abort +
+    // durability coverage.
+    const point_write_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_point_write_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    point_write_test_mod.addImport("geode", root_mod);
+    const point_write_tests = b.addTest(.{ .root_module = point_write_test_mod });
+    const run_point_write_tests = b.addRunArtifact(point_write_tests);
+    shardDep(test_step, &run_point_write_tests.step, 1, test_shard_loads, test_shard_index);
+    const point_write_step = b.step("test-point-write-fastpath", "Engine-direct point writes + legacy write-executor budget (routing table, budget abort, durability)");
+    point_write_step.dependOn(&run_point_write_tests.step);
+
     // TSan companion: same lazy-hydrate test file compiled with -fsanitize-thread
     // so the "hydrate A || read B" cross-graph hydration race (CWE-362 on the
     // shared `nodes_by_graph` / `label_index` outer maps) runs under the thread

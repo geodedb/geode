@@ -40,6 +40,27 @@ pub fn resetOrderedScanFastPathHits() void {
     g_ordered_scan_fastpath_hits.store(0, .monotonic);
 }
 
+// GAP (write-path OOM, 2026-07-04): path counters for the ENGINE-DIRECT point
+// write vs the LEGACY materializing write scan. `pointWriteFastPath` bumps the
+// first when it SERVES a write (including the authoritative 0-match empty);
+// `executeMatchQueryImpl` bumps the second when a write-carrying (SET/REMOVE)
+// query proceeds into the legacy candidate scan after the fast path declined.
+// Tests assert the routing table on these (RED: legacy moves, engine-direct 0).
+var g_point_write_fastpath_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getPointWriteFastPathTotal() u64 {
+    return g_point_write_fastpath_total.load(.monotonic);
+}
+pub fn resetPointWriteFastPathTotal() void {
+    g_point_write_fastpath_total.store(0, .monotonic);
+}
+var g_legacy_write_scan_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getLegacyWriteScanTotal() u64 {
+    return g_legacy_write_scan_total.load(.monotonic);
+}
+pub fn resetLegacyWriteScanTotal() void {
+    g_legacy_write_scan_total.store(0, .monotonic);
+}
+
 const match_log = std.log.scoped(.match_ops);
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
@@ -1400,6 +1421,33 @@ pub fn propertyAggregateFastPath(
 //   - no active RLS policy for an authenticated user (per-row policy would need
 //     materialization) — falls through so `passesRLSFilter` runs per node.
 // Tenant filtering IS honoured per slot, identically to the aggregate path.
+// GAP (write-path OOM, 2026-07-04): ENGINE-DIRECT point writes.
+// Covered shape (everything else falls through to the legacy path UNCHANGED):
+//   MATCH (n:L) WHERE n.<indexed> = '<ascii-string-lit>'
+//       SET n.k = <lit> [, n.k2 = <lit> ...] / REMOVE n.k [, ...]
+//       [RETURN <exprs over n>]
+// Resolution mirrors the READ path's exact-index seek (seekIndexedCandidates /
+// countFilteredFastPath): posting probe -> candidate slots -> per-candidate
+// eval-parity re-verify -> slot->node-id via the IdMap -> durable store write
+// via the SAME property_mutation helpers the legacy loop uses. RED-phase stub:
+// implementation lands after the failing tests are recorded.
+pub fn pointWriteFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !?ExecutionResult {
+    _ = allocator;
+    _ = q;
+    _ = filter_graph;
+    _ = filter_tenant;
+    _ = param_names;
+    _ = param_values;
+    return null;
+}
+
 pub fn countFilteredFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -7396,6 +7444,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
+
+    // GAP (write-path OOM, 2026-07-04): route the covered single-node indexed-
+    // equality point-write shapes ENGINE-DIRECT (exact-index seek + durable
+    // store property APIs) before the legacy candidate scan below materializes
+    // O(label). Uncovered shapes fall through UNCHANGED (and are metered by the
+    // write-executor working-set budget installed in executeQueryWithContext).
+    // Placed AFTER the cluster gate (executeLegacyQueryWithResolvedParams runs
+    // executeClusterMatchUpdateIfNeeded before dispatching here), so cluster
+    // writes are already replicated/rejected and never reach this fast path.
+    if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) {
+        if (try pointWriteFastPath(allocator, q, filter_graph, filter_tenant, param_names, param_values)) |fast_result| {
+            return fast_result;
+        }
+        // Fast path declined: this write-carrying query proceeds into the
+        // legacy materializing scan (routing-table test signal).
+        _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
+    }
 
     // Extract pattern information from MATCH using helper function
     const pattern_info = extractPatternInfo(q);
