@@ -40,7 +40,33 @@ pub fn resetOrderedScanFastPathHits() void {
     g_ordered_scan_fastpath_hits.store(0, .monotonic);
 }
 
+// GAP (write-path OOM, 2026-07-04): path counters for the ENGINE-DIRECT point
+// write vs the LEGACY materializing write scan. `pointWriteFastPath` bumps the
+// first when it SERVES a write (including the authoritative 0-match empty);
+// `executeMatchQueryImpl` bumps the second when a write-carrying (SET/REMOVE)
+// query proceeds into the legacy candidate scan after the fast path declined.
+// Tests assert the routing table on these (RED: legacy moves, engine-direct 0).
+var g_point_write_fastpath_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getPointWriteFastPathTotal() u64 {
+    return g_point_write_fastpath_total.load(.monotonic);
+}
+pub fn resetPointWriteFastPathTotal() void {
+    g_point_write_fastpath_total.store(0, .monotonic);
+}
+var g_legacy_write_scan_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getLegacyWriteScanTotal() u64 {
+    return g_legacy_write_scan_total.load(.monotonic);
+}
+pub fn resetLegacyWriteScanTotal() void {
+    g_legacy_write_scan_total.store(0, .monotonic);
+}
+
 const match_log = std.log.scoped(.match_ops);
+// GAP (write-path OOM, 2026-07-04): working-set budget for write-carrying
+// legacy scans. `write_budget.check()` is a no-op unless the dispatcher
+// installed a scope (write-carrying MATCH shapes only), so read queries pay a
+// threadlocal load + branch per candidate at most.
+const write_budget = @import("../write_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
 const property_value_codec = @import("../property_value_codec.zig");
@@ -1400,6 +1426,288 @@ pub fn propertyAggregateFastPath(
 //   - no active RLS policy for an authenticated user (per-row policy would need
 //     materialization) — falls through so `passesRLSFilter` runs per node.
 // Tenant filtering IS honoured per slot, identically to the aggregate path.
+// GAP (write-path OOM, 2026-07-04): ENGINE-DIRECT point writes.
+//
+// Incident: ONE `MATCH (n:Taxon) WHERE n.source_id='X' SET n.p='v'` on the
+// 14.27M store ran the legacy executor's O(label) candidate scan (getNodesByLabels
+// posting + per-candidate getNodePtrForScan materialization + WHERE eval),
+// 50+ min, RSS 82 -> 86.4 G, OOM killer took the server. The READ half of this
+// exact shape has been an exact-index SEEK for months (node_scan_stream
+// seekIndexedCandidates / countFilteredFastPath); the WRITE half had no seek.
+//
+// Covered shape (EVERYTHING else falls through to the legacy path UNCHANGED,
+// where the write-executor working-set budget now bounds it):
+//
+//   MATCH (n:L) WHERE n.<indexed> = '<seekable-ascii-string-lit>'
+//       SET n.k = <literal> [, n.k2 = <literal> ...] and/or REMOVE n.k [, ...]
+//       [RETURN <exprs over n>] [LIMIT k>=1]
+//
+// ROUTING TABLE (gates, in order — each miss = legacy):
+//   * single MATCH chain, head-only (no hops), non-optional, no path var
+//   * exactly ONE label, NO inline props, named variable
+//   * no UNWIND/CREATE/DELETE/MERGE/CALL/chained query/FOR/CTE/initial-CALL
+//   * no WITH / FILTER / GROUP BY / HAVING / ORDER BY / DISTINCT
+//   * no OFFSET, no LIMIT/OFFSET params, LIMIT absent or >= 1
+//   * RETURN absent, or present without aggregation
+//   * WHERE is exactly `n.<key> = <string literal>` (either operand order),
+//     where the key passes the exact-index completeness gate
+//     (graph_store.shouldIndexProperty — identical to the READ seek) and the
+//     literal passes the seek-exactness gate (seekableAsciiStringEq: pure
+//     ASCII, non-bool, non-numeric — the NFC / cross-type-coercion soundness
+//     argument, see that fn's doc)
+//   * every SET clause is `.Property` on the matched var with a LITERAL value
+//     (SET n:Label and SET n = {...} fall through; `+=` is not geode GQL)
+//   * every REMOVE clause is `.Property` on the matched var
+//   * RLS inactive for this session (countFastPathRlsAllowed — same gate as
+//     every read fast path); ANY tenant scope (incl. hierarchy) falls through
+//   * exact-index posting for (label,key,value) is <= 1 (a POINT write; a
+//     multi-match indexed equality keeps legacy row-order/semantics)
+//   * candidate slot resolves to a store node id via the IdMap (or the
+//     persisted public-id property) — an unresolvable mapping falls through
+//     BEFORE any write is applied
+//
+// Resolution mirrors the READ seek: posting probe
+// (countCandidateNodesByLabelAndProperty) -> candidate slots
+// (getCandidateNodesByLabelAndProperty) -> per-candidate eval-parity re-verify
+// (compareStoragePvLit — tolerates raw-hash collisions) -> slot -> node id via
+// the IdMap -> durable write via the SAME property_mutation helpers the legacy
+// loop uses (setNodePropertyFromValue / removeNodeProperty, which route through
+// the P3-C3 hydrate-on-miss store.setNodeProperty / store.removeNodeProperty:
+// adapter write + merge/exact index upkeep + FLE + FTS + WAL notify). Result
+// rows are built exactly like the legacy loop (bind node ptr, eval RETURN
+// items / single-column node row), so covered results are byte-parity.
+//
+// A 0-candidate seek is AUTHORITATIVE empty (index completeness per
+// shouldIndexProperty) — served engine-direct with zero writes.
+//
+// LOCKING: on the server path mutations hold the per-graph EXCLUSIVE lock
+// (acquired by the transport handler before executeProgramWithContext);
+// store.setNodeProperty/removeNodeProperty require exactly that — identical to
+// the legacy loop this replaces. CLUSTER: executeLegacyQueryWithResolvedParams
+// runs executeClusterMatchUpdateIfNeeded BEFORE dispatching to
+// executeMatchQueryImpl, so replicated/rejected cluster writes never reach
+// this fast path.
+pub fn pointWriteFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.optional_match) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // --- Shape gates on clauses ---
+    if (q.unwind_clause != null) return null;
+    if (q.create_pattern != null) return null;
+    if (q.delete_items.len != 0) return null;
+    if (q.merge_statement != null) return null;
+    if (q.call_clause != null) return null;
+    if (q.next_query != null) return null;
+    if (q.for_statement != null) return null;
+    if (q.initial_call_subquery != null) return null;
+    if (q.cte_list != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.ret.distinct) return null;
+    if (q.offset != null) return null;
+    if (q.limit_param != null) return null;
+    if (q.offset_param != null) return null;
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+    const items = q.ret.items;
+    if (items.len > 0 and returnItemsHaveAggregation(items)) return null;
+
+    // --- Write clauses: literal .Property SETs / .Property REMOVEs on n ---
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0) return null;
+    for (q.set_clauses) |sc| {
+        switch (sc) {
+            .Property => |prop| {
+                if (!std.mem.eql(u8, prop.target.object, match_var)) return null;
+                if (extractLiteral(prop.value) == null) return null;
+            },
+            else => return null, // SET n:Label / SET n = {...} -> legacy
+        }
+    }
+    for (q.remove_clauses) |rc| {
+        switch (rc) {
+            .Property => |pa| {
+                if (!std.mem.eql(u8, pa.object, match_var)) return null;
+            },
+            else => return null, // REMOVE n:Label -> legacy
+        }
+    }
+
+    // --- WHERE: exactly one seek-exact indexed string equality ---
+    const where = q.where_clause orelse return null;
+    const where_pred: SimpleWhere = extractSimpleWhere(where, match_var) orelse return null;
+    const seek_str = seekableAsciiStringEq(where_pred) orelse return null;
+
+    // --- Session gates: RLS / tenant scope fall through to the legacy path
+    // (which applies passesRLSFilter / passesTenantFilter per candidate) ---
+    if (!countFastPathRlsAllowed()) return null;
+    if (filter_tenant != null) return null;
+
+    // --- Exact-index seek (the READ path's machinery) ---
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+    const seek_pv = graph_store.PropertyValue{ .String = seek_str };
+
+    // POINT gate: at most one posting entry. The count probe triggers the same
+    // ensureExactNodePropertyIndexBuilt hook the read seeks rely on, so an
+    // H4-deferred index is built before the first probe (never observed empty).
+    const posting_len = adapter.countCandidateNodesByLabelAndProperty(
+        filter_graph,
+        head.labels[0],
+        where_pred.key,
+        seek_pv,
+    ) catch return null;
+    if (posting_len > 1) return null; // multi-match: not a point write
+
+    const candidates = adapter.getCandidateNodesByLabelAndProperty(
+        filter_graph,
+        head.labels[0],
+        where_pred.key,
+        seek_pv,
+        allocator,
+    ) catch return null;
+    defer allocator.free(candidates);
+
+    // Re-verify each candidate with the SAME eval-parity comparison the read
+    // fast paths use (raw-hash collision tolerance). With the posting gate
+    // above this is 0 or 1 candidates; keep the loop defensive.
+    var matched_slot: ?u64 = null;
+    for (candidates) |slot_id| {
+        const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+        defer switch (w_val) {
+            .string => |s| allocator.free(s),
+            else => {},
+        };
+        if (!compareStoragePvLit(w_val, where_pred.op, where_pred.lit)) continue;
+        if (matched_slot != null) return null; // >1 verified match: legacy (nothing written yet)
+        matched_slot = slot_id;
+    }
+
+    const store = graph_store.getWritableGlobalStore(allocator);
+
+    if (matched_slot == null) {
+        // Authoritative empty (index complete for the key): zero rows, zero
+        // writes — mirror the legacy empty-result shape exactly.
+        const columns: [][]const u8 = if (items.len > 0)
+            try generateUniqueColumnNames(allocator, items)
+        else blk: {
+            const cols = try allocator.alloc([]const u8, 1);
+            cols[0] = try allocator.dupe(u8, match_var);
+            break :blk cols;
+        };
+        _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]Value, 0),
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
+    // --- Resolve slot -> store node id (IdMap first, persisted public-id
+    // fallback). Unresolvable -> legacy, BEFORE any write. ---
+    const slot = matched_slot.?;
+    const node_id: u64 = blk: {
+        if (store.getIdMap(filter_graph)) |im| {
+            if (im.nodeUuid(slot)) |uuid_128| break :blk @as(u64, @truncate(uuid_128));
+        }
+        const stored = adapter.getNodeProperty(filter_graph, slot, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null;
+        if (stored) |sp| {
+            defer switch (sp) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            switch (sp) {
+                .string => |text| {
+                    if (graph_store.parsePersistedPublicId(text)) |pid| break :blk pid;
+                },
+                .int => |n| {
+                    if (n >= 0) break :blk @as(u64, @intCast(n));
+                },
+                else => {},
+            }
+        }
+        return null;
+    };
+
+    // Hydrate the node body (P3-C3 discipline; write path — the per-graph
+    // EXCLUSIVE lock is held on the server path, same as the store APIs
+    // require). Unresolvable -> legacy, still before any write.
+    const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+
+    // --- Apply writes via the SAME helpers the legacy loop uses (durable
+    // adapter write + index/FLE/FTS/WAL side effects), in clause order. ---
+    for (q.set_clauses) |sc| {
+        const prop = sc.Property; // gated above
+        const value = litToValue(extractLiteral(prop.value).?);
+        try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
+    }
+    for (q.remove_clauses) |rc| {
+        const pa = rc.Property; // gated above
+        property_mutation.removeNodeProperty(store, node_ptr, pa.property);
+    }
+
+    // --- Build the result exactly like the legacy loop ---
+    var rows = try allocator.alloc([]Value, 1);
+    errdefer allocator.free(rows);
+    var columns: [][]const u8 = undefined;
+    if (items.len == 0) {
+        // No RETURN: one row binding the matched variable (legacy shape).
+        columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, match_var);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Node = node_ptr };
+        rows[0] = row;
+    } else {
+        columns = try generateUniqueColumnNames(allocator, items);
+        // Mirror the legacy env exactly (heap arrays, owned): eval.withBinding
+        // may take ownership during pattern-comprehension evaluation.
+        const env_names = try allocator.alloc([]const u8, 1);
+        const env_values = try allocator.alloc(Value, 1);
+        env_names[0] = match_var;
+        env_values[0] = Value{ .Node = node_ptr };
+        const env = Env{
+            .names = env_names,
+            .values = env_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+            .owned = true,
+        };
+        const row = try allocator.alloc(Value, items.len);
+        for (items, 0..) |item, i| {
+            row[i] = try eval.evalExpr(allocator, item.expr, env);
+        }
+        rows[0] = row;
+    }
+
+    _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 pub fn countFilteredFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -7397,6 +7705,27 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
 
+    // GAP (write-path OOM, 2026-07-04): route the covered single-node indexed-
+    // equality point-write shapes ENGINE-DIRECT (exact-index seek + durable
+    // store property APIs) before the legacy candidate scan below materializes
+    // O(label). Uncovered shapes fall through UNCHANGED (and are metered by the
+    // write-executor working-set budget installed in executeQueryWithContext).
+    // Placed AFTER the cluster gate (executeLegacyQueryWithResolvedParams runs
+    // executeClusterMatchUpdateIfNeeded before dispatching here), so cluster
+    // writes are already replicated/rejected and never reach this fast path.
+    // Inline LET bindings extend the legacy env/columns — those queries are
+    // never attempted engine-direct.
+    if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) {
+        if (inline_let_bindings.len == 0) {
+            if (try pointWriteFastPath(allocator, q, filter_graph, filter_tenant, param_names, param_values)) |fast_result| {
+                return fast_result;
+            }
+        }
+        // Fast path declined: this write-carrying query proceeds into the
+        // legacy materializing scan (routing-table test signal).
+        _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
+    }
+
     // Extract pattern information from MATCH using helper function
     const pattern_info = extractPatternInfo(q);
     const match_variable = pattern_info.match_variable;
@@ -7531,6 +7860,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // (silently drops evicted/cold rows on a bounded cache).
                 var left_iter = store.iterateNodesInGraph(filter_graph);
                 while (left_iter.next()) |left_node| {
+                    // GAP (write-path OOM): abort a write-carrying scan cleanly
+                    // once the working-set budget is exceeded (no-op otherwise).
+                    try write_budget.check();
                     // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -8191,6 +8523,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // (silently drops evicted/cold rows on a bounded cache).
                 var left_iter = store.iterateNodesInGraph(filter_graph);
                 while (left_iter.next()) |left_node| {
+                    // GAP (write-path OOM): abort a write-carrying scan cleanly
+                    // once the working-set budget is exceeded (no-op otherwise).
+                    try write_budget.check();
                     // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -8612,6 +8947,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // resident-only iteration dropped evicted/cold rows silently.
             var node_iter = store.iterateNodesInGraph(filter_graph);
             while (node_iter.next()) |node| {
+                // GAP (write-path OOM): budget poll (no-op without a scope).
+                try write_budget.check();
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
@@ -9453,11 +9790,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // — resident-only iteration dropped evicted/cold rows.
                 var left_iter = store.iterateNodesInGraph(filter_graph);
                 while (left_iter.next()) |left_node_ptr| {
+                    // GAP (write-path OOM): the collection pass itself
+                    // materializes detached boxes per cold node — poll the
+                    // budget here too (no-op without a scope).
+                    try write_budget.check();
                     try left_nodes_to_process.append(allocator, left_node_ptr);
                 }
             }
 
             for (left_nodes_to_process.items) |left_node| {
+                // GAP (write-path OOM): budget poll (no-op without a scope).
+                try write_budget.check();
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
@@ -9619,6 +9962,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var full_iter = store.iterateNodesInGraph(filter_graph);
             var cand_idx: usize = 0;
             while (true) {
+                // GAP (write-path OOM, 2026-07-04): THE incident loop — a
+                // write-carrying single-node MATCH walks every label candidate
+                // here, materializing detached boxes + env/eval scratch per
+                // candidate. Poll the working-set budget BETWEEN candidates
+                // (before this candidate's mutation is applied): per-node
+                // atomicity at abort, and the OOM killer is never the arbiter.
+                // No-op when no budget scope is installed (read queries).
+                try write_budget.check();
                 const node: *graph_store.Node = if (use_label_candidates) blk: {
                     if (cand_idx >= simple_node_candidates.items.len) break;
                     const nid = simple_node_candidates.items[cand_idx];

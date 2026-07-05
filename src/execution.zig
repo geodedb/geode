@@ -218,6 +218,12 @@ pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfig
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
 pub const getOrderedScanFastPathHits = match_operations.getOrderedScanFastPathHits;
 pub const resetOrderedScanFastPathHits = match_operations.resetOrderedScanFastPathHits;
+// GAP (write-path OOM, 2026-07-04): engine-direct point-write vs legacy
+// write-scan path counters (routing-table test signals).
+pub const getPointWriteFastPathTotal = match_operations.getPointWriteFastPathTotal;
+pub const resetPointWriteFastPathTotal = match_operations.resetPointWriteFastPathTotal;
+pub const getLegacyWriteScanTotal = match_operations.getLegacyWriteScanTotal;
+pub const resetLegacyWriteScanTotal = match_operations.resetLegacyWriteScanTotal;
 
 // Re-export statement handler functions for backward compatibility (M1 Phase 7 extraction)
 pub const executeShow = statement_handlers.executeShow;

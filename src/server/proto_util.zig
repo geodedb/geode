@@ -188,6 +188,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.Timeout => .{ .code = "08006", .message = "Timeout: cluster write outcome unknown — the entry may have committed but local apply could not be confirmed in time; retry ONLY with an idempotency key" },
         error.ClusterNotLeader => .{ .code = "40001", .message = "ClusterNotLeader: cluster write not applied here — this node is not the leader; retry against the current leader" },
         error.ClusterWriteNotReplicable => .{ .code = "40001", .message = "ClusterWriteNotReplicable: cluster write not applied here — the leader could not replicate this write shape; retry against the current leader" },
+        // GAP (write-path OOM, 2026-07-04): the legacy write-carrying MATCH
+        // executor aborted because its materialization working set crossed the
+        // configured budget — a loud, clean refusal instead of the OOM killer.
+        // 53200 = SQLSTATE out_of_memory (class 53, insufficient resources).
+        error.WriteQueryBudgetExceeded => .{ .code = "53200", .message = "WriteQueryBudgetExceeded: this write query's working set exceeded GEODE_WRITE_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. Aborted BETWEEN row mutations: rows already written remain applied (no statement-level rollback in autocommit). Narrow the MATCH (single-node indexed-equality point writes run engine-direct) or raise the budget" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

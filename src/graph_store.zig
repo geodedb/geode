@@ -20,6 +20,10 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 }
 
 const fle_integration = @import("fle_integration.zig");
+// GAP (write-path OOM, 2026-07-04): working-set budget hooks for the legacy
+// write executor. `chargeStoreBytes` is a no-op unless the query dispatcher
+// installed a thread-local budget scope (write-carrying MATCH shapes only).
+const write_budget = @import("write_budget.zig");
 const id_map_mod = @import("storage/id_map.zig");
 const hydration_snapshot = @import("storage/hydration_snapshot.zig");
 const uuid = @import("uuid");
@@ -2729,7 +2733,33 @@ pub const GraphStore = struct {
             mut.allocator.destroy(box);
             return null;
         };
+        // GAP (write-path OOM, 2026-07-04): detached boxes live until the
+        // per-graph grace boundary — for a write-carrying O(label) scan on a
+        // cold store this is exactly the unbounded resident growth that OOM'd
+        // the box (82 -> 86.4 G). Charge the adoption against the active
+        // write-executor budget scope (thread-local; no-op for read queries /
+        // other threads). COARSE accounting by design: struct + name/label
+        // bytes + per-property entry overhead + string payloads.
+        write_budget.chargeStoreBytes(approxDetachedNodeBytes(box));
         return box;
+    }
+
+    /// Coarse per-box working-set estimate for the write-executor budget
+    /// (page-granularity precision is acceptable — this feeds a tripwire, not
+    /// an accounting ledger).
+    fn approxDetachedNodeBytes(node: *const Node) u64 {
+        var total: u64 = @sizeOf(Node) + node.graph_name.len;
+        for (node.labels) |l| total += l.len + @sizeOf([]const u8);
+        var it = node.properties.iterator();
+        while (it.next()) |entry| {
+            total += 64; // entry + key/value boxing overhead (coarse)
+            total += entry.key_ptr.len;
+            total += switch (entry.value_ptr.*) {
+                .String => |s| s.len,
+                else => @as(u64, 16),
+            };
+        }
+        return total;
     }
 
     /// Free the detached scan boxes belonging to `graph_name`. MUST only be
