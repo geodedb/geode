@@ -1178,33 +1178,6 @@ test "T2c poisoned gate: merge failure with gate-blocked workers joins all threa
 
 test "loadFromFile during an in-flight pipelined stream-scan merge serializes (no use-after-free)" {
     const allocator = testing.allocator;
-// C-1 — checkpoint grace window vs in-flight hydration merge (reclaim gate)
-// ============================================================================
-//
-// T2b adversarial-review Critical: the merge's family threads read shallow
-// Node copies whose sub-heaps are owned by the bounded node cache; at scale
-// the merge core's own cache puts EVICT one shard's worth of nodes per shard,
-// landing their bodies on the graph's retire list while the family threads
-// are still reading them one shard behind. Hydration holds only entry.mutex +
-// hydration_build_mutex — NEVER mg.rwlock — so ANY checkpoint (write cadence
-// on any graph, explicit, WAL hook, clean shutdown) acquires the hydrating
-// graph's FREE rwlock and, pre-fix, unconditionally reclaimed those retired
-// bodies mid-merge: a use-after-free whose garbage the persist-on-complete
-// path then blesses as durable products.
-//
-// Mechanism contract (the UAF itself is not deterministically observable):
-//   * a checkpoint fired while the hydration is IN FLIGHT must SKIP the
-//     graph's retired-cache reclaims (skip counter >= 1), and the hydration
-//     products must come out correct;
-//   * a checkpoint fired AFTER hydration completes must reclaim again (skip
-//     counter unchanged) — the RSS bound survives, the gate is precise.
-//
-// RED (pre-gate): the mid-merge checkpoint runs the reclaims (skips == 0 for
-// the whole hydration) — under the small cache cap below it frees node
-// bodies the family threads are actively reading.
-test "C-1 reclaim gate: mid-merge checkpoint skips the hydrating graph's retired-cache reclaim; post-hydration checkpoint reclaims again" {
-    const allocator = testing.allocator;
-    const adapter_mod = geode.graph_storage_adapter;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
     _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
@@ -1276,6 +1249,128 @@ test "C-1 reclaim gate: mid-merge checkpoint skips the hydrating graph's retired
         // and still sees every node — an ordered wipe, never a mid-build one.
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
         try testing.expect(graph_store.hydrationStreamingScanCount() >= scans_after_build);
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
+
+// ============================================================================
+// C-1 — checkpoint grace window vs in-flight hydration merge (reclaim gate)
+// ============================================================================
+//
+// T2b adversarial-review Critical: the merge's family threads read shallow
+// Node copies whose sub-heaps are owned by the bounded node cache; at scale
+// the merge core's own cache puts EVICT one shard's worth of nodes per shard,
+// landing their bodies on the graph's retire list while the family threads
+// are still reading them one shard behind. Hydration holds only entry.mutex +
+// hydration_build_mutex — NEVER mg.rwlock — so ANY checkpoint (write cadence
+// on any graph, explicit, WAL hook, clean shutdown) acquires the hydrating
+// graph's FREE rwlock and, pre-fix, unconditionally reclaimed those retired
+// bodies mid-merge: a use-after-free whose garbage the persist-on-complete
+// path then blesses as durable products.
+//
+// Mechanism contract (the UAF itself is not deterministically observable):
+//   * a checkpoint fired while the hydration is IN FLIGHT must SKIP the
+//     graph's retired-cache reclaims (skip counter >= 1), and the hydration
+//     products must come out correct;
+//   * a checkpoint fired AFTER hydration completes must reclaim again (skip
+//     counter unchanged) — the RSS bound survives, the gate is precise.
+//
+// RED (pre-gate): the mid-merge checkpoint runs the reclaims (skips == 0 for
+// the whole hydration) — under the small cache cap below it frees node
+// bodies the family threads are actively reading.
+test "C-1 reclaim gate: mid-merge checkpoint skips the hydrating graph's retired-cache reclaim; post-hydration checkpoint reclaims again" {
+    const allocator = testing.allocator;
+    const adapter_mod = geode.graph_storage_adapter;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    // FULL checkpoint: the reopen adopts the IdMap snapshot and DEFERS
+    // hydration to first touch (hooks armed between open and touch); deleting
+    // the loop2 snapshots forces that first touch onto the streaming rebuild.
+    const N: usize = 4_000;
+    try buildGateStore(allocator, data_dir, N, true);
+    try deleteHydrationSnapshots(allocator, data_dir);
+
+    // Small resident node-cache cap (256 << N): the merge core's cache puts
+    // EVICT earlier rows mid-merge, so the graph's retire list is NON-EMPTY
+    // exactly while the family threads may still be reading the batch copies
+    // — the C-1 hazard state. The slow merge (25 ms/shard) opens a wide
+    // window for the checkpoint below to land mid-merge.
+    _ = setenv("GEODE_NODE_CACHE_ENTRIES", "256", 1);
+    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+    defer {
+        _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
+        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+    }
+    graph_store.setTestHydrationMergeDelayMs(25);
+    defer graph_store.setTestHydrationMergeDelayMs(null);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        adapter_mod.resetHydrationReclaimSkipsForTesting();
+        const store = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        const Touch = struct {
+            store: *GraphStore,
+            count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+            done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+            fn run(t: *@This()) void {
+                const c = t.store.countNodesByLabel(GRAPH, "Taxon", null);
+                t.count.store(@intCast(c), .release);
+                t.done.store(true, .release);
+            }
+        };
+        var touch = Touch{ .store = store };
+        const th = try std.Thread.spawn(.{}, Touch.run, .{&touch});
+
+        // Wait until the merge is genuinely consuming rows (well past the
+        // 256-entry cache cap, so evictions have retired node bodies) but
+        // far from done, then fire full checkpoints — the exact
+        // write-cadence/explicit/shutdown window the review flagged. The
+        // retry loop closes the race where the merge finishes between the
+        // row poll and the checkpoint reaching this graph.
+        var spins: usize = 0;
+        while (graph_store.loop2ScanNodeCount() < 300 and spins < 20_000) : (spins += 1) {
+            sleepMs(1);
+        }
+        try testing.expect(graph_store.loop2ScanNodeCount() >= 300);
+
+        var skips_mid: u64 = 0;
+        while (skips_mid == 0 and !touch.done.load(.acquire)) {
+            try adapter.checkpointAll();
+            skips_mid = adapter_mod.getHydrationReclaimSkipsForTesting();
+        }
+
+        th.join();
+        try testing.expect(touch.done.load(.acquire));
+
+        // MECHANISM: at least one checkpoint hit the hydrating graph while
+        // its build was unfinished and SKIPPED the retired-cache reclaim.
+        // RED pre-gate: the reclaims ran unconditionally -> skips == 0.
+        try testing.expect(skips_mid >= 1);
+
+        // PRODUCTS: hydration completed correctly under the mid-merge
+        // checkpoint (the whole point — no garbage, no quarantine).
+        try testing.expectEqual(@as(u64, N), touch.count.load(.acquire));
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+
+        // PRECISION: once hydration is DONE the gate must NOT fire — a
+        // post-hydration checkpoint reclaims again (the RSS bound survives).
+        const skips_before = adapter_mod.getHydrationReclaimSkipsForTesting();
+        try adapter.checkpointAll();
+        try testing.expectEqual(skips_before, adapter_mod.getHydrationReclaimSkipsForTesting());
 
         graph_store.deinitGlobalStoreForTestCrash();
     }
@@ -1356,23 +1451,6 @@ test "light checkpoint during an in-flight merge skips cache reclaim (no use-aft
         _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
         _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
         _ = unsetenv("GEODE_HYDRATION_INFLIGHT_SHARDS");
-    // FULL checkpoint: the reopen adopts the IdMap snapshot and DEFERS
-    // hydration to first touch (hooks armed between open and touch); deleting
-    // the loop2 snapshots forces that first touch onto the streaming rebuild.
-    const N: usize = 4_000;
-    try buildGateStore(allocator, data_dir, N, true);
-    try deleteHydrationSnapshots(allocator, data_dir);
-
-    // Small resident node-cache cap (256 << N): the merge core's cache puts
-    // EVICT earlier rows mid-merge, so the graph's retire list is NON-EMPTY
-    // exactly while the family threads may still be reading the batch copies
-    // — the C-1 hazard state. The slow merge (25 ms/shard) opens a wide
-    // window for the checkpoint below to land mid-merge.
-    _ = setenv("GEODE_NODE_CACHE_ENTRIES", "256", 1);
-    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
-    defer {
-        _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
-        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
     }
     graph_store.setTestHydrationMergeDelayMs(25);
     defer graph_store.setTestHydrationMergeDelayMs(null);
@@ -1430,83 +1508,10 @@ test "light checkpoint during an in-flight merge skips cache reclaim (no use-aft
         const retired_after = store.nodes.retiredCount();
         std.debug.print("[bomb2-test] retired after post-build checkpoint = {d}\n", .{retired_after});
         try testing.expect(retired_after < retired_before);
-        adapter_mod.resetHydrationReclaimSkipsForTesting();
-        const store = graph_store.getGlobalStore(allocator);
-        const adapter = graph_store.getGlobalAdapter().?;
-
-        const Touch = struct {
-            store: *GraphStore,
-            count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-            done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-            fn run(t: *@This()) void {
-                const c = t.store.countNodesByLabel(GRAPH, "Taxon", null);
-                t.count.store(@intCast(c), .release);
-                t.done.store(true, .release);
-            }
-        };
-        var touch = Touch{ .store = store };
-        const th = try std.Thread.spawn(.{}, Touch.run, .{&touch});
-
-        // Wait until the merge is genuinely consuming rows (well past the
-        // 256-entry cache cap, so evictions have retired node bodies) but
-        // far from done, then fire full checkpoints — the exact
-        // write-cadence/explicit/shutdown window the review flagged. The
-        // retry loop closes the race where the merge finishes between the
-        // row poll and the checkpoint reaching this graph.
-        var spins: usize = 0;
-        while (graph_store.loop2ScanNodeCount() < 300 and spins < 20_000) : (spins += 1) {
-            sleepMs(1);
-        }
-        try testing.expect(graph_store.loop2ScanNodeCount() >= 300);
-
-        var skips_mid: u64 = 0;
-        while (skips_mid == 0 and !touch.done.load(.acquire)) {
-            try adapter.checkpointAll();
-            skips_mid = adapter_mod.getHydrationReclaimSkipsForTesting();
-        }
-
-        th.join();
-        try testing.expect(touch.done.load(.acquire));
-
-        // MECHANISM: at least one checkpoint hit the hydrating graph while
-        // its build was unfinished and SKIPPED the retired-cache reclaim.
-        // RED pre-gate: the reclaims ran unconditionally -> skips == 0.
-        try testing.expect(skips_mid >= 1);
-
-        // PRODUCTS: hydration completed correctly under the mid-merge
-        // checkpoint (the whole point — no garbage, no quarantine).
-        try testing.expectEqual(@as(u64, N), touch.count.load(.acquire));
-        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
-        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
-
-        // PRECISION: once hydration is DONE the gate must NOT fire — a
-        // post-hydration checkpoint reclaims again (the RSS bound survives).
-        const skips_before = adapter_mod.getHydrationReclaimSkipsForTesting();
-        try adapter.checkpointAll();
-        try testing.expectEqual(skips_before, adapter_mod.getHydrationReclaimSkipsForTesting());
 
         graph_store.deinitGlobalStoreForTestCrash();
     }
 }
-
-// ============================================================================
-// GAP-ENT-0042(a) — bounded, graph-scoped hydration self-heal flush
-// ============================================================================
-//
-// `loadOneGraphFromAdapterFull`'s orphan-edge self-heal used to fire
-// `adapter.checkpointAll()` — an ALL-graph FULL checkpoint whose per-graph
-// EXCLUSIVE rwlock acquisition spins UNBOUNDEDLY — from inside the hydration
-// chokepoint (entry.mutex + hydration_build_mutex held). Any busy rwlock on
-// ANY graph (e.g. a SHARED holder itself parked on `ensureGraphHydrated` for
-// a different graph -> on the hydration_build_mutex WE hold) wedged the
-// server permanently — the exact topology T3's bounded acquire was built to
-// avoid. Post-fix the flush is graph-scoped (`checkpointGraph`, T3's bounded
-// 5 s acquire) and non-fatal: on timeout the flush is skipped with a loud
-// log (repairs are already engine-applied; re-heal is idempotent).
-//
-// The damage fixture mirrors tests/test_edge_durability_churn_repro.zig:
-// orphan physical edge slots injected at the ADAPTER layer (no
-// __geode_internal_edge_id, no IdMap entry).
 
 const OTHER_GRAPH = "hsg_other";
 
