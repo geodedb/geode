@@ -989,6 +989,19 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
                 Attr.string("admin_username", admin_user),
                 Attr.string("action_required", "Password was printed to stderr — change on first login"),
             });
+        } else {
+            // Operator breadcrumb (2026-07-01 incident follow-up): this path
+            // only runs when NO persistent auth graph is active
+            // (persistentResolverEnabled() returned false above — e.g. HMAC
+            // key unavailable or the engine-backed store fell back to
+            // in-memory). An env-seeded admin created here lives only in
+            // process memory: it is re-read from the environment on every
+            // start, and any credential change made at runtime is LOST on
+            // restart. Warn loudly so "the admin password tracked the env var
+            // across a restart" is diagnosable from the logs.
+            log.warn("Admin user seeded from GEODE_ADMIN_PASSWORD into the in-memory user store (no persistent auth graph active); this credential is NOT persisted and will be re-read from the environment on next start", &.{
+                Attr.string("admin_username", admin_user),
+            });
         }
     }
 }

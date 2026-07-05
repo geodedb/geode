@@ -4295,6 +4295,34 @@ pub fn build(b: *std.Build) void {
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
 
+    // Gap 0039 (data-ingest enterprise review): `geode serve` SIGTERM shutdown
+    // busy-spun forever draining abandoned QUIC connections (client vanished
+    // without CONNECTION_CLOSE): flush completed, then >= 10 min at ~1.75
+    // cores with the listener still accepting; only SIGKILL ended it. The
+    // subprocess test SIGTERMs a real server that has abandoned client
+    // connections held open and asserts: bounded drain engages
+    // (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), stalled connections are force-closed
+    // at the deadline, the process exits rc=0 within deadline + margin, and
+    // the store reopens clean. Executable (not `test`) for the same
+    // builtin.is_test reason as e2e_quic_high_concurrency above.
+    const shutdown_drain_e2e = b.addExecutable(.{ .name = "e2e_shutdown_drain_timeout", .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_shutdown_drain_timeout.zig"), .target = target, .optimize = optimize }) });
+    shutdown_drain_e2e.root_module.addImport("geode", root_mod);
+    shutdown_drain_e2e.root_module.addImport("protobuf", protobuf_mod);
+    shutdown_drain_e2e.root_module.addImport("schema", schema_mod);
+    shutdown_drain_e2e.root_module.addImport("transport/quic", transport_quic_mod);
+    shutdown_drain_e2e.root_module.link_libc = true;
+    if (enable_openssl) {
+        shutdown_drain_e2e.root_module.linkSystemLibrary("ssl", .{});
+        shutdown_drain_e2e.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        shutdown_drain_e2e.root_module.linkSystemLibrary("dl", .{});
+    }
+    const run_shutdown_drain_e2e = b.addRunArtifact(shutdown_drain_e2e);
+    run_shutdown_drain_e2e.step.dependOn(&install_geode_exe.step);
+    const shutdown_drain_step = b.step("test-shutdown-drain-timeout", "Gap 0039: SIGTERM shutdown must stop accepting, bound the connection drain (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), force-close stalled connections, and exit rc=0");
+    shutdown_drain_step.dependOn(&run_shutdown_drain_e2e.step);
+
     // CANARY: REQ=REQ-QUIC-HC-180; FEATURE="Sequential Single-Connection Upsert Liveness"; ASPECT=FirstStreamSchedulerLostWakeBuild; STATUS=TESTED; OWNER=transport; UPDATED=2026-06-19
     // BUG_STREAM_DESYNC regression: 250+ sequential find+create on ONE connection.
     // Root cause was an O(n^2) per-connection accumulator in the vendored quic lib;
@@ -6782,6 +6810,44 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_admin_bootstrap_tests.step, 1, test_shard_loads, test_shard_index);
     const admin_bootstrap_step = b.step("test-admin-bootstrap", "Reproduction tests for admin-bootstrap env-var + offline-reset bugs (must fail pre-fix)");
     admin_bootstrap_step.dependOn(&run_admin_bootstrap_tests.step);
+
+    // Gap 0026 (data-ingest security review): security-graph mutations must
+    // stay crash-durable under GEODE_WAL_SYNC=deferred. The bulk-load knob
+    // (GAP-0900) relaxed per-commit WAL fsync globally; an admin credential
+    // rotation acknowledged without fsync is silently lost on a hard crash
+    // (old credential resurrects). Tests pin the per-graph
+    // `.sync_each_commit` carve-out for `__geode_security` (create + reopen
+    // paths), the fsync-before-ack observable, a bulk-write still-defers
+    // regression, and the end-to-end rotate → crash → reopen sequence.
+    const sec_wal_durability_mod = b.createModule(.{ .root_source_file = b.path("tests/test_security_wal_durability.zig"), .target = target, .optimize = optimize });
+    sec_wal_durability_mod.addImport("geode", root_mod);
+    sec_wal_durability_mod.addImport("geode_auth", auth_mod);
+    sec_wal_durability_mod.addImport("user_storage", user_storage_mod);
+    sec_wal_durability_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sec_wal_durability_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sec_wal_durability_tests = b.addTest(.{ .root_module = sec_wal_durability_mod });
+    const run_sec_wal_durability_tests = b.addRunArtifact(sec_wal_durability_tests);
+    shardDep(test_step, &run_sec_wal_durability_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_wal_durability_step = b.step("test-security-wal-durability", "Gap 0026: security-graph mutations crash-durable under GEODE_WAL_SYNC=deferred (per-graph sync_each_commit carve-out)");
+    sec_wal_durability_step.dependOn(&run_sec_wal_durability_tests.step);
+
+    // Gap 0034 (data-ingest enterprise review): fresh-store FALSE "POSSIBLE
+    // TAMPERING" alarms. The periodic HMAC verifier read the AuthChainRoot
+    // node body via the non-hydrating getNodePtr; once a bulk ingest evicted
+    // it from the bounded resident node cache, every verify round reported
+    // MissingChainRoot until restart. Tests pin: bootstrap seals the root
+    // synchronously; eviction must NOT raise the tamper alarm (the verifier
+    // hydrates the durable truth from the engine); a root genuinely deleted
+    // or corrupted in the engine still fails loudly (the real tamper signal
+    // is preserved).
+    const hmac_root_eviction_mod = b.createModule(.{ .root_source_file = b.path("tests/test_hmac_chain_root_eviction.zig"), .target = target, .optimize = optimize });
+    hmac_root_eviction_mod.addImport("geode", root_mod);
+    hmac_root_eviction_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const hmac_root_eviction_tests = b.addTest(.{ .root_module = hmac_root_eviction_mod });
+    const run_hmac_root_eviction_tests = b.addRunArtifact(hmac_root_eviction_tests);
+    shardDep(test_step, &run_hmac_root_eviction_tests.step, 1, test_shard_loads, test_shard_index);
+    const hmac_root_eviction_step = b.step("test-hmac-chain-root-eviction", "Gap 0034: periodic HMAC verify must not raise false POSSIBLE TAMPERING when the chain-root node body is evicted from the bounded node cache");
+    hmac_root_eviction_step.dependOn(&run_hmac_root_eviction_tests.step);
 
     // Issue #819: admin-bootstrap data-dir permission hardening (CWE-538 /
     // CWE-732).  Exercises the pure permission-check helper in

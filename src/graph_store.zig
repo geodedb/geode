@@ -6912,6 +6912,29 @@ pub const GraphStore = struct {
         return self.nodes.getPtr(node_id);
     }
 
+    /// Hydrate-on-miss variant of `getNodePtr` (node twin of
+    /// `getEdgePtrHydrated`): a node body evicted from the bounded resident
+    /// cache is rebuilt from the durable engine, so callers that must
+    /// distinguish "node truly absent from the store" from "node body
+    /// evicted from the resident cache" never confuse the two. Returns null
+    /// only when the id exists in neither the cache nor the engine.
+    ///
+    /// Gap 0034: the periodic HMAC verifier's chain-root read used the raw
+    /// `getNodePtr`; a bulk ingest evicting the bootstrap-era AuthChainRoot
+    /// body made every verify round report MissingChainRoot ("POSSIBLE
+    /// TAMPERING") on a perfectly healthy fresh store until restart.
+    ///
+    /// NOTE: on a miss this MUTATES the cache (insert + maybe evict) under
+    /// the shard's hydrate mutex + map lock, so the caller must hold a lock
+    /// that serializes cache writes — NOT merely a shared read lock (the
+    /// periodic verifier holds the GLOBAL EXCLUSIVE store lock; startup/CLI
+    /// callers are single-threaded). Same contract as `getNodeProperty`'s
+    /// hydrate-on-miss read.
+    pub fn getNodePtrHydrated(self: *const GraphStore, node_id: u64) ?*const Node {
+        const cache: *NodeCache = @constCast(&self.nodes);
+        return (cache.getOrHydratePtr(node_id) catch return null) orelse null;
+    }
+
     pub fn getEdgePtr(self: *const GraphStore, edge_id: u64) ?*const Edge {
         // PHASE 1: hydrate-on-miss so an evicted edge body still resolves.
         return self.getEdgePtrHydrated(edge_id);
@@ -14742,6 +14765,31 @@ pub fn deinitGlobalStore() void {
 /// deinit at all; this frees memory so the same test process can reopen.
 pub fn deinitGlobalStoreForTestCrash() void {
     deinitGlobalStoreEx(false);
+}
+
+/// TEST-ONLY: simulate a HARD process kill (SIGKILL / power loss) for
+/// WAL-durability crash tests (gap 0026). Drops every global reference
+/// WITHOUT closing, checkpointing, or freeing the store/adapter — exactly
+/// the on-disk state a hard kill leaves behind. The abandoned objects LEAK
+/// (memory + fds), so the crashed phase MUST have been initialised with a
+/// non-leak-checking allocator (e.g. the std.heap page-backed allocator),
+/// never `std.testing.allocator`.
+///
+/// `deinitGlobalStoreForTestCrash` is NOT sufficient for WAL-durability
+/// tests: it still runs `adapter.checkpointAll()` inside
+/// `deinitGlobalAdapter`, which flushes dirty pages and makes even
+/// deferred-WAL commits durable — masking exactly the loss window under
+/// test. Group-commit coordinator threads are stopped first so no
+/// background apply touches the abandoned adapter (or its WAL files, which
+/// the caller may be about to truncate to simulate an unsynced tail).
+pub fn abandonGlobalStoreForCrashSim() void {
+    const group_commit = @import("storage/group_commit.zig");
+    group_commit.shutdownAllCoordinators();
+    global_store = null;
+    global_store_allocator = null;
+    initialized.store(false, .release);
+    global_adapter = null;
+    global_vtable = null;
 }
 
 fn deinitGlobalStoreEx(clean: bool) void {
