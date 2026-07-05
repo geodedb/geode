@@ -2203,6 +2203,24 @@ pub fn build(b: *std.Build) void {
     );
     lean_merge_key_seek_reopen_step.dependOn(&run_lean_merge_key_seek_reopen_tests.step);
 
+    // GAP-0046: reopen re-MERGE dedup under DEFERRED (lazy) hydration — the
+    // first op on a crash-reopened graph is `MERGE ... SET` and must dedup
+    // (merge match hydrates the merge index before probing). Opt-in via
+    // `zig build test-reopen-merge-hydration-dup`.
+    const reopen_merge_hydration_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_reopen_merge_hydration_dup.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    reopen_merge_hydration_tests.root_module.addImport("geode", root_mod);
+    const run_reopen_merge_hydration_tests = b.addRunArtifact(reopen_merge_hydration_tests);
+    const reopen_merge_hydration_step = b.step(
+        "test-reopen-merge-hydration-dup",
+        "GAP-0046: first-op re-MERGE after a crash reopen dedups under deferred hydration",
+    );
+    reopen_merge_hydration_step.dependOn(&run_reopen_merge_hydration_tests.step);
+
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST
     // cache via optional `ast_cache` fields + `setAstCache()` methods.

@@ -17,6 +17,11 @@ GAP-ENT-0002,EdgeCountFastPath,FastPath,TESTED,,,execution,2026-06-26,src/execut
 GAP-ENT-0002,EdgeCountFastPath,Regression,TESTED,,,execution,2026-06-26,tests/test_count_edges_fastpath.zig
 GAP-ENT-0002,GroupByStreamingFastPath,Implementation,TESTED,,,execution,2026-06-26,src/execution/match_operations.zig
 GAP-ENT-0002,GroupByStreamingFastPath,Regression,TESTED,,,execution,2026-06-26,tests/test_gap_ent0002_groupby_streaming.zig
+GAP-ENT-0043,IndexServedAggregate,Implementation,TESTED,,,execution,2026-07-05,src/execution/match_operations.zig
+GAP-ENT-0043,IndexServedAggregate,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0043_index_served_aggregate.zig
+GAP-ENT-0043,ProjectionPushdownScan,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0043_projection_pushdown.zig
+GAP-ENT-0044,ReadExecutorBudget,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0044_read_budget_cancel.zig
+GAP-ENT-0045,ReadCancelOnDisconnect,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0044_read_budget_cancel.zig
 GQL-39075-CK-001,GQLConformance/AllRQs,UnitTestCoverage,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0001,Conformance/ExecuteConformingPrograms,Profile,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0002,Conformance/RequiredErrors,SQLSTATE,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig

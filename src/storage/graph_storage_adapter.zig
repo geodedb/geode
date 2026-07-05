@@ -3909,6 +3909,16 @@ pub const StorageAdapter = struct {
     ) !u64 {
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
+        // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key
+        // MUST stay indexed so dedup + edge-endpoint resolution find this node
+        // by its key across a reopen (the sidecar re-registers it before the
+        // exact-index rebuild). The group-commit variant
+        // (`bulkMergeNodeWithReservedIdForTenant`) already registers here; this
+        // group-commit-OFF direct path missed it, so a lean-mode reopen left the
+        // key UNindexed and the first re-MERGE created a duplicate. No-op when
+        // lean mode is off. Idempotent.
+        graph_store.registerMergeIndexKey(merge_key);
+
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
         // Phase 1 (inline): merge-prop index probe.  `.not_indexable`
@@ -8341,6 +8351,43 @@ fn findNodeMatchingMergeProps(
 ) !?u64 {
     // CANARY: REQ=REQ-QUIC-HC-111; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeIndexedProbe; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
     //
+    // GAP-0046: the multi-property MERGE match MUST run behind the SAME
+    // hydration chokepoint as the single-key `store.lookupMergeCandidate` and
+    // the edge-endpoint `store.lookupPublicNodeIdByLabelAndAllProps`. Without
+    // it, a DEFERRED (lazy-hydration) graph — the state a crash/OOM restart
+    // reopens into — has an EMPTY resident IdMap (loop1) and node cache
+    // (loop2): the exact-index candidate slots below resolve to a null public
+    // id or a non-resident `store.nodes.getPtr` miss, so the probe reports NO
+    // match and the MERGE wrongly CREATEs a duplicate. (Observed at scale as
+    // ~3.2M dup :Taxon after an OOM restart re-ran the source mid-ingest — the
+    // same read-path "source split" family as the deferred count fix.)
+    //
+    // Composite fast path (mirrors `lookupPublicNodeIdByLabelAndAllProps`): when
+    // the merge props EXACTLY match a registered composite key (the from-dump
+    // `{source, source_id}` node key), resolve the WHOLE key in ONE MAINTAINED,
+    // eviction-INDEPENDENT merge-index probe — O(1), no node-page read, and
+    // authoritative (the composite index is complete and rebuilt on hydration,
+    // and survives node-cache eviction). `lookupCompositeMergeCandidate` runs
+    // ensureGraphHydrated itself, so the hot path is guarded with NO redundant
+    // acquire. This is the enterprise hot path and is collision-correct
+    // (source_id is not globally unique).
+    if (graph_store.compositeKeyIndexForFilters(props)) |composite_idx| {
+        var cid: u64 = 0;
+        switch (store.lookupCompositeMergeCandidate(graph_name, label, composite_idx, props, &cid)) {
+            .found => return cid,
+            .not_found => return null,
+            // Value type can't be encoded into the composite key — fall through
+            // to the exact-index candidate seek (guarded + eviction-safe below).
+            .not_indexable => {},
+        }
+    }
+
+    // Fallback (no registered composite, or an unencodable value type): the
+    // exact-index candidate seek reads store IdMap (loop1) + node cache (loop2),
+    // so it needs the same hydration chokepoint before it can trust them.
+    // ensureGraphHydrated is a lock-free atomic fast-path once built.
+    store.ensureGraphHydrated(graph_name);
+
     // Multi-property MERGE used to scan every node carrying `label` on each
     // miss. Under fan-out this made unique tuple inserts O(label cardinality).
     // Start from the smallest exact-property posting instead, then verify the
@@ -8368,7 +8415,10 @@ fn findNodeMatchingMergeProps(
 
     for (candidates) |slot_id| {
         const public_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
-        const node = store.nodes.getPtr(public_id) orelse continue;
+        // GAP-0046: hydrate-on-miss. Under a bounded node cache (or right after a
+        // deferred reopen) the matching node need not be resident; a plain
+        // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
+        const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
         if (nodeMatchesMergeProps(node, graph_name, label, props)) return public_id;
     }
     return null;
