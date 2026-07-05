@@ -191,6 +191,41 @@ pub fn check() CheckError!void {
     }
 }
 
+/// GAP-ENT-0048 DEFECT B: a snapshot of the active read scope's cancel flag
+/// pointers, so a worker on a DIFFERENT thread than the installing handler can
+/// poll cancellation directly. The exact-index rebuild dispatches its per-shard
+/// scans onto the shared thread pool, whose workers do NOT inherit the
+/// handler's threadlocal `Scope` — so `check()` (which reads that threadlocal)
+/// is a silent no-op on them. Capturing the raw atomic pointers here lets those
+/// workers observe a client disconnect / stall-watchdog abort at a batch
+/// boundary and free the wedged handler instead of running the whole O(graph)
+/// rebuild to completion.
+///
+/// Empty (never trips) when no read scope is installed — so a WRITE-path rebuild
+/// (writes never install a read scope) is never cancelled.
+pub const CancelFlags = struct {
+    cancel: ?*const std.atomic.Value(bool) = null,
+    watchdog: ?*const std.atomic.Value(bool) = null,
+
+    /// True once either captured cancel source has been set (cross-thread safe).
+    pub fn tripped(self: CancelFlags) bool {
+        if (self.cancel) |flag| {
+            if (flag.load(.acquire)) return true;
+        }
+        if (self.watchdog) |flag| {
+            if (flag.load(.acquire)) return true;
+        }
+        return false;
+    }
+};
+
+/// Snapshot the active read scope's cancel flag pointers (see `CancelFlags`).
+/// Both null when no read scope is installed on the calling thread.
+pub fn activeCancelFlags() CancelFlags {
+    const s = t_active orelse return .{};
+    return .{ .cancel = s.cancel, .watchdog = s.watchdog_cancel };
+}
+
 /// Pass-through observer allocator. Forwards every call to `inner` unchanged
 /// (returned memory IS `inner` memory — freeing it later via `inner` directly
 /// is legal), adjusting the active scope's net-live counter. HARD BACKSTOP:
@@ -298,6 +333,31 @@ test "watchdog cancel source aborts independently of the connection flag" {
     try check();
     wd_flag.store(true, .release); // watchdog: abort the wedged executor
     try std.testing.expectError(error.ReadQueryCancelled, check());
+}
+
+test "activeCancelFlags snapshots the scope's cancel sources for cross-thread polling" {
+    // No scope installed -> empty snapshot, never trips.
+    try std.testing.expect(!activeCancelFlags().tripped());
+
+    var conn = std.atomic.Value(bool).init(false);
+    var wd = std.atomic.Value(bool).init(false);
+    setStreamCancelSource(&conn);
+    setWatchdogCancelSource(&wd);
+    defer setStreamCancelSource(null);
+    defer setWatchdogCancelSource(null);
+
+    var s = Scope.init();
+    beginScope(&s);
+    defer endScope(&s);
+
+    const flags = activeCancelFlags();
+    try std.testing.expect(flags.cancel != null);
+    try std.testing.expect(flags.watchdog != null);
+    try std.testing.expect(!flags.tripped());
+    // A cross-thread set on the connection flag is observed through the
+    // captured pointer (the rebuild's pool workers rely on exactly this).
+    conn.store(true, .release);
+    try std.testing.expect(flags.tripped());
 }
 
 test "budget trip takes precedence over cancel; no scope = no-op" {

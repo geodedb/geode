@@ -19,6 +19,11 @@ const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
+// GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
+// executor's cancel flags so a client disconnect / stall-watchdog abort frees a
+// handler wedged inside the O(graph) first-access rebuild. `read_budget` is a
+// leaf module (imports only std), so there is no import cycle.
+const read_budget = @import("../read_budget.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
@@ -72,6 +77,13 @@ var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value
 // unchanged) and must rebuild EXACTLY ONCE on first index access (read or
 // live-mutation). Incremented at the top of every rebuild.
 var g_exact_rebuild_runs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 DEFECT B: nodes VISITED by the exact-index rebuild scan
+// (`rebuildExactNodePropertyIndex`'s per-shard scanCallback) process-wide.
+// Wall-clock-independent instrumentation for the cancel contract: a read query
+// whose executor cancel flag is set must abort the deferred rebuild at the next
+// batch boundary, so the scan visits FAR fewer than the graph's node count
+// instead of running to completion (the wedged-handler symptom at 14.27M).
+var g_exact_rebuild_nodes_scanned: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // C-1 (T2b adversarial review): number of times a per-graph checkpoint's
 // retired-cache reclaim (the grace window in `checkpointOneGraph`) was
 // SKIPPED because the graph had an unfinished (pending or in-flight)
@@ -183,6 +195,18 @@ pub fn getExactRebuildRunsForTesting() u64 {
 /// H4 (cold-open phase 1): reset the rebuild-runs counter (test-only).
 pub fn resetExactRebuildRunsForTesting() void {
     g_exact_rebuild_runs.store(0, .release);
+}
+
+/// GAP-ENT-0048 DEFECT B: nodes visited by the exact-index rebuild scan since
+/// the last reset. Test-only: a cancelled deferred rebuild must abort early, so
+/// this stays far below the graph's node count (pre-fix it equalled the count).
+pub fn getExactRebuildNodesScannedForTesting() u64 {
+    return g_exact_rebuild_nodes_scanned.load(.acquire);
+}
+
+/// GAP-ENT-0048 DEFECT B: reset the rebuild-scan node counter (test-only).
+pub fn resetExactRebuildNodesScannedForTesting() void {
+    g_exact_rebuild_nodes_scanned.store(0, .release);
 }
 
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
@@ -1644,7 +1668,14 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
 // Hence the parallel rebuild produces a posting-for-posting identical index to
 // the serial one. If only one shard exists (or any other degenerate case) we
 // fall back to a straight serial loop.
-fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
+/// GAP-ENT-0048 DEFECT B: nodes visited between two cancel-flag polls in the
+/// exact-index rebuild scan. Bounds how long a cancelled read stays wedged in
+/// the per-node property-chain walk (the dominant `BufferPool.pin` cost of the
+/// rebuild) before it aborts — the same batch discipline the executor's
+/// scan/aggregate loops use.
+const exact_rebuild_cancel_poll_batch: usize = 256;
+
+fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags) !void {
     // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
     // deferred-build latch rebuilds 0 times at open and exactly once on first
     // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
@@ -1656,9 +1687,14 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
 
     // Per-shard scan context: shares only `mg` (whose exact-property index is
     // mutex-sharded) and writes its OWN `err` slot — no shared mutable scratch.
+    // GAP-ENT-0048 DEFECT B: each context carries the caller's read-executor
+    // cancel flags (captured on the handler thread) so the pool workers — which
+    // do NOT inherit the handler's threadlocal read scope — can poll them.
     const ShardCtx = struct {
         mg: *ManagedGraph,
         shard: *gs.GraphEngine,
+        cancel: read_budget.CancelFlags,
+        since_poll: usize = 0,
         err: ?anyerror = null,
 
         fn scanCallback(self: *@This(), node_id: gs.NodeId, rec: gs.node.NodeRec) void {
@@ -1666,6 +1702,22 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
             // Coverage counter: count every live node the scan presents (atomic
             // so the parallel per-shard workers compose correctly).
             _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
+            _ = g_exact_rebuild_nodes_scanned.fetchAdd(1, .monotonic);
+            // GAP-ENT-0048 DEFECT B: poll the read-executor cancel flags at a
+            // batch boundary. On a client disconnect / stall-watchdog abort this
+            // stops the expensive per-node property-chain walk immediately (the
+            // remaining `if (self.err != null) return` fast-outs make the rest of
+            // the scan a cheap no-op), so the wedged handler frees instead of
+            // paying the whole O(graph) rebuild. Empty flags (write paths / no
+            // read scope) never trip.
+            self.since_poll += 1;
+            if (self.since_poll >= exact_rebuild_cancel_poll_batch) {
+                self.since_poll = 0;
+                if (self.cancel.tripped()) {
+                    self.err = error.ReadQueryCancelled;
+                    return;
+                }
+            }
             if (rec.label_head == 0 or rec.prop_head == 0) return;
 
             const node_shard = self.mg.shardEngineForNode(node_id);
@@ -1681,6 +1733,13 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
         }
 
         fn run(self: *@This()) void {
+            // GAP-ENT-0048 DEFECT B: a cancel already pending before the first
+            // node bails the whole shard WITHOUT touching the node store (the
+            // common "client already gone" case — zero page pins).
+            if (self.cancel.tripped()) {
+                self.err = error.ReadQueryCancelled;
+                return;
+            }
             // Each shard owns nodes with ids satisfying shardOfNode(id) == idx.
             self.shard.node_store.scanNodes(self.shard.manifest.next_node_id, self, scanCallback) catch |err| {
                 if (self.err == null) self.err = err;
@@ -1690,7 +1749,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
 
     var ctxs: [gs.sharded_engine.SHARD_COUNT]ShardCtx = undefined;
     for (shards, 0..) |shard, idx| {
-        ctxs[idx] = .{ .mg = mg, .shard = shard };
+        ctxs[idx] = .{ .mg = mg, .shard = shard, .cancel = cancel };
     }
 
     // Serial fallback: a single shard gains nothing from the pool, and keeps a
@@ -1770,7 +1829,15 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
     // Double-check under the mutex: a peer first-accessor may have built it
     // while we waited for the lock.
     if (mg.exact_index_built.load(.acquire)) return;
-    try rebuildExactNodePropertyIndex(mg);
+    // GAP-ENT-0048 DEFECT B: capture THIS (handler) thread's read-executor
+    // cancel flags and hand them to the parallel rebuild, whose per-shard pool
+    // workers run on threads that do not inherit the threadlocal read scope. If
+    // the driving client disconnects (or the stall watchdog aborts the wedged
+    // executor) mid-rebuild, the scan aborts with error.ReadQueryCancelled and
+    // the latch stays UNbuilt — the next accessor retries the rebuild cleanly
+    // (idempotent: rebuild clears first). Write paths install no read scope, so
+    // `activeCancelFlags` is empty for them and their rebuild is never cancelled.
+    try rebuildExactNodePropertyIndex(mg, read_budget.activeCancelFlags());
     mg.exact_index_built.store(true, .release);
     adapter.spawnExactIndexPersistAfterBuild(mg.name);
 }
@@ -5124,7 +5191,8 @@ pub const StorageAdapter = struct {
         };
         acquireWholeGraphExclusive(mg);
         defer releaseWholeGraphExclusive(mg);
-        try rebuildExactNodePropertyIndex(mg);
+        // Test-only forced rebuild: never cancellable (no read scope semantics).
+        try rebuildExactNodePropertyIndex(mg, .{});
         // H4: mark the index built so a deferred graph doesn't redundantly rebuild
         // on the next ensure (mirrors ensureExactNodePropertyIndexBuilt's latch).
         mg.exact_index_built.store(true, .release);

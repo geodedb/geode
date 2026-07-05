@@ -488,3 +488,100 @@ test "GAP-ENT-0048 DEFECT A: clean FULL-checkpoint reopen reloads the exact inde
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
     }
 }
+
+// ============================================================================
+// GAP-ENT-0048 DEFECT B — the deferred first-access exact-index REBUILD scan
+// must honor the read-executor cancel flag (GAP-ENT-0044/0045 T5 infra).
+// ============================================================================
+//
+// On a reopened store whose exact index is DEFERRED, the FIRST index-served
+// read (T1 posting walk / point-seek) triggers `rebuildExactNodePropertyIndex`
+// — a full O(graph) per-shard scan. Pre-fix that scan polled NO cancel source,
+// so a client that disconnected (or the proto-reader stall watchdog) could not
+// free the handler: it stayed wedged burning cores for the whole rebuild (the
+// 14.27M "~1.3 cores, pending_handlers climbing" symptom; the rebuild runs on
+// the shared pool, which does not inherit the handler's threadlocal read scope).
+//
+// Contract: with a read scope installed and its cancel flag set, the rebuild
+// aborts within a bounded window (a batch) — scanning FAR fewer than N nodes —
+// returns error.ReadQueryCancelled, and does NOT latch the index built (a later
+// uncancelled read rebuilds cleanly and returns the correct posting).
+//
+// RED (pre-fix): the rebuild ignores the flag, scans all N nodes, latches built,
+// and the lookup RETURNS a value (no error). GREEN (post-fix): early abort.
+test "GAP-ENT-0048 DEFECT B: deferred exact-index rebuild honors read-executor cancel (frees the handler promptly)" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "cancel_rebuild_graph";
+    const label = "Taxon";
+    const N: usize = 8192;
+
+    // ---- Session 1: seed durably, then DROP the snapshot -> reopen DEFERS. ----
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+            try adapter.setNodeProperty(graph, node_id, "source", .{ .Int = @intCast(i % 4) });
+        }
+        try adapter.checkpointAll(); // persist snapshot ...
+        try adapter.checkpointAllLight(); // ... then invalidate it -> reopen DEFERS
+    }
+
+    // ---- Session 2: reopen deferred; a CANCELLED read must bail early. ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactRebuildNodesScannedForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        _ = try adapter.getOrCreateGraph(graph);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // Install a read-executor scope whose connection cancel flag is ALREADY
+        // set (client gone at/ before the first page) — exactly what the transport
+        // handler installs and the disconnect / stall watchdog then sets.
+        var cancel = std.atomic.Value(bool).init(true);
+        geode.read_budget.setStreamCancelSource(&cancel);
+        defer geode.read_budget.setStreamCancelSource(null);
+        var scope = geode.read_budget.Scope.init();
+        geode.read_budget.beginScope(&scope);
+        defer geode.read_budget.endScope(&scope);
+
+        // The first index-served read triggers the deferred rebuild. Cancelled ->
+        // aborts with 57014 (ReadQueryCancelled) WITHOUT scanning the whole graph.
+        try testing.expectError(
+            error.ReadQueryCancelled,
+            adapter.getCandidateNodesByLabelAndProperty(graph, label, "source", .{ .Int = 0 }, allocator),
+        );
+
+        // A rebuild was ATTEMPTED ...
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
+        // ... but it bailed EARLY: far fewer than N nodes were scanned. (Pre-fix it
+        // scanned all N and returned a value.)
+        const scanned = adapter_mod.getExactRebuildNodesScannedForTesting();
+        if (scanned >= N) {
+            std.debug.print(
+                "DEFECT B REGRESSION: cancelled rebuild scanned {d} nodes (seed {d}) " ++
+                    "— it ran to completion instead of aborting at the next batch " ++
+                    "boundary. The wedged handler never frees on client disconnect.\n",
+                .{ scanned, N },
+            );
+            return error.CancelledRebuildDidNotStop;
+        }
+
+        // The cancelled rebuild must NOT have latched the index built: clearing
+        // the flag and re-running (still in this session) rebuilds AGAIN and
+        // returns the correct posting.
+        cancel.store(false, .release);
+        adapter_mod.resetExactRebuildRunsForTesting();
+        const got = try adapter.getCandidateNodesByLabelAndProperty(graph, label, "source", .{ .Int = 0 }, allocator);
+        defer allocator.free(got);
+        try testing.expect(got.len > 0);
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
+    }
+}
