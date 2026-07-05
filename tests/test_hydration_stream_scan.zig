@@ -1284,3 +1284,98 @@ test "registerAdapterGraphsForLazyHydration skips registered graphs (catalog ini
         graph_store.deinitGlobalStoreForTestCrash();
     }
 }
+
+test "light checkpoint during an in-flight merge skips cache reclaim (no use-after-free of retired batch heap)" {
+    // Bomb #2 of the 14.27M SEGV (WAL/periodic-checkpoint variant): the
+    // persistence loop's walCheckpointHook -> saveToFileEx(light) ->
+    // checkpointOneGraph grace point reclaimed (freed) retired node-cache
+    // entries WHILE the streaming merge's family batches still shared their
+    // sub-heap, and its unlocked retire-list compaction raced the merge's
+    // eviction appends (captured live: gdb run 7, 5642 freeNodeValue hits
+    // through wal.walCheckpointHook culminating in a dangling retired-list
+    // element). The grace point must win the store's build gate (tryLock of
+    // hydration_build_mutex) or SKIP reclaim for the cycle.
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 4_000;
+    try buildGateStore(allocator, data_dir, N, false);
+
+    // Tiny resident cap => the merge EVICTS (retires) most of every batch it
+    // builds, exactly the at-scale condition (500k cap vs 891k-row shards).
+    _ = setenv("GEODE_NODE_CACHE_ENTRIES", "64", 1);
+    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+    _ = setenv("GEODE_HYDRATION_INFLIGHT_SHARDS", "2", 1);
+    defer {
+        _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
+        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+        _ = unsetenv("GEODE_HYDRATION_INFLIGHT_SHARDS");
+    }
+    graph_store.setTestHydrationMergeDelayMs(25);
+    defer graph_store.setTestHydrationMergeDelayMs(null);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        // The bounded cap only ACTIVATES once the hydrate-on-miss hook is
+        // installed (caches are safety-forced unbounded before that — see
+        // NodeCache.init). The server path installs it right after adapter
+        // wiring; install explicitly here so the tiny test cap is live during
+        // the build and the merge genuinely retires evicted rows.
+        store.installNodeCacheHydrate();
+        std.debug.print("\n[bomb2-test] node cache effective cap = {d}\n", .{store.nodes.effectiveCap()});
+
+        // Checkpoint poker: the persistence-loop stand-in. Fires ~150 ms into
+        // the >=400 ms build; pre-fix its grace point freed the merge's
+        // just-retired nodes under the family threads (the at-scale crash —
+        // that run is this test's red); post-fix tryBeginCacheReclaimGrace
+        // fails and reclaim is skipped for the cycle.
+        const Poker = struct {
+            store: *GraphStore,
+            err: ?anyerror = null,
+            fn run(p: *@This()) void {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 150 * std.time.ns_per_ms };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                p.store.saveToFileEx(true) catch |e| {
+                    p.err = e;
+                };
+            }
+        };
+        var poker = Poker{ .store = store };
+        const poker_thread = try std.Thread.spawn(.{}, Poker.run, .{&poker});
+
+        store.ensureGraphHydrated(GRAPH);
+        poker_thread.join();
+        if (poker.err) |perr| {
+            std.debug.print("\n[bomb2-test] poker saveToFileEx error: {s}\n", .{@errorName(perr)});
+        }
+        try testing.expect(poker.err == null);
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+
+        // Products correct despite the mid-build checkpoint attempt.
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+
+        // The tiny cap retired most rows during the build; a checkpoint OUTSIDE
+        // the build window (build mutex free) must reclaim them.
+        const retired_before = store.nodes.retiredCount();
+        std.debug.print("\n[bomb2-test] retired before post-build checkpoint = {d}\n", .{retired_before});
+        try testing.expect(retired_before > 0);
+        try store.saveToFileEx(true);
+        const retired_after = store.nodes.retiredCount();
+        std.debug.print("[bomb2-test] retired after post-build checkpoint = {d}\n", .{retired_after});
+        try testing.expect(retired_after < retired_before);
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}

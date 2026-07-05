@@ -2639,11 +2639,39 @@ pub const GraphStore = struct {
         return std.mem.eql(u8, node.graph_name, graph_name.*);
     }
 
+    /// Cache-reclaim grace gate (14.27M SEGV fix, bomb #2 — the WAL/periodic
+    /// checkpoint variant of the catalog-reload UAF): the per-graph EXCLUSIVE
+    /// rwlock the checkpoint holds drains QUERY readers, but NOT an in-flight
+    /// lazy-hydration build — its FamilyPipeline batches hold SHALLOW Node
+    /// copies whose sub-heap is owned by resident/just-retired cache entries,
+    /// and its core thread concurrently APPENDS to the same retire lists the
+    /// reclaim compacts. Every build runs under `hydration_build_mutex`, so
+    /// the grace point must additionally hold that mutex to free retired
+    /// values. Non-blocking by design: the checkpoint thread must NEVER park
+    /// under a graph-exclusive rwlock waiting out a multi-hour build — on
+    /// tryLock failure the caller SKIPS reclaim this cycle and the retire
+    /// backlog simply persists until the next checkpoint tick.
+    ///
+    /// (Also inherently covers the hydration-completion persist, which runs
+    /// while the build mutex is still held by the SAME thread: its tryLock
+    /// fails and the just-finished build's retirees are reclaimed by the next
+    /// periodic tick instead.)
+    pub fn tryBeginCacheReclaimGrace(self: *GraphStore) bool {
+        return self.hydration_build_mutex.tryLock();
+    }
+
+    pub fn endCacheReclaimGrace(self: *GraphStore) void {
+        self.hydration_build_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
     /// Reclaim (free) the node cache's retired entries that belong to
     /// `graph_name`. MUST be called by the storage adapter while it holds that
     /// graph's per-graph rwlock EXCLUSIVE (the checkpoint window), which drains
     /// all readers of that graph's nodes — so freeing them cannot race a live
-    /// pointer. This is the grace boundary in the bound-node-mirror design.
+    /// pointer — AND inside the `tryBeginCacheReclaimGrace` window, which
+    /// excludes an in-flight hydration build (whose batch copies and retire-
+    /// list appends the rwlock does not cover). This is the grace boundary in
+    /// the bound-node-mirror design.
     pub fn reclaimNodeCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
         var gn = graph_name;
         self.nodes.reclaimRetiredWhere(@ptrCast(&gn), retiredNodeInGraph);

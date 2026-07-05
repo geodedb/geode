@@ -6212,21 +6212,42 @@ pub const StorageAdapter = struct {
         // cache's retired (evicted/overwritten) entries for THIS graph now —
         // no reader can hold a pointer to them. This bounds resident RSS to
         // ~cache cap + retire backlog since the last checkpoint.
+        //
+        // 14.27M SEGV fix (bomb #2): the rwlock does NOT drain an in-flight
+        // lazy-hydration build — its merge batches hold shallow copies of
+        // (possibly just-retired) cache values and its core thread appends to
+        // the same retire lists this reclaim compacts. The grace point must
+        // therefore also win the store's build gate (a NON-BLOCKING tryLock
+        // of hydration_build_mutex — parking here under the graph-exclusive
+        // rwlock for a multi-hour build would starve every reader). On
+        // failure the reclaim is skipped this cycle; the retire backlog just
+        // persists until the next checkpoint tick after the build finishes.
         if (graph_store.getCurrentGlobalStore()) |store| {
-            store.reclaimNodeCacheRetiredForGraph(mg.name);
-            // PHASE 0: same grace boundary for the bounded adjacency caches.
-            // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
-            // graph, so any `[]const u64` adjacency slice handed to an
-            // in-flight reader of THIS graph is no longer live — free this
-            // graph's retired (evicted/removed) adjacency lists now.
-            store.reclaimAdjCacheRetiredForGraph(mg.name);
-            // PHASE 1: same grace boundary for the bounded edge-body cache.
-            // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
-            // graph drained), any `*Edge` handed to an in-flight reader of
-            // this graph is no longer live — free this graph's retired
-            // (evicted/removed) edge bodies now. One consistent grace window
-            // covers nodes + adjacency + edges.
-            store.reclaimEdgeCacheRetiredForGraph(mg.name);
+            if (store.tryBeginCacheReclaimGrace()) {
+                defer store.endCacheReclaimGrace();
+                store.reclaimNodeCacheRetiredForGraph(mg.name);
+                // PHASE 0: same grace boundary for the bounded adjacency caches.
+                // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
+                // graph, so any `[]const u64` adjacency slice handed to an
+                // in-flight reader of THIS graph is no longer live — free this
+                // graph's retired (evicted/removed) adjacency lists now.
+                store.reclaimAdjCacheRetiredForGraph(mg.name);
+                // PHASE 1: same grace boundary for the bounded edge-body cache.
+                // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
+                // graph drained), any `*Edge` handed to an in-flight reader of
+                // this graph is no longer live — free this graph's retired
+                // (evicted/removed) edge bodies now. One consistent grace window
+                // covers nodes + adjacency + edges.
+                store.reclaimEdgeCacheRetiredForGraph(mg.name);
+            } else {
+                // GAP-ENT-0038 discipline: a silently skipped grace point must
+                // be visible — a build that overlaps every cycle would
+                // otherwise look like a healthy cadence while the retire
+                // backlog grows.
+                slog.info("cache reclaim skipped: hydration build in flight (retire backlog deferred to next checkpoint)", &.{
+                    SAttr.string("graph", mg.name),
+                });
+            }
         }
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         return if (engine_ok) .ok else .engine_failed;
