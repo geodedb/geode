@@ -54,6 +54,17 @@ fn monoNanos() u64 {
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
+/// Poll-loop sleep (std.Thread.sleep is gone in 0.16; same nanosleep idiom
+/// as the canary tests / the in-tree bounded-acquire spins).
+fn sleepMs(ms: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ms / 1000),
+        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 /// Delete every loop2-product snapshot file under the data dir (leaves
 /// idmap.snapshot in place) so a reopen adopts the mmap IdMap but must
 /// scan-rebuild the loop2 products.
@@ -1141,4 +1152,324 @@ test "T2c poisoned gate: merge failure with gate-blocked workers joins all threa
         // or wedge this crash-style deinit.
         graph_store.deinitGlobalStoreForTestCrash();
     }
+}
+
+// ============================================================================
+// C-1 — checkpoint grace window vs in-flight hydration merge (reclaim gate)
+// ============================================================================
+//
+// T2b adversarial-review Critical: the merge's family threads read shallow
+// Node copies whose sub-heaps are owned by the bounded node cache; at scale
+// the merge core's own cache puts EVICT one shard's worth of nodes per shard,
+// landing their bodies on the graph's retire list while the family threads
+// are still reading them one shard behind. Hydration holds only entry.mutex +
+// hydration_build_mutex — NEVER mg.rwlock — so ANY checkpoint (write cadence
+// on any graph, explicit, WAL hook, clean shutdown) acquires the hydrating
+// graph's FREE rwlock and, pre-fix, unconditionally reclaimed those retired
+// bodies mid-merge: a use-after-free whose garbage the persist-on-complete
+// path then blesses as durable products.
+//
+// Mechanism contract (the UAF itself is not deterministically observable):
+//   * a checkpoint fired while the hydration is IN FLIGHT must SKIP the
+//     graph's retired-cache reclaims (skip counter >= 1), and the hydration
+//     products must come out correct;
+//   * a checkpoint fired AFTER hydration completes must reclaim again (skip
+//     counter unchanged) — the RSS bound survives, the gate is precise.
+//
+// RED (pre-gate): the mid-merge checkpoint runs the reclaims (skips == 0 for
+// the whole hydration) — under the small cache cap below it frees node
+// bodies the family threads are actively reading.
+test "C-1 reclaim gate: mid-merge checkpoint skips the hydrating graph's retired-cache reclaim; post-hydration checkpoint reclaims again" {
+    const allocator = testing.allocator;
+    const adapter_mod = geode.graph_storage_adapter;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    // FULL checkpoint: the reopen adopts the IdMap snapshot and DEFERS
+    // hydration to first touch (hooks armed between open and touch); deleting
+    // the loop2 snapshots forces that first touch onto the streaming rebuild.
+    const N: usize = 4_000;
+    try buildGateStore(allocator, data_dir, N, true);
+    try deleteHydrationSnapshots(allocator, data_dir);
+
+    // Small resident node-cache cap (256 << N): the merge core's cache puts
+    // EVICT earlier rows mid-merge, so the graph's retire list is NON-EMPTY
+    // exactly while the family threads may still be reading the batch copies
+    // — the C-1 hazard state. The slow merge (25 ms/shard) opens a wide
+    // window for the checkpoint below to land mid-merge.
+    _ = setenv("GEODE_NODE_CACHE_ENTRIES", "256", 1);
+    _ = setenv("GEODE_HYDRATION_SCAN_WORKERS", "16", 1);
+    defer {
+        _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
+        _ = unsetenv("GEODE_HYDRATION_SCAN_WORKERS");
+    }
+    graph_store.setTestHydrationMergeDelayMs(25);
+    defer graph_store.setTestHydrationMergeDelayMs(null);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        adapter_mod.resetHydrationReclaimSkipsForTesting();
+        const store = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        const Touch = struct {
+            store: *GraphStore,
+            count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+            done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+            fn run(t: *@This()) void {
+                const c = t.store.countNodesByLabel(GRAPH, "Taxon", null);
+                t.count.store(@intCast(c), .release);
+                t.done.store(true, .release);
+            }
+        };
+        var touch = Touch{ .store = store };
+        const th = try std.Thread.spawn(.{}, Touch.run, .{&touch});
+
+        // Wait until the merge is genuinely consuming rows (well past the
+        // 256-entry cache cap, so evictions have retired node bodies) but
+        // far from done, then fire full checkpoints — the exact
+        // write-cadence/explicit/shutdown window the review flagged. The
+        // retry loop closes the race where the merge finishes between the
+        // row poll and the checkpoint reaching this graph.
+        var spins: usize = 0;
+        while (graph_store.loop2ScanNodeCount() < 300 and spins < 20_000) : (spins += 1) {
+            sleepMs(1);
+        }
+        try testing.expect(graph_store.loop2ScanNodeCount() >= 300);
+
+        var skips_mid: u64 = 0;
+        while (skips_mid == 0 and !touch.done.load(.acquire)) {
+            try adapter.checkpointAll();
+            skips_mid = adapter_mod.getHydrationReclaimSkipsForTesting();
+        }
+
+        th.join();
+        try testing.expect(touch.done.load(.acquire));
+
+        // MECHANISM: at least one checkpoint hit the hydrating graph while
+        // its build was unfinished and SKIPPED the retired-cache reclaim.
+        // RED pre-gate: the reclaims ran unconditionally -> skips == 0.
+        try testing.expect(skips_mid >= 1);
+
+        // PRODUCTS: hydration completed correctly under the mid-merge
+        // checkpoint (the whole point — no garbage, no quarantine).
+        try testing.expectEqual(@as(u64, N), touch.count.load(.acquire));
+        try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+        try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+
+        // PRECISION: once hydration is DONE the gate must NOT fire — a
+        // post-hydration checkpoint reclaims again (the RSS bound survives).
+        const skips_before = adapter_mod.getHydrationReclaimSkipsForTesting();
+        try adapter.checkpointAll();
+        try testing.expectEqual(skips_before, adapter_mod.getHydrationReclaimSkipsForTesting());
+
+        graph_store.deinitGlobalStoreForTestCrash();
+    }
+}
+
+// ============================================================================
+// GAP-ENT-0042(a) — bounded, graph-scoped hydration self-heal flush
+// ============================================================================
+//
+// `loadOneGraphFromAdapterFull`'s orphan-edge self-heal used to fire
+// `adapter.checkpointAll()` — an ALL-graph FULL checkpoint whose per-graph
+// EXCLUSIVE rwlock acquisition spins UNBOUNDEDLY — from inside the hydration
+// chokepoint (entry.mutex + hydration_build_mutex held). Any busy rwlock on
+// ANY graph (e.g. a SHARED holder itself parked on `ensureGraphHydrated` for
+// a different graph -> on the hydration_build_mutex WE hold) wedged the
+// server permanently — the exact topology T3's bounded acquire was built to
+// avoid. Post-fix the flush is graph-scoped (`checkpointGraph`, T3's bounded
+// 5 s acquire) and non-fatal: on timeout the flush is skipped with a loud
+// log (repairs are already engine-applied; re-heal is idempotent).
+//
+// The damage fixture mirrors tests/test_edge_durability_churn_repro.zig:
+// orphan physical edge slots injected at the ADAPTER layer (no
+// __geode_internal_edge_id, no IdMap entry).
+
+const OTHER_GRAPH = "hsg_other";
+
+/// n nodes + 1 canonical edge (store-level: real public ids + IdMap entries)
+/// in GRAPH, `orphans` extra ADAPTER-level physical edge slots (the churn
+/// damage shape), plus one node in OTHER_GRAPH (so the graph-scoping test
+/// can hold ITS rwlock). Clean shutdown (snapshots written); the caller then
+/// deletes the loop2 snapshots so the reopen's first touch scan-rebuilds,
+/// detects + repairs the orphans, and runs the self-heal flush under test.
+fn buildSelfHealStore(allocator: std.mem.Allocator, data_dir: []const u8, n: usize, orphans: usize) !void {
+    graph_store.setDataDirOverride(allocator, data_dir);
+    const store = graph_store.getGlobalStore(allocator);
+    var name_buf: [48]u8 = undefined;
+    var first_id: u64 = 0;
+    var second_id: u64 = 0;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const id = try store.createNodeWithGraph(&[_][]const u8{"Taxon"}, GRAPH);
+        if (i == 0) first_id = id;
+        if (i == 1) second_id = id;
+        const name = try std.fmt.bufPrint(&name_buf, "taxon-{d}", .{i});
+        try store.setNodeProperty(id, "name", .{ .String = name });
+    }
+    _ = try store.createEdgeWithGraph(first_id, second_id, "CHILD_OF", GRAPH);
+    _ = try store.createNodeWithGraph(&[_][]const u8{"Other"}, OTHER_GRAPH);
+
+    // Inject orphan physical edge slots ADAPTER-level (slot ids, not public
+    // ids): durable adjacency entries with NO __geode_internal_edge_id and NO
+    // IdMap entry — unqueryable, detected + deleted by the hydration
+    // self-heal.
+    const adapter = graph_store.getGlobalAdapter().?;
+    const id_map = store.getIdMap(GRAPH) orelse return error.IdMapNotLoaded;
+    const from_slot = id_map.nodeSlot(@as(u128, first_id)) orelse return error.NodeSlotMappingMissing;
+    const to_slot = id_map.nodeSlot(@as(u128, second_id)) orelse return error.NodeSlotMappingMissing;
+    var j: usize = 0;
+    while (j < orphans) : (j += 1) {
+        _ = try adapter.createEdge(GRAPH, from_slot, to_slot, "CHILD_OF");
+    }
+
+    graph_store.deinitGlobalStore(); // CLEAN: final checkpoint + snapshots
+    graph_store.setDataDirOverride(allocator, null);
+}
+
+/// Shared driver: on the REOPENED damaged store, hold `locked_graph`'s
+/// per-graph rwlock EXCLUSIVE, hydrate GRAPH from a second thread (the
+/// self-heal flush under test fires inside), and require hydration to
+/// complete WITHIN `deadline_ms` WHILE the lock is still held. The caller
+/// owns the store/adapter lifetime (data-dir override stays active across
+/// the caller's post-driver assertions) and asserts products/counters.
+fn runSelfHealHydrationHoldingLock(
+    store: *GraphStore,
+    adapter: *geode.graph_storage_adapter.StorageAdapter,
+    locked_graph: []const u8,
+    deadline_ms: u64,
+) !void {
+    const Touch = struct {
+        store: *GraphStore,
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        fn run(t: *@This()) void {
+            // ensureGraphHydrated only (never takes mg.rwlock) — the
+            // completion signal must not depend on read paths that would
+            // block on the exclusive lock held below.
+            t.store.ensureGraphHydrated(GRAPH);
+            t.done.store(true, .release);
+        }
+    };
+    var touch = Touch{ .store = store };
+
+    var th_opt: ?std.Thread = null;
+    defer if (th_opt) |t| t.join(); // joins AFTER the lock release below
+
+    const mg = try adapter.acquireGraphWriteLock(locked_graph);
+    var released = false;
+    defer if (!released) adapter.releaseGraphWriteLock(mg);
+
+    th_opt = try std.Thread.spawn(.{}, Touch.run, .{&touch});
+
+    var waited_ms: u64 = 0;
+    while (!touch.done.load(.acquire) and waited_ms < deadline_ms) : (waited_ms += 10) {
+        sleepMs(10);
+    }
+    const done_under_lock = touch.done.load(.acquire);
+
+    adapter.releaseGraphWriteLock(mg);
+    released = true;
+
+    // THE CONTRACT: hydration (self-heal flush included) completed while the
+    // rwlock was still held. RED (pre-fix): the self-heal's ALL-graph FULL
+    // checkpoint spins unboundedly on the held rwlock -> never completes
+    // until the release above -> this fails.
+    try testing.expect(done_under_lock);
+}
+
+test "self-heal flush is graph-scoped: hydration completes while ANOTHER graph's rwlock is held exclusive" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 800;
+    try buildSelfHealStore(allocator, data_dir, N, 2);
+    try deleteHydrationSnapshots(allocator, data_dir);
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+    const store = graph_store.getGlobalStore(allocator);
+    const adapter = graph_store.getGlobalAdapter().?;
+
+    // Another graph's rwlock being busy must be IRRELEVANT to GRAPH's
+    // self-heal flush (graph-scoped!). Generous deadline: the flush itself
+    // has no contention, so post-fix this completes in well under a second.
+    try runSelfHealHydrationHoldingLock(store, adapter, OTHER_GRAPH, 20_000);
+
+    // The flush checkpoint itself SUCCEEDED (uncontended) — no skip.
+    try testing.expectEqual(@as(u64, 0), graph_store.hydrationSelfHealCheckpointSkips());
+
+    // Self-heal took: orphans physically deleted, canonical edge intact.
+    try testing.expectEqual(@as(u64, 1), try adapter.edgeCount(GRAPH));
+    try testing.expectEqual(@as(usize, 1), store.countEdgesForGraph(GRAPH));
+    try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+
+    graph_store.deinitGlobalStoreForTestCrash();
+}
+
+test "self-heal flush is bounded + non-fatal: rwlock busy past deadline skips the flush loudly, hydration still completes un-quarantined" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 800;
+    try buildSelfHealStore(allocator, data_dir, N, 2);
+    try deleteHydrationSnapshots(allocator, data_dir);
+
+    const skips_before = graph_store.hydrationSelfHealCheckpointSkips();
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+    const store = graph_store.getGlobalStore(allocator);
+    const adapter = graph_store.getGlobalAdapter().?;
+
+    // Hold GRAPH's OWN rwlock: the bounded flush acquire must give up after
+    // its 5 s deadline (deadline 25 s >> 5 s bound + scan time) instead of
+    // spinning forever, and the failure must NOT quarantine the hydration.
+    try runSelfHealHydrationHoldingLock(store, adapter, GRAPH, 25_000);
+
+    // The flush was SKIPPED (bounded acquire hit the deadline) — loudly
+    // counted. RED (pre-fix): unbounded spin, never a skip.
+    try testing.expect(graph_store.hydrationSelfHealCheckpointSkips() > skips_before);
+
+    // NON-FATAL: hydration completed with full products (not quarantined —
+    // a quarantined graph would refuse to serve and never re-scan), and the
+    // orphan repairs are engine-applied even though the flush was skipped.
+    try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Taxon", null));
+    try testing.expectEqual(@as(u64, 1), try adapter.edgeCount(GRAPH));
+    try testing.expectEqual(@as(usize, 1), store.countEdgesForGraph(GRAPH));
+
+    // Un-quarantined double-check: a second touch does not re-scan (done
+    // latched clean), and the row counter stays put.
+    const rows_after = graph_store.loop2ScanNodeCount();
+    store.ensureGraphHydrated(GRAPH);
+    try testing.expectEqual(rows_after, graph_store.loop2ScanNodeCount());
+
+    graph_store.deinitGlobalStoreForTestCrash();
 }
