@@ -1392,7 +1392,10 @@ pub const AuthGraphManager = struct {
         var it = self.storage.graph_grant_nodes.iterator();
         while (it.next()) |entry| {
             const node_id = entry.value_ptr.*;
-            const node = self.storage.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline: hydrate-on-miss so an evicted/not-yet-resident
+            // grant body still resolves from the engine (the getNodeProperty
+            // reads below already hydrate; the body read must match).
+            const node = self.storage.store.getNodePtrHydrated(node_id) orelse continue;
             // SECURITY_GRAPH_NAME is duplicated as a file-local const in this
             // module (and in user_storage.zig). Use the local copy so we don't
             // rely on a cross-module reference.

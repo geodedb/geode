@@ -322,7 +322,16 @@ pub const UserStorageBackend = struct {
     }
 
     fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) ?UserRecord {
-        const node = store.getNodePtr(node_id) orelse return null;
+        // Gap 0034 discipline, extended (merge interaction with the loop2
+        // warm-hydration path): a snapshot-served reopen restores the label
+        // postings WITHOUT materializing resident node bodies (engine scan
+        // skipped — see loadOneGraphFromAdapterFull), so the raw `getNodePtr`
+        // conflated "not yet resident" with "missing" and every persisted
+        // security record became invisible after a clean-shutdown reopen
+        // (admin login failed, bootstrap refused fail-closed). Read the body
+        // HYDRATE-ON-MISS like loadChainRoot: null now really means the node
+        // is absent from cache AND engine.
+        const node = store.getNodePtrHydrated(node_id) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         const id_val = getIntProp(store, node_id, "id", -1);
@@ -396,7 +405,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -422,7 +433,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -446,7 +459,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -478,7 +493,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -511,7 +528,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return false;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -547,7 +566,9 @@ pub const UserStorageBackend = struct {
         defer records.deinit(allocator);
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
