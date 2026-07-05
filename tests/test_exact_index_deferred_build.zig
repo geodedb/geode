@@ -413,3 +413,78 @@ test "exact node-property index: lazy build persists immediately (crash before a
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
     }
 }
+
+// ============================================================================
+// GAP-ENT-0048 DEFECT A — a THIS-binary store that is cleanly FULL-checkpointed
+// on shutdown must RELOAD the persisted exact index on reopen, so the first
+// index-served aggregate (T1) engages WITHOUT any O(graph) rebuild scan.
+// ============================================================================
+//
+// The observed 14.27M-scale symptom: on a reopened store the first
+// `GROUP BY source count(*)` blocked for minutes because the exact index was
+// DEFERRED (no `prop_exact.idx`) and the T1 posting walk paid a full
+// first-access rebuild. The existing deferred-build suite always FORCES the
+// deferred condition (FULL then LIGHT checkpoint removes the snapshot); it never
+// pins the CLEAN path the real server takes at shutdown — a FULL checkpoint
+// with NO subsequent invalidation. This test pins exactly that: the snapshot
+// survives the clean shutdown and reloads on reopen, so the T1 posting walk
+// serves the distinct values with ZERO rebuild runs (no scan).
+//
+// If this is GREEN on first run, DEFECT A does NOT reproduce on a this-binary
+// store: the persist+reload path is sound, and the live 14.27M defer was a
+// legacy (pre-persist-format) slab store or an unclean shutdown, not a code
+// defect — only DEFECT B (cancel) needs a fix.
+test "GAP-ENT-0048 DEFECT A: clean FULL-checkpoint reopen reloads the exact index (T1 posting walk, zero rebuild)" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "clean_reopen_graph";
+    const label = "Taxon";
+    // Low-cardinality indexed prop (like `source`), spanning many shards.
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 4096;
+
+    // ---- Session 1: ingest + CLEAN FULL checkpoint (mirrors a clean shutdown). ----
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+            try adapter.setNodeProperty(graph, node_id, "source", .{ .String = sources[i % sources.len] });
+        }
+        // Clean shutdown = FULL checkpoint that persists prop_exact.idx.
+        // DELIBERATELY no LIGHT checkpoint — we do NOT invalidate the snapshot.
+        try adapter.checkpointAll();
+    }
+
+    // ---- Session 2: reopen; the exact index must LOAD from disk (no rebuild). ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        _ = try adapter.getOrCreateGraph(graph);
+
+        // Opening did not rebuild (the loaded snapshot latches built at open).
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // T1's posting walk serves the distinct `source` values from the loaded
+        // snapshot — WITHOUT any scan/rebuild.
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const summaries = try adapter.collectPropertyPostingSummaries(graph, label, "source", arena.allocator());
+
+        // Exactly one summary per distinct source, counts intact.
+        try testing.expectEqual(@as(usize, sources.len), summaries.len);
+        var total: u64 = 0;
+        for (summaries) |s| total += s.count;
+        try testing.expectEqual(@as(u64, N), total);
+
+        // Headline assertion: STILL zero rebuilds — the index-served aggregate
+        // engaged immediately from the reloaded snapshot, never a full-graph scan.
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+    }
+}
