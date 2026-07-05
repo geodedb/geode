@@ -268,3 +268,148 @@ test "exact node-property index: full checkpoint on a deferred graph does not pe
         try testing.expect(adapter_mod.getExactRebuildRunsForTesting() >= 1);
     }
 }
+
+// ============================================================================
+// H4 persist-on-build — the lazily-built index must survive a crash
+// ============================================================================
+//
+// The deferred first-access rebuild costs O(graph) (~32 min at 14.27M), but
+// pre-fix its output persisted only at the NEXT FULL checkpoint (typically
+// clean shutdown): a crash after the build re-paid the whole rebuild on
+// reopen. Post-fix, `ensureExactNodePropertyIndexBuilt` triggers a
+// graph-scoped bounded persist (T3 `checkpointGraph`: 5 s acquire, best-
+// effort, non-fatal, latch-gated) on a background thread right after a
+// successful REBUILD — never after a snapshot LOAD (nothing new to persist)
+// and never for an unbuilt/invalidated index (the 88a05773 discipline:
+// `checkpointOneGraph` re-checks `exact_index_built` under the exclusive
+// lock and invalidates instead).
+//
+//   * Session 1 seeds durable pages, then FULL+LIGHT checkpoints so the
+//     reopen finds NO persisted index (the deferred condition).
+//   * Session 2 reopens, runs ONE property lookup (build-via-query), waits
+//     for the background persist to land, then deinits WITHOUT any full
+//     checkpoint — the crash: the persist-on-build write is the ONLY durable
+//     copy of the index.
+//   * Session 3 reopens after the "crash" and asserts the first lookup is
+//     served from the persisted snapshot: ZERO rebuild runs (the existing
+//     load-vs-rebuild counter) and byte-correct postings.
+//
+// RED (pre-fix): no persist fires in session 2 (completions == 0) and the
+// session-3 lookup re-pays the rebuild (rebuild-runs == 1, not 0).
+
+fn sleepMsDeferred(ms: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ms / 1000),
+        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
+test "exact node-property index: lazy build persists immediately (crash before any checkpoint does not re-pay the rebuild)" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "persist_on_build_graph";
+    const label = "Item";
+    const N: usize = 256;
+
+    var node_ids = try allocator.alloc(u64, N);
+    defer allocator.free(node_ids);
+
+    // ---- Session 1: seed durably; leave NO persisted index behind. ----
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+            node_ids[i] = node_id;
+            try adapter.setNodeProperty(graph, node_id, "uid", .{ .Int = @intCast(i) });
+            try adapter.setNodeProperty(graph, node_id, "grp", .{ .Int = @intCast(i % 4) });
+        }
+
+        // FULL checkpoint: durable pages (+ index snapshot); LIGHT checkpoint:
+        // removes the index snapshot -> the reopen DEFERS the rebuild.
+        try adapter.checkpointAll();
+        try adapter.checkpointAllLight();
+    }
+
+    // ---- Session 2: build via query; persist-on-build; CRASH. ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexPersistCountersForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        _ = try adapter.getOrCreateGraph(graph);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // Build-via-query: the first lookup pays the deferred rebuild ...
+        {
+            const got = try querySorted(allocator, adapter, graph, label, "uid", .{ .Int = 7 });
+            defer allocator.free(got);
+            try testing.expectEqualSlices(u64, node_ids[7..8], got);
+        }
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
+
+        // ... and triggers the background graph-scoped persist. Wait for it
+        // to land (bounded; adapter.deinit would also join it, but assert
+        // the SUCCESS surface explicitly).
+        var waited_ms: u64 = 0;
+        while (adapter_mod.getExactIndexPersistCompletionsForTesting() +
+            adapter_mod.getExactIndexPersistFailuresForTesting() == 0 and
+            waited_ms < 15_000) : (waited_ms += 10)
+        {
+            sleepMsDeferred(10);
+        }
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistAttemptsForTesting());
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistCompletionsForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexPersistFailuresForTesting());
+
+        // CRASH: deinit runs NO full checkpoint (mirrors the existing suite's
+        // sessions) — on-disk state = durable pages + the persist-on-build
+        // index snapshot only.
+    }
+
+    // ---- Session 3: crash reopen — the lookup must NOT rebuild. ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        _ = try adapter.getOrCreateGraph(graph);
+
+        // Singleton posting served correctly ...
+        {
+            const got = try querySorted(allocator, adapter, graph, label, "uid", .{ .Int = 7 });
+            defer allocator.free(got);
+            try testing.expectEqualSlices(u64, node_ids[7..8], got);
+        }
+        // ... WITHOUT re-paying the O(graph) rebuild: the persisted snapshot
+        // was loaded at open. RED (pre-fix): rebuild-runs == 1 here.
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // Wide posting also correct from the snapshot (whole-index validity,
+        // not just the probed entry) — still no rebuild.
+        {
+            const got = try querySorted(allocator, adapter, graph, label, "grp", .{ .Int = 1 });
+            defer allocator.free(got);
+            var expected = std.ArrayList(u64).empty;
+            defer expected.deinit(allocator);
+            var i: usize = 0;
+            while (i < N) : (i += 1) {
+                if (i % 4 == 1) try expected.append(allocator, node_ids[i]);
+            }
+            std.mem.sort(u64, expected.items, {}, std.sort.asc(u64));
+            try testing.expectEqualSlices(u64, expected.items, got);
+        }
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+    }
+}

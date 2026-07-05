@@ -9400,6 +9400,35 @@ pub const GraphStore = struct {
         return entry.failed.load(.acquire);
     }
 
+    /// C-1 (T2b adversarial review): true iff `graph_name` has a deferred-
+    /// hydration entry whose build has NOT completed (`done == false`) — a
+    /// first-touch hydration is pending or currently BUILDING. The checkpoint
+    /// grace window (`checkpointOneGraph`'s retired-cache reclaims in the
+    /// storage adapter) consults this to SKIP freeing this graph's retired
+    /// cache bodies: the hydration merge's family threads read shallow Node
+    /// copies whose sub-heaps (labels / property strings / graph_name /
+    /// tenant_id) are owned by the bounded node cache — and once the same
+    /// merge's cache puts EVICT those entries, the sub-heaps live on exactly
+    /// the per-graph retire lists the grace window frees. Hydration
+    /// deliberately never holds `mg.rwlock`, so the checkpoint's EXCLUSIVE
+    /// rwlock acquisition does NOT drain those readers; this predicate is
+    /// what does.
+    ///
+    /// Race-safety: `done` is stored (.release) only AFTER every scan/family
+    /// thread has been joined (both the clean path — `pipeline.finish()` —
+    /// and every error path join first), so an `.acquire` load of `false`
+    /// here is exactly the "a hydration thread may still hold retired
+    /// sub-heap pointers" condition, and a load of `true` happens-after all
+    /// those reads. Entries are only ever CREATED at open registration and
+    /// never removed for the process lifetime, so there is no
+    /// entry-appears-mid-check race. Skipping the reclaim on `true` is
+    /// always safe — the retire backlog just survives to the next grace
+    /// window (typically the persist-on-complete graph checkpoint fired
+    /// right after `done` flips).
+    pub fn hasUnfinishedHydration(self: *GraphStore, graph_name: []const u8) bool {
+        return self.isGraphDeferred(graph_name);
+    }
+
     // ── GAP-ENT-0023 P3: per-graph loop2-product snapshots ─────────────────
     //
     // Persist geode's loop2 hydration products so a warm reopen's first-access
@@ -10877,9 +10906,19 @@ pub const GraphStore = struct {
     /// hydrate-on-miss straight back into the per-node random engine reads
     /// this scan exists to avoid. The copy's sub-heap (labels/props/strings)
     /// is cache-owned and — including for evicted entries — freed only at the
-    /// per-graph grace window (retire discipline), which cannot run while
-    /// this graph's hydration holds its entry mutex; the merge joins every
-    /// family thread before returning.
+    /// per-graph grace window (retire discipline).
+    ///
+    /// SAFETY (C-1, corrected by the T2b adversarial review): the grace
+    /// window is gated on `mg.rwlock` EXCLUSIVE — a lock this hydration
+    /// deliberately NEVER holds (entry mutex + hydration_build_mutex only) —
+    /// so the window CAN open mid-merge: any checkpoint (write cadence on
+    /// any graph, explicit, WAL-growth hook, clean shutdown) acquires the
+    /// hydrating graph's free rwlock. What keeps these sub-heaps alive is
+    /// the reclaim gate in `checkpointOneGraph`: the retired-cache reclaims
+    /// are SKIPPED while this graph has an unfinished hydration
+    /// (`hasUnfinishedHydration`, i.e. the entry's `done` latch still
+    /// false). `done` flips only after the merge joins every family thread,
+    /// so no family can be reading a retired body once reclaims run again.
     fn hydrateStreamNodeRowCore(
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
@@ -10993,8 +11032,12 @@ pub const GraphStore = struct {
     /// order — including merge-index last-wins on duplicate keys — is
     /// IDENTICAL to the single-threaded merge. The batches hold shallow Node
     /// copies (see hydrateStreamNodeRowCore) so families never touch the
-    /// node cache. Family errors surface at the next submit()/finish() and
-    /// fail the hydration exactly like an inline error (C1 quarantine).
+    /// node cache; the copies' cache-owned sub-heaps are protected from the
+    /// checkpoint grace window by the C-1 reclaim gate (reclaims are skipped
+    /// while this graph's hydration is unfinished — see
+    /// hydrateStreamNodeRowCore's SAFETY note). Family errors surface at the
+    /// next submit()/finish() and fail the hydration exactly like an inline
+    /// error (C1 quarantine).
     const FamilyPipeline = struct {
         store: *GraphStore,
         graph_name: []const u8,
@@ -12184,8 +12227,37 @@ pub const GraphStore = struct {
             // Flush the legacy backfill AND any orphan-slot repairs so the
             // durable store reflects the self-heal on next open (idempotent
             // re-load then sees a clean adjacency).
+            //
+            // GAP-ENT-0042(a): this used to be `try adapter.checkpointAll()`
+            // — an ALL-graph FULL checkpoint whose per-graph EXCLUSIVE rwlock
+            // acquisition spins UNBOUNDEDLY (timeout null) — fired from
+            // inside the hydration chokepoint (entry.mutex +
+            // hydration_build_mutex held). Any busy rwlock on ANY graph
+            // (e.g. a SHARED holder itself parked on `ensureGraphHydrated`
+            // for a different graph → on the hydration_build_mutex WE hold)
+            // wedged the server permanently — the exact topology the Task-3
+            // bounded acquire was built to avoid. The backfill and the
+            // repairs only touched THIS graph, so scope the flush to THIS
+            // graph and reuse the Task-3 bounded-acquire path
+            // (`checkpointGraph`: 5 s deadline, tryLock re-probe, never
+            // parks). On timeout/failure: log LOUDLY and continue — the
+            // repairs are already applied to the engine (WAL-durable), so
+            // skipping the flush only defers page-flush/WAL-truncate to the
+            // next checkpoint, and a crash before then simply re-detects any
+            // surviving orphan slot on the next hydration scan and re-heals
+            // (idempotent, best-effort-per-slot by design). NOTE: with the
+            // C-1 reclaim gate, this mid-hydration graph checkpoint
+            // (`done == false`) deliberately skips the retired-cache
+            // reclaims — the merge family threads' batch memory stays
+            // untouched.
             if (backfilled_from_legacy or repaired_edge_slots > 0) {
-                try adapter.checkpointAll();
+                adapter.checkpointGraph(graph_name) catch |err| {
+                    _ = g_selfheal_checkpoint_skips.fetchAdd(1, .monotonic);
+                    log.err("hydration self-heal flush checkpoint skipped; repairs stay WAL-durable until the next checkpoint", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             }
             self.cleanupLegacySidecarsForGraph(graph_name);
 
@@ -13649,6 +13721,10 @@ pub fn hydrationInflightShardHighWater() u64 {
     return graph_storage_adapter.hydration_scan.hydrationInflightShardHighWater();
 }
 
+// GAP-ENT-0042(a): self-heal flush checkpoints skipped on bounded-acquire
+// timeout / engine failure (see hydrationSelfHealCheckpointSkips).
+var g_selfheal_checkpoint_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
 // Task 3 TDD hook — test builds only (check site gated on `builtin.is_test`):
 // force the hydration-completion persist to fail (simulates a graph-scoped
 // engine-checkpoint / snapshot-write error at the persist call site).
@@ -13771,6 +13847,15 @@ pub fn hydrationCompletionPersistCount() u64 {
 /// loudly, hydration itself unaffected; the next reopen re-scans).
 pub fn hydrationCompletionPersistFailureCount() u64 {
     return g_hydration_completion_persist_failures.load(.acquire);
+}
+
+/// GAP-ENT-0042(a): number of hydration self-heal flush checkpoints that were
+/// SKIPPED (bounded-acquire timeout or engine failure) instead of wedging the
+/// hydration chokepoint. The repairs themselves are already applied to the
+/// engine when this fires; only the page-flush/WAL-truncate is deferred to
+/// the next checkpoint. Test observability for the bounded self-heal flush.
+pub fn hydrationSelfHealCheckpointSkips() u64 {
+    return g_selfheal_checkpoint_skips.load(.acquire);
 }
 
 /// Number of nodes walked by the DEFERRED resident-index scan so far. 0 at the
