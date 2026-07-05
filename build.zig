@@ -7518,6 +7518,20 @@ pub fn build(b: *std.Build) void {
     const projection_pushdown_step = b.step("test-gap0043-projection-pushdown", "Run GAP-ENT-0043 T2 projection-pushdown regression (unlabeled GROUP BY/DISTINCT/aggregate streams single-property reads, zero materialization)");
     projection_pushdown_step.dependOn(&run_projection_pushdown_tests.step);
 
+    // GAP-ENT-0044/0045 (T5): read-executor working-set budget + cancel.
+    // Pre-fix: a runaway full-row read materializes unboundedly (the OOM
+    // killer is the arbiter) and a disconnected client's query runs to
+    // completion. Post-fix: clean SQLSTATE 53200 abort at
+    // GEODE_READ_EXECUTOR_BUDGET_MB and SQLSTATE 57014 cancel within one
+    // row/batch boundary of the flag being set.
+    const read_budget_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0044_read_budget_cancel.zig"), .target = target, .optimize = optimize });
+    read_budget_test_mod.addImport("geode", root_mod);
+    const read_budget_tests = b.addTest(.{ .root_module = read_budget_test_mod });
+    const run_read_budget_tests = b.addRunArtifact(read_budget_tests);
+    shardDep(test_step, &run_read_budget_tests.step, 1, test_shard_loads, test_shard_index);
+    const read_budget_step = b.step("test-gap0044-read-budget-cancel", "Run GAP-ENT-0044/0045 read-executor budget + cancel-on-disconnect regression (53200 budget abort, 57014 cancel within one batch)");
+    read_budget_step.dependOn(&run_read_budget_tests.step);
+
     // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
     // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
     // PARENT_OF children.  Counter assertions (label-scan == 0, exact >= 1) are

@@ -46,6 +46,13 @@ pub const Handle = struct {
     /// Returns the peer address string for diagnostic logging.  The
     /// pointer must remain valid until `unregister` is called.
     getPeerAddr: *const fn (self: *anyopaque) []const u8,
+    /// GAP-ENT-0045: request cancellation of the reader's in-flight
+    /// executor. Sets the reader's per-stream atomic cancel flag; the
+    /// executor's scan/aggregate loops poll it at row/batch boundaries
+    /// (read_budget.check()) and abort with SQLSTATE 57014. Optional so
+    /// pre-existing handles keep compiling; null = cancellation not
+    /// supported for this reader.
+    requestCancel: ?*const fn (self: *anyopaque) void = null,
 };
 
 /// Snapshot of the slowest-progressing reader; returned by
@@ -192,6 +199,47 @@ pub const Registry = struct {
         return result;
     }
 
+    /// GAP-ENT-0045: request cancellation of EVERY registered reader's
+    /// in-flight executor. Used by the process-wide proto_reader stall
+    /// watchdog ("all counters frozen + pending handlers"): every handler
+    /// is wedged downstream of nextMessage, so abort them all instead of
+    /// only logging "restart pod". Returns the number of readers whose
+    /// cancel was requested (handles without a requestCancel callback are
+    /// skipped and not counted).
+    pub fn cancelAll(self: *Registry) usize {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        var n: usize = 0;
+        for (self.entries.items) |entry| {
+            const cb = entry.requestCancel orelse continue;
+            cb(entry.self);
+            n += 1;
+        }
+        return n;
+    }
+
+    /// GAP-ENT-0045: request cancellation of every reader on ONE connection
+    /// (`peer` is the QUIC 4-tuple shared by that connection's multiplexed
+    /// streams — the same grouping `connectionLevelStall` uses). Used by the
+    /// per-connection stall watchdog: the whole connection is wedged / the
+    /// client is gone, so its in-flight executors must stop, while executors
+    /// on other connections are untouched. Returns the number of readers
+    /// whose cancel was requested.
+    pub fn cancelConnection(self: *Registry, peer: []const u8) usize {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        var n: usize = 0;
+        for (self.entries.items) |entry| {
+            if (!std.mem.eql(u8, entry.getPeerAddr(entry.self), peer)) continue;
+            const cb = entry.requestCancel orelse continue;
+            cb(entry.self);
+            n += 1;
+        }
+        return n;
+    }
+
     /// Current number of registered readers (== active handler threads
     /// currently inside the read loop).  Used by the metrics layer.
     pub fn count(self: *Registry) usize {
@@ -213,6 +261,7 @@ const FakeReader = struct {
     activity: u64,
     stream_id: u64,
     peer: []const u8,
+    cancel_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     fn getActivity(ptr: *anyopaque) u64 {
         const self: *FakeReader = @ptrCast(@alignCast(ptr));
@@ -226,6 +275,10 @@ const FakeReader = struct {
         const self: *FakeReader = @ptrCast(@alignCast(ptr));
         return self.peer;
     }
+    fn requestCancel(ptr: *anyopaque) void {
+        const self: *FakeReader = @ptrCast(@alignCast(ptr));
+        self.cancel_requested.store(true, .release);
+    }
 
     fn handle(self: *FakeReader) Handle {
         return .{
@@ -233,6 +286,7 @@ const FakeReader = struct {
             .getActivityNs = FakeReader.getActivity,
             .getStreamId = FakeReader.getStreamId,
             .getPeerAddr = FakeReader.getPeerAddr,
+            .requestCancel = FakeReader.requestCancel,
         };
     }
 };
@@ -318,6 +372,50 @@ test "GAP-0895: idle control stream on a live connection is NOT a stall" {
 
     // Connection-aware watchdog suppresses it: a sibling is active.
     try testing.expectEqual(@as(?StallSnapshot, null), reg.connectionLevelStall(1000, 500));
+}
+
+test "GAP-ENT-0045: cancelAll sets every registered reader's cancel flag" {
+    var reg = Registry.init();
+    defer reg.deinit(testing.allocator);
+
+    var a = FakeReader{ .activity = 100, .stream_id = 1, .peer = "conn-A" };
+    var b = FakeReader{ .activity = 100, .stream_id = 2, .peer = "conn-B" };
+    try reg.register(testing.allocator, a.handle());
+    try reg.register(testing.allocator, b.handle());
+
+    try testing.expectEqual(@as(usize, 2), reg.cancelAll());
+    try testing.expect(a.cancel_requested.load(.acquire));
+    try testing.expect(b.cancel_requested.load(.acquire));
+}
+
+test "GAP-ENT-0045: cancelConnection cancels only the wedged connection's readers" {
+    var reg = Registry.init();
+    defer reg.deinit(testing.allocator);
+
+    var wedged0 = FakeReader{ .activity = 100, .stream_id = 0, .peer = "conn-W" };
+    var wedged1 = FakeReader{ .activity = 120, .stream_id = 1, .peer = "conn-W" };
+    var healthy = FakeReader{ .activity = 950, .stream_id = 7, .peer = "conn-H" };
+    try reg.register(testing.allocator, wedged0.handle());
+    try reg.register(testing.allocator, wedged1.handle());
+    try reg.register(testing.allocator, healthy.handle());
+
+    try testing.expectEqual(@as(usize, 2), reg.cancelConnection("conn-W"));
+    try testing.expect(wedged0.cancel_requested.load(.acquire));
+    try testing.expect(wedged1.cancel_requested.load(.acquire));
+    try testing.expect(!healthy.cancel_requested.load(.acquire));
+}
+
+test "GAP-ENT-0045: handles without requestCancel are skipped, not counted" {
+    var reg = Registry.init();
+    defer reg.deinit(testing.allocator);
+
+    var legacy = FakeReader{ .activity = 100, .stream_id = 3, .peer = "conn-L" };
+    var no_cancel_handle = legacy.handle();
+    no_cancel_handle.requestCancel = null; // pre-0045 handle shape
+    try reg.register(testing.allocator, no_cancel_handle);
+
+    try testing.expectEqual(@as(usize, 0), reg.cancelAll());
+    try testing.expect(!legacy.cancel_requested.load(.acquire));
 }
 
 test "GAP-0895: a fully-wedged connection IS still reported" {

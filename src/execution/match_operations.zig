@@ -80,6 +80,10 @@ const match_log = std.log.scoped(.match_ops);
 // installed a scope (write-carrying MATCH shapes only), so read queries pay a
 // threadlocal load + branch per candidate at most.
 const write_budget = @import("../write_budget.zig");
+// GAP-ENT-0044/0045 (T5): read-executor budget + cancel polls. `check()` is a
+// no-op unless the read dispatcher installed a scope, so write paths and
+// scope-free callers pay a threadlocal load + branch per row at most.
+const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
 const property_value_codec = @import("../property_value_codec.zig");
@@ -1323,6 +1327,7 @@ pub fn propertyAggregateFastPath(
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 if (where_pred) |p| {
@@ -1339,6 +1344,7 @@ pub fn propertyAggregateFastPath(
         const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
         defer allocator.free(slots);
         for (slots) |slot_id| {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
                 const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
@@ -1864,6 +1870,7 @@ pub fn countFilteredFastPath(
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 const w_val = prop_store.getNodeProperty(node_id, where_pred.key) orelse continue;
@@ -1875,6 +1882,7 @@ pub fn countFilteredFastPath(
         const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
         defer allocator.free(slots);
         for (slots) |slot_id| {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
                 const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
@@ -2072,6 +2080,7 @@ pub fn indexServedGroupByFastPath(
     var merged_counts = try std.ArrayList(u64).initCapacity(sa, summaries.len);
     var merged_index = std.StringHashMap(usize).init(sa);
     for (summaries) |s| {
+        try read_budget.check(); // T5: budget/cancel poll (O(distinct) loop, but distinct can be large)
         const pv = (adapter.getNodeProperty(filter_graph, s.representative_slot, key_prop, sa) catch return null) orelse return null;
         const val: Value = switch (pv) {
             .int => |iv| Value{ .Int = iv },
@@ -2389,6 +2398,7 @@ pub fn groupByAggregateFastPath(
         };
         if (posting) |slots| {
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
 
@@ -2481,6 +2491,7 @@ pub fn groupByAggregateFastPath(
         const n_scan = if (scan_label != null) scan_slots.len else scan_entries.len;
         var scan_i: usize = 0;
         while (scan_i < n_scan) : (scan_i += 1) {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             const slot_id: u64 = if (scan_label != null) scan_slots[scan_i] else scan_entries[scan_i].slot_id;
             const prop_head: ?u64 = if (scan_label != null) null else scan_entries[scan_i].rec.prop_head;
             if (tenant_active) {
@@ -2927,6 +2938,7 @@ pub fn topKOrderedFastPath(
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
@@ -2959,6 +2971,7 @@ pub fn topKOrderedFastPath(
         const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
         defer allocator.free(slots);
         for (slots) |slot_id| {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
                 const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
@@ -8216,6 +8229,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // GAP (write-path OOM): abort a write-carrying scan cleanly
                     // once the working-set budget is exceeded (no-op otherwise).
                     try write_budget.check();
+                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                     // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -8879,6 +8893,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // GAP (write-path OOM): abort a write-carrying scan cleanly
                     // once the working-set budget is exceeded (no-op otherwise).
                     try write_budget.check();
+                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                     // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -9302,6 +9317,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             while (node_iter.next()) |node| {
                 // GAP (write-path OOM): budget poll (no-op without a scope).
                 try write_budget.check();
+                try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
@@ -10147,6 +10163,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // materializes detached boxes per cold node — poll the
                     // budget here too (no-op without a scope).
                     try write_budget.check();
+                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                     try left_nodes_to_process.append(allocator, left_node_ptr);
                 }
             }
@@ -10154,6 +10171,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             for (left_nodes_to_process.items) |left_node| {
                 // GAP (write-path OOM): budget poll (no-op without a scope).
                 try write_budget.check();
+                try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
@@ -10323,6 +10341,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // atomicity at abort, and the OOM killer is never the arbiter.
                 // No-op when no budget scope is installed (read queries).
                 try write_budget.check();
+                try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                 const node: *graph_store.Node = if (use_label_candidates) blk: {
                     if (cand_idx >= simple_node_candidates.items.len) break;
                     const nid = simple_node_candidates.items[cand_idx];

@@ -116,6 +116,11 @@ const multi_graph_security = geode.multi_graph_security;
 const tenant_quota = geode.tenant_quota;
 const stream_registry = @import("active_stream_registry.zig");
 const proto_reader_registry = @import("proto_reader_registry.zig");
+// GAP-ENT-0044/0045 (T5): read-executor budget + cancel-on-disconnect. The
+// handler installs the per-stream cancel sources (connection shutdown flag +
+// per-reader watchdog flag) before dispatching queries; the executor's scan/
+// aggregate loops poll them at row/batch boundaries.
+const read_budget = geode.read_budget;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -1531,6 +1536,14 @@ const BufferedProtoReader = struct {
     /// stall log line can identify WHICH client is wedged.  Empty
     /// string when unset (initial state).
     peer_addr: []const u8 = "",
+    /// GAP-ENT-0045: per-stream executor cancel flag. Set by the stall
+    /// watchdog (via the registry's requestCancel) when this stream's
+    /// handler is wedged; the executor polls it at row/batch boundaries
+    /// (read_budget.check()) and aborts with SQLSTATE 57014 instead of
+    /// running an abandoned query to completion. Complementary to the
+    /// connection-level `stream.shutdown_requested` (client disconnect),
+    /// which the handler wires as the primary cancel source.
+    cancel_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -1576,6 +1589,13 @@ const BufferedProtoReader = struct {
         return self.peer_addr;
     }
 
+    /// GAP-ENT-0045 registry callback: the stall watchdog requests abort of
+    /// this reader's in-flight executor (set-once; polled by read_budget).
+    fn registryRequestCancel(ptr: *anyopaque) void {
+        const self: *BufferedProtoReader = @ptrCast(@alignCast(ptr));
+        self.cancel_requested.store(true, .release);
+    }
+
     /// Build a registry handle pointing at this reader.  The caller is
     /// responsible for invoking `proto_reader_registry.register`
     /// immediately after this returns and `unregister` before the
@@ -1586,6 +1606,7 @@ const BufferedProtoReader = struct {
             .getActivityNs = registryGetActivity,
             .getStreamId = registryGetStreamId,
             .getPeerAddr = registryGetPeerAddr,
+            .requestCancel = registryRequestCancel,
         };
     }
 
@@ -2723,6 +2744,16 @@ fn runStreamQueryLoopWithReader(
     peer_ip: []const u8,
 ) void {
     _ = transport;
+    // GAP-ENT-0045: wire the executor cancel sources for every query this
+    // stream handler dispatches — the transport's connection-close flag
+    // (set the instant the client disconnects / resets / is idle-reaped;
+    // the same source the node-scan streaming cancel binds) plus this
+    // reader's watchdog abort flag. Cleared on handler exit (threads are
+    // pooled; a stale thread-local would cancel an unrelated stream).
+    read_budget.setStreamCancelSource(stream.shutdown_requested);
+    read_budget.setWatchdogCancelSource(&line_reader.cancel_requested);
+    defer read_budget.setStreamCancelSource(null);
+    defer read_budget.setWatchdogCancelSource(null);
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (isIdleStreamReadError(err)) return;
@@ -3347,6 +3378,15 @@ fn processFirstStreamPacket(
         return true;
     };
 
+    // GAP-ENT-0045: cooperative first-stream owners service MANY streams on
+    // one thread — install this packet's cancel sources for the duration of
+    // its dispatch only, and clear them before the owner moves to the next
+    // stream (a stale thread-local would cancel an unrelated stream's query).
+    read_budget.setStreamCancelSource(stream.shutdown_requested);
+    read_budget.setWatchdogCancelSource(&line_reader.cancel_requested);
+    defer read_budget.setStreamCancelSource(null);
+    defer read_budget.setWatchdogCancelSource(null);
+
     {
         const om = @import("otel_metrics");
         const otel_lib = @import("otel");
@@ -3374,7 +3414,6 @@ fn processFirstStreamPacket(
         };
     }
 
-    _ = line_reader;
     return true;
 }
 

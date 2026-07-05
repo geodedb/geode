@@ -17,6 +17,10 @@ const pattern_helpers = @import("pattern_helpers.zig");
 // through the tenant-aware path. The common single-tenant case (null/"default"
 // scope) keeps the fast path with zero overhead.
 const tenancy = @import("tenancy.zig");
+// GAP-ENT-0044/0045 (T5): read-executor budget + cancel. Polled at every
+// row-materialization boundary (right before g_path_rows_materialized ticks),
+// so a runaway/abandoned planned read aborts within one row of the trip.
+const read_budget = @import("../read_budget.zig");
 
 // Task 1.5 / GAP-0806: interior-dupe scratch allocator resolver. Mirrors
 // `match_operations.scratchAllocatorOr` — when a per-query arena is installed
@@ -938,6 +942,7 @@ fn materializeNodeOnlyRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |tracked_node| {
@@ -1253,6 +1258,7 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
+        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try rows.append(allocator, row);
         emitted += 1;
@@ -1272,6 +1278,7 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
+        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try rows.append(allocator, row);
     }
@@ -1349,6 +1356,7 @@ const VarLenExec = struct {
             .exec_context = @constCast(&self.context),
         };
         const row = try buildBindingRow(self.allocator, self.q, env, binding_values);
+        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try self.rows.append(self.allocator, row);
     }
@@ -1658,6 +1666,7 @@ fn materializeMultiChainRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |n| {
@@ -2355,6 +2364,7 @@ fn materializePathRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |node| {

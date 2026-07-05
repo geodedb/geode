@@ -2851,9 +2851,24 @@ pub fn main() !void {
                             0;
                         const fresh_stall = last_stall_log_idle_ns < stall_threshold_ns;
                         if (fresh_stall or since_last_log >= stall_relog_interval_ns) {
+                            // GAP-ENT-0045: ABORT the wedged executors, don't
+                            // just log. Every registered reader's counters are
+                            // frozen with handlers pending — each in-flight
+                            // executor gets its cancel flag set; the read
+                            // budget/cancel polls abort it at the next
+                            // row/batch boundary with SQLSTATE 57014 and the
+                            // handler thread returns to its read loop. The
+                            // 2026-07-05 OOM proof: two abandoned GROUP BYs
+                            // ran ~50 min unbounded because this watchdog only
+                            // logged. Cancellation is read-only w.r.t. data
+                            // (aborts BETWEEN rows); a wedged WRITE handler is
+                            // untouched (write paths don't install the read
+                            // scope), preserving the old mid-transaction
+                            // safety stance for mutations.
+                            const cancel_requested_n = quic_connection_handler.getProtoReaderRegistry().cancelAll();
                             std.log.err(
-                                "proto_reader stall detected: idle_ms={d} pending_handlers={d} (handlers wedged downstream of BufferedProtoReader.nextMessage; restart pod to recover)",
-                                .{ idle_ns / std.time.ns_per_ms, pending },
+                                "proto_reader stall detected: idle_ms={d} pending_handlers={d} (handlers wedged downstream of BufferedProtoReader.nextMessage; requested executor cancellation for {d} in-flight readers — SQLSTATE 57014 at the next row boundary; restart pod if the stall persists)",
+                                .{ idle_ns / std.time.ns_per_ms, pending, cancel_requested_n },
                             );
                             last_stall_log_idle_ns = idle_ns;
                         }
@@ -2876,9 +2891,14 @@ pub fn main() !void {
                     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
                     const now_ns: u64 = sec * std.time.ns_per_s + nsec;
                     if (reg.connectionLevelStall(now_ns, stall_threshold_ns)) |snap| {
+                        // GAP-ENT-0045: the whole connection is wedged (every
+                        // stream idle past threshold — client likely gone).
+                        // Abort ITS in-flight read executors only; healthy
+                        // connections are untouched.
+                        const conn_cancelled_n = reg.cancelConnection(snap.peer_addr);
                         std.log.warn(
-                            "per-connection proto_reader stall: stream_id={d} peer={s} idle_ms={d} (every stream on this connection idle past threshold; client likely gone — connection will be reaped on its own timeout)",
-                            .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms },
+                            "per-connection proto_reader stall: stream_id={d} peer={s} idle_ms={d} (every stream on this connection idle past threshold; client likely gone — requested executor cancellation for {d} readers; connection will be reaped on its own timeout)",
+                            .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms, conn_cancelled_n },
                         );
                     }
 
