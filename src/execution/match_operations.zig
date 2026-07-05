@@ -2185,6 +2185,30 @@ pub fn indexServedGroupByFastPath(
 ///
 /// m2: LIMIT N is NOT applied here — the caller (executeMatchQueryImpl) applies
 /// post-return LIMIT on the ExecutionResult, matching propertyAggregateFastPath.
+/// GAP-ENT-0043 T2: single-property engine read for the bounded scan loops.
+/// When the scan came from the engine page-scan (`prop_head != null`, the
+/// unlabeled source) the read routes via `getNodePropertyByHead`, which walks
+/// the node's property chain for ONE key WITHOUT the per-node `getNode`
+/// random read — a pure single-property read, never a whole-node decode. A
+/// `prop_head` of 0 means the node has no properties: every key reads null.
+/// Label-posting sources (`prop_head == null`) keep the `getNodeProperty`
+/// read (getNode + single-key chain walk). Errors read as null (skip),
+/// matching the existing `catch null` / `catch continue` loop semantics.
+fn readScanNodeProp(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    slot_id: u64,
+    prop_head: ?u64,
+    key: []const u8,
+    alloc: std.mem.Allocator,
+) ?gs.PropertyValue {
+    if (prop_head) |ph| {
+        if (ph == 0) return null;
+        return adapter.getNodePropertyByHead(graph_name, slot_id, ph, key, alloc) catch null;
+    }
+    return adapter.getNodeProperty(graph_name, slot_id, key, alloc) catch null;
+}
+
 pub fn groupByAggregateFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -2199,7 +2223,17 @@ pub fn groupByAggregateFastPath(
     if (chain.name != null) return null;
     if (q.path_variable != null) return null;
     const head = chain.head orelse return null;
-    if (head.labels.len != 1) return null;
+    // GAP-ENT-0043 T2: accept ZERO or one label. The unlabeled
+    // `MATCH (n) … GROUP BY n.k` / `RETURN DISTINCT n.k` previously declined
+    // here and fell through to planned_read_runtime, which materializes one
+    // FULL node row per node before aggregating (the 2026-07-05 live
+    // 60s+/OOM family). The unlabeled scan streams the graph id-set
+    // (unbounded cache: fully-resident reads) or the engine page-scan
+    // (bounded cache: per-key single-property reads via the node's
+    // prop_head — whole-node decode skipped). Multi-label still declines
+    // (posting intersection is the regular path's job).
+    if (head.labels.len > 1) return null;
+    const scan_label: ?[]const u8 = if (head.labels.len == 1) head.labels[0] else null;
     if (head.props != null) return null;
     const match_var = head.name orelse return null;
 
@@ -2341,7 +2375,18 @@ pub fn groupByAggregateFastPath(
         defer read_view.deinit();
         const read_store = read_view.getReadStore();
         const prop_store: *graph_store.GraphStore = @constCast(read_store);
-        const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+        // T2 unlabeled: the authoritative graph id-set replaces the label
+        // posting (unbounded cache => every node resident; the iterator's
+        // hydrate-on-miss is a no-op). Collected into the group arena so the
+        // loop below is byte-identical for both sources.
+        const posting: ?[]const u64 = if (scan_label) |lbl|
+            read_store.getNodesByLabel(filter_graph, lbl)
+        else blk: {
+            var graph_ids = std.ArrayList(u64).empty;
+            var graph_iter = read_store.iterateNodesInGraph(filter_graph);
+            while (graph_iter.next()) |node_ptr| try graph_ids.append(ga, node_ptr.id);
+            break :blk try graph_ids.toOwnedSlice(ga);
+        };
         if (posting) |slots| {
             for (slots) |node_id| {
                 const node = read_store.nodes.get(node_id) orelse continue;
@@ -2419,12 +2464,27 @@ pub fn groupByAggregateFastPath(
         }
     } else {
         // ---- Bounded: engine-direct slot scan ----
-        const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
-        defer allocator.free(slots);
+        // T2: labeled → label-posting slots (per-key getNodeProperty reads);
+        // unlabeled → engine page-scan entries carrying each node's prop_head,
+        // so every referenced-property read goes via getNodePropertyByHead
+        // (single-property chain walk, no per-node getNode random read).
+        var scan_slots: []u64 = &.{};
+        var scan_entries: []graph_storage_adapter.StorageAdapter.ScanEntry = &.{};
+        if (scan_label) |lbl| {
+            scan_slots = adapter.getNodesByLabelCapped(filter_graph, lbl, null, allocator) catch return null;
+        } else {
+            scan_entries = adapter.scanAllNodes(filter_graph, allocator) catch return null;
+        }
+        defer allocator.free(scan_slots);
+        defer allocator.free(scan_entries);
 
-        for (slots) |slot_id| {
+        const n_scan = if (scan_label != null) scan_slots.len else scan_entries.len;
+        var scan_i: usize = 0;
+        while (scan_i < n_scan) : (scan_i += 1) {
+            const slot_id: u64 = if (scan_label != null) scan_slots[scan_i] else scan_entries[scan_i].slot_id;
+            const prop_head: ?u64 = if (scan_label != null) null else scan_entries[scan_i].rec.prop_head;
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -2437,7 +2497,7 @@ pub fn groupByAggregateFastPath(
             }
 
             if (where_pred) |p| {
-                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator) catch continue) orelse continue;
+                const w_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, p.key, allocator) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
@@ -2454,7 +2514,7 @@ pub fn groupByAggregateFastPath(
             const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
                 if (ki > 0) try key_w.writeAll("|");
-                const pv = adapter.getNodeProperty(filter_graph, slot_id, kprop, allocator) catch null;
+                const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
                 if (pv) |pval| {
                     // m1: defer frees the engine-owned string when this block exits
                     // (success or error), so a ga.dupe OOM below cannot leak it.
@@ -2503,7 +2563,7 @@ pub fn groupByAggregateFastPath(
                     .group_key => {},
                     .count_star => group.accs[item_acc_idx[i]].count += 1,
                     .count_prop => {
-                        const pv = adapter.getNodeProperty(filter_graph, slot_id, item_agg_prop[i].?, allocator) catch null;
+                        const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator);
                         if (pv) |pval| {
                             switch (pval) {
                                 .string => |s| allocator.free(s),
@@ -2513,7 +2573,7 @@ pub fn groupByAggregateFastPath(
                         }
                     },
                     .sum, .avg, .min, .max => {
-                        const t_val = (adapter.getNodeProperty(filter_graph, slot_id, item_agg_prop[i].?, allocator) catch continue) orelse continue;
+                        const t_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
                         defer switch (t_val) {
                             .string => |s| allocator.free(s),
                             else => {},
