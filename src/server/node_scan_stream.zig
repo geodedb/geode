@@ -693,6 +693,36 @@ pub fn prepare(
         } else return null;
     }
 
+    // GAP-ENT-0055: O(1) FILTERED count for `MATCH (n:L) WHERE n.<indexed> =
+    // '<ascii>' RETURN count(n)`. The exact node-property index posting LENGTH
+    // for (label, key, value) IS the answer, so serve it O(1) instead of
+    // collecting + materializing + re-evaluating every matching slot in
+    // `buildCountPage` (O(matching): 88 s at 7 M for `source='col'`). Gated on a
+    // SINGLE seekable equality, one label, no inline props, no FILTER clause —
+    // any other shape falls through to the streaming tally (still correct).
+    // Tenant/RLS-scoped counts never reach this engine-direct stream (handled by
+    // the in-memory fast paths / legacy executor upstream), so — like the
+    // unfiltered precompute above — the posting length (all-tenant) is exact here.
+    if (count_precomputed == null and eligibility.mode == .count and
+        !has_inline_props and eligibility.pattern.labels.len == 1 and
+        q.filter_clause == null)
+    {
+        if (q.where_clause) |wc| {
+            if (seekableEqCountWhere(wc, var_name)) |seek| {
+                if (graph_store.getGlobalAdapter()) |adapter| {
+                    if (adapter.countCandidateNodesByLabelAndProperty(
+                        graph_name,
+                        eligibility.pattern.labels[0],
+                        seek.key,
+                        graph_store.PropertyValue{ .String = seek.value },
+                    )) |posting_len| {
+                        count_precomputed = posting_len;
+                    } else |_| {}
+                }
+            }
+        }
+    }
+
     // Clone RETURN items (projection mode) into the arena.
     var ret_items: []ast.ReturnItem = &.{};
     var columns: [][]const u8 = &.{};
@@ -1185,6 +1215,46 @@ fn stringLiteralValue(e: ast.Expr) ?[]const u8 {
 /// the downstream WHERE re-eval remain correct). The synthetic value Expr is a
 /// `.String`, so `seekIndexedCandidates`' `eval`+`valueToPropertyValue` yields
 /// the same `String` property value the inline `{prop: 'val'}` path produces.
+/// GAP-ENT-0055: recognize a WHERE that is EXACTLY a single seekable
+/// `var.key = <ascii string literal>` equality (no AND, no other predicate),
+/// so a filtered `count(n)` can be served O(1) from the exact-index posting
+/// LENGTH instead of streaming + materializing every matching slot
+/// (`buildCountPage`'s tally, O(matching) — 88 s on the 7M store's high-
+/// cardinality `source='col'` covering 5.4 M nodes).
+///
+/// This is the SAME provably-exact shape `countFilteredFastPath` (GAP-ENT-0019)
+/// serves O(1), but on the path the QUIC handler ACTUALLY routes filtered
+/// counts to (readServedEngineDirect → node_scan_stream), which
+/// `countFilteredFastPath` never sees. It must be a SINGLE top-level equality:
+/// an AND tree (`a=x AND b>2`) would need per-node re-eval, so it is declined
+/// (→ the streaming tally, still correct). Reuses the seek soundness gates
+/// (`shouldIndexProperty` completeness + `isSeekableAsciiStringLiteral` NFC /
+/// cross-type argument), so the posting bucket holds exactly the eval-matches
+/// (the same collision-free posting assumption the T1 index-served aggregate
+/// path relies on).
+const SeekEqCount = struct { key: []const u8, value: []const u8 };
+fn seekableEqCountWhere(where_expr: ast.Expr, var_name: []const u8) ?SeekEqCount {
+    const b = switch (where_expr) {
+        .Binary => |bin| bin,
+        else => return null,
+    };
+    if (b.op != .Eq) return null; // single equality only (AND / ordering → tally)
+    var key: ?[]const u8 = null;
+    var lit: ?[]const u8 = null;
+    if (varPropertyKey(b.left.*, var_name)) |k| {
+        key = k;
+        lit = stringLiteralValue(b.right.*);
+    } else if (varPropertyKey(b.right.*, var_name)) |k| {
+        key = k;
+        lit = stringLiteralValue(b.left.*);
+    }
+    const seek_key = key orelse return null;
+    const seek_lit = lit orelse return null;
+    if (!graph_store.shouldIndexProperty(seek_key)) return null;
+    if (!isSeekableAsciiStringLiteral(seek_lit)) return null;
+    return .{ .key = seek_key, .value = seek_lit };
+}
+
 fn appendSeekableWhereProps(
     arena: std.mem.Allocator,
     where_expr: ast.Expr,

@@ -444,3 +444,59 @@ test "GAP-0902: selective per-key read — filtered count on wide nodes is corre
     try testing.expectEqual(@as(u64, 0), graph_store.getCloneNodesTotal());
     try testing.expect(h.store.nodes.residentCount() <= CACHE_CAP);
 }
+
+test "GAP-ENT-0055: seekable-eq filtered count is O(1) posting length — zero materialization" {
+    var h = try BoundedHarness.init(testing.allocator);
+    defer h.deinit();
+    try seedWide(&h, N_NODES); // every node rank='species'
+    const aa = h.arena.allocator();
+
+    // `rank` is an indexed key and 'species' is a pure-ASCII, non-numeric literal,
+    // so the exact-index posting LENGTH is the count. node_scan_stream must serve
+    // it O(1) WITHOUT materializing a single node — contrast the streaming tally,
+    // which materializes O(matching). This is the shape the QUIC handler routes
+    // filtered counts to (readServedEngineDirect → node_scan_stream), where the
+    // pre-0055 path scanned (88 s at 7 M for the high-cardinality value).
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const q = try parseQueryAst(&qa, "MATCH (n:Wide) WHERE n.rank = 'species' RETURN count(n) AS c");
+    try testing.expect(node_scan_stream.isEligible(q));
+
+    node_scan_stream.resetNodesMaterializedTotal();
+    var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse return error.NotEligible;
+    defer stream.deinit();
+    var page = try stream.buildNextPage(aa, 64);
+    defer page.result.deinit(aa);
+
+    try testing.expectEqual(@as(usize, 1), page.result.rows.len);
+    try testing.expectEqual(@as(i64, @intCast(N_NODES)), page.result.rows[0][0].Int);
+    // O(1): the posting length, NOT a per-node tally → zero materialization.
+    try testing.expectEqual(@as(u64, 0), node_scan_stream.getNodesMaterializedTotal());
+}
+
+test "GAP-ENT-0055: selective-value filtered count is exact via posting length" {
+    var h = try BoundedHarness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+    // Mixed ranks: exactly 3 'genus', the rest 'species'.
+    var i: usize = 0;
+    while (i < N_NODES) : (i += 1) {
+        const rank = if (i < 3) "genus" else "species";
+        const q = try std.fmt.allocPrint(aa, "CREATE (:Wide {{ordinal: {d}, rank: '{s}'}})", .{ i, rank });
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+        if (i % 512 == 0) h.store.nodes.reclaimRetired();
+    }
+    h.store.nodes.reclaimRetired();
+
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+    const q = try parseQueryAst(&qa, "MATCH (n:Wide) WHERE n.rank = 'genus' RETURN count(n) AS c");
+    node_scan_stream.resetNodesMaterializedTotal();
+    var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse return error.NotEligible;
+    defer stream.deinit();
+    var page = try stream.buildNextPage(aa, 64);
+    defer page.result.deinit(aa);
+    try testing.expectEqual(@as(i64, 3), page.result.rows[0][0].Int);
+    try testing.expectEqual(@as(u64, 0), node_scan_stream.getNodesMaterializedTotal());
+}
