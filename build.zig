@@ -8070,6 +8070,26 @@ pub fn build(b: *std.Build) void {
     const exact_index_deferred_step = b.step("test-exact-index-deferred-build", "H4: defer exact node-property index rebuild to lazy first-access (cold-open phase 1)");
     exact_index_deferred_step.dependOn(&run_exact_index_deferred_tests.step);
 
+    // GAP-ENT-0048 crash-reconcile (Phase E): on a crash-reopen with a committed
+    // WAL tail, geode RECONCILES prop_exact.idx (O(tail)) instead of REBUILDING.
+    // Asserts reconcile == full-rebuild key-for-key AND count-for-count for an
+    // insert + in-place value change + delete; clean reopen reloads; multi-crash
+    // and reverse-map-absent fall back to a safe rebuild; reverse-map round-trip
+    // + bounded size.
+    const exact_index_crash_reconcile_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_exact_index_crash_reconcile.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exact_index_crash_reconcile_mod.addImport("geode", root_mod);
+    exact_index_crash_reconcile_mod.addImport("graph_storage", graph_storage_mod);
+    const exact_index_crash_reconcile_tests = b.addTest(.{ .root_module = exact_index_crash_reconcile_mod });
+    const run_exact_index_crash_reconcile_tests = b.addRunArtifact(exact_index_crash_reconcile_tests);
+    shardDep(test_step, &run_exact_index_crash_reconcile_tests.step, 1, test_shard_loads, test_shard_index);
+    const exact_index_crash_reconcile_step = b.step("test-exact-index-crash-reconcile", "Phase E: crash-reopen prop_exact.idx reconcile == full rebuild (keys+counts)");
+    exact_index_crash_reconcile_step.dependOn(&run_exact_index_crash_reconcile_tests.step);
+
     // TSan companion: same test file compiled with -fsanitize-thread so the
     // adversarial repeated-rebuild case runs under the thread sanitizer.
     // Wired as an opt-in step (not part of the default test_step) because TSan
