@@ -94,6 +94,18 @@ var g_exact_rebuild_nodes_scanned: std.atomic.Value(u64) = std.atomic.Value(u64)
 // rebuild is EXEMPT from the proto-reader stall (watchdog) cancel: a handler
 // that is heartbeating is building, not stuck. Reset per test.
 var g_exact_rebuild_heartbeats: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 (task0048d): per-shard scan tasks the most recent rebuild
+// dispatched to the engine's shared thread pool (PARALLEL) vs ran INLINE on the
+// calling thread (serial). At 14.27M a value of pool>=1 proves the rebuild fanned
+// out across pool workers rather than degrading to a single-threaded scan (the
+// coordinator's ~1.2-core observation). Reset per test.
+var g_exact_rebuild_pool_tasks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_exact_rebuild_inline_tasks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 (task0048d): registry graphs that a FULL checkpoint force-loaded
+// (opened their adapter engine) so their derived exact index could be built +
+// persisted even though no query had opened them this session (snapshot-served /
+// counter-served graphs never enter `self.engines` — the divelife skip).
+var g_full_checkpoint_forced_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // C-1 (T2b adversarial review): number of times a per-graph checkpoint's
 // retired-cache reclaim (the grace window in `checkpointOneGraph`) was
 // SKIPPED because the graph had an unfinished (pending or in-flight)
@@ -244,6 +256,29 @@ pub fn getExactRebuildHeartbeatsForTesting() u64 {
 /// GAP-ENT-0048 SECONDARY: reset the build-progress heartbeat counter.
 pub fn resetExactRebuildHeartbeatsForTesting() void {
     g_exact_rebuild_heartbeats.store(0, .release);
+}
+
+/// GAP-ENT-0048 (task0048d): shard scans dispatched to the pool (parallel) vs
+/// run inline (serial) by the most recent rebuild. pool>=1 proves parallelism.
+pub fn getExactRebuildPoolTasksForTesting() u64 {
+    return g_exact_rebuild_pool_tasks.load(.acquire);
+}
+pub fn getExactRebuildInlineTasksForTesting() u64 {
+    return g_exact_rebuild_inline_tasks.load(.acquire);
+}
+pub fn resetExactRebuildDispatchCountersForTesting() void {
+    g_exact_rebuild_pool_tasks.store(0, .release);
+    g_exact_rebuild_inline_tasks.store(0, .release);
+}
+
+/// GAP-ENT-0048 (task0048d): FULL checkpoints that force-loaded an on-disk
+/// (registry) graph so its exact index could be built + persisted (the
+/// snapshot-served graph that never entered `self.engines`).
+pub fn getFullCheckpointForcedLoadsForTesting() u64 {
+    return g_full_checkpoint_forced_loads.load(.acquire);
+}
+pub fn resetFullCheckpointForcedLoadsForTesting() void {
+    g_full_checkpoint_forced_loads.store(0, .release);
 }
 
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
@@ -1738,6 +1773,9 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
     _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
     mg.exact_node_property_index.clear();
     mg.exact_index_rebuild_iters.store(0, .monotonic);
+    // task0048d: per-build dispatch accounting (pool vs inline shard scans).
+    g_exact_rebuild_pool_tasks.store(0, .monotonic);
+    g_exact_rebuild_inline_tasks.store(0, .monotonic);
 
     const shards = mg.engine.shards;
 
@@ -1848,16 +1886,28 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
     };
 
     var wg = pool.waitGroup();
-    var submitted: usize = 0;
+    // GAP-ENT-0048 (task0048d): a submit failure runs ONLY that shard inline and
+    // KEEPS submitting the rest — the previous `catch break` serialized every
+    // remaining shard onto the calling thread on the first backpressure reject,
+    // which at 14.27M could collapse the whole rebuild to a single-threaded scan
+    // (the coordinator's ~1.2-core symptom). Instrumented so a test / the 14.27M
+    // run can prove the fan-out actually engaged (pool_tasks >= 1).
+    var inline_ctxs_buf: [gs.sharded_engine.SHARD_COUNT]*ShardCtx = undefined;
+    var inline_n: usize = 0;
     for (ctxs[0..shards.len]) |*c| {
         // Default backpressure (.return_error) is deadlock-safe; the wait_group
         // auto-adds on submit and auto-dones on completion.
-        _ = pool.submit(Task.run, c, .{ .wait_group = &wg }) catch break;
-        submitted += 1;
+        if (pool.submit(Task.run, c, .{ .wait_group = &wg })) |_| {
+            _ = g_exact_rebuild_pool_tasks.fetchAdd(1, .monotonic);
+        } else |_| {
+            inline_ctxs_buf[inline_n] = c;
+            inline_n += 1;
+        }
     }
-    // Any task that failed to submit runs inline on this (non-worker) thread
-    // BEFORE wg.wait(), so it still completes and is not double-counted by wg.
-    for (ctxs[submitted..shards.len]) |*c| {
+    // Shards that failed to submit run inline on this (non-worker) thread BEFORE
+    // wg.wait(), so they still complete and are not double-counted by wg.
+    for (inline_ctxs_buf[0..inline_n]) |c| {
+        _ = g_exact_rebuild_inline_tasks.fetchAdd(1, .monotonic);
         c.run();
     }
     wg.wait();
@@ -6365,6 +6415,48 @@ pub const StorageAdapter = struct {
         return self.checkpointAllEx(true, true);
     }
 
+    /// GAP-ENT-0048 (task0048d) test-only: is `name`'s adapter engine currently
+    /// resident in `self.engines`? A graph served entirely from loop2/counter
+    /// snapshots is NOT loaded (false) even though it exists on disk — the exact
+    /// condition that made a FULL checkpoint skip its exact-index persist.
+    pub fn isGraphEngineLoadedForTesting(self: *StorageAdapter, name: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.engines.contains(name);
+    }
+
+    /// GAP-ENT-0048 (task0048d): open the adapter engine of every registry graph
+    /// that is not yet loaded, so a FULL checkpoint covers on-disk graphs that
+    /// were served this whole session from loop2/counter snapshots (which never
+    /// open the adapter engine — the `divelife` skip). MUST be called with
+    /// `self.mutex` held (mutates `self.engines` via `requireExistingGraphLocked`).
+    ///
+    /// Registry names are snapshotted into a local buffer FIRST: opening a graph
+    /// calls `upsertRegistryEntryLocked`, which updates the matching entry
+    /// in place (never frees the name, never appends — the name already exists),
+    /// so the captured `[]const u8` name slices stay valid and no reallocation of
+    /// `registry.entries.items` occurs mid-iteration.
+    fn forceLoadRegistryGraphsForFullCheckpointLocked(self: *StorageAdapter) void {
+        var names_buf: [64][]const u8 = undefined;
+        var n: usize = 0;
+        for (self.registry.entries.items) |entry| {
+            if (n >= names_buf.len) break;
+            if (self.engines.contains(entry.name)) continue;
+            names_buf[n] = entry.name;
+            n += 1;
+        }
+        for (names_buf[0..n]) |nm| {
+            _ = self.requireExistingGraphLocked(nm) catch |err| {
+                log.warn("full checkpoint: could not load graph '{s}' to persist its exact index: {s}", .{ nm, @errorName(err) });
+                continue;
+            };
+            _ = g_full_checkpoint_forced_loads.fetchAdd(1, .monotonic);
+            slog.info("full checkpoint force-loaded snapshot-served graph for exact-index persist", &.{
+                SAttr.string("graph", nm),
+            });
+        }
+    }
+
     /// Core checkpoint implementation.
     ///
     /// * `light` — when true each graph runs the bounded `engine.checkpointLight()`
@@ -6387,6 +6479,16 @@ pub const StorageAdapter = struct {
         {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            // GAP-ENT-0048 (task0048d): a FULL checkpoint (clean shutdown /
+            // explicit save) must build+persist the exact index for EVERY on-disk
+            // graph — including one served this whole session from loop2/counter
+            // snapshots, which NEVER opens its adapter engine and is therefore
+            // absent from `self.engines`. The loop below iterates only loaded
+            // engines, so such a graph (the 14.27M `divelife` case) was silently
+            // skipped and never got a `prop_exact.idx`. Force-load every registry
+            // graph not yet resident so it is checkpointed and, if its exact index
+            // is deferred, eager-built from its durable store pages.
+            if (!light) self.forceLoadRegistryGraphsForFullCheckpointLocked();
             var it = self.engines.valueIterator();
             while (it.next()) |mg| {
                 if (graph_count < graphs_buf.len) {
@@ -6669,6 +6771,20 @@ pub const StorageAdapter = struct {
         // loading a stale snapshot. The clean-shutdown FULL checkpoint always
         // rewrites it fresh, so a clean restart still loads it without a rebuild.
         if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            if (!light) {
+                // GAP-ENT-0048 (task0048d) diagnostic: one line per graph at every
+                // FULL checkpoint so the 14.27M run can see WHY a graph is or is
+                // not exact-index-persisted (name, durable manifest node count,
+                // already-built vs deferred). The eager-build helper logs the
+                // grace-probe / build-ran outcome for the deferred case.
+                var mnc: u64 = 0;
+                for (mg.engine.shards) |shard| mnc += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+                slog.info("full checkpoint: exact-index persist decision", &.{
+                    SAttr.string("graph", mg.name),
+                    SAttr.uint("manifest_node_count", mnc),
+                    SAttr.string("state", if (mg.exact_index_built.load(.acquire)) "built" else "deferred"),
+                });
+            }
             if (light) {
                 invalidateExactPropertyIndexFile(self.allocator, dir_path);
             } else if (mg.exact_index_built.load(.acquire)) {
@@ -6842,6 +6958,10 @@ pub const StorageAdapter = struct {
         // Parallel rebuild from durable pages. `.{}` cancel flags never trip: a
         // checkpoint-time build must run to completion (it is NOT tied to any
         // client connection, unlike the lazy first-access rebuild).
+        // GAP-ENT-0048 (task0048d) diagnostic: grace acquired, starting the
+        // parallel store-scan build. Time it so the 14.27M run sees the one-time
+        // cost, and the dispatch counters (pool vs inline) prove it fanned out.
+        const build_start_ns = monoNanosNow();
         rebuildExactNodePropertyIndex(mg, .{}) catch |err| {
             log.warn("eager exact-index build at full checkpoint failed for graph '{s}': {} — staying deferred", .{ mg.name, err });
             return false;
@@ -6851,6 +6971,9 @@ pub const StorageAdapter = struct {
         slog.info("deferred exact-index eagerly built at full checkpoint from durable store (reopen will reload the snapshot)", &.{
             SAttr.string("graph", mg.name),
             SAttr.uint("nodes", node_count),
+            SAttr.uint("build_ms", (monoNanosNow() -| build_start_ns) / std.time.ns_per_ms),
+            SAttr.uint("pool_tasks", g_exact_rebuild_pool_tasks.load(.acquire)),
+            SAttr.uint("inline_tasks", g_exact_rebuild_inline_tasks.load(.acquire)),
         });
         return true;
     }

@@ -80,13 +80,17 @@ fn countPropExactIdx(allocator: std.mem.Allocator, data_dir: []const u8) usize {
 }
 
 fn deleteAllPropExactIdx(allocator: std.mem.Allocator, data_dir: []const u8) void {
+    deleteAllNamed(allocator, data_dir, "prop_exact.idx");
+}
+
+fn deleteAllNamed(allocator: std.mem.Allocator, data_dir: []const u8, name: []const u8) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return;
     defer dir.close(io);
     var walker = dir.walk(allocator) catch return;
     defer walker.deinit();
     while (walker.next(io) catch return) |entry| {
-        if (std.mem.eql(u8, entry.basename, "prop_exact.idx")) {
+        if (std.mem.eql(u8, entry.basename, name)) {
             dir.deleteFile(io, entry.path) catch {};
         }
     }
@@ -2612,6 +2616,122 @@ test "GAP-ENT-0048 lazy-hydration: FULL checkpoint builds+persists a deferred (n
         const got = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[1] }, allocator);
         defer allocator.free(got);
         try testing.expectEqual(@as(usize, N / sources.len), got.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// ============================================================================
+// GAP-ENT-0048 (task0048d) — a FULL checkpoint must build+persist the exact
+// index for an on-disk graph that was NEVER opened at the adapter level this
+// session. At 14.27M `divelife` reopens served ENTIRELY from loop2/counter
+// snapshots (RSS ~5.3G, resident count ~0); that hydration path
+// (loadOneGraphFromAdapterFull's snapshot branch) rebuilds resident indexes from
+// the IdMap WITHOUT calling adapter.getOrCreateGraph, so divelife never enters
+// the adapter's `self.engines`. `checkpointAllEx` iterated ONLY `self.engines`,
+// so the clean-shutdown FULL checkpoint SKIPPED divelife entirely — no eager
+// build, no prop_exact.idx (only the tiny system graph, which IS loaded, got
+// one). Fix: a FULL checkpoint force-loads every registry graph first, then
+// checkpoints+eager-builds each.
+//
+// This test reproduces the exact skip condition deterministically: after a
+// clean reopen, divelife's adapter engine is NOT loaded (no query opened it —
+// the same state snapshot/counter-served hydration leaves it in). A FULL
+// checkpoint must force-load it and build its exact index IN PARALLEL from the
+// durable store.
+//
+// RED (pre-fix): checkpointAllEx skips the unloaded graph -> no force-load, no
+// eager build, no prop_exact.idx -> Phase 3 reopen re-defers (reloaded==0, the
+// seek rebuilds). GREEN (fix): force-load (forced_loads>=1) + parallel eager
+// build (pool_tasks>=1) + prop_exact.idx persisted -> Phase 3 RELOADS
+// (reloaded==1, rebuild-runs==0) and the seek is served with zero rebuild.
+test "GAP-ENT-0048 snapshot-served: FULL checkpoint force-loads + parallel-builds a graph never opened this session" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 3000;
+
+    // --- Phase 1: ingest + FULL checkpoint, then DELETE prop_exact.idx so the
+    //     reopen has durable pages + snapshots but NO exact-index snapshot. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    // Reproduce divelife's 14.27M on-disk state: durable node pages present, but
+    // NO current idmap.snapshot and NO prop_exact.idx. Without an idmap snapshot
+    // the store-open path never calls graphManifestCounter (which would open the
+    // adapter engine), so divelife's engine stays UNLOADED at "server ready" —
+    // exactly the loop2/counter-served condition where checkpointAllEx skipped it.
+    try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+    deleteAllPropExactIdx(allocator, data_dir);
+    deleteAllNamed(allocator, data_dir, "idmap.snapshot");
+    try testing.expectEqual(@as(usize, 0), countPropExactIdx(allocator, data_dir));
+
+    // --- Phase 2: reopen WITHOUT opening divelife's adapter engine (the
+    //     snapshot/counter-served state), then FULL checkpoint. ---
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    adapter_mod.resetExactRebuildDispatchCountersForTesting();
+    adapter_mod.resetFullCheckpointForcedLoadsForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator); // "server ready" — divelife deferred
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        // THE snapshot-served condition: divelife exists on disk (registry) but its
+        // adapter engine is NOT resident — nothing opened it this session.
+        try testing.expect(!adapter.isGraphEngineLoadedForTesting(G));
+
+        // FULL checkpoint. GREEN: force-load divelife (forced_loads>=1), eager
+        // build in PARALLEL (pool_tasks>=1), persist prop_exact.idx.
+        // RED (pre-fix): divelife is not in self.engines -> skipped entirely.
+        try store.saveToFile();
+
+        try testing.expect(adapter_mod.getFullCheckpointForcedLoadsForTesting() >= 1);
+        try testing.expect(adapter_mod.getExactEagerCheckpointBuildsForTesting() >= 1);
+        try testing.expect(adapter_mod.getExactRebuildPoolTasksForTesting() >= 1); // PARALLEL fan-out
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+        // divelife is now resident (force-loaded).
+        try testing.expect(adapter.isGraphEngineLoadedForTesting(G));
+
+        graph_store.deinitGlobalStore();
+    }
+
+    // --- Phase 3: reopen; open divelife's engine; the exact index RELOADS with
+    //     ZERO rebuild and a seek is served immediately. ---
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        _ = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+        _ = try adapter.getOrCreateGraph(G);
+
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[2] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
 
         graph_store.deinitGlobalStore();
