@@ -106,6 +106,22 @@ fn exactIndexPersistOnBuildDisabled() bool {
 }
 var g_exact_persist_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_exact_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 PRIMARY: number of graphs whose exact node-property index was
+// RELOADED from a persisted `prop_exact.idx` snapshot at open (the O(snapshot)
+// bulk-load path, NOT the O(graph) rebuild). Test instrumentation for the
+// reopen contract: after a clean FULL-checkpoint shutdown the reopen must LOAD
+// the snapshot (this counter increments, `g_exact_rebuild_runs` stays 0), so
+// the first index-served read engages with ZERO client-facing rebuild.
+var g_exact_index_reloaded: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 PRIMARY: number of times a FULL checkpoint EAGERLY built a
+// deferred-but-unbuilt exact index from the durable pages (in parallel) so it
+// could persist a COMPLETE `prop_exact.idx` instead of invalidating the file.
+// This is the clean-shutdown chokepoint that guarantees a loadable snapshot for
+// a graph that ran this session with the index deferred (reopened-then-appended
+// stores, or any graph whose last durable checkpoint was LIGHT). Distinct from
+// the lazy first-access build so a test can prove the build happened at the
+// checkpoint, not on a client query.
+var g_exact_eager_checkpoint_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Candidate nodes examined by the verify-loop in `lookupNodeIdByLabelAndAllProps`
 // (the bulk edge-endpoint resolver). A dangling composite-key endpoint whose
@@ -246,6 +262,25 @@ pub fn resetExactIndexPersistCountersForTesting() void {
     g_exact_persist_attempts.store(0, .release);
     g_exact_persist_completions.store(0, .release);
     g_exact_persist_failures.store(0, .release);
+}
+
+/// GAP-ENT-0048 PRIMARY: graphs whose exact index was RELOADED from the
+/// persisted `prop_exact.idx` snapshot at open since the last reset. Test-only:
+/// a clean-shutdown reopen must LOAD (this > 0) with ZERO rebuild runs.
+pub fn getExactIndexReloadedForTesting() u64 {
+    return g_exact_index_reloaded.load(.acquire);
+}
+
+/// GAP-ENT-0048 PRIMARY: FULL checkpoints that eagerly built a deferred index
+/// so a complete snapshot could be persisted (rather than invalidated).
+pub fn getExactEagerCheckpointBuildsForTesting() u64 {
+    return g_exact_eager_checkpoint_builds.load(.acquire);
+}
+
+/// GAP-ENT-0048 PRIMARY: reset the reload / eager-checkpoint-build counters.
+pub fn resetExactIndexReloadCountersForTesting() void {
+    g_exact_index_reloaded.store(0, .release);
+    g_exact_eager_checkpoint_builds.store(0, .release);
 }
 
 /// Candidates examined by `lookupNodeIdByLabelAndAllProps`'s verify-loop since
@@ -6600,15 +6635,31 @@ pub const StorageAdapter = struct {
                 mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
                     log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
                 };
+            } else if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
+                // GAP-ENT-0048 PRIMARY: the exact index was DEFERRED this session
+                // (no/stale snapshot at open) and never built by a query — so the
+                // in-memory index is EMPTY. Rather than invalidate the file and
+                // leave the deferral in place FOREVER (every reopen then re-pays
+                // the O(graph) first-access rebuild, which at 14.27M nodes blows
+                // past the ~60 s proto-reader stall window and wedges the handler
+                // — the escalation's read-path blocker), a FULL checkpoint (clean
+                // shutdown / explicit save) EAGERLY builds the index from the
+                // durable pages IN PARALLEL (reusing rebuildExactNodePropertyIndex's
+                // per-shard thread-pool machinery — we hold mg.rwlock EXCLUSIVE, so
+                // the scan is race-free) and latches `built`. We then fall through
+                // to persist the COMPLETE snapshot below. This also supersedes the
+                // old "never persist an EMPTY snapshot" hazard: we persist a
+                // materialised, non-empty index, not the empty in-memory one.
+                mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                    log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
+                };
             } else {
-                // H4: the exact index was DEFERRED at open and never built, so
-                // the in-memory index is EMPTY. Persisting it would write an
-                // empty snapshot that loadFromFile accepts as "complete"
-                // (entry_count == 0 is a valid load), permanently latching
-                // exact_index_built = true on the next open so the deferred
-                // rebuild never runs — property-equality queries return empty
-                // and MERGE silently creates duplicates. Instead, remove any
-                // stale on-disk index so the next open DEFERS + rebuilds lazily.
+                // Deferred and NOT eagerly built (empty graph — nothing to build —
+                // or an in-flight first-touch hydration whose pages are mid-write:
+                // scanning them here would be the C-1 use-after-free). Remove any
+                // stale on-disk index so the next open DEFERS + rebuilds lazily
+                // (correct, just not yet fast); the next clean FULL checkpoint of a
+                // hydrated graph will materialise the snapshot.
                 invalidateExactPropertyIndexFile(self.allocator, dir_path);
             }
             self.allocator.free(dir_path);
@@ -6671,6 +6722,68 @@ pub const StorageAdapter = struct {
         }
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         return if (engine_ok) .ok else .engine_failed;
+    }
+
+    /// GAP-ENT-0048 PRIMARY: at a FULL checkpoint, EAGERLY materialise a
+    /// deferred-but-unbuilt exact node-property index from the durable pages so
+    /// the caller can persist a COMPLETE `prop_exact.idx` (making the next reopen
+    /// an O(snapshot) reload instead of a client-facing O(graph) rebuild).
+    ///
+    /// Returns `true` when it built and latched the index (caller persists),
+    /// `false` when the build was skipped or failed (caller invalidates the
+    /// stale file and the graph stays deferred — correct, just not yet fast).
+    ///
+    /// MUST be called only from `checkpointOneGraph`'s FULL (non-light) path,
+    /// which holds `mg.rwlock` EXCLUSIVE — draining all SHARED readers so the
+    /// per-shard node-store scan is race-free (the same no-concurrent-mutation
+    /// invariant `rebuildExactPropertyIndexForTesting` relies on). The rebuild is
+    /// PARALLEL (one scan task per engine shard on the shared thread pool) and
+    /// uncancellable (empty CancelFlags — a checkpoint build has no read scope).
+    ///
+    /// Skips (returns false) when:
+    ///   * the graph has NO live nodes — nothing to build; persisting an empty
+    ///     snapshot is pointless (an empty graph's reopen serves everything
+    ///     correctly from an empty index anyway);
+    ///   * a first-touch hydration is in flight for this graph — its pages are
+    ///     mid-write and the merge family reads shallow Node copies off the
+    ///     bounded caches' retire lists; scanning here is the C-1 UAF. This never
+    ///     happens at a clean shutdown (no in-flight hydration), only in the rare
+    ///     overlapping-cycle case, which degrades to the prior lazy behaviour.
+    fn eagerBuildDeferredIndexForFullCheckpoint(self: *StorageAdapter, mg: *ManagedGraph) bool {
+        _ = self;
+        // Nothing to materialise for an empty graph.
+        var node_count: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            node_count += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+        }
+        if (node_count == 0) return false;
+
+        // C-1: never scan durable pages of a graph with an in-flight first-touch
+        // hydration (UAF against the retire lists). No global store (pure-adapter
+        // tests / tooling) => no hydration machinery => safe to build.
+        if (graph_store.getCurrentGlobalStore()) |store| {
+            if (store.hasUnfinishedHydration(mg.name)) {
+                slog.info("deferred exact-index NOT eager-built at full checkpoint (hydration in flight); staying lazy", &.{
+                    SAttr.string("graph", mg.name),
+                });
+                return false;
+            }
+        }
+
+        // Parallel rebuild from durable pages. `.{}` cancel flags never trip: a
+        // checkpoint-time build must run to completion (it is NOT tied to any
+        // client connection, unlike the lazy first-access rebuild).
+        rebuildExactNodePropertyIndex(mg, .{}) catch |err| {
+            log.warn("eager exact-index build at full checkpoint failed for graph '{s}': {} — staying deferred", .{ mg.name, err });
+            return false;
+        };
+        mg.exact_index_built.store(true, .release);
+        _ = g_exact_eager_checkpoint_builds.fetchAdd(1, .monotonic);
+        slog.info("deferred exact-index eagerly built at full checkpoint (reopen will reload the snapshot)", &.{
+            SAttr.string("graph", mg.name),
+            SAttr.uint("nodes", node_count),
+        });
+        return true;
     }
 
     /// Task 3 (hydration persist-on-complete): FULL checkpoint of a SINGLE
@@ -7427,6 +7540,9 @@ pub const StorageAdapter = struct {
         if (loaded_from_disk) {
             // Persisted snapshot loaded: the index is complete and ready.
             mg.exact_index_built.store(true, .release);
+            // GAP-ENT-0048 PRIMARY: record the O(snapshot) reload so a test can
+            // prove the reopen engaged the index WITHOUT an O(graph) rebuild.
+            _ = g_exact_index_reloaded.fetchAdd(1, .monotonic);
         } else {
             // H4 (cold-open phase 1): DEFER the full O(graph) property-chain
             // rebuild to first access instead of paying it EAGERLY at open

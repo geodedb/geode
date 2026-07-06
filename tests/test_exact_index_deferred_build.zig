@@ -176,31 +176,29 @@ test "exact node-property index: deferred at open, built once on first access" {
 }
 
 // REGRESSION (correctness-critical) — a FULL checkpoint on a DEFERRED graph must
-// NOT persist the empty in-memory index.
-//
-// Bug: commit e00103b8 made the exact index lazily-built (deferred at open when
-// no snapshot loaded). The FULL checkpoint path used to call saveToFile()
-// UNCONDITIONALLY. On a deferred graph the in-memory index is EMPTY (never
-// built), so a full checkpoint persisted an EMPTY snapshot. loadFromFile accepts
-// entry_count == 0 as a valid load -> next open latches exact_index_built = true
-// -> the deferred rebuild NEVER runs -> the index is permanently empty: every
-// property-equality query returns nothing AND MERGE silently creates duplicates.
+// NEVER strand WRONG data on disk. Historically the risk was a persisted EMPTY
+// snapshot (loadFromFile accepts entry_count == 0 as "complete" -> next open
+// latches built without the real data -> equality queries return nothing AND
+// MERGE silently dups). GAP-ENT-0048 PRIMARY supersedes the old "invalidate the
+// deferred index" mitigation with a STRONGER one: the FULL checkpoint EAGERLY
+// builds the deferred index from durable pages (in parallel) and persists a
+// COMPLETE, correct snapshot — which both fixes the empty-snapshot hazard AND
+// makes the reopen an O(snapshot) reload instead of an O(graph) rebuild.
 //
 // Sessions:
 //   1. seed property data, FULL-checkpoint (persists prop_exact.idx), then
 //      LIGHT-checkpoint (removes it) so session 2 opens DEFERRED.
 //   2. open DEFERRED (built == false, no query), then FULL checkpointAll()
-//      BEFORE any property query, close. The checkpoint must NOT rebuild and
-//      must NOT persist an empty snapshot.
-//   3. reopen; a property-equality lookup MUST return the correct NON-EMPTY
-//      posting, and the rebuild MUST have run (>= 1) — proving session 3 did not
-//      load an empty "complete" snapshot.
+//      BEFORE any property query. The checkpoint eagerly builds + persists a
+//      COMPLETE snapshot (eager-builds == 1).
+//   3. reopen; the snapshot RELOADS (reloaded == 1, rebuild-runs == 0) and a
+//      property-equality lookup returns the correct NON-EMPTY posting — proving
+//      session 2 persisted correct (not empty) data and session 3 did no rebuild.
 //
-// RED (pre-fix): session 2's full checkpoint persists an empty index; session 3
-// loads it as complete -> query returns empty -> the slice assertion fails and
-// rebuild-runs stays 0. GREEN (post-fix): session 2 invalidates the stale file
-// for the deferred graph -> session 3 defers + rebuilds -> query is correct.
-test "exact node-property index: full checkpoint on a deferred graph does not persist an empty index" {
+// RED (pre-fix): session 2's FULL checkpoint invalidates (eager-builds == 0);
+// session 3 finds no snapshot, defers, and the lookup re-pays the rebuild
+// (reloaded == 0, rebuild-runs >= 1). GREEN (post-fix): build+persist -> reload.
+test "exact node-property index: full checkpoint on a deferred graph persists a complete (non-empty) snapshot" {
     const allocator = testing.allocator;
 
     var tmp = testing.tmpDir(.{});
@@ -235,6 +233,7 @@ test "exact node-property index: full checkpoint on a deferred graph does not pe
 
     // ---- Session 2: open deferred, FULL checkpoint BEFORE any query. ----
     adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
     {
         const adapter = try StorageAdapter.init(allocator, path, testConfig());
         defer adapter.deinit();
@@ -243,29 +242,34 @@ test "exact node-property index: full checkpoint on a deferred graph does not pe
         _ = try adapter.getOrCreateGraph(graph);
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
 
-        // FULL checkpoint while the index is still deferred. Pre-fix this wrote an
-        // empty snapshot; post-fix it invalidates the stale file. Either way it
-        // must NOT trigger a rebuild.
+        // FULL checkpoint while the index is still deferred: eagerly build from
+        // durable pages (rebuild-runs 0 -> 1, eager-builds 0 -> 1) and persist a
+        // COMPLETE snapshot. (Pre-fix: invalidated, eager-builds stayed 0.)
         try adapter.checkpointAll();
-        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactEagerCheckpointBuildsForTesting());
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
     }
 
-    // ---- Session 3: reopen; the query MUST be correct and MUST have rebuilt. ----
+    // ---- Session 3: reopen; the snapshot RELOADS and the query is correct. ----
     adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
     {
         const adapter = try StorageAdapter.init(allocator, path, testConfig());
         defer adapter.deinit();
 
         _ = try adapter.getOrCreateGraph(graph);
+        // Opening RELOADED the complete snapshot session 2 persisted — no rebuild.
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
 
-        // The posting MUST be the seeded singleton — NOT empty. (Pre-fix: empty.)
+        // The posting MUST be the seeded singleton — NOT empty. (This is the
+        // original empty-snapshot guard: a broken/empty build fails here.)
         const got = try querySorted(allocator, adapter, graph, label, "uid", .{ .Int = 7 });
         defer allocator.free(got);
         try testing.expectEqualSlices(u64, node_ids[7..8], got);
 
-        // The lookup MUST have rebuilt from durable pages, proving session 3 did
-        // NOT load an empty snapshot as "complete". (Pre-fix: 0 — loaded empty.)
-        try testing.expect(adapter_mod.getExactRebuildRunsForTesting() >= 1);
+        // Served from the reloaded snapshot — NO rebuild. (Pre-fix: >= 1.)
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
     }
 }
 
@@ -583,5 +587,120 @@ test "GAP-ENT-0048 DEFECT B: deferred exact-index rebuild honors read-executor c
         defer allocator.free(got);
         try testing.expect(got.len > 0);
         try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
+    }
+}
+
+// ============================================================================
+// GAP-ENT-0048 PRIMARY — a graph that runs a session with its exact index
+// DEFERRED must, on the session's FULL (clean-shutdown) checkpoint, EAGERLY
+// build the index from the durable pages (in parallel) and PERSIST a complete
+// `prop_exact.idx` — so the NEXT reopen RELOADS the snapshot with ZERO
+// client-facing rebuild. The first index-served read then engages immediately
+// (<1s at scale), instead of paying an O(graph) first-access rebuild that (at
+// 14.27M) blows past the proto-reader stall window and wedges the handler.
+// ============================================================================
+//
+// This pins the real-server reopen state the escalation proved: after a large
+// ingest whose last durable checkpoints were LIGHT (which DELETE prop_exact.idx)
+// the reopen finds NO snapshot and DEFERS. Pre-fix, a FULL checkpoint on that
+// deferred graph merely INVALIDATED the (already-absent) file — leaving the
+// deferral in place forever, so every reopen re-pays the rebuild. Post-fix the
+// FULL checkpoint materialises the snapshot.
+//
+// Sessions:
+//   1. seed N nodes (multi-shard) with a low-cardinality indexed prop; FULL
+//      checkpoint (persist) then LIGHT checkpoint (invalidate) -> reopen DEFERS.
+//   2. open DEFERRED (built == false) WITHOUT any query, then FULL checkpoint.
+//        RED : invalidates -> no snapshot   (eager-builds == 0).
+//        GREEN: eager parallel build + persist (eager-builds == 1, rebuild == 1).
+//   3. reopen. The snapshot must RELOAD (reloaded == 1, rebuild-runs == 0), and
+//      BOTH a GROUP BY posting-walk (T1) AND a point seek must return correct
+//      results with ZERO rebuild runs — served from the reloaded snapshot.
+//
+// RED (pre-fix): session 2's FULL checkpoint does not build (eager-builds == 0);
+// session 3 finds no snapshot, defers, and the first read rebuilds
+// (reloaded == 0, rebuild-runs >= 1). GREEN (post-fix): reload, zero rebuild.
+test "GAP-ENT-0048 PRIMARY: deferred graph FULL checkpoint builds+persists so reopen reloads (zero client-facing rebuild)" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "deferred_full_ckpt_graph";
+    const label = "Taxon";
+    // Low-cardinality indexed prop (like `source`) spanning many shards.
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 4096;
+
+    // ---- Session 1: seed, FULL (persist) then LIGHT (invalidate) -> reopen DEFERS.
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+            try adapter.setNodeProperty(graph, node_id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try adapter.checkpointAll(); // persist prop_exact.idx ...
+        try adapter.checkpointAllLight(); // ... then invalidate it -> reopen DEFERS
+    }
+
+    // ---- Session 2: open DEFERRED, then FULL checkpoint (clean shutdown). ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        // Open WITHOUT touching the exact index -> deferred (built == false),
+        // and the reopen did NOT reload a snapshot (there was none) nor rebuild.
+        _ = try adapter.getOrCreateGraph(graph);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // FULL checkpoint of the DEFERRED graph. GREEN: eagerly builds the index
+        // (rebuild-runs 0 -> 1, eager-builds 0 -> 1) and persists a complete
+        // snapshot. RED: invalidates (eager-builds stays 0).
+        try adapter.checkpointAll();
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactEagerCheckpointBuildsForTesting());
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
+    }
+
+    // ---- Session 3: reopen; the snapshot must RELOAD (no rebuild). ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        _ = try adapter.getOrCreateGraph(graph);
+
+        // Opening RELOADED the persisted snapshot (built latched at open) and did
+        // NOT rebuild. RED (pre-fix): reloaded == 0 (no file) and a later read
+        // rebuilds.
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // T1 posting-walk (GROUP BY / DISTINCT) served from the reloaded snapshot:
+        // one summary per distinct source, counts intact, ZERO rebuild.
+        {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const summaries = try adapter.collectPropertyPostingSummaries(graph, label, "source", arena.allocator());
+            try testing.expectEqual(@as(usize, sources.len), summaries.len);
+            var total: u64 = 0;
+            for (summaries) |s| total += s.count;
+            try testing.expectEqual(@as(u64, N), total);
+        }
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // Point seek served from the reloaded snapshot: correct posting, ZERO
+        // rebuild. (At 14.27M this is the id/taxon_id seek that was timing out.)
+        {
+            const got = try querySorted(allocator, adapter, graph, label, "source", .{ .String = sources[1] });
+            defer allocator.free(got);
+            try testing.expectEqual(@as(usize, N / sources.len), got.len);
+        }
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
     }
 }
