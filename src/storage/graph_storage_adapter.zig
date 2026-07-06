@@ -6902,34 +6902,41 @@ pub const StorageAdapter = struct {
     /// memory (the 14.27M lazily-hydrated main graph). The buffer pool is
     /// bounded, so the scan does not spike RSS to the fully-resident set.
     ///
-    /// Skips (returns false) when:
-    ///   * the graph has NO durable nodes (manifest count 0) — nothing to build;
-    ///     persisting an empty snapshot is pointless.
-    ///   * a first-touch hydration build is ACTIVELY IN FLIGHT (store-wide
-    ///     `hydration_build_mutex` held) — its merge family reads shallow Node
-    ///     copies off the bounded caches' retire lists (C-1 UAF), so we do not
-    ///     scan concurrently with it. Detected with `tryBeginCacheReclaimGrace`
-    ///     (the SAME probe the checkpoint's own retired-cache reclaim uses), held
-    ///     across the build to exclude a concurrent hydration start.
+    /// Skips (returns false) only when the graph has NO durable nodes (manifest
+    /// count 0) — nothing to build; persisting an empty snapshot is pointless.
     ///
-    /// GAP-ENT-0048 lazy-hydration fix (task0048c): the previous gate used
-    /// `hasUnfinishedHydration` (== `isGraphDeferred`, `!entry.done`), which is
-    /// true for a graph that is merely DEFERRED-but-idle (never hydrated), not
-    /// only one that is actively building. That wrongly skipped the reopened
-    /// main graph — whose first-touch hydration never completed because it was
-    /// only counter-served — so its exact index was never persisted and every
-    /// reopen re-deferred. We now gate on an ACTIVE build, so a deferred-idle
-    /// graph is built from its durable pages.
-    ///
-    /// Lock-order note: called under `mg.rwlock` EXCLUSIVE; acquiring the store's
-    /// `hydration_build_mutex` (via `tryBeginCacheReclaimGrace`) here is the same
-    /// EXCLUSIVE-rwlock → `hydration_build_mutex`(tryLock) order the reclaim grace
-    /// below already uses, and hydration never takes `mg.rwlock`, so it cannot
-    /// deadlock (an active hydration holding the mutex simply makes tryLock fail →
-    /// we skip). Holding it across the build briefly blocks a concurrent
-    /// first-touch hydration of any graph; this branch only runs at a FULL
-    /// checkpoint of a DEFERRED graph (clean shutdown / explicit save), where that
-    /// is safe and rare.
+    /// GAP-ENT-0048e — NO hydration grace gate. Earlier iterations gated this on
+    /// the store-wide `hydration_build_mutex` (via `tryBeginCacheReclaimGrace`),
+    /// which was the WRONG gate and permanently skipped the build at clean
+    /// shutdown: a hydration task still holds that mutex during the shutdown
+    /// checkpoint window, so the tryLock failed and — there being no "next
+    /// checkpoint" at shutdown — the index was never built. The grace gate was
+    /// inherited from the checkpoint's cache-RECLAIM path, which FREES the bounded
+    /// caches' per-graph retire lists that an in-flight hydration merge's shallow
+    /// Node copies point into (the C-1 UAF). This store-scan build is a DIFFERENT
+    /// operation and is safe to run concurrently with a hydration:
+    ///   * It touches NONE of the C-1 UAF surface — no bounded node/adj/edge cache,
+    ///     no retire lists, no shallow-Node copies. It reads the DURABLE engine
+    ///     stores (`node_store.scanNodes` → buffer pool → disk pages;
+    ///     `label_store.getLabels`; `getAllProperties`) and writes only the
+    ///     adapter's own mutex-sharded exact index. It never frees retire memory.
+    ///   * A concurrent first-touch reopen hydration is READ-ONLY on the engine
+    ///     node/label/property stores (it builds the graph_store RESIDENT indexes
+    ///     from a scan; it does not mutate the engine). The one exception — the
+    ///     legacy-IdMap node-property backfill (`adapter.setNodeProperty` in
+    ///     `loadOneGraphFromAdapterFull`, guarded by `legacy_map != null`) — runs
+    ///     only for LEGACY-format stores (never the current slab format) and, even
+    ///     then, goes through the engine's own concurrency-safe write path (the
+    ///     same buffer-pool/page-latch path that serves concurrent query reads +
+    ///     bulk-ingest writes in normal operation). The engine already supports
+    ///     the 16 concurrent per-shard reads this very build issues.
+    ///   * It must NOT block on `hydration_build_mutex` (the discarded Option B):
+    ///     the hydration persist-on-complete path takes `hydration_build_mutex` →
+    ///     `mg.rwlock` (T3 `checkpointGraph`), so blocking on that mutex while we
+    ///     hold `mg.rwlock` EXCLUSIVE would be an ABBA deadlock. Decoupling from
+    ///     the mutex entirely avoids it.
+    /// So the build fires unconditionally (given durable nodes), concurrent with
+    /// any in-flight hydration, and the clean-shutdown checkpoint persists it.
     fn eagerBuildDeferredIndexForFullCheckpoint(self: *StorageAdapter, mg: *ManagedGraph) bool {
         _ = self;
         // Nothing to materialise for a graph with no durable nodes.
@@ -6939,26 +6946,10 @@ pub const StorageAdapter = struct {
         }
         if (node_count == 0) return false;
 
-        // Guard against an ACTIVELY-BUILDING first-touch hydration (C-1 UAF). A
-        // merely deferred/idle graph is NOT excluded — that is the whole point of
-        // this fix. No global store (pure-adapter tests / tooling) => no hydration
-        // machinery => build directly.
-        var grace_store: ?*graph_store.GraphStore = null;
-        if (graph_store.getCurrentGlobalStore()) |store| {
-            if (!store.tryBeginCacheReclaimGrace()) {
-                slog.info("deferred exact-index NOT eager-built at full checkpoint (hydration build in flight); staying lazy", &.{
-                    SAttr.string("graph", mg.name),
-                });
-                return false;
-            }
-            grace_store = store;
-        }
-        defer if (grace_store) |s| s.endCacheReclaimGrace();
-
         // Parallel rebuild from durable pages. `.{}` cancel flags never trip: a
         // checkpoint-time build must run to completion (it is NOT tied to any
         // client connection, unlike the lazy first-access rebuild).
-        // GAP-ENT-0048 (task0048d) diagnostic: grace acquired, starting the
+        // GAP-ENT-0048 (task0048d) diagnostic: starting the
         // parallel store-scan build. Time it so the 14.27M run sees the one-time
         // cost, and the dispatch counters (pool vs inline) prove it fanned out.
         const build_start_ns = monoNanosNow();

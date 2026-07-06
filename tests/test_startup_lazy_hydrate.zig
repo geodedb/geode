@@ -96,6 +96,12 @@ fn deleteAllNamed(allocator: std.mem.Allocator, data_dir: []const u8, name: []co
     }
 }
 
+fn sleepMs(ms: u64) void {
+    const req = std.os.linux.timespec{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 // Zig 0.16: std.time.Timer was removed; read the monotonic clock directly.
 fn monoNanos() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
@@ -2734,6 +2740,115 @@ test "GAP-ENT-0048 snapshot-served: FULL checkpoint force-loads + parallel-build
         try testing.expectEqual(@as(usize, N / sources.len), seek.len);
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
 
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// ============================================================================
+// GAP-ENT-0048e — the eager exact-index build at a FULL checkpoint must FIRE even
+// when a first-touch hydration is IN FLIGHT (holding the store-wide
+// hydration_build_mutex). At 14.27M a hydration task still holds that mutex
+// during the clean-shutdown checkpoint window, so the prior grace gate
+// (tryBeginCacheReclaimGrace) failed and — there being no "next checkpoint" at
+// shutdown — the deferred index was NEVER built. The store-scan build touches
+// NONE of the C-1 UAF surface (no bounded-cache retire lists / shallow-Node
+// copies; it reads durable engine pages and writes the adapter's own exact
+// index), so it is safe concurrent with a hydration and the grace gate was
+// dropped (see eagerBuildDeferredIndexForFullCheckpoint).
+//
+// This reproduces the exact failure condition deterministically: hold
+// hydration_build_mutex across the FULL checkpoint (the observable state of an
+// in-flight hydration for the grace probe). RED (grace gate present): the eager
+// build's tryBeginCacheReclaimGrace fails -> skipped -> no prop_exact.idx. GREEN
+// (gate dropped): the build fires -> prop_exact.idx persisted, index correct,
+// reopen reloads with zero rebuild.
+test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_mutex held (in-flight hydration)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 3000;
+
+    // Phase 1: ingest + FULL checkpoint, then remove idmap.snapshot + prop_exact.idx.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    deleteAllPropExactIdx(allocator, data_dir);
+    deleteAllNamed(allocator, data_dir, "idmap.snapshot");
+
+    // Phase 2: reopen deferred; hold hydration_build_mutex ACROSS the FULL checkpoint.
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    adapter_mod.resetFullCheckpointForcedLoadsForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+
+        // Simulate the in-flight hydration by HOLDING hydration_build_mutex on a
+        // SEPARATE thread (exactly the 14.27M condition: a hydration task on
+        // another thread holds it during the shutdown-checkpoint window). Holding
+        // it on the checkpoint's own thread would falsely re-enter the mutex from
+        // the checkpoint's benign cache-reclaim tryLock.
+        const Holder = struct {
+            fn run(s: *GraphStore, acquired: *std.atomic.Value(bool), release: *std.atomic.Value(bool)) void {
+                if (!s.tryBeginCacheReclaimGrace()) return;
+                acquired.store(true, .release);
+                while (!release.load(.acquire)) sleepMs(1);
+                s.endCacheReclaimGrace();
+            }
+        };
+        var acquired = std.atomic.Value(bool).init(false);
+        var release = std.atomic.Value(bool).init(false);
+        const holder = try std.Thread.spawn(.{}, Holder.run, .{ store, &acquired, &release });
+        var spun: u64 = 0;
+        while (!acquired.load(.acquire) and spun < 5000) : (spun += 1) sleepMs(1);
+        try testing.expect(acquired.load(.acquire)); // the holder owns the mutex now
+
+        // FULL checkpoint WHILE another thread holds hydration_build_mutex. GREEN:
+        // the build ignores the mutex and fires. RED (grace gate): the eager
+        // build's tryBeginCacheReclaimGrace fails -> skip -> no prop_exact.idx.
+        try store.saveToFile();
+
+        try testing.expect(adapter_mod.getExactEagerCheckpointBuildsForTesting() >= 1);
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+
+        release.store(true, .release);
+        holder.join();
+        graph_store.deinitGlobalStore();
+    }
+
+    // Phase 3: reopen; the exact index RELOADS (no rebuild), seek correct.
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        _ = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+        _ = try adapter.getOrCreateGraph(G);
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[3] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
         graph_store.deinitGlobalStore();
     }
 }
