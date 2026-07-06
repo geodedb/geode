@@ -217,6 +217,23 @@ pub const CancelFlags = struct {
         }
         return false;
     }
+
+    /// GAP-ENT-0048 SECONDARY: true only when the STREAM (connection-close)
+    /// cancel is set — i.e. the client is genuinely gone. Deliberately EXCLUDES
+    /// the watchdog (proto-reader stall) flag: the stall watchdog fires because a
+    /// long index-BUILD makes the handler look idle to the transport, but the
+    /// build IS making progress and is NOT wedged. The deferred exact-index
+    /// rebuild polls THIS (not `tripped`) so a stall abort cannot kill a
+    /// progressing build (which would never latch -> the next query restarts the
+    /// O(graph) rebuild -> forever wedge), while a real disconnect still frees the
+    /// handler promptly. Normal executor reads keep polling `tripped`/`check` and
+    /// still honour the watchdog (an abandoned GROUP BY is genuinely idle).
+    pub fn streamTripped(self: CancelFlags) bool {
+        if (self.cancel) |flag| {
+            if (flag.load(.acquire)) return true;
+        }
+        return false;
+    }
 };
 
 /// Snapshot the active read scope's cancel flag pointers (see `CancelFlags`).

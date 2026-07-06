@@ -591,6 +591,89 @@ test "GAP-ENT-0048 DEFECT B: deferred exact-index rebuild honors read-executor c
 }
 
 // ============================================================================
+// GAP-ENT-0048 SECONDARY — the deferred first-access rebuild must NOT be killed
+// by the proto-reader STALL (watchdog) cancel while it is making progress. The
+// ~60 s stall watchdog (server/main.zig) fires precisely because a long build
+// makes the handler look idle to the transport; aborting the build there leaves
+// the index un-latched, so the NEXT query restarts the whole O(graph) rebuild
+// and re-stalls — the forever-wedge the escalation observed. A progressing build
+// is exempt from the WATCHDOG cancel; only a genuine client disconnect (STREAM
+// cancel — DEFECT B) still aborts it.
+// ============================================================================
+//
+// RED (pre-fix): the rebuild polls BOTH cancel sources, so a set watchdog flag
+// aborts it (ReadQueryCancelled, index un-latched, scanned << N). GREEN
+// (post-fix): the watchdog flag is exempted while the build heartbeats — the
+// build COMPLETES, returns the correct posting, latches built (rebuild-runs 1),
+// scans every live node (scanned == N), and emits heartbeats (> 0).
+test "GAP-ENT-0048 SECONDARY: deferred rebuild is exempt from the proto-reader stall (watchdog) cancel while progressing" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "watchdog_exempt_graph";
+    const label = "Taxon";
+    const N: usize = 8192;
+
+    // ---- Session 1: seed durably, then DROP the snapshot -> reopen DEFERS. ----
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+            try adapter.setNodeProperty(graph, node_id, "source", .{ .Int = @intCast(i % 4) });
+        }
+        try adapter.checkpointAll();
+        try adapter.checkpointAllLight(); // invalidate -> reopen DEFERS
+    }
+
+    // ---- Session 2: reopen deferred; a WATCHDOG-cancelled read must COMPLETE. ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactRebuildNodesScannedForTesting();
+    adapter_mod.resetExactRebuildHeartbeatsForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        _ = try adapter.getOrCreateGraph(graph);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // Install a read scope whose WATCHDOG (proto-reader stall) cancel is
+        // ALREADY set — exactly what `Registry.cancelAll()` does at the ~60 s
+        // stall — but leave the STREAM (connection-close) cancel UNSET: the client
+        // is still connected; the handler only *looks* idle because it is building.
+        var watchdog = std.atomic.Value(bool).init(true);
+        geode.read_budget.setWatchdogCancelSource(&watchdog);
+        defer geode.read_budget.setWatchdogCancelSource(null);
+        var scope = geode.read_budget.Scope.init();
+        geode.read_budget.beginScope(&scope);
+        defer geode.read_budget.endScope(&scope);
+
+        // The first index-served read triggers the deferred rebuild. Post-fix the
+        // watchdog flag is EXEMPTED while the build heartbeats -> it COMPLETES and
+        // returns the correct posting (NOT error.ReadQueryCancelled).
+        const got = try adapter.getCandidateNodesByLabelAndProperty(graph, label, "source", .{ .Int = 0 }, allocator);
+        defer allocator.free(got);
+        try testing.expectEqual(@as(usize, N / 4), got.len);
+
+        // The build ran to completion: one rebuild, every live node scanned, and
+        // heartbeats fired (proving it was progressing, not wedged).
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
+        try testing.expectEqual(@as(u64, N), adapter_mod.getExactRebuildNodesScannedForTesting());
+        try testing.expect(adapter_mod.getExactRebuildHeartbeatsForTesting() > 0);
+
+        // The index latched built: a second read serves WITHOUT a new rebuild.
+        adapter_mod.resetExactRebuildRunsForTesting();
+        const got2 = try adapter.getCandidateNodesByLabelAndProperty(graph, label, "source", .{ .Int = 1 }, allocator);
+        defer allocator.free(got2);
+        try testing.expectEqual(@as(usize, N / 4), got2.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+    }
+}
+
+// ============================================================================
 // GAP-ENT-0048 PRIMARY — a graph that runs a session with its exact index
 // DEFERRED must, on the session's FULL (clean-shutdown) checkpoint, EAGERLY
 // build the index from the durable pages (in parallel) and PERSIST a complete

@@ -80,10 +80,20 @@ var g_exact_rebuild_runs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-ENT-0048 DEFECT B: nodes VISITED by the exact-index rebuild scan
 // (`rebuildExactNodePropertyIndex`'s per-shard scanCallback) process-wide.
 // Wall-clock-independent instrumentation for the cancel contract: a read query
-// whose executor cancel flag is set must abort the deferred rebuild at the next
-// batch boundary, so the scan visits FAR fewer than the graph's node count
-// instead of running to completion (the wedged-handler symptom at 14.27M).
+// whose STREAM (connection-close) cancel flag is set must abort the deferred
+// rebuild at the next batch boundary, so the scan visits FAR fewer than the
+// graph's node count instead of running to completion (frees a genuinely-gone
+// client's handler). GAP-ENT-0048 SECONDARY narrows this to the STREAM source
+// only: a proto-reader stall (WATCHDOG) abort must NOT stop a progressing build
+// (see `g_exact_rebuild_heartbeats` and `CancelFlags.streamTripped`).
 var g_exact_rebuild_nodes_scanned: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 SECONDARY: build-progress heartbeat. Incremented once per
+// cancel-poll BATCH (every `exact_rebuild_cancel_poll_batch` nodes) while the
+// deferred exact-index rebuild advances. A monotonically-rising value proves the
+// build is making forward progress (not wedged), which is exactly why the
+// rebuild is EXEMPT from the proto-reader stall (watchdog) cancel: a handler
+// that is heartbeating is building, not stuck. Reset per test.
+var g_exact_rebuild_heartbeats: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // C-1 (T2b adversarial review): number of times a per-graph checkpoint's
 // retired-cache reclaim (the grace window in `checkpointOneGraph`) was
 // SKIPPED because the graph had an unfinished (pending or in-flight)
@@ -223,6 +233,17 @@ pub fn getExactRebuildNodesScannedForTesting() u64 {
 /// GAP-ENT-0048 DEFECT B: reset the rebuild-scan node counter (test-only).
 pub fn resetExactRebuildNodesScannedForTesting() void {
     g_exact_rebuild_nodes_scanned.store(0, .release);
+}
+
+/// GAP-ENT-0048 SECONDARY: build-progress heartbeats emitted by the most recent
+/// rebuild since the last reset. > 0 proves the build advanced (was not wedged).
+pub fn getExactRebuildHeartbeatsForTesting() u64 {
+    return g_exact_rebuild_heartbeats.load(.acquire);
+}
+
+/// GAP-ENT-0048 SECONDARY: reset the build-progress heartbeat counter.
+pub fn resetExactRebuildHeartbeatsForTesting() void {
+    g_exact_rebuild_heartbeats.store(0, .release);
 }
 
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
@@ -1748,7 +1769,19 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
             self.since_poll += 1;
             if (self.since_poll >= exact_rebuild_cancel_poll_batch) {
                 self.since_poll = 0;
-                if (self.cancel.tripped()) {
+                // GAP-ENT-0048 SECONDARY: emit a build-progress heartbeat, then
+                // poll ONLY the STREAM (connection-close) cancel — a genuinely
+                // gone client frees the handler (DEFECT B). The proto-reader
+                // stall (WATCHDOG) cancel is deliberately NOT honoured here: the
+                // stall fires precisely because this build makes the handler look
+                // idle to the transport, yet the build IS advancing (this
+                // heartbeat proves it). Aborting on the stall would leave the
+                // index un-latched so the NEXT query restarts the whole O(graph)
+                // rebuild — the ~60 s-stall forever-wedge. Let a progressing build
+                // run to completion, latch, and persist; every later query is then
+                // served from the built/persisted index.
+                _ = g_exact_rebuild_heartbeats.fetchAdd(1, .monotonic);
+                if (self.cancel.streamTripped()) {
                     self.err = error.ReadQueryCancelled;
                     return;
                 }
@@ -1768,10 +1801,13 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
         }
 
         fn run(self: *@This()) void {
-            // GAP-ENT-0048 DEFECT B: a cancel already pending before the first
-            // node bails the whole shard WITHOUT touching the node store (the
-            // common "client already gone" case — zero page pins).
-            if (self.cancel.tripped()) {
+            // GAP-ENT-0048 DEFECT B: a STREAM cancel already pending before the
+            // first node bails the whole shard WITHOUT touching the node store
+            // (the common "client already gone" case — zero page pins). Uses the
+            // stream-only source (see SECONDARY): a pre-set stall WATCHDOG flag
+            // must NOT prevent the build — the build is what the stalled handler
+            // is doing, and it will complete and serve every future reader.
+            if (self.cancel.streamTripped()) {
                 self.err = error.ReadQueryCancelled;
                 return;
             }
@@ -1867,10 +1903,14 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
     // GAP-ENT-0048 DEFECT B: capture THIS (handler) thread's read-executor
     // cancel flags and hand them to the parallel rebuild, whose per-shard pool
     // workers run on threads that do not inherit the threadlocal read scope. If
-    // the driving client disconnects (or the stall watchdog aborts the wedged
-    // executor) mid-rebuild, the scan aborts with error.ReadQueryCancelled and
-    // the latch stays UNbuilt — the next accessor retries the rebuild cleanly
-    // (idempotent: rebuild clears first). Write paths install no read scope, so
+    // the driving client genuinely DISCONNECTS (STREAM cancel) mid-rebuild, the
+    // scan aborts with error.ReadQueryCancelled and the latch stays UNbuilt — the
+    // next accessor retries the rebuild cleanly (idempotent: rebuild clears
+    // first). GAP-ENT-0048 SECONDARY: a proto-reader STALL (watchdog) abort does
+    // NOT stop the build — a progressing build is not a wedged handler, so it
+    // runs to completion and latches, and every later query is served from the
+    // built (and persist-on-build durable) index instead of restarting the
+    // O(graph) rebuild forever. Write paths install no read scope, so
     // `activeCancelFlags` is empty for them and their rebuild is never cancelled.
     try rebuildExactNodePropertyIndex(mg, read_budget.activeCancelFlags());
     mg.exact_index_built.store(true, .release);
