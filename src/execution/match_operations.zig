@@ -53,6 +53,18 @@ pub fn resetIndexServedAggregateTotal() void {
     g_index_served_aggregate_total.store(0, .monotonic);
 }
 
+// GAP-ENT-0055: routing counter for the O(1) filtered `count(n)` served straight
+// from the exact node-property index posting LENGTH (no candidate re-verify
+// walk). Fires only for the provably-exact `seekableAsciiStringEq` shape with no
+// tenant scope. Tests assert a delta of 1 to prove sub-linear routing.
+var g_filtered_count_index_served_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getFilteredCountIndexServedTotal() u64 {
+    return g_filtered_count_index_served_total.load(.monotonic);
+}
+pub fn resetFilteredCountIndexServedTotal() void {
+    g_filtered_count_index_served_total.store(0, .monotonic);
+}
+
 // GAP (write-path OOM, 2026-07-04): path counters for the ENGINE-DIRECT point
 // write vs the LEGACY materializing write scan. `pointWriteFastPath` bumps the
 // first when it SERVES a write (including the authoritative 0-match empty);
@@ -1020,6 +1032,71 @@ fn extractBoundVarProperty(expr: ast.Expr, match_var: []const u8) ?[]const u8 {
     return vp.property;
 }
 
+// GAP-ENT-0055: resolve a GROUP BY key expression to `<match_var>.<property>`,
+// transparently following a RETURN alias.
+//
+// GQL/Cypher lets `GROUP BY` reference a RETURN alias:
+//   MATCH (n:Taxon) RETURN n.source AS s, count(*) AS c GROUP BY s
+// The parser leaves `GROUP BY s` as a bare `Ident("s")` (no alias resolution),
+// so `extractBoundVarProperty(Ident("s"))` returns null and BOTH aggregate fast
+// paths declined — the query fell to the legacy full-materialization GROUP BY
+// (execution.zig computeGroupAggregation), which resolves the alias by evaluating
+// against O(nodes) MATERIALIZED rows (the 2026-07-05 live `GROUP BY source
+// count(*)` 88s scan). DISTINCT never hit this: `RETURN DISTINCT n.source AS s`
+// carries the property `n.source` DIRECTLY in the RETURN item expr (the alias is
+// a separate field), so its key always resolved and it stayed index-served.
+//
+// This follows the alias so the alias-grouped shape routes to the SAME
+// O(distinct) exact-index path DISTINCT already uses. When the key is (directly,
+// or via a single alias hop) a bound var property of `match_var`, returns the
+// property name; otherwise null (→ the fast path declines, legacy serves it).
+fn resolveGroupKeyProperty(
+    key_expr: ast.Expr,
+    match_var: []const u8,
+    ret_items: []const ast.ReturnItem,
+) ?[]const u8 {
+    // Direct `n.<prop>` shape (also the pre-0055 behavior — backward compatible).
+    if (extractBoundVarProperty(key_expr, match_var)) |p| return p;
+    // Otherwise: a bare identifier naming a RETURN alias → resolve through that
+    // item's expression (one hop only; an alias whose expr is itself an alias
+    // or an aggregate resolves to null → decline).
+    const ident = switch (key_expr) {
+        .Ident => |id| id.orig,
+        else => return null,
+    };
+    for (ret_items) |item| {
+        const alias = item.alias orelse continue;
+        if (std.mem.eql(u8, alias, ident)) {
+            return extractBoundVarProperty(item.expr, match_var);
+        }
+    }
+    return null;
+}
+
+// GAP-ENT-0055: resolve a GROUP BY key expression through a RETURN alias to the
+// underlying expression it names (`GROUP BY s` → the `n.source` expr when
+// `RETURN n.source AS s`). Returns the key UNCHANGED when it is not a bare
+// identifier naming a RETURN alias, so non-alias keys (`GROUP BY n.source`) are
+// byte-for-byte unaffected.
+//
+// The LEGACY grouping loops evaluate the key expression per node/binding; a bare
+// alias identifier evaluates to Null there (the raw match env binds `n`, not the
+// projected alias `s`), collapsing EVERY row into one null group — a silent
+// wrong result for `GROUP BY <alias>` on any shape that declines the aggregate
+// fast paths (ORDER BY, multi-hop, etc.). Resolving to the aliased expression
+// makes the legacy path agree with the fast paths and the projection.
+fn resolveGroupKeyExprAlias(key_expr: ast.Expr, ret_items: []const ast.ReturnItem) ast.Expr {
+    const ident = switch (key_expr) {
+        .Ident => |id| id.orig,
+        else => return key_expr,
+    };
+    for (ret_items) |item| {
+        const alias = item.alias orelse continue;
+        if (std.mem.eql(u8, alias, ident)) return item.expr;
+    }
+    return key_expr;
+}
+
 fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
     const bin = switch (where) {
         .Binary => |b| b,
@@ -1810,13 +1887,43 @@ pub fn countFilteredFastPath(
     // triggers `ensureExactNodePropertyIndexBuilt`, so an H4-deferred index is
     // built before the first seek (never observed empty).
     if (seekableAsciiStringEq(where_pred)) |seek_str| {
-        if (adapter.getCandidateNodesByLabelAndProperty(
+        // GAP-ENT-0055 (GAP-ENT-0019 O(1) upgrade): with NO tenant scope, the
+        // exact-index posting for `(label, key, value)` IS the answer — its
+        // LENGTH is exactly the match count. Serve it O(1) via the posting-length
+        // accessor instead of the O(matching) candidate re-verify walk below
+        // (which read one property per candidate — minutes for a high-cardinality
+        // value like `source='col'` covering millions of nodes). The
+        // `seekableAsciiStringEq` gate already proves the seek set == the eval
+        // match set (pure ASCII → NFC identity; non-numeric/non-bool → no
+        // cross-type coercion), so the only nodes in the bucket are exact
+        // matches — the SAME collision-free posting assumption the T1
+        // index-served GROUP BY/DISTINCT path (collectPropertyPostingSummaries)
+        // already relies on. `countCandidateNodesByLabelAndProperty` runs
+        // `ensureExactNodePropertyIndexBuilt` (H4 latch), and a missing posting
+        // returns 0 — authoritative empty (index complete per shouldIndexProperty).
+        if (!tenant_active) {
+            if (adapter.countCandidateNodesByLabelAndProperty(
+                filter_graph,
+                head.labels[0],
+                where_pred.key,
+                graph_store.PropertyValue{ .String = seek_str },
+            )) |posting_len| {
+                _ = g_filtered_count_index_served_total.fetchAdd(1, .monotonic);
+                const col: []const u8 = item.alias orelse "count(n)";
+                return try buildCountFastPathResult(allocator, col, posting_len);
+            } else |_| {
+                // Index unavailable (e.g. graph vanished mid-flight) — fall
+                // through to the exact full scan, which is always correct.
+            }
+        } else if (adapter.getCandidateNodesByLabelAndProperty(
             filter_graph,
             head.labels[0],
             where_pred.key,
             graph_store.PropertyValue{ .String = seek_str },
             allocator,
         )) |candidates| {
+            // Tenant scope active: postings are NOT tenant-scoped, so seek the
+            // candidate set and re-verify + tenant-filter each (O(matching)).
             defer allocator.free(candidates);
             var seek_matched: usize = 0;
             for (candidates) |slot_id| {
@@ -2000,7 +2107,10 @@ pub fn indexServedGroupByFastPath(
     } else {
         const gb = q.group_by.?;
         if (gb.keys.len != 1) return null; // single-key only; multi-key → streaming
-        key_prop = extractBoundVarProperty(gb.keys[0], match_var) orelse return null;
+        // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s` where `s` aliases
+        // `n.source`) — the parser leaves it a bare Ident that the direct
+        // `extractBoundVarProperty` cannot resolve.
+        key_prop = resolveGroupKeyProperty(gb.keys[0], match_var, q.ret.items) orelse return null;
 
         for (q.ret.items, 0..) |item, i| {
             if (item.expr == .Call) {
@@ -2299,7 +2409,10 @@ pub fn groupByAggregateFastPath(
         const gb = q.group_by.?;
         if (gb.keys.len == 0 or gb.keys.len > MAX_KEYS) return null;
         for (gb.keys, 0..) |key_expr, ki| {
-            gb_key_props[ki] = extractBoundVarProperty(key_expr, match_var) orelse return null;
+            // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s`) — same
+            // resolution the index-served path uses, so both fast paths accept
+            // the alias-grouped shape rather than falling to legacy materialize.
+            gb_key_props[ki] = resolveGroupKeyProperty(key_expr, match_var, q.ret.items) orelse return null;
         }
         n_gb_keys = gb.keys.len;
 
@@ -8760,7 +8873,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Evaluate grouping key for this node
                 // For now, assume single grouping key that's a property access
                 if (group_by.keys.len > 0) {
-                    const key_expr = group_by.keys[0];
+                    // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s`) to its
+                    // underlying `n.source` expr — a bare alias evaluates to Null
+                    // per node and collapses everything into one null group.
+                    const key_expr = resolveGroupKeyExprAlias(group_by.keys[0], items);
                     const key_val = try evaluateNodeExpression(allocator, key_expr, node);
 
                     // Format the key as a string for grouping

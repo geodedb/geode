@@ -22,6 +22,7 @@ GAP-ENT-0043,IndexServedAggregate,Regression,TESTED,,,execution,2026-07-05,tests
 GAP-ENT-0043,ProjectionPushdownScan,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0043_projection_pushdown.zig
 GAP-ENT-0044,ReadExecutorBudget,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0044_read_budget_cancel.zig
 GAP-ENT-0045,ReadCancelOnDisconnect,Regression,TESTED,,,execution,2026-07-05,tests/test_gap0044_read_budget_cancel.zig
+GAP-ENT-0055,AliasGroupedAndFilteredIndexCount,Regression,TESTED,,,execution,2026-07-06,tests/test_gap0055_alias_grouped_and_filtered_count.zig
 GQL-39075-CK-001,GQLConformance/AllRQs,UnitTestCoverage,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0001,Conformance/ExecuteConformingPrograms,Profile,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0002,Conformance/RequiredErrors,SQLSTATE,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig

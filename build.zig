@@ -7540,6 +7540,20 @@ pub fn build(b: *std.Build) void {
     const index_served_agg_step = b.step("test-gap0043-index-served-aggregate", "Run GAP-ENT-0043 T1 index-served GROUP BY/DISTINCT/count-by-value regression (O(distinct) from exact-index postings, zero materialization)");
     index_served_agg_step.dependOn(&run_index_served_agg_tests.step);
 
+    // GAP-ENT-0055: alias-grouped GROUP BY + O(1) filtered count route to the
+    // exact node-property index (mirror the DISTINCT index-served path).
+    // Pre-fix: `GROUP BY <alias>` and `WHERE k=v RETURN count(n)` scanned (88s
+    // @7M). Post-fix: alias GROUP BY is index-served (getIndexServedAggregateTotal
+    // == 1) and the filtered count is O(1) posting length
+    // (getFilteredCountIndexServedTotal == 1), results exact.
+    const alias_grouped_count_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0055_alias_grouped_and_filtered_count.zig"), .target = target, .optimize = optimize });
+    alias_grouped_count_test_mod.addImport("geode", root_mod);
+    const alias_grouped_count_tests = b.addTest(.{ .root_module = alias_grouped_count_test_mod });
+    const run_alias_grouped_count_tests = b.addRunArtifact(alias_grouped_count_tests);
+    shardDep(test_step, &run_alias_grouped_count_tests.step, 1, test_shard_loads, test_shard_index);
+    const alias_grouped_count_step = b.step("test-gap0055-alias-grouped-filtered-count", "Run GAP-ENT-0055 alias-grouped GROUP BY + O(1) filtered-count index-served regression");
+    alias_grouped_count_step.dependOn(&run_alias_grouped_count_tests.step);
+
     // GAP-ENT-0043 T2: projection-pushdown streaming for residual scans.
     // Pre-fix: unlabeled GROUP BY/DISTINCT/aggregate declines every fast path
     // (all require exactly one label) → planned_read_runtime materializes one

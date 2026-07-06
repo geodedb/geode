@@ -5802,6 +5802,10 @@ pub const StorageAdapter = struct {
         property_key: []const u8,
         value: graph_store.PropertyValue,
     ) !usize {
+        // This probes the exact node-property index by value hash exactly like
+        // getCandidateNodesByLabelAndProperty — count it as an exact-index lookup
+        // so probe-counting callers/tests (GAP-ENT-0019) see the seek fire.
+        _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
