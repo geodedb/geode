@@ -3243,6 +3243,24 @@ pub fn build(b: *std.Build) void {
     const bench_executor_mutation_step = b.step("bench-query-executor-mutation", "In-process mutation-path timings across 6 scenarios (CREATE/SET/DELETE/MERGE/edge)");
     bench_executor_mutation_step.dependOn(&run_bench_executor_mutation.step);
 
+    // task0049: edge bulk-load throughput repro — measures the LIVE bulk
+    // fast-path per-edge cost (lookupNodeByMergeKey x2 + bulkInsertEdgeWithIds),
+    // swept across N to detect O(n), per-edge-txn vs batched to isolate WAL fsync.
+    const bench_edge_bulk_exe = b.addExecutable(.{
+        .name = "bench-edge-bulk-throughput",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_edge_bulk_throughput.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    bench_edge_bulk_exe.root_module.addImport("geode", root_mod);
+    const run_bench_edge_bulk = b.addRunArtifact(bench_edge_bulk_exe);
+    if (b.args) |args| run_bench_edge_bulk.addArgs(args);
+    const bench_edge_bulk_step = b.step("bench-edge-bulk-throughput", "edge bulk-load per-edge cost repro");
+    bench_edge_bulk_step.dependOn(&run_bench_edge_bulk.step);
+
     // Task 3.2: bench_executor_mutation unit/smoke test (opt-in via GEODE_RUN_SLOW_TESTS=1).
     const bench_executor_mutation_test = b.addTest(.{
         .root_module = b.createModule(.{
