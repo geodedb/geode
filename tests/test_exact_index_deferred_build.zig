@@ -118,10 +118,11 @@ test "exact node-property index: deferred at open, built once on first access" {
         // FULL checkpoint: durable engine pages + a freshly persisted
         // prop_exact.idx snapshot.
         try adapter.checkpointAll();
-        // LIGHT checkpoint: removes (invalidates) the persisted prop_exact.idx so
-        // a reopen finds NO index file (loadFromFile == false) and must DEFER the
-        // rebuild — while the engine pages stay durable from the full checkpoint.
-        try adapter.checkpointAllLight();
+        // Drop the persisted prop_exact.idx so a reopen finds NO index file
+        // (loadFromFile == false) and must DEFER the rebuild — while the engine
+        // pages stay durable from the full checkpoint. (Since GAP-ENT-0048g a
+        // LIGHT checkpoint KEEPS a current-stamped index, so we drop it directly.)
+        adapter.invalidateExactIndexFileForTesting(graph);
     }
 
     // Confirm the seed spans multiple shards (so the rebuild has real work).
@@ -228,7 +229,7 @@ test "exact node-property index: full checkpoint on a deferred graph persists a 
 
         try adapter.checkpointAll();
         // Remove the persisted snapshot so session 2 opens DEFERRED.
-        try adapter.checkpointAllLight();
+        adapter.invalidateExactIndexFileForTesting(graph);
     }
 
     // ---- Session 2: open deferred, FULL checkpoint BEFORE any query. ----
@@ -339,10 +340,10 @@ test "exact node-property index: lazy build persists immediately (crash before a
             try adapter.setNodeProperty(graph, node_id, "grp", .{ .Int = @intCast(i % 4) });
         }
 
-        // FULL checkpoint: durable pages (+ index snapshot); LIGHT checkpoint:
-        // removes the index snapshot -> the reopen DEFERS the rebuild.
+        // FULL checkpoint: durable pages (+ index snapshot); then drop the index
+        // snapshot -> the reopen DEFERS the rebuild.
         try adapter.checkpointAll();
-        try adapter.checkpointAllLight();
+        adapter.invalidateExactIndexFileForTesting(graph);
     }
 
     // ---- Session 2: build via query; persist-on-build; CRASH. ----
@@ -534,7 +535,7 @@ test "GAP-ENT-0048 DEFECT B: deferred exact-index rebuild honors read-executor c
             try adapter.setNodeProperty(graph, node_id, "source", .{ .Int = @intCast(i % 4) });
         }
         try adapter.checkpointAll(); // persist snapshot ...
-        try adapter.checkpointAllLight(); // ... then invalidate it -> reopen DEFERS
+        adapter.invalidateExactIndexFileForTesting(graph); // ... then drop it -> reopen DEFERS
     }
 
     // ---- Session 2: reopen deferred; a CANCELLED read must bail early. ----
@@ -627,7 +628,7 @@ test "GAP-ENT-0048 SECONDARY: deferred rebuild is exempt from the proto-reader s
             try adapter.setNodeProperty(graph, node_id, "source", .{ .Int = @intCast(i % 4) });
         }
         try adapter.checkpointAll();
-        try adapter.checkpointAllLight(); // invalidate -> reopen DEFERS
+        adapter.invalidateExactIndexFileForTesting(graph); // drop -> reopen DEFERS
     }
 
     // ---- Session 2: reopen deferred; a WATCHDOG-cancelled read must COMPLETE. ----
@@ -726,7 +727,7 @@ test "GAP-ENT-0048 PRIMARY: deferred graph FULL checkpoint builds+persists so re
             try adapter.setNodeProperty(graph, node_id, "source", .{ .String = sources[i % sources.len] });
         }
         try adapter.checkpointAll(); // persist prop_exact.idx ...
-        try adapter.checkpointAllLight(); // ... then invalidate it -> reopen DEFERS
+        adapter.invalidateExactIndexFileForTesting(graph); // ... then drop it -> reopen DEFERS
     }
 
     // ---- Session 2: open DEFERRED, then FULL checkpoint (clean shutdown). ----

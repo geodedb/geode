@@ -294,6 +294,18 @@ pub fn resetExactHydrationBuildsForTesting() void {
     g_exact_hydration_builds.store(0, .release);
 }
 
+/// GAP-ENT-0048g: aggregate (sum over all shards) of the per-shard
+/// `manifest.counter` — bumps once per durable checkpoint of any shard. Used to
+/// stamp `prop_exact.idx` and gate its reload (load-if-current), the same
+/// discipline `idmap.snapshot` uses.
+fn mgManifestCounter(mg: *ManagedGraph) u64 {
+    var counter: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        counter +%= shard.manifest.counter;
+    }
+    return counter;
+}
+
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
 /// retired-cache reclaims because the graph had an unfinished first-touch
 /// hydration (test instrumentation for the reclaim gate).
@@ -638,9 +650,15 @@ const NodePropertyExactIndex = struct {
         return buf[0..total_len];
     }
 
-    /// Persist the index to `prop_exact.idx` inside `graph_dir_path`.
+    /// Persist the index to `prop_exact.idx` inside `graph_dir_path`, stamped
+    /// with the engine `manifest_counter` at persist time (GAP-ENT-0048g). The
+    /// stamp mirrors the `idmap.snapshot` load-if-current discipline: on reopen
+    /// the index loads ONLY if its stamp equals the engine's current manifest
+    /// counter (no committed write since it was persisted). This lets a LIGHT
+    /// checkpoint KEEP a current-stamped index instead of deleting it — the
+    /// counter gate, not a delete, guarantees a stale copy is never loaded.
     /// Non-fatal: callers should catch and log warnings.
-    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) !void {
+    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, manifest_counter: u64) !void {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -657,8 +675,10 @@ const NodePropertyExactIndex = struct {
         var idx_fw = file.writerStreaming(idx_io, &idx_wbuf);
         const writer = &idx_fw.interface;
 
-        // 8-byte magic header
-        try writer.writeAll("GENPIDX1");
+        // 8-byte magic header (v2 = manifest-counter stamped).
+        try writer.writeAll("GENPIDX2");
+        // Staleness stamp: the engine manifest counter at persist time.
+        try writer.writeInt(u64, manifest_counter, .little);
 
         // Entry count
         var count: u64 = 0;
@@ -685,10 +705,15 @@ const NodePropertyExactIndex = struct {
         try idx_fw.flush();
     }
 
-    /// Load the index from `prop_exact.idx` inside `graph_dir_path`.
-    /// Returns true on success, false if file is missing, corrupt, or unreadable
-    /// (caller should fall back to full rebuild).
-    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) bool {
+    /// Load the index from `prop_exact.idx` inside `graph_dir_path`, but ONLY if
+    /// its manifest-counter stamp equals `expected_counter` (the engine's current
+    /// counter). Returns true on a current load; false if missing, corrupt,
+    /// legacy-format, or STALE (stamp != expected — a committed write advanced the
+    /// counter since persist), in which case the caller rebuilds. This is the
+    /// idmap.snapshot load-if-current discipline (GAP-ENT-0048g): staleness is
+    /// caught by the stamp, so a stale on-disk copy is never blessed and a LIGHT
+    /// checkpoint need not delete a current-stamped file.
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_counter: u64) bool {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -705,10 +730,16 @@ const NodePropertyExactIndex = struct {
         var file_reader = file.reader(gsa_io, &reader_buffer);
         const reader = &file_reader.interface;
 
-        // Validate magic header
+        // Validate magic header — only the v2 (counter-stamped) format loads; a
+        // legacy GENPIDX1 (unstamped) file is treated as stale -> rebuild.
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return false;
-        if (!std.mem.eql(u8, &magic, "GENPIDX1")) return false;
+        if (!std.mem.eql(u8, &magic, "GENPIDX2")) return false;
+
+        // Staleness gate: reject unless the stamp matches the engine's current
+        // manifest counter (no committed write since the index was persisted).
+        const stored_counter = reader.takeInt(u64, .little) catch return false;
+        if (stored_counter != expected_counter) return false;
 
         const entry_count = reader.takeInt(u64, .little) catch return false;
 
@@ -6273,11 +6304,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.requireExistingGraphLocked(graph_name) catch return null;
         };
-        var counter: u64 = 0;
-        for (mg.engine.shards) |shard| {
-            counter +%= shard.manifest.counter;
-        }
-        return counter;
+        return mgManifestCounter(mg);
     }
 
     // ------------------------------------------------------------------
@@ -6436,6 +6463,22 @@ pub const StorageAdapter = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.engines.contains(name);
+    }
+
+    /// GAP-ENT-0048g test-only: remove the on-disk `prop_exact.idx` for a loaded
+    /// graph to force the DEFERRED condition. Since GAP-ENT-0048g a LIGHT
+    /// checkpoint KEEPS a current-stamped index (the counter gate handles
+    /// staleness), so tests can no longer use `checkpointAllLight` to drop it.
+    pub fn invalidateExactIndexFileForTesting(self: *StorageAdapter, graph_name: []const u8) void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return;
+        };
+        if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            defer self.allocator.free(dir_path);
+            invalidateExactPropertyIndexFile(self.allocator, dir_path);
+        } else |_| {}
     }
 
     /// GAP-ENT-0048 (task0048d): open the adapter engine of every registry graph
@@ -6799,9 +6842,18 @@ pub const StorageAdapter = struct {
                 });
             }
             if (light) {
-                invalidateExactPropertyIndexFile(self.allocator, dir_path);
+                // GAP-ENT-0048g: KEEP a stamped `prop_exact.idx` across LIGHT
+                // checkpoints instead of DELETING it. The manifest-counter stamp
+                // (saveToFile/loadFromFile) makes a stale copy un-loadable on
+                // reopen, so a delete is no longer needed for correctness — and
+                // the delete is exactly what dropped the hydration-built index at
+                // 14.27M (P1). We also do NOT re-save here: that is O(graph) and
+                // would defeat the O(dirty) LIGHT contract. A LIGHT checkpoint that
+                // dirtied pages bumps the manifest counter, which naturally
+                // invalidates the now-stale on-disk stamp for the next reopen; a
+                // no-op (clean) LIGHT leaves a current-stamped index reloadable.
             } else if (mg.exact_index_built.load(.acquire)) {
-                mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                mg.exact_node_property_index.saveToFile(dir_path, mgManifestCounter(mg)) catch |err| {
                     log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
                 };
             } else if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
@@ -6819,7 +6871,7 @@ pub const StorageAdapter = struct {
                 // to persist the COMPLETE snapshot below. This also supersedes the
                 // old "never persist an EMPTY snapshot" hazard: we persist a
                 // materialised, non-empty index, not the empty in-memory one.
-                mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                mg.exact_node_property_index.saveToFile(dir_path, mgManifestCounter(mg)) catch |err| {
                     log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
                 };
             } else {
@@ -7038,7 +7090,7 @@ pub const StorageAdapter = struct {
         // checkpoint). This is what removes the shutdown-checkpoint dependency.
         if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
             defer self.allocator.free(dir_path);
-            mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+            mg.exact_node_property_index.saveToFile(dir_path, mgManifestCounter(mg)) catch |err| {
                 log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
             };
         } else |err| {
@@ -7800,11 +7852,13 @@ pub const StorageAdapter = struct {
             mg.fts_dir = fts_result.dir;
         }
 
-        // Try loading the persisted property index; fall back to a lazy rebuild.
+        // Try loading the persisted property index if it is CURRENT (its
+        // manifest-counter stamp matches the engine's counter — GAP-ENT-0048g);
+        // otherwise fall back to a lazy/hydration rebuild.
         const loaded_from_disk = blk: {
             const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
             defer self.allocator.free(dir_path);
-            break :blk mg.exact_node_property_index.loadFromFile(dir_path);
+            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgManifestCounter(mg));
         };
         if (loaded_from_disk) {
             // Persisted snapshot loaded: the index is complete and ready.

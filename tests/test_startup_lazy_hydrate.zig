@@ -2951,3 +2951,82 @@ test "GAP-ENT-0048f: hydration builds+persists the exact index (race-free, no sh
         graph_store.deinitGlobalStore();
     }
 }
+
+// ============================================================================
+// GAP-ENT-0048g (P1 durability + P2 no-reopen-build) — prop_exact.idx is stamped
+// with the engine manifest counter, so a LIGHT checkpoint KEEPS a current-stamped
+// index instead of deleting it (P1), and a clean ingest+shutdown reopen RELOADS
+// it (load-if-current) instead of paying the O(graph) hydration build (P2 — the
+// 14-min / 46G->62G+swap thrash at 14.27M). The build survives to reopen, so the
+// reopen only reloads.
+//
+// RED (LIGHT deletes the index): after the LIGHT checkpoint prop_exact.idx is
+// gone -> reopen defers -> hydration re-builds it. GREEN: LIGHT keeps it; reopen
+// reloads (reloaded==1) and hydration does NOT build (hydration-builds==0,
+// rebuild-runs==0).
+test "GAP-ENT-0048g: prop_exact.idx survives a LIGHT checkpoint and reopen RELOADS (no reopen build)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 3000;
+
+    // Phase 1: ingest; FULL checkpoint (persist@C); LIGHT checkpoint (MUST KEEP);
+    // clean shutdown. NO manual deletion.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile(); // FULL -> persist prop_exact.idx@C
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1); // persisted
+
+        try store.saveToFileEx(true); // LIGHT (periodic) -> MUST KEEP the stamped index
+        // P1 headline: the current-stamped index SURVIVES the LIGHT checkpoint.
+        // RED (LIGHT deletes): this is 0.
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Phase 2: reopen -> RELOADS the surviving index; hydration does NOT build.
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    adapter_mod.resetExactHydrationBuildsForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        // Trigger first-touch hydration.
+        const nodes = store.getNodesByLabel(G, LBL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, nodes.len);
+
+        // P2 headline: the reopen RELOADED the index (reloaded==1) and NEITHER
+        // hydration NOR a lazy read rebuilt it (hydration-builds==0, rebuild==0).
+        // => no O(graph) reopen build -> no 14-min / swap-thrash at 14.27M.
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactHydrationBuildsForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // A seek is served from the reloaded index with ZERO rebuild.
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[2] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        graph_store.deinitGlobalStore();
+    }
+}
