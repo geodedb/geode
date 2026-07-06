@@ -6780,35 +6780,64 @@ pub const StorageAdapter = struct {
     /// PARALLEL (one scan task per engine shard on the shared thread pool) and
     /// uncancellable (empty CancelFlags — a checkpoint build has no read scope).
     ///
+    /// The rebuild scans the DURABLE store pages (`node_store.scanNodes` →
+    /// buffer pool → disk), so it does NOT require the graph to be resident /
+    /// hydrated — it covers a graph that is POPULATED ON DISK but not fully in
+    /// memory (the 14.27M lazily-hydrated main graph). The buffer pool is
+    /// bounded, so the scan does not spike RSS to the fully-resident set.
+    ///
     /// Skips (returns false) when:
-    ///   * the graph has NO live nodes — nothing to build; persisting an empty
-    ///     snapshot is pointless (an empty graph's reopen serves everything
-    ///     correctly from an empty index anyway);
-    ///   * a first-touch hydration is in flight for this graph — its pages are
-    ///     mid-write and the merge family reads shallow Node copies off the
-    ///     bounded caches' retire lists; scanning here is the C-1 UAF. This never
-    ///     happens at a clean shutdown (no in-flight hydration), only in the rare
-    ///     overlapping-cycle case, which degrades to the prior lazy behaviour.
+    ///   * the graph has NO durable nodes (manifest count 0) — nothing to build;
+    ///     persisting an empty snapshot is pointless.
+    ///   * a first-touch hydration build is ACTIVELY IN FLIGHT (store-wide
+    ///     `hydration_build_mutex` held) — its merge family reads shallow Node
+    ///     copies off the bounded caches' retire lists (C-1 UAF), so we do not
+    ///     scan concurrently with it. Detected with `tryBeginCacheReclaimGrace`
+    ///     (the SAME probe the checkpoint's own retired-cache reclaim uses), held
+    ///     across the build to exclude a concurrent hydration start.
+    ///
+    /// GAP-ENT-0048 lazy-hydration fix (task0048c): the previous gate used
+    /// `hasUnfinishedHydration` (== `isGraphDeferred`, `!entry.done`), which is
+    /// true for a graph that is merely DEFERRED-but-idle (never hydrated), not
+    /// only one that is actively building. That wrongly skipped the reopened
+    /// main graph — whose first-touch hydration never completed because it was
+    /// only counter-served — so its exact index was never persisted and every
+    /// reopen re-deferred. We now gate on an ACTIVE build, so a deferred-idle
+    /// graph is built from its durable pages.
+    ///
+    /// Lock-order note: called under `mg.rwlock` EXCLUSIVE; acquiring the store's
+    /// `hydration_build_mutex` (via `tryBeginCacheReclaimGrace`) here is the same
+    /// EXCLUSIVE-rwlock → `hydration_build_mutex`(tryLock) order the reclaim grace
+    /// below already uses, and hydration never takes `mg.rwlock`, so it cannot
+    /// deadlock (an active hydration holding the mutex simply makes tryLock fail →
+    /// we skip). Holding it across the build briefly blocks a concurrent
+    /// first-touch hydration of any graph; this branch only runs at a FULL
+    /// checkpoint of a DEFERRED graph (clean shutdown / explicit save), where that
+    /// is safe and rare.
     fn eagerBuildDeferredIndexForFullCheckpoint(self: *StorageAdapter, mg: *ManagedGraph) bool {
         _ = self;
-        // Nothing to materialise for an empty graph.
+        // Nothing to materialise for a graph with no durable nodes.
         var node_count: u64 = 0;
         for (mg.engine.shards) |shard| {
             node_count += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
         }
         if (node_count == 0) return false;
 
-        // C-1: never scan durable pages of a graph with an in-flight first-touch
-        // hydration (UAF against the retire lists). No global store (pure-adapter
-        // tests / tooling) => no hydration machinery => safe to build.
+        // Guard against an ACTIVELY-BUILDING first-touch hydration (C-1 UAF). A
+        // merely deferred/idle graph is NOT excluded — that is the whole point of
+        // this fix. No global store (pure-adapter tests / tooling) => no hydration
+        // machinery => build directly.
+        var grace_store: ?*graph_store.GraphStore = null;
         if (graph_store.getCurrentGlobalStore()) |store| {
-            if (store.hasUnfinishedHydration(mg.name)) {
-                slog.info("deferred exact-index NOT eager-built at full checkpoint (hydration in flight); staying lazy", &.{
+            if (!store.tryBeginCacheReclaimGrace()) {
+                slog.info("deferred exact-index NOT eager-built at full checkpoint (hydration build in flight); staying lazy", &.{
                     SAttr.string("graph", mg.name),
                 });
                 return false;
             }
+            grace_store = store;
         }
+        defer if (grace_store) |s| s.endCacheReclaimGrace();
 
         // Parallel rebuild from durable pages. `.{}` cancel flags never trip: a
         // checkpoint-time build must run to completion (it is NOT tied to any
@@ -6819,7 +6848,7 @@ pub const StorageAdapter = struct {
         };
         mg.exact_index_built.store(true, .release);
         _ = g_exact_eager_checkpoint_builds.fetchAdd(1, .monotonic);
-        slog.info("deferred exact-index eagerly built at full checkpoint (reopen will reload the snapshot)", &.{
+        slog.info("deferred exact-index eagerly built at full checkpoint from durable store (reopen will reload the snapshot)", &.{
             SAttr.string("graph", mg.name),
             SAttr.uint("nodes", node_count),
         });

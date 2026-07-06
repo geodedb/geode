@@ -28,6 +28,7 @@ const testing = std.testing;
 const geode = @import("geode");
 const graph_store = geode.graph_store;
 const execution = geode.execution;
+const adapter_mod = geode.graph_storage_adapter;
 const GraphStore = graph_store.GraphStore;
 const PropertyValue = graph_store.PropertyValue;
 
@@ -59,6 +60,36 @@ fn snapshotExists(allocator: std.mem.Allocator, data_dir: []const u8) bool {
         if (std.mem.eql(u8, entry.basename, "idmap.snapshot")) return true;
     }
     return false;
+}
+
+// GAP-ENT-0048 (task0048c): count / delete every persisted `prop_exact.idx`
+// under the data dir — used to force the on-disk "exact index deferred" state
+// (no snapshot) that the 14.27M store shows for its lazily-hydrated main graph,
+// and to assert the eager build later materialised one.
+fn countPropExactIdx(allocator: std.mem.Allocator, data_dir: []const u8) usize {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return 0;
+    defer dir.close(io);
+    var walker = dir.walk(allocator) catch return 0;
+    defer walker.deinit();
+    var n: usize = 0;
+    while (walker.next(io) catch return n) |entry| {
+        if (std.mem.eql(u8, entry.basename, "prop_exact.idx")) n += 1;
+    }
+    return n;
+}
+
+fn deleteAllPropExactIdx(allocator: std.mem.Allocator, data_dir: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var walker = dir.walk(allocator) catch return;
+    defer walker.deinit();
+    while (walker.next(io) catch return) |entry| {
+        if (std.mem.eql(u8, entry.basename, "prop_exact.idx")) {
+            dir.deleteFile(io, entry.path) catch {};
+        }
+    }
 }
 
 // Zig 0.16: std.time.Timer was removed; read the monotonic clock directly.
@@ -2465,5 +2496,124 @@ test "engine-direct single-label count serves the in-memory refcount, never the 
 
         // The authoritative in-memory refcount agrees (hydration-guaranteed).
         try testing.expectEqual(N, store.countNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, LABEL, null));
+    }
+}
+
+// ============================================================================
+// GAP-ENT-0048 lazy-hydration hole (task0048c) — the eager exact-index build at
+// a FULL checkpoint must cover a graph that is POPULATED ON DISK even when it is
+// NOT resident/hydrated. The 14.27M store reopens with the main graph LAZILY
+// hydrated (counter-served count is fast, but the graph's nodes are not
+// resident). The prior eager-build gate skipped it because `hasUnfinishedHydration`
+// (== isGraphDeferred, `!done`) is true for a merely deferred/idle graph — so its
+// exact index was never built/persisted and every reopen re-deferred, and a
+// WHERE prop=v seek re-triggered the O(graph) rebuild that wedges at scale.
+//
+// Fix: gate on an ACTIVELY-IN-FLIGHT hydration (store hydration_build_mutex), not
+// on "deferred". The build scans the DURABLE store pages, so it does not depend
+// on residence.
+//
+// This drives the production GraphStore lazy-hydration path (deferred at open),
+// loads the adapter engine WITHOUT hydrating it (getOrCreateGraph — opens the
+// engine, exact index deferred, does NOT hydrate the resident indexes), then
+// takes a FULL checkpoint.
+//   RED (pre-fix): the eager build skips the deferred graph -> eager-builds == 0,
+//     no prop_exact.idx -> Phase 3 reopen still deferred (reloaded == 0).
+//   GREEN (post-fix): the build materialises from the durable store -> eager-
+//     builds == 1 -> Phase 3 reopen RELOADS (reloaded == 1, rebuild-runs == 0)
+//     and a seek is served with ZERO rebuild. The graph was NEVER hydrated at
+//     build time (hasUnfinishedHydration stays true) — proving residence-free.
+test "GAP-ENT-0048 lazy-hydration: FULL checkpoint builds+persists a deferred (non-resident, on-disk) graph's exact index" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 2048;
+
+    // --- Phase 1: create + ingest, FULL checkpoint (writes prop_exact.idx),
+    //     then LIGHT (invalidates it) so the reopen DEFERS the exact index. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile(); // FULL: durable pages + idmap/hydration snapshots
+        graph_store.deinitGlobalStore(); // clean shutdown
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // Force divelife's on-disk state: durable node pages + idmap/hydration
+    // snapshots present, but NO prop_exact.idx (exact index deferred). The reopen
+    // then lazily hydrates AND defers the exact index — exactly the 14.27M case.
+    try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+    deleteAllPropExactIdx(allocator, data_dir);
+    try testing.expectEqual(@as(usize, 0), countPropExactIdx(allocator, data_dir));
+
+    // --- Phase 2: reopen DEFERRED; load the adapter engine WITHOUT hydrating;
+    //     FULL checkpoint the non-resident on-disk graph. ---
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator); // "server ready" — deferred
+
+        // The graph is DEFERRED at the store level (lazy hydration not done).
+        try testing.expect(store.hasUnfinishedHydration(G));
+
+        const adapter = graph_store.getGlobalAdapter().?;
+        // Open the adapter engine WITHOUT hydrating and WITHOUT building the exact
+        // index (getOrCreateGraph opens the engine; the index stays deferred).
+        _ = try adapter.getOrCreateGraph(G);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        // Still deferred (not resident) after merely opening the engine.
+        try testing.expect(store.hasUnfinishedHydration(G));
+
+        // FULL checkpoint the DEFERRED, non-resident graph. GREEN: eagerly builds
+        // from the durable store (eager-builds 0 -> 1). RED: gate skips (0).
+        try store.saveToFile();
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactEagerCheckpointBuildsForTesting());
+        // A complete prop_exact.idx was persisted for the deferred graph.
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+        // The build did NOT hydrate the graph — it scanned the durable store, so
+        // resident state is unchanged (still deferred). Residence-free proof.
+        try testing.expect(store.hasUnfinishedHydration(G));
+
+        graph_store.deinitGlobalStore();
+    }
+
+    // --- Phase 3: reopen; the exact index must RELOAD (no client-facing rebuild). ---
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        _ = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+        _ = try adapter.getOrCreateGraph(G);
+
+        // Opening RELOADED the snapshot the deferred FULL checkpoint persisted.
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        // A point seek (the WHERE prop=v shape that timed out at 14.27M) is served
+        // from the reloaded snapshot — full N/|sources| posting, ZERO rebuild.
+        const got = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[1] }, allocator);
+        defer allocator.free(got);
+        try testing.expectEqual(@as(usize, N / sources.len), got.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        graph_store.deinitGlobalStore();
     }
 }
