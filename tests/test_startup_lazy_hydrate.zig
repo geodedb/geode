@@ -2852,3 +2852,102 @@ test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_m
         graph_store.deinitGlobalStore();
     }
 }
+
+// ============================================================================
+// GAP-ENT-0048f (REDESIGN) — hydration itself builds + persists the exact
+// node-property VALUE index, RACE-FREE. The eager-build-at-FULL-checkpoint
+// approach fundamentally races the in-flight hydration for mg.rwlock (the
+// bounded shutdown checkpoint cannot win it, and a clean shutdown has no retry),
+// so at 14.27M the build never ran. Fix: first-touch hydration — which already
+// scans every node lock-free and holds NO mg.rwlock — builds the exact index in
+// the same window and persists prop_exact.idx directly (shard mutexes only, no
+// checkpoint). So a seek/GROUP BY after hydration is served from the built index
+// with NO lazy rebuild, the index exists right after hydration (before any
+// shutdown), and the next reopen reloads it.
+//
+// RED (hook disabled): hydration does NOT build the exact index -> no
+// prop_exact.idx after hydration, hydration-builds == 0, and a seek re-pays a
+// lazy rebuild. GREEN: hydration builds+persists -> prop_exact.idx present
+// before shutdown, hydration-builds >= 1, seek served with ZERO rebuild; Phase-3
+// reopen reloads (reloaded == 1, rebuild == 0).
+test "GAP-ENT-0048f: hydration builds+persists the exact index (race-free, no shutdown-checkpoint dependency)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 3000;
+
+    // Phase 1: ingest + FULL checkpoint, then remove idmap.snapshot + prop_exact.idx
+    // so the reopen is deferred with NO exact-index snapshot.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    deleteAllPropExactIdx(allocator, data_dir);
+    deleteAllNamed(allocator, data_dir, "idmap.snapshot");
+    try testing.expectEqual(@as(usize, 0), countPropExactIdx(allocator, data_dir));
+
+    // Phase 2: reopen; trigger hydration via a graph_store query; assert the exact
+    // index was built + PERSISTED by hydration, RIGHT AFTER hydration (before any
+    // shutdown), and that a seek is served with ZERO lazy rebuild.
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactHydrationBuildsForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        // Trigger first-touch hydration (getNodesByLabel -> ensureGraphHydrated).
+        const nodes = store.getNodesByLabel(G, LBL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, nodes.len);
+
+        // Hydration built + persisted the exact index — with NO shutdown checkpoint.
+        try testing.expect(adapter_mod.getExactHydrationBuildsForTesting() >= 1);
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+
+        // A WHERE-seek is served from the built index with ZERO lazy rebuild
+        // (built == true after hydration — no 85s wedge).
+        adapter_mod.resetExactRebuildRunsForTesting();
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[1] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        graph_store.deinitGlobalStore();
+    }
+
+    // Phase 3: reopen; the exact index RELOADS from the hydration-persisted
+    // snapshot (no rebuild), seek served.
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        _ = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+        _ = try adapter.getOrCreateGraph(G);
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[2] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        graph_store.deinitGlobalStore();
+    }
+}

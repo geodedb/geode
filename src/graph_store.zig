@@ -10311,6 +10311,21 @@ pub const GraphStore = struct {
             break :blk null;
         };
         entry.done.store(true, .release);
+        // GAP-ENT-0048f: build + persist the adapter's exact node-property VALUE
+        // index (prop_exact.idx) in THIS hydration window — the race-free path.
+        // Hydration has just scanned every node lock-free and holds NO mg.rwlock,
+        // so building the exact index here (a lock-free per-shard engine scan) +
+        // persisting it directly avoids the shutdown-checkpoint rwlock race that
+        // starved the eager-build-at-checkpoint approach at 14.27M (the bounded
+        // shutdown checkpoint could not win mg.rwlock against the hydration scan).
+        // After this a WHERE-seek / GROUP BY is served from the built index with
+        // NO lazy rebuild wedge, and the next reopen reloads the snapshot.
+        // Both .rebuilt and .snapshot_served leave the engine fully open +
+        // scannable; only a FAILED hydration (outcome == null, quarantined) skips
+        // (partial state — never build/persist off a broken hydration).
+        if (outcome != null) {
+            adapter.buildAndPersistExactIndexForHydratedGraph(graph_name);
+        }
         // Task 3 (hydration persist-on-complete): make the just-built products
         // durable NOW — a crash before the next full checkpoint used to re-pay
         // the whole first-access scan (13 h at 14.27M, twice in production).

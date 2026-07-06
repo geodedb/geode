@@ -106,6 +106,11 @@ var g_exact_rebuild_inline_tasks: std.atomic.Value(u64) = std.atomic.Value(u64).
 // persisted even though no query had opened them this session (snapshot-served /
 // counter-served graphs never enter `self.engines` — the divelife skip).
 var g_full_checkpoint_forced_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048f: graphs whose exact node-property index was built + persisted
+// DURING first-touch hydration (the race-free path — hydration already scans
+// every node lock-free and never holds mg.rwlock, so there is no checkpoint
+// rwlock race and no shutdown-checkpoint dependency). Test instrumentation.
+var g_exact_hydration_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // C-1 (T2b adversarial review): number of times a per-graph checkpoint's
 // retired-cache reclaim (the grace window in `checkpointOneGraph`) was
 // SKIPPED because the graph had an unfinished (pending or in-flight)
@@ -279,6 +284,14 @@ pub fn getFullCheckpointForcedLoadsForTesting() u64 {
 }
 pub fn resetFullCheckpointForcedLoadsForTesting() void {
     g_full_checkpoint_forced_loads.store(0, .release);
+}
+
+/// GAP-ENT-0048f: exact indexes built + persisted during first-touch hydration.
+pub fn getExactHydrationBuildsForTesting() u64 {
+    return g_exact_hydration_builds.load(.acquire);
+}
+pub fn resetExactHydrationBuildsForTesting() void {
+    g_exact_hydration_builds.store(0, .release);
 }
 
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
@@ -6967,6 +6980,79 @@ pub const StorageAdapter = struct {
             SAttr.uint("inline_tasks", g_exact_rebuild_inline_tasks.load(.acquire)),
         });
         return true;
+    }
+
+    /// GAP-ENT-0048f: build + persist the exact node-property index DURING
+    /// first-touch hydration — the RACE-FREE path that supersedes the
+    /// eager-build-at-FULL-checkpoint approach. Called from
+    /// `GraphStore.ensureGraphHydrated` right after hydration completes
+    /// (done=true, not failed), while it holds the store-wide
+    /// `hydration_build_mutex`.
+    ///
+    /// Runs LOCK-FREE w.r.t. `mg.rwlock` (respecting the deliberate "hydration
+    /// never holds mg.rwlock" invariant): it scans the DURABLE engine node
+    /// stores exactly as the hydration scan just did, populates the adapter's
+    /// mutex-sharded exact index, latches `built`, and persists `prop_exact.idx`
+    /// DIRECTLY (shard mutexes only — NOT the exclusive-rwlock checkpoint). This
+    /// removes the shutdown-checkpoint dependency and the rwlock race that the
+    /// checkpoint approach hit at 14.27M (the bounded shutdown checkpoint could
+    /// not acquire mg.rwlock against the in-flight hydration scan, so on a clean
+    /// shutdown — no retry — the build never ran). After this returns a
+    /// seek/GROUP BY is served from the built index with NO lazy rebuild, and
+    /// the next reopen reloads the persisted snapshot.
+    ///
+    /// No-op when the index is already built (loaded from disk at open, or built
+    /// by a prior touch). The one-shot `exact_index_build_mutex` latch (shared
+    /// with the lazy path) makes concurrent first-touch + hydration build exactly
+    /// once. Best-effort persist: a save error leaves the index correct in memory.
+    pub fn buildAndPersistExactIndexForHydratedGraph(self: *StorageAdapter, graph_name: []const u8) void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return;
+        };
+        if (mg.exact_index_built.load(.acquire)) return;
+
+        // Double-checked one-shot latch (the SAME mutex the lazy first-access
+        // build uses), so a concurrent lazy build + this hydration build produce
+        // the index EXACTLY once. `exact_index_build_mutex` is a leaf (no path
+        // takes it then reaches for mg.rwlock / hydration_build_mutex), so this
+        // cannot deadlock against the hydration_build_mutex the caller holds.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mg.exact_index_build_mutex.lockUncancelable(io);
+        defer mg.exact_index_build_mutex.unlock(io);
+        if (mg.exact_index_built.load(.acquire)) return;
+
+        // Lock-free parallel scan of the durable engine stores -> mutex-sharded
+        // exact index. `.{}` cancel flags: a hydration-time build runs to
+        // completion (it is NOT tied to any client connection).
+        const build_start_ns = monoNanosNow();
+        rebuildExactNodePropertyIndex(mg, .{}) catch |err| {
+            log.warn("hydration-time exact-index build failed for graph '{s}': {} — staying deferred", .{ graph_name, err });
+            return;
+        };
+        mg.exact_index_built.store(true, .release);
+        _ = g_exact_hydration_builds.fetchAdd(1, .monotonic);
+
+        // Persist prop_exact.idx DIRECTLY (shard mutexes only — no mg.rwlock, no
+        // checkpoint). This is what removes the shutdown-checkpoint dependency.
+        if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            defer self.allocator.free(dir_path);
+            mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
+            };
+        } else |err| {
+            log.warn("hydration-time exact-index persist: dir path failed for graph '{s}': {}", .{ graph_name, err });
+        }
+
+        var node_count: u64 = 0;
+        for (mg.engine.shards) |shard| node_count += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+        slog.info("exact-index built + persisted during hydration (race-free; reopen will reload)", &.{
+            SAttr.string("graph", graph_name),
+            SAttr.uint("nodes", node_count),
+            SAttr.uint("build_ms", (monoNanosNow() -| build_start_ns) / std.time.ns_per_ms),
+            SAttr.uint("pool_tasks", g_exact_rebuild_pool_tasks.load(.acquire)),
+        });
     }
 
     /// Task 3 (hydration persist-on-complete): FULL checkpoint of a SINGLE
