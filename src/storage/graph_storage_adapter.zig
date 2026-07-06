@@ -168,6 +168,14 @@ var g_exact_index_reloaded: std.atomic.Value(u64) = std.atomic.Value(u64).init(0
 // the lazy first-access build so a test can prove the build happened at the
 // checkpoint, not on a client query.
 var g_exact_eager_checkpoint_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 crash-reconcile (Phase E2): number of reopens that RECONCILED a
+// committed WAL tail into the prop_exact.idx snapshot in O(tail) — evicting each
+// tail node's OLD postings via the persisted reverse map and re-deriving its
+// CURRENT postings from the engine — INSTEAD of a full O(graph) rebuild. The
+// release gate asserts this is 1 (and `g_exact_rebuild_runs` stays 0) on the
+// gated crash-tail path, and 0 (rebuild fires) on the ungated multi-crash /
+// reverse-map-absent path.
+var g_exact_index_reconciled: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Candidate nodes examined by the verify-loop in `lookupNodeIdByLabelAndAllProps`
 // (the bulk edge-endpoint resolver). A dangling composite-key endpoint whose
@@ -200,6 +208,13 @@ var g_label_slots_enumerated: std.atomic.Value(u64) = std.atomic.Value(u64).init
 
 // CANARY: REQ=REQ-QUIC-HC-122; FEATURE="HighConcurrencyMutations"; ASPECT=ExactPropertyIndexSharding; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
 pub const exact_node_property_index_shard_count: usize = 64;
+
+/// GAP-ENT-0048 crash-reconcile (Phase E1): sibling of `prop_exact.idx` holding
+/// the node→[(label,key,value_hash)] reverse map used to evict a tail-changed
+/// node's OLD postings on a crash-reopen reconcile. Magic-bumped + stamped with
+/// the SAME (checkpoint_epoch, covered_lsn) as `prop_exact.idx`.
+const prop_rev_index_file_name = "prop_rev.idx";
+const prop_rev_index_magic = "GENRVIX1";
 
 const graph_store_file_names = [_][]const u8{
     "nodes.store",
@@ -367,6 +382,30 @@ fn mgDurableFrontierLsn(mg: *ManagedGraph) u64 {
     return frontier;
 }
 
+/// GAP-ENT-0048 crash-reconcile (Phase E2): aggregate (wrapping sum over all
+/// shards) of the per-shard `preRecoveryFrontierLsn()` (gs G2 getter =
+/// `tail_pre_recovery_lsn`) — the durable committed frontier as it stood BEFORE
+/// this session's recovery replayed. A SOUND single-recovery reconcile requires
+/// the on-disk snapshot's covered_lsn == this: exactly one recovery has advanced
+/// the frontier since the snapshot, so the WAL tail captured by Path B is
+/// complete and attributable. If covered_lsn < this (a PRIOR un-checkpointed
+/// recovery advanced the frontier past the snapshot — the multi-crash case), the
+/// reconcile MUST fall back to a full rebuild.
+///
+/// SUM SOUNDNESS: each shard's durable frontier is MONOTONIC (checkpoints and
+/// tail replays only advance `last_checkpoint_lsn`), so per shard
+/// `preRecoveryFrontierLsn() >= snapshot covered_lsn`. Therefore
+/// `sum(preRecovery) == sum(snapshot covered)` ⟺ per-shard equality for EVERY
+/// shard — the summed gate is as strong as a per-shard gate (the same wrapping
+/// -sum fingerprint discipline `mgCheckpointEpoch`/`mgDurableFrontierLsn` use).
+fn mgPreRecoveryFrontierLsn(mg: *ManagedGraph) u64 {
+    var frontier: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        frontier +%= shard.preRecoveryFrontierLsn();
+    }
+    return frontier;
+}
+
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
 /// retired-cache reclaims because the graph had an unfinished first-touch
 /// hydration (test instrumentation for the reclaim gate).
@@ -423,6 +462,17 @@ pub fn getExactEagerCheckpointBuildsForTesting() u64 {
 pub fn resetExactIndexReloadCountersForTesting() void {
     g_exact_index_reloaded.store(0, .release);
     g_exact_eager_checkpoint_builds.store(0, .release);
+}
+
+/// GAP-ENT-0048 crash-reconcile (Phase E2): reopens that RECONCILED a committed
+/// WAL tail into prop_exact.idx (O(tail)) instead of a full rebuild. The release
+/// gate asserts reconciled==1 / rebuilds==0 on the gated crash-tail path.
+pub fn getExactIndexReconciledForTesting() u64 {
+    return g_exact_index_reconciled.load(.acquire);
+}
+
+pub fn resetExactIndexReconcileCountersForTesting() void {
+    g_exact_index_reconciled.store(0, .release);
 }
 
 /// Candidates examined by `lookupNodeIdByLabelAndAllProps`'s verify-loop since
@@ -774,14 +824,111 @@ const NodePropertyExactIndex = struct {
             }
         }
         try idx_fw.flush();
+
+        // GAP-ENT-0048 crash-reconcile (Phase E1): persist the node→postings
+        // REVERSE MAP alongside prop_exact.idx, stamped with the SAME (epoch,
+        // covered_lsn). It lets a crash-reopen with a committed WAL tail EVICT a
+        // tail-changed node's OLD postings in O(node's postings) WITHOUT
+        // re-reading its (tail-overwritten) old value — the exact prerequisite
+        // the Phase 5 report flagged as missing. Written in the SAME locked pass
+        // (all shard mutexes held) so it is an exact inversion of the postings
+        // just written. Independent stamp/magic → an inconsistent or torn
+        // reverse file is rejected on load (→ safe full rebuild), never mis-used.
+        try self.writeReverseMapLocked(graph_dir_path, checkpoint_epoch, covered_lsn);
+    }
+
+    /// Phase E1: write `prop_rev.idx` — the node→[(label,key,value_hash)] reverse
+    /// map — by STREAMING the inversion of the forward postings (no transient
+    /// in-memory map at save time). Caller must already hold every shard mutex
+    /// (invoked from `saveToFile`). Format:
+    ///   magic "GENRVIX1" | epoch u64 | covered_lsn u64 | pair_count u64
+    ///   then pair_count × { node_id u64, key_len u32, encoded_key bytes }
+    /// where `encoded_key` is the forward posting key
+    /// `[label_id u32][key_len u32][key][value_hash u64]`. The value is
+    /// represented by its 64-bit hash only, so the file size is bounded by the
+    /// number of (node,label,key) postings and the KEY length — independent of
+    /// the property VALUE length (the E1 "bounded size" contract).
+    fn writeReverseMapLocked(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64) !void {
+        const rev_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir_path, prop_rev_index_file_name });
+        defer self.allocator.free(rev_path);
+
+        const rev_io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(rev_io, rev_path, .{ .truncate = true });
+        defer file.close(rev_io);
+
+        var rev_wbuf: [8192]u8 = undefined;
+        var rev_fw = file.writerStreaming(rev_io, &rev_wbuf);
+        const writer = &rev_fw.interface;
+
+        try writer.writeAll(prop_rev_index_magic);
+        try writer.writeInt(u64, checkpoint_epoch, .little);
+        try writer.writeInt(u64, covered_lsn, .little);
+
+        // pair_count = total (node, encoded_key) postings == sum of posting
+        // lengths across every shard.
+        var pair_count: u64 = 0;
+        for (&self.shards) |*shard| {
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| pair_count += entry.value_ptr.items.len;
+        }
+        try writer.writeInt(u64, pair_count, .little);
+
+        for (&self.shards) |*shard| {
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                for (entry.value_ptr.items) |nid| {
+                    try writer.writeInt(u64, nid, .little);
+                    try writer.writeInt(u32, @intCast(key.len), .little);
+                    try writer.writeAll(key);
+                }
+            }
+        }
+        try rev_fw.flush();
+    }
+
+    /// Phase E2: remove `node_id` from the posting for `encoded_key` (the exact
+    /// forward posting key `[label_id][key_len][key][value_hash]`, as stored in
+    /// the reverse map). Drops the posting entirely when it becomes empty (so a
+    /// count/GROUP-BY walk never sees a zero-length bucket). Used by the
+    /// crash-reopen reconcile to EVICT a tail node's OLD postings via the reverse
+    /// map, WITHOUT decoding the value. No-op if the key/node is absent.
+    fn removeByEncodedKey(self: *NodePropertyExactIndex, encoded_key: []const u8, node_id: u64) void {
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(encoded_key);
+        const shard = &self.shards[shard_idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+
+        if (shard.postings.getPtr(encoded_key)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) : (i += 1) {
+                if (list.items[i] == node_id) {
+                    _ = list.orderedRemove(i);
+                    break;
+                }
+            }
+            if (list.items.len == 0) {
+                if (shard.postings.fetchRemove(encoded_key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var list_copy = kv.value;
+                    list_copy.deinit(self.allocator);
+                }
+            }
+        }
     }
 
     /// Load the index from `prop_exact.idx` inside `graph_dir_path`, but ONLY if
     /// it is CURRENT on the WAL-aware Path B contract (GAP-ENT-0048): its stamped
     /// `checkpoint_epoch` equals `expected_epoch` (the engine's current epoch — no
     /// checkpoint since persist) AND its stamped `covered_lsn` equals
-    /// `durable_frontier_lsn` (the current `last_checkpoint_lsn` sum — no committed
-    /// WAL tail beyond the snapshot). Returns:
+    /// `expected_covered_lsn`. The clean-reopen caller passes the current durable
+    /// frontier (`last_checkpoint_lsn` sum) so a match means "no committed WAL
+    /// tail beyond the snapshot" (RELOAD); the crash-reconcile base-load caller
+    /// (Phase E2) passes the snapshot's OWN stamped covered_lsn (== the
+    /// pre-recovery frontier, gated by the caller) to LOAD the covered_lsn base
+    /// even though a tail exists, so it can then reconcile the bounded tail.
+    /// Returns:
     ///   `.loaded` — the snapshot was current and is now resident.
     ///   `.stale`  — a snapshot FILE was present but rejected: legacy format
     ///               (GENPIDX1/GENPIDX2), epoch-mismatched (a checkpoint ran since
@@ -797,7 +944,7 @@ const NodePropertyExactIndex = struct {
     /// Never blesses a stale copy: on ANY uncertainty it does NOT return `.loaded`
     /// (the "never serve a stale prop_exact.idx" invariant — a wrong exact index =
     /// silently wrong WHERE/GROUP BY/DISTINCT).
-    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, durable_frontier_lsn: u64) ExactIndexLoadOutcome {
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -830,7 +977,7 @@ const NodePropertyExactIndex = struct {
         const stored_epoch = reader.takeInt(u64, .little) catch return .stale;
         if (stored_epoch != expected_epoch) return .stale;
         const stored_covered_lsn = reader.takeInt(u64, .little) catch return .stale;
-        if (stored_covered_lsn != durable_frontier_lsn) return .stale;
+        if (stored_covered_lsn != expected_covered_lsn) return .stale;
 
         const entry_count = reader.takeInt(u64, .little) catch return .stale;
 
@@ -883,6 +1030,123 @@ const NodePropertyExactIndex = struct {
 /// drive the race-free rebuild, Task 5.3b) from a never-persisted one
 /// (`.absent` → defer to lazy first-access, preserving sub-second cold-open).
 const ExactIndexLoadOutcome = enum { loaded, stale, absent };
+
+/// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
+/// `prop_exact.idx`, read from its header alone (no postings). `null` when the
+/// file is absent, torn, or not the GENPIDX3 (WAL-aware) format. Used by the
+/// crash-reopen reconcile gate to compare the snapshot's covered_lsn against the
+/// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
+const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
+
+fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactIndexStamp {
+    const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return null;
+    defer allocator.free(idx_path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, idx_path, .{}) catch return null;
+    defer file.close(io);
+
+    var rbuf: [64]u8 = undefined;
+    var fr = file.reader(io, &rbuf);
+    const reader = &fr.interface;
+
+    var magic: [8]u8 = undefined;
+    reader.readSliceAll(&magic) catch return null;
+    if (!std.mem.eql(u8, &magic, "GENPIDX3")) return null;
+    const epoch = reader.takeInt(u64, .little) catch return null;
+    const covered = reader.takeInt(u64, .little) catch return null;
+    return .{ .epoch = epoch, .covered_lsn = covered };
+}
+
+/// Phase E1/E2: the node→[(label,key,value_hash)] REVERSE MAP, materialized ONLY
+/// transiently at crash-reopen reconcile time (loaded from `prop_rev.idx`, used
+/// to evict a tail node's OLD postings, then freed). It is NOT resident during
+/// normal operation — steady-state memory is unchanged. Each node maps to a list
+/// of OWNED encoded posting keys `[label_id][key_len][key][value_hash]` (the
+/// same bytes used as the forward posting map key), so eviction is a direct
+/// `NodePropertyExactIndex.removeByEncodedKey` per key with no value decode.
+const NodePropertyReverseMap = struct {
+    allocator: Allocator,
+    map: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged([]u8)) = .{},
+
+    fn init(allocator: Allocator) NodePropertyReverseMap {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *NodePropertyReverseMap) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |key| self.allocator.free(key);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.map.deinit(self.allocator);
+    }
+
+    /// Append an OWNED copy of `encoded_key` to `node_id`'s key list.
+    fn addKey(self: *NodePropertyReverseMap, node_id: u64, encoded_key: []const u8) !void {
+        const key_copy = try self.allocator.dupe(u8, encoded_key);
+        errdefer self.allocator.free(key_copy);
+        const gop = try self.map.getOrPut(self.allocator, node_id);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(self.allocator, key_copy);
+    }
+
+    /// The encoded keys currently mapped for `node_id` (borrowed; valid until the
+    /// next mutation / deinit). `null` when the node has no reverse entry (e.g. a
+    /// node inserted in the tail that was absent from the covered_lsn snapshot).
+    fn keysFor(self: *NodePropertyReverseMap, node_id: u64) ?[]const []u8 {
+        if (self.map.getPtr(node_id)) |list| return list.items;
+        return null;
+    }
+
+    /// Phase E1: load `prop_rev.idx` from `graph_dir_path`, but ONLY if it is
+    /// stamped with `expected_epoch` AND `expected_covered_lsn` (the same gate as
+    /// the forward base-load, so a torn / inconsistent / foreign reverse file is
+    /// rejected → the caller falls back to a full rebuild, never an unsound
+    /// reconcile). Mirrors `NodePropertyExactIndex.loadFromFile`'s outcomes.
+    fn loadFromFile(self: *NodePropertyReverseMap, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
+        const rev_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir_path, prop_rev_index_file_name }) catch return .absent;
+        defer self.allocator.free(rev_path);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io, rev_path, .{}) catch return .absent;
+        defer file.close(io);
+
+        var rbuf: [4096]u8 = undefined;
+        var fr = file.reader(io, &rbuf);
+        const reader = &fr.interface;
+
+        var magic: [8]u8 = undefined;
+        reader.readSliceAll(&magic) catch return .stale;
+        if (!std.mem.eql(u8, &magic, prop_rev_index_magic)) return .stale;
+        const stored_epoch = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_epoch != expected_epoch) return .stale;
+        const stored_covered = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_covered != expected_covered_lsn) return .stale;
+
+        const pair_count = reader.takeInt(u64, .little) catch return .stale;
+        var i: u64 = 0;
+        while (i < pair_count) : (i += 1) {
+            const node_id = reader.takeInt(u64, .little) catch return .stale;
+            const key_len = reader.takeInt(u32, .little) catch return .stale;
+            const key = self.allocator.alloc(u8, key_len) catch return .stale;
+            reader.readSliceAll(key) catch {
+                self.allocator.free(key);
+                return .stale;
+            };
+            const gop = self.map.getOrPut(self.allocator, node_id) catch {
+                self.allocator.free(key);
+                return .stale;
+            };
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            gop.value_ptr.append(self.allocator, key) catch {
+                self.allocator.free(key);
+                return .stale;
+            };
+        }
+        return .loaded;
+    }
+};
 
 // ============================================================================
 // LabelStringDict — bidirectional label string ↔ LabelId mapping view
@@ -1531,11 +1795,17 @@ pub const ManagedGraph = struct {
         return out.toOwnedSlice(allocator);
     }
 
-    fn deinit(self: *ManagedGraph, allocator: Allocator) void {
+    fn deinit(self: *ManagedGraph, allocator: Allocator, crash: bool) void {
         // Teardown order matters: facade → adapter (flushes + closes each engine
         // and its child dir) → base_dir (the adapter never closes base_dir) →
         // free the owned path. Durability is owned by the engine WAL/segments;
         // `adapter.deinit` best-effort flushes each engine before closing it.
+        //
+        // `crash` (test-only): when true, tear the engine down via `deinit()`
+        // (memory-only, NO final checkpoint) instead of `close()` (which
+        // checkpoints when dirty). Committed txns are already durable in the WAL
+        // (per-commit fsync), so this leaves a genuine committed WAL TAIL for the
+        // next open's recovery to replay — a faithful kill-9 crash simulation.
         if (self.fts_index) |fts| {
             fts.deinit();
             allocator.destroy(fts);
@@ -1591,7 +1861,11 @@ pub const ManagedGraph = struct {
         }
         // error-policy: A — best-effort close during teardown; WAL recovery
         // handles anything a failed close left behind.
-        self.engine.close() catch {};
+        if (crash) {
+            self.engine.deinit(); // no checkpoint → committed WAL tail survives
+        } else {
+            self.engine.close() catch {};
+        }
         self.exact_node_property_index.deinit();
         allocator.free(self.merge_tuple_locks);
         self.label_dict.deinit();
@@ -2474,7 +2748,41 @@ pub const StorageAdapter = struct {
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.*.deinit(self.allocator);
+            entry.value_ptr.*.deinit(self.allocator, false);
+        }
+        self.engines.deinit();
+        self.default_engine = null;
+
+        self.registry.deinit();
+        self.allocator.free(self.registry_path);
+        self.allocator.free(self.data_dir);
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.allocator.destroy(self);
+    }
+
+    /// TEST-ONLY: tear the adapter down as if the process was kill-9'd — each
+    /// engine is `deinit()`'d (memory-only, NO final checkpoint) instead of
+    /// `close()`'d, so committed-but-uncheckpointed writes stay in the durable
+    /// WAL as a committed TAIL for the next open's recovery to replay. Frees all
+    /// adapter memory exactly like `deinit` (so `testing.allocator` sees no leak)
+    /// while deliberately NOT absorbing the tail. Reopening the same data dir
+    /// then exercises the crash-reopen `prop_exact.idx` reconcile path.
+    pub fn simulateCrashForTesting(self: *StorageAdapter) void {
+        {
+            const io_h4 = std.Io.Threaded.global_single_threaded.io();
+            self.exact_persist_mutex.lockUncancelable(io_h4);
+            self.exact_persist_shutdown = true;
+            var persist_threads = self.exact_persist_threads;
+            self.exact_persist_threads = .empty;
+            self.exact_persist_mutex.unlock(io_h4);
+            for (persist_threads.items) |t| t.join();
+            persist_threads.deinit(self.allocator);
+        }
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+
+        var it = self.engines.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit(self.allocator, true); // crash teardown
         }
         self.engines.deinit();
         self.default_engine = null;
@@ -2619,7 +2927,7 @@ pub const StorageAdapter = struct {
             }
 
             dropped_uuid = mg.uuid;
-            mg.deinit(self.allocator);
+            mg.deinit(self.allocator, false);
         } else if (self.findRegistryEntryLocked(name)) |entry| {
             dropped_uuid = entry.uuid;
         }
@@ -5900,6 +6208,151 @@ pub const StorageAdapter = struct {
         return out.toOwnedSlice(allocator);
     }
 
+    /// TEST-ONLY (Phase E2 gate): one exact-index posting — its encoded key
+    /// `[label_id][key_len][key][value_hash]` and the SORTED node ids it holds.
+    pub const ExactIndexPostingDump = struct {
+        key: []u8,
+        nodes: []u64,
+    };
+
+    /// TEST-ONLY (Phase E2 gate): dump EVERY posting of the in-memory exact index
+    /// (all shards), each with its sorted node list, sorted by encoded key. Two
+    /// dumps are EQUAL iff the indexes are key-for-key AND count-for-count (the
+    /// sorted node lists, whose lengths are the posting counts) identical — the
+    /// exact "reconcile == full rebuild" release-gate comparison. Does NOT build a
+    /// deferred index (reads whatever is resident) so a reconciled vs. a
+    /// force-rebuilt index can be compared without a rebuild side effect. Caller
+    /// frees each entry's `key` + `nodes` and the outer slice.
+    pub fn dumpExactIndexPostingsForTesting(self: *StorageAdapter, graph_name: []const u8, allocator: Allocator) ![]ExactIndexPostingDump {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+
+        var out = std.ArrayList(ExactIndexPostingDump).empty;
+        errdefer {
+            for (out.items) |e| {
+                allocator.free(e.key);
+                allocator.free(e.nodes);
+            }
+            out.deinit(allocator);
+        }
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (&mg.exact_node_property_index.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| {
+                const posting = entry.value_ptr.items;
+                if (posting.len == 0) continue;
+                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(key_copy);
+                const nodes_copy = try allocator.dupe(u64, posting);
+                std.mem.sort(u64, nodes_copy, {}, std.sort.asc(u64));
+                try out.append(allocator, .{ .key = key_copy, .nodes = nodes_copy });
+            }
+        }
+
+        const items = try out.toOwnedSlice(allocator);
+        std.mem.sort(ExactIndexPostingDump, items, {}, struct {
+            fn lt(_: void, a: ExactIndexPostingDump, b: ExactIndexPostingDump) bool {
+                return std.mem.lessThan(u8, a.key, b.key);
+            }
+        }.lt);
+        return items;
+    }
+
+    /// TEST-ONLY (Phase E1): byte size of the persisted `prop_rev.idx`, or null
+    /// if absent. Used to prove the reverse map is BOUNDED — it stores the 8-byte
+    /// value_hash, not the full value, so its size is independent of value length.
+    pub fn reverseMapFileSizeForTesting(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const rev_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir_path, prop_rev_index_file_name }) catch return null;
+        defer self.allocator.free(rev_path);
+        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), rev_path, .{}) catch return null;
+        return stat.size;
+    }
+
+    /// TEST-ONLY (Phase E1): load the persisted `prop_rev.idx` reverse map and
+    /// return it as a flat, key-sorted list of (node_id, encoded_key) pairs, so a
+    /// round-trip test can assert it equals the inversion of the forward index.
+    /// `expected_epoch`/`expected_covered` must be the stamp the file was written
+    /// with (a mismatch → null, proving the load gate). Caller frees each `key`
+    /// and the slice.
+    pub const ReverseMapPairDump = struct { node_id: u64, key: []u8 };
+
+    pub fn dumpReverseMapForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        expected_epoch: u64,
+        expected_covered: u64,
+        allocator: Allocator,
+    ) !?[]ReverseMapPairDump {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const dir_path = try graphDirPath(self.allocator, self.data_dir, mg.uuid);
+        defer self.allocator.free(dir_path);
+
+        var rev = NodePropertyReverseMap.init(allocator);
+        defer rev.deinit();
+        if (rev.loadFromFile(dir_path, expected_epoch, expected_covered) != .loaded) return null;
+
+        var out = std.ArrayList(ReverseMapPairDump).empty;
+        errdefer {
+            for (out.items) |e| allocator.free(e.key);
+            out.deinit(allocator);
+        }
+        var it = rev.map.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |key| {
+                try out.append(allocator, .{ .node_id = entry.key_ptr.*, .key = try allocator.dupe(u8, key) });
+            }
+        }
+        const items = try out.toOwnedSlice(allocator);
+        std.mem.sort(ReverseMapPairDump, items, {}, struct {
+            fn lt(_: void, a: ReverseMapPairDump, b: ReverseMapPairDump) bool {
+                if (a.node_id != b.node_id) return a.node_id < b.node_id;
+                return std.mem.lessThan(u8, a.key, b.key);
+            }
+        }.lt);
+        return items;
+    }
+
+    /// TEST-ONLY (Phase E2): the aggregate (epoch, covered_lsn, pre_recovery
+    /// frontier) the reconcile gate compares. Lets a test assert the crash-tail
+    /// state it constructed actually satisfies (or fails) the single-recovery
+    /// gate before relying on the reconcile/rebuild outcome.
+    pub const ReconcileGateState = struct { epoch: u64, covered_lsn: u64, frontier: u64, pre_recovery: u64 };
+
+    pub fn reconcileGateStateForTesting(self: *StorageAdapter, graph_name: []const u8) ?ReconcileGateState {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const stamp = readExactIndexStamp(self.allocator, dir_path) orelse
+            return .{ .epoch = mgCheckpointEpoch(mg), .covered_lsn = 0, .frontier = mgDurableFrontierLsn(mg), .pre_recovery = mgPreRecoveryFrontierLsn(mg) };
+        return .{
+            .epoch = stamp.epoch,
+            .covered_lsn = stamp.covered_lsn,
+            .frontier = mgDurableFrontierLsn(mg),
+            .pre_recovery = mgPreRecoveryFrontierLsn(mg),
+        };
+    }
+
     // ------------------------------------------------------------------
     // Edge property operations
     // ------------------------------------------------------------------
@@ -7375,6 +7828,117 @@ pub const StorageAdapter = struct {
         });
     }
 
+    /// GAP-ENT-0048 crash-reconcile (Phase E2): on a `.stale` reopen (a present
+    /// prop_exact.idx snapshot rejected because a committed WAL tail advanced the
+    /// durable frontier past its covered_lsn), attempt an O(tail) RECONCILE of
+    /// the snapshot instead of the O(graph) full rebuild — but ONLY when it is
+    /// provably SOUND. Returns `true` iff the reconcile completed and the
+    /// in-memory index is now correct-as-of the recovered tail (caller latches
+    /// `exact_index_built`); `false` on ANY doubt (caller falls back to the safe
+    /// full rebuild). A WRONG reconcile = silently-wrong WHERE/GROUP-BY/DISTINCT,
+    /// so every uncertain branch returns `false`.
+    ///
+    /// Called INLINE from `openGraphLocked` before the graph is published to
+    /// `self.engines` (so no other thread can touch the index) — the most
+    /// race-free routing, and O(tail)-bounded (unlike the O(graph) rebuild that
+    /// must be deferred to a background thread).
+    ///
+    /// Gate (identical to gs's own Path B derived-index gate, mirrored on geode's
+    /// aggregate stamp): stamped_epoch == current epoch (no checkpoint since the
+    /// snapshot) AND current durable frontier > stamped covered_lsn (a tail
+    /// exists) AND stamped covered_lsn == pre-recovery frontier (EXACTLY one
+    /// recovery since the snapshot — never reconcile across >1 recovery). On any
+    /// gate miss, or a null/absent tail node set (overflow / unattributable
+    /// props), or a missing/torn reverse map, or a per-node re-derive error →
+    /// `false` (full rebuild).
+    fn tryReconcileExactIndexOnReopen(self: *StorageAdapter, mg: *ManagedGraph, graph_dir_path: []const u8) bool {
+        // 1) Read the snapshot's (epoch, covered_lsn) stamp from its header.
+        const stamp = readExactIndexStamp(self.allocator, graph_dir_path) orelse return false;
+
+        // 2) Gate on the WAL-aware single-recovery contract.
+        const cur_epoch = mgCheckpointEpoch(mg);
+        const cur_frontier = mgDurableFrontierLsn(mg);
+        const pre_recovery = mgPreRecoveryFrontierLsn(mg);
+        if (stamp.epoch != cur_epoch) return false; // a checkpoint ran since the snapshot → rebuild
+        if (cur_frontier <= stamp.covered_lsn) return false; // no committed tail → the caller's .stale path shouldn't reach here, but be safe
+        if (stamp.covered_lsn != pre_recovery) return false; // multi-crash / >1 recovery since the snapshot → rebuild
+
+        // 3) Resolve the tail-affected node ids FIRST — before any base load or
+        //    per-node re-derive — because gs frees `tail_affected_pages` on its
+        //    first derived-hydration access (the G1 lifecycle contract). Three-way
+        //    signal: null → full rebuild required; empty → nothing to reconcile;
+        //    non-empty → the (super)set of tail-affected node ids.
+        const maybe_ids = mg.engine.tailAffectedNodeIds(self.allocator) catch return false;
+        const ids = maybe_ids orelse return false; // null → rebuild
+        defer self.allocator.free(ids);
+
+        // 4) Load the covered_lsn BASE postings (the snapshot as it stood at the
+        //    last checkpoint). `expected_covered_lsn == stamp.covered_lsn` (==
+        //    pre_recovery, gated) so the file loads despite the tail.
+        const base_outcome = mg.exact_node_property_index.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn);
+        if (base_outcome != .loaded) return false;
+        // From here a `false` return MUST leave the index EMPTY (a partial index
+        // is worse than a rebuild): every failure branch below calls `clear()`
+        // before `return false` (this fn returns `bool`, so `errdefer` cannot).
+
+        if (ids.len == 0) {
+            // A committed tail advanced the frontier but touched NO node-owning
+            // pages (e.g. edge-only) → the node-property base is already correct.
+            _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+            return true;
+        }
+
+        // 5) Load the reverse map (node → old encoded posting keys), stamped
+        //    IDENTICALLY to the base. Missing/torn/mismatched → clear + rebuild.
+        var rev = NodePropertyReverseMap.init(self.allocator);
+        defer rev.deinit();
+        if (rev.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn) != .loaded) {
+            mg.exact_node_property_index.clear();
+            return false;
+        }
+
+        // 6) Reconcile each tail-affected node: EVICT its OLD postings (reverse
+        //    map) then RE-DERIVE its CURRENT postings from the engine (identical
+        //    to how the full rebuild derives them, so the result is key-for-key
+        //    AND count-for-count equal to a rebuild). Handles all shapes:
+        //      * INSERT (no old entry → nothing to evict; add current),
+        //      * in-place VALUE change (evict old value posting; add new value —
+        //        the count moves from old value to new),
+        //      * DELETE (evict old; getNode == null → add nothing),
+        //      * unchanged page-mate (evict then re-add the SAME → net no-op).
+        //    A superset from `tailAffectedNodeIds` is harmless (idempotent).
+        for (ids) |node_id| {
+            // (a) EVICT old postings via the reverse map (no value decode).
+            if (rev.keysFor(node_id)) |old_keys| {
+                for (old_keys) |encoded_key| {
+                    mg.exact_node_property_index.removeByEncodedKey(encoded_key, node_id);
+                }
+            }
+
+            // (b) RE-DERIVE current postings from the engine's CURRENT state.
+            const node_shard = mg.shardEngineForNode(node_id);
+            const maybe_rec = node_shard.getNode(node_id) catch {
+                mg.exact_node_property_index.clear();
+                return false;
+            };
+            const rec = maybe_rec orelse continue; // deleted/tombstoned → evict-only
+            // Mirror rebuildExactNodePropertyIndex's per-node derivation EXACTLY.
+            if (rec.label_head == 0 or rec.prop_head == 0) continue;
+            const label_ids = node_shard.label_store.getLabels(rec.label_head, mg.engine.allocator) catch {
+                mg.exact_node_property_index.clear();
+                return false;
+            };
+            defer mg.engine.allocator.free(label_ids);
+            addNodePropertiesForLabels(mg, node_id, label_ids, rec.prop_head) catch {
+                mg.exact_node_property_index.clear();
+                return false;
+            };
+        }
+
+        _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+        return true;
+    }
+
     /// GAP-ENT-0048 Task 5.3b: spawn a BACKGROUND thread that rebuilds a
     /// reopen-deferred (stale-snapshot) exact index via the RACE-FREE
     /// hydration-scan build (`buildAndPersistExactIndexForHydratedGraph`:
@@ -8074,8 +8638,25 @@ pub const StorageAdapter = struct {
             // scanning at every open would fight sub-second cold-open; it stays on
             // the ordinary lazy first-access rebuild.
             if (load_outcome == .stale and !eagerExactRebuildOnReopenDisabled()) {
-                self.spawnExactIndexRebuildOnReopen(owned_name);
-                log.info("exact property index deferred for graph '{s}' (stale snapshot → race-free background rebuild)", .{name});
+                // GAP-ENT-0048 crash-reconcile (Phase E2): before the O(graph)
+                // rebuild, attempt an O(tail) RECONCILE of the committed WAL tail
+                // into the persisted snapshot (evict each tail node's OLD postings
+                // via the reverse map + re-derive its CURRENT postings from the
+                // engine). Sound ONLY on the single-recovery gate; on ANY doubt it
+                // returns false and we fall back to the safe full rebuild. Inline
+                // + pre-publish → fully race-free, and O(tail)-bounded.
+                const reconciled = blk: {
+                    const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
+                    defer self.allocator.free(dir_path);
+                    break :blk self.tryReconcileExactIndexOnReopen(mg, dir_path);
+                };
+                if (reconciled) {
+                    mg.exact_index_built.store(true, .release);
+                    log.info("exact property index RECONCILED from WAL tail for graph '{s}' (O(tail), no rebuild)", .{name});
+                } else {
+                    self.spawnExactIndexRebuildOnReopen(owned_name);
+                    log.info("exact property index deferred for graph '{s}' (stale snapshot → race-free background rebuild)", .{name});
+                }
             } else {
                 log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild)", .{name});
             }
