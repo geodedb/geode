@@ -788,3 +788,144 @@ test "GAP-ENT-0048 PRIMARY: deferred graph FULL checkpoint builds+persists so re
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
     }
 }
+
+// ============================================================================
+// GAP-ENT-0048 Path B — the persisted `prop_exact.idx` is now stamped with the
+// gs `checkpoint_epoch` + the `covered_lsn` it reflects (GENPIDX3), NOT the
+// manifest counter. On reopen it RELOADS only if BOTH the epoch matches (no
+// checkpoint stranded it) AND covered == the durable frontier (no committed WAL
+// tail beyond it). A snapshot that a later checkpoint STRANDED (its generation
+// advanced without re-persisting the exact index — exactly what a periodic LIGHT
+// checkpoint does) must be REJECTED and the index rebuilt to the CURRENT durable
+// state — NEVER stale-served (a wrong exact index = silently wrong
+// WHERE/GROUP BY/DISTINCT). This is the geode half of the WAL-aware contract;
+// the gs engine proves the covered<frontier tail gate + O(tail) reconcile in
+// graph-storage tests/test_index_tail_reconcile.zig at v0.2.29.
+//
+// Scenario (deterministic, no crash primitive needed — the adapter's deinit is a
+// CLEAN close, so a real WAL-tail crash is only reachable at the gs layer; a
+// LIGHT checkpoint reproduces the SAME stranded-snapshot staleness the epoch gate
+// guards, via the epoch axis):
+//   1. seed X (grp=1) among N multi-shard nodes; FULL checkpointAll persists a
+//      GENPIDX3 snapshot in which X is under grp=1 and node Y does not exist.
+//   2. MUTATE past the snapshot (no re-persist): move X to grp=2, add Y (grp=1),
+//      then a LIGHT checkpointAll — which advances the checkpoint_epoch and
+//      flushes the mutations to durable pages but KEEPS the old snapshot on disk.
+//   3. reopen: the stamped epoch no longer matches → loadFromFile returns
+//      `.stale` (reloaded == 0, NEVER a stale serve), the index rebuilds from the
+//      now-current durable pages, and the seek results reflect the mutations:
+//      X is under grp=2 (its NEW value), NOT the snapshot's stale grp=1; Y is
+//      under grp=1; X is absent from grp=1.
+//
+// RED (pre-Path-B, counter stamp): recovery/light both bump the counter, so this
+// already rebuilt — but the counter ALSO rebuilt a VALID deferred-WAL-tail
+// snapshot (the 85s wedge). GREEN (Path B): the epoch stamp is the correct
+// generation token; a stranded snapshot is rejected here, and (gs side) a valid
+// tail snapshot reloads+reconciles instead of rebuilding.
+test "GAP-ENT-0048 Path B: a checkpoint-stranded prop_exact.idx is rejected on reopen and rebuilt to the tail-current state (never stale-served)" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "path_b_stranded_graph";
+    const label = "Item";
+    const N: usize = 256;
+
+    var node_ids = try allocator.alloc(u64, N);
+    defer allocator.free(node_ids);
+
+    // Expected grp memberships AFTER the tail mutations (built as we go).
+    var grp1 = std.ArrayList(u64).empty; // grp == 1 (minus moved X, plus Y)
+    defer grp1.deinit(allocator);
+    var grp2 = std.ArrayList(u64).empty; // grp == 2 (plus moved X)
+    defer grp2.deinit(allocator);
+
+    var x_id: u64 = undefined; // the node we MOVE from grp=1 to grp=2 in the tail
+    var y_id: u64 = undefined; // a NEW grp=1 node added in the tail
+
+    // ---- Session 1: seed + FULL checkpoint (persist), then tail-mutate + LIGHT. ----
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+            node_ids[i] = node_id;
+            const g: i64 = @intCast(i % 4);
+            try adapter.setNodeProperty(graph, node_id, "grp", .{ .Int = g });
+        }
+        // X = the FIRST grp==1 node (i==1). It is under grp=1 in the snapshot.
+        x_id = node_ids[1];
+
+        // FULL checkpoint: persists the GENPIDX3 snapshot (X ∈ grp=1, no Y) at the
+        // current (epoch, covered_lsn). NO invalidation — the clean snapshot path.
+        try adapter.checkpointAll();
+
+        // ---- Tail mutations PAST the snapshot (no re-persist of prop_exact.idx). ----
+        // Move X from grp=1 to grp=2.
+        try adapter.setNodeProperty(graph, x_id, "grp", .{ .Int = 2 });
+        // Add a brand-new grp=1 node Y.
+        y_id = try adapter.createNode(graph, &[_][]const u8{label});
+        try adapter.setNodeProperty(graph, y_id, "grp", .{ .Int = 1 });
+
+        // LIGHT checkpoint: advances the checkpoint_epoch + flushes the mutations
+        // to durable pages, but KEEPS the (now generation-stale) snapshot on disk.
+        try adapter.checkpointAllLight();
+    }
+
+    // Compute the expected post-tail memberships.
+    {
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = node_ids[i];
+            if (id == x_id) {
+                try grp2.append(allocator, id); // X moved to grp=2
+            } else if (i % 4 == 1) {
+                try grp1.append(allocator, id);
+            } else if (i % 4 == 2) {
+                try grp2.append(allocator, id);
+            }
+        }
+        try grp1.append(allocator, y_id); // Y added to grp=1
+        std.mem.sort(u64, grp1.items, {}, std.sort.asc(u64));
+        std.mem.sort(u64, grp2.items, {}, std.sort.asc(u64));
+    }
+
+    // ---- Session 2: reopen; the stranded snapshot is REJECTED, index rebuilt. ----
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+        _ = try adapter.getOrCreateGraph(graph);
+
+        // HEADLINE: the generation-stranded snapshot was NOT reloaded — never a
+        // stale serve. (RED with a stale-tolerant gate: reloaded == 1.)
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexReloadedForTesting());
+
+        // The (rebuilt) index reflects the TAIL-CURRENT durable state: X seeks
+        // under its NEW value grp=2, and is ABSENT from its stale snapshot value
+        // grp=1; the new node Y seeks under grp=1.
+        {
+            const got1 = try querySorted(allocator, adapter, graph, label, "grp", .{ .Int = 1 });
+            defer allocator.free(got1);
+            try testing.expectEqualSlices(u64, grp1.items, got1);
+            // X must NOT be served from the stale grp=1 posting.
+            for (got1) |id| try testing.expect(id != x_id);
+        }
+        {
+            const got2 = try querySorted(allocator, adapter, graph, label, "grp", .{ .Int = 2 });
+            defer allocator.free(got2);
+            try testing.expectEqualSlices(u64, grp2.items, got2);
+            // X IS present under its new value.
+            var found_x = false;
+            for (got2) |id| {
+                if (id == x_id) found_x = true;
+            }
+            try testing.expect(found_x);
+        }
+    }
+}

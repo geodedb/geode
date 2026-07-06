@@ -131,6 +131,25 @@ fn exactIndexPersistOnBuildDisabled() bool {
     const raw = std.mem.span(raw_z);
     return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
 }
+
+/// GAP-ENT-0048 Path B (Task 5.3b) kill switch: when a reopen finds the
+/// persisted `prop_exact.idx` stale (epoch mismatch or a WAL tail past its
+/// covered_lsn — `loadFromFile` returned false), the deferred index is rebuilt
+/// PROACTIVELY on a background thread via the RACE-FREE hydration-scan build
+/// (`buildAndPersistExactIndexForHydratedGraph`), instead of leaving the whole
+/// O(graph) rebuild for the first client query to pay INLINE on its handler
+/// thread (the "85s lazy-on-first-query path" that, at 14.27M nodes, overran the
+/// proto-reader stall window and wedged the handler). Server-ready stays
+/// sub-second (open only spawns the thread); reads that need the index wait for
+/// the background build (which they would anyway, the snapshot being unusable),
+/// while other reads are unaffected. Set to disable (revert to pure lazy
+/// first-access) for the sub-second-cold-open A/B, where no proactive build is
+/// wanted.
+fn eagerExactRebuildOnReopenDisabled() bool {
+    const raw_z = std.c.getenv("GEODE_DISABLE_EAGER_EXACT_REBUILD_ON_REOPEN") orelse return false;
+    const raw = std.mem.span(raw_z);
+    return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+}
 var g_exact_persist_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_exact_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-ENT-0048 PRIMARY: number of graphs whose exact node-property index was
@@ -304,6 +323,48 @@ fn mgManifestCounter(mg: *ManagedGraph) u64 {
         counter +%= shard.manifest.counter;
     }
     return counter;
+}
+
+/// GAP-ENT-0048 Path B: aggregate (wrapping sum over all shards) of the
+/// per-shard `manifest.checkpoint_epoch` — the durable derived-index generation
+/// token gs v0.2.29 advances ONLY at `doCheckpoint`, NEVER by a WAL-tail
+/// recovery (checkpoint.zig bumps it beside `counter`; recovery.zig leaves it
+/// untouched). This is why it replaces `manifest.counter` as the
+/// `prop_exact.idx` stamp: the counter is ALSO bumped by recovery, so a
+/// deferred-WAL-tail reopen bumped it and needlessly rebuilt a valid index (the
+/// GAP-ENT-0048 root cause). The epoch stays fixed across a tail replay, so an
+/// epoch match means "no checkpoint has run since the snapshot" — the snapshot
+/// is valid AS OF its covered_lsn (see `mgDurableFrontierLsn` for the tail
+/// gate). A wrapping sum is a combined fingerprint: if ANY shard checkpoints,
+/// the sum changes and the snapshot is treated as generation-mismatched.
+fn mgCheckpointEpoch(mg: *ManagedGraph) u64 {
+    var epoch: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        epoch +%= shard.manifest.checkpoint_epoch;
+    }
+    return epoch;
+}
+
+/// GAP-ENT-0048 Path B: aggregate (wrapping sum over all shards) of the
+/// per-shard `manifest.last_checkpoint_lsn` — the DURABLE COMMITTED FRONTIER.
+/// It is set to the checkpoint LSN by `doCheckpoint`, and ADVANCED by a WAL-tail
+/// recovery (recovery.zig sets it to `wal.currentLsn()` after replaying a
+/// committed tail) — but LEFT UNCHANGED by a clean reopen that replays nothing
+/// (recovery.zig returns before touching it when no WAL records are seen). So at
+/// `prop_exact.idx` SAVE time (right after a FULL `engine.checkpoint()`) this is
+/// exactly the LSN the persisted index covers; at reopen it is the same value
+/// (clean, no tail → RELOAD) or larger (a committed tail was replayed → the
+/// loaded index would be stale → REBUILD). The reload gate is therefore:
+/// `stamped_epoch == mgCheckpointEpoch(mg) AND stamped_covered == this`.
+/// "covered == frontier" ⟺ "no WAL tail beyond the snapshot" — mirrors gs's own
+/// derived-index tail gate (engine_index.tryLoadDerivedIndexes), which compares
+/// each snapshot's covered_lsn against `manifest.last_checkpoint_lsn`.
+fn mgDurableFrontierLsn(mg: *ManagedGraph) u64 {
+    var frontier: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        frontier +%= shard.manifest.last_checkpoint_lsn;
+    }
+    return frontier;
 }
 
 /// C-1: process-wide count of checkpoint grace windows that SKIPPED the
@@ -651,14 +712,20 @@ const NodePropertyExactIndex = struct {
     }
 
     /// Persist the index to `prop_exact.idx` inside `graph_dir_path`, stamped
-    /// with the engine `manifest_counter` at persist time (GAP-ENT-0048g). The
-    /// stamp mirrors the `idmap.snapshot` load-if-current discipline: on reopen
-    /// the index loads ONLY if its stamp equals the engine's current manifest
-    /// counter (no committed write since it was persisted). This lets a LIGHT
-    /// checkpoint KEEP a current-stamped index instead of deleting it — the
-    /// counter gate, not a delete, guarantees a stale copy is never loaded.
-    /// Non-fatal: callers should catch and log warnings.
-    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, manifest_counter: u64) !void {
+    /// with the gs `checkpoint_epoch` + the `covered_lsn` it reflects at persist
+    /// time (GAP-ENT-0048 Path B). The stamp mirrors gs's own WAL-aware
+    /// derived-index snapshot header (index_snapshot.zig: epoch + covered_lsn):
+    /// on reopen the index loads ONLY if its stamped epoch equals the engine's
+    /// current `checkpoint_epoch` (no checkpoint since persist) AND its
+    /// covered_lsn equals the current durable frontier `last_checkpoint_lsn`
+    /// (no committed WAL tail beyond it). Unlike the old `manifest.counter`
+    /// stamp, the epoch is NOT bumped by recovery, so a deferred-WAL-tail reopen
+    /// no longer needlessly invalidates a valid snapshot on the epoch axis — the
+    /// tail is detected precisely on the covered_lsn axis instead (and a present
+    /// tail routes to a SAFE rebuild; a correct O(tail) reconcile of this
+    /// value→node index is not achievable with the v0.2.29 API — see the Phase 5
+    /// report). Non-fatal: callers should catch and log warnings.
+    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64) !void {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -675,10 +742,14 @@ const NodePropertyExactIndex = struct {
         var idx_fw = file.writerStreaming(idx_io, &idx_wbuf);
         const writer = &idx_fw.interface;
 
-        // 8-byte magic header (v2 = manifest-counter stamped).
-        try writer.writeAll("GENPIDX2");
-        // Staleness stamp: the engine manifest counter at persist time.
-        try writer.writeInt(u64, manifest_counter, .little);
+        // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
+        // WAL-aware Path B contract). GENPIDX2 (counter-stamped) and GENPIDX1
+        // (unstamped) are treated as stale on load → rebuild (never mis-served).
+        try writer.writeAll("GENPIDX3");
+        // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
+        // generation) and the durable-frontier LSN this index covers.
+        try writer.writeInt(u64, checkpoint_epoch, .little);
+        try writer.writeInt(u64, covered_lsn, .little);
 
         // Entry count
         var count: u64 = 0;
@@ -706,42 +777,62 @@ const NodePropertyExactIndex = struct {
     }
 
     /// Load the index from `prop_exact.idx` inside `graph_dir_path`, but ONLY if
-    /// its manifest-counter stamp equals `expected_counter` (the engine's current
-    /// counter). Returns true on a current load; false if missing, corrupt,
-    /// legacy-format, or STALE (stamp != expected — a committed write advanced the
-    /// counter since persist), in which case the caller rebuilds. This is the
-    /// idmap.snapshot load-if-current discipline (GAP-ENT-0048g): staleness is
-    /// caught by the stamp, so a stale on-disk copy is never blessed and a LIGHT
-    /// checkpoint need not delete a current-stamped file.
-    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_counter: u64) bool {
+    /// it is CURRENT on the WAL-aware Path B contract (GAP-ENT-0048): its stamped
+    /// `checkpoint_epoch` equals `expected_epoch` (the engine's current epoch — no
+    /// checkpoint since persist) AND its stamped `covered_lsn` equals
+    /// `durable_frontier_lsn` (the current `last_checkpoint_lsn` sum — no committed
+    /// WAL tail beyond the snapshot). Returns:
+    ///   `.loaded` — the snapshot was current and is now resident.
+    ///   `.stale`  — a snapshot FILE was present but rejected: legacy format
+    ///               (GENPIDX1/GENPIDX2), epoch-mismatched (a checkpoint ran since
+    ///               persist), TAIL-PRESENT (covered < frontier — a recovery
+    ///               replayed committed records the snapshot predates), or a torn
+    ///               read. The caller REBUILDS; because a valid base existed, the
+    ///               reopen proactively drives the race-free rebuild (Task 5.3b).
+    ///   `.absent` — no snapshot file (or the path could not even be formed). The
+    ///               caller defers to the ordinary lazy first-access rebuild — this
+    ///               graph never persisted an index (legacy / LIGHT-only), so there
+    ///               is nothing to "reload", and eagerly rebuilding at every open
+    ///               would fight sub-second cold-open.
+    /// Never blesses a stale copy: on ANY uncertainty it does NOT return `.loaded`
+    /// (the "never serve a stale prop_exact.idx" invariant — a wrong exact index =
+    /// silently wrong WHERE/GROUP BY/DISTINCT).
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, durable_frontier_lsn: u64) ExactIndexLoadOutcome {
         self.lockAllShards();
         defer self.unlockAllShards();
 
-        const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return false;
+        const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return .absent;
         defer self.allocator.free(idx_path);
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
         @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
 
         const gsa_io = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(gsa_io, idx_path, .{}) catch return false;
+        // A file that cannot be opened is treated as ABSENT (the common
+        // never-persisted / dropped case); every FAILURE PAST a successful open is
+        // a present-but-unusable snapshot → `.stale` (drives the proactive rebuild).
+        const file = std.Io.Dir.cwd().openFile(gsa_io, idx_path, .{}) catch return .absent;
         defer file.close(gsa_io);
 
         var reader_buffer: [4096]u8 = undefined;
         var file_reader = file.reader(gsa_io, &reader_buffer);
         const reader = &file_reader.interface;
 
-        // Validate magic header — only the v2 (counter-stamped) format loads; a
-        // legacy GENPIDX1 (unstamped) file is treated as stale -> rebuild.
+        // Validate magic header — only the v3 (epoch + covered-lsn stamped) format
+        // loads; a legacy GENPIDX1 (unstamped) or GENPIDX2 (counter-stamped) file
+        // is a present-but-stale snapshot -> rebuild.
         var magic: [8]u8 = undefined;
-        reader.readSliceAll(&magic) catch return false;
-        if (!std.mem.eql(u8, &magic, "GENPIDX2")) return false;
+        reader.readSliceAll(&magic) catch return .stale;
+        if (!std.mem.eql(u8, &magic, "GENPIDX3")) return .stale;
 
-        // Staleness gate: reject unless the stamp matches the engine's current
-        // manifest counter (no committed write since the index was persisted).
-        const stored_counter = reader.takeInt(u64, .little) catch return false;
-        if (stored_counter != expected_counter) return false;
+        // WAL-aware staleness gate (Path B): reject unless BOTH the derived-index
+        // generation matches (no checkpoint since persist) AND the covered LSN is
+        // still the durable frontier (no committed WAL tail beyond the snapshot).
+        const stored_epoch = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_epoch != expected_epoch) return .stale;
+        const stored_covered_lsn = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_covered_lsn != durable_frontier_lsn) return .stale;
 
-        const entry_count = reader.takeInt(u64, .little) catch return false;
+        const entry_count = reader.takeInt(u64, .little) catch return .stale;
 
         // We already hold every shard mutex; using `clear()` would re-enter
         // the same non-reentrant `std.Io.Mutex` values and deadlock.
@@ -750,27 +841,27 @@ const NodePropertyExactIndex = struct {
 
         var i: u64 = 0;
         while (i < entry_count) : (i += 1) {
-            const key_len = reader.takeInt(u32, .little) catch return false;
-            const key = self.allocator.alloc(u8, key_len) catch return false;
+            const key_len = reader.takeInt(u32, .little) catch return .stale;
+            const key = self.allocator.alloc(u8, key_len) catch return .stale;
             reader.readSliceAll(key) catch {
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
 
             const posting_count = reader.takeInt(u64, .little) catch {
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
             var posting = std.ArrayList(u64).initCapacity(self.allocator, @intCast(posting_count)) catch {
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
             var j: u64 = 0;
             while (j < posting_count) : (j += 1) {
                 const nid = reader.takeInt(u64, .little) catch {
                     posting.deinit(self.allocator);
                     self.allocator.free(key);
-                    return false;
+                    return .stale;
                 };
                 posting.appendAssumeCapacity(nid);
             }
@@ -779,13 +870,19 @@ const NodePropertyExactIndex = struct {
             self.shards[shard_idx].postings.put(key, posting) catch {
                 posting.deinit(self.allocator);
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
         }
 
-        return true;
+        return .loaded;
     }
 };
+
+/// GAP-ENT-0048 Path B: outcome of a `prop_exact.idx` reopen load attempt. The
+/// caller distinguishes a rejected-but-present snapshot (`.stale` → proactively
+/// drive the race-free rebuild, Task 5.3b) from a never-persisted one
+/// (`.absent` → defer to lazy first-access, preserving sub-second cold-open).
+const ExactIndexLoadOutcome = enum { loaded, stale, absent };
 
 // ============================================================================
 // LabelStringDict — bidirectional label string ↔ LabelId mapping view
@@ -6843,17 +6940,35 @@ pub const StorageAdapter = struct {
             }
             if (light) {
                 // GAP-ENT-0048g: KEEP a stamped `prop_exact.idx` across LIGHT
-                // checkpoints instead of DELETING it. The manifest-counter stamp
-                // (saveToFile/loadFromFile) makes a stale copy un-loadable on
-                // reopen, so a delete is no longer needed for correctness — and
+                // checkpoints instead of DELETING it. The (epoch, covered_lsn)
+                // stamp (saveToFile/loadFromFile) makes a stale copy un-loadable
+                // on reopen, so a delete is no longer needed for correctness — and
                 // the delete is exactly what dropped the hydration-built index at
                 // 14.27M (P1). We also do NOT re-save here: that is O(graph) and
                 // would defeat the O(dirty) LIGHT contract. A LIGHT checkpoint that
-                // dirtied pages bumps the manifest counter, which naturally
+                // dirtied pages advances the epoch + frontier, which naturally
                 // invalidates the now-stale on-disk stamp for the next reopen; a
                 // no-op (clean) LIGHT leaves a current-stamped index reloadable.
+            } else if (!engine_ok) {
+                // GAP-ENT-0048 Task 5.3a: the engine FULL checkpoint FAILED — an
+                // interrupted big-deferred-WAL shutdown leaves a WAL tail, so the
+                // durable frontier/pages did not cleanly advance to the in-memory
+                // state. Persisting `prop_exact.idx` NOW would stamp it with a
+                // frontier that a subsequent reopen might match (covered ==
+                // frontier) while the index does NOT reflect the true durable
+                // committed state → a PRESENT-BUT-STALE snapshot that reloads
+                // wrong WHERE/GROUP BY/DISTINCT answers. So do NOT write a fresh
+                // stamp. The PRIOR on-disk file (from the last SUCCESSFUL
+                // checkpoint) is left untouched: on reopen, recovery replays the
+                // tail and advances the frontier past that file's covered_lsn, so
+                // the covered<frontier tail gate rejects it and rebuilds (and if
+                // the failure left no tail, that older file is still valid and
+                // reloads). Either way, never a stale serve.
+                slog.warn("skipping exact-index persist: engine checkpoint failed (tail may remain; not writing a possibly-stale stamp)", &.{
+                    SAttr.string("graph", mg.name),
+                });
             } else if (mg.exact_index_built.load(.acquire)) {
-                mg.exact_node_property_index.saveToFile(dir_path, mgManifestCounter(mg)) catch |err| {
+                mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
                     log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
                 };
             } else if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
@@ -6871,7 +6986,7 @@ pub const StorageAdapter = struct {
                 // to persist the COMPLETE snapshot below. This also supersedes the
                 // old "never persist an EMPTY snapshot" hazard: we persist a
                 // materialised, non-empty index, not the empty in-memory one.
-                mg.exact_node_property_index.saveToFile(dir_path, mgManifestCounter(mg)) catch |err| {
+                mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
                     log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
                 };
             } else {
@@ -7088,9 +7203,18 @@ pub const StorageAdapter = struct {
 
         // Persist prop_exact.idx DIRECTLY (shard mutexes only — no mg.rwlock, no
         // checkpoint). This is what removes the shutdown-checkpoint dependency.
+        // Stamped on the Path B (epoch, covered_lsn) contract. NOTE: this direct
+        // persist does NOT run a checkpoint, so `covered_lsn` = the CURRENT
+        // durable frontier `last_checkpoint_lsn` (which may lag the just-scanned
+        // pages if committed writes since the last checkpoint sit in the WAL). If
+        // such a tail exists, the NEXT reopen's covered<frontier gate REBUILDS
+        // (safe, never a stale serve); a subsequent FULL checkpoint re-stamps it
+        // reloadably (covered == frontier). The in-memory index is complete and
+        // correct either way; this persist buys crash-safety, not a reload
+        // guarantee under a still-open WAL tail.
         if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
             defer self.allocator.free(dir_path);
-            mg.exact_node_property_index.saveToFile(dir_path, mgManifestCounter(mg)) catch |err| {
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
                 log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
             };
         } else |err| {
@@ -7245,6 +7369,56 @@ pub const StorageAdapter = struct {
         slog.info("exact-index persist-on-build complete (crash-safe)", &.{
             SAttr.string("graph", graph_name),
         });
+    }
+
+    /// GAP-ENT-0048 Task 5.3b: spawn a BACKGROUND thread that rebuilds a
+    /// reopen-deferred (stale-snapshot) exact index via the RACE-FREE
+    /// hydration-scan build (`buildAndPersistExactIndexForHydratedGraph`:
+    /// parallel `rebuildExactNodePropertyIndex` under the build mutex + a direct
+    /// shard-mutex-only persist — no `mg.rwlock`, no checkpoint rwlock race),
+    /// instead of leaving the whole O(graph) rebuild for the first client query
+    /// to pay INLINE. Tracked in `exact_persist_threads` (joined by `deinit`,
+    /// which sets `exact_persist_shutdown` first so a late reopen refuses to
+    /// spawn). Reuses the H4 persist-on-build lifecycle + `graph_name` ownership
+    /// (dupe here, worker frees). Best-effort and non-fatal: on ANY spawn failure
+    /// the index simply stays deferred and the first access rebuilds it (the
+    /// pre-5.3b behaviour). Idempotent against a racing first-access build — both
+    /// gate on the `exact_index_built` latch under the build mutex.
+    fn spawnExactIndexRebuildOnReopen(self: *StorageAdapter, graph_name: []const u8) void {
+        const name_copy = self.allocator.dupe(u8, graph_name) catch {
+            log.warn("reopen eager exact-index rebuild skipped: OOM duping graph name '{s}'", .{graph_name});
+            return;
+        };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.exact_persist_mutex.lockUncancelable(io);
+        defer self.exact_persist_mutex.unlock(io);
+        if (self.exact_persist_shutdown) {
+            self.allocator.free(name_copy);
+            return;
+        }
+        // Reserve BEFORE spawning so a post-spawn OOM never leaks an unjoinable
+        // thread.
+        self.exact_persist_threads.ensureUnusedCapacity(self.allocator, 1) catch {
+            self.allocator.free(name_copy);
+            log.warn("reopen eager exact-index rebuild skipped: OOM reserving thread slot for '{s}'", .{graph_name});
+            return;
+        };
+        const t = std.Thread.spawn(.{}, exactIndexRebuildOnReopenWorker, .{ self, name_copy }) catch |err| {
+            self.allocator.free(name_copy);
+            log.warn("reopen eager exact-index rebuild skipped: thread spawn failed for '{s}': {}", .{ graph_name, err });
+            return;
+        };
+        self.exact_persist_threads.appendAssumeCapacity(t);
+    }
+
+    /// Worker for `spawnExactIndexRebuildOnReopen`: run the race-free build (which
+    /// no-ops if a first-access build already latched `built`) and free the owned
+    /// name. `buildAndPersistExactIndexForHydratedGraph` is itself best-effort and
+    /// logs its own outcome; a graph DROPped between spawn and run fails the name
+    /// lookup inside and leaves nothing to build (correct).
+    fn exactIndexRebuildOnReopenWorker(self: *StorageAdapter, graph_name: []u8) void {
+        defer self.allocator.free(graph_name);
+        self.buildAndPersistExactIndexForHydratedGraph(graph_name);
     }
 
     /// Number of completed `checkpointAll` runs since process start.
@@ -7852,14 +8026,17 @@ pub const StorageAdapter = struct {
             mg.fts_dir = fts_result.dir;
         }
 
-        // Try loading the persisted property index if it is CURRENT (its
-        // manifest-counter stamp matches the engine's counter — GAP-ENT-0048g);
-        // otherwise fall back to a lazy/hydration rebuild.
-        const loaded_from_disk = blk: {
-            const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
+        // Try loading the persisted property index if it is CURRENT on the
+        // WAL-aware Path B contract (GAP-ENT-0048): its `checkpoint_epoch` stamp
+        // matches the engine's current epoch AND no committed WAL tail advanced
+        // the durable frontier past its covered_lsn. Otherwise fall back to a
+        // race-free hydration/lazy rebuild (never a stale serve).
+        const load_outcome: ExactIndexLoadOutcome = blk: {
+            const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk .absent;
             defer self.allocator.free(dir_path);
-            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgManifestCounter(mg));
+            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg));
         };
+        const loaded_from_disk = load_outcome == .loaded;
         if (loaded_from_disk) {
             // Persisted snapshot loaded: the index is complete and ready.
             mg.exact_index_built.store(true, .release);
@@ -7867,14 +8044,37 @@ pub const StorageAdapter = struct {
             // prove the reopen engaged the index WITHOUT an O(graph) rebuild.
             _ = g_exact_index_reloaded.fetchAdd(1, .monotonic);
         } else {
-            // H4 (cold-open phase 1): DEFER the full O(graph) property-chain
-            // rebuild to first access instead of paying it EAGERLY at open
-            // (~1.5-2h at 14.27M nodes). `ensureExactNodePropertyIndexBuilt`
-            // rebuilds from the durable pages on the first read/live-mutation;
-            // every index accessor guards on it. Crash-safe (rebuild reads
-            // durable pages; counter-gated by loadFromFile on the next open).
+            // H4 (cold-open phase 1): the persisted snapshot was stale (epoch
+            // mismatch or a WAL tail past its covered_lsn — GAP-ENT-0048 Path B),
+            // so the index must be REBUILT from the durable pages. DEFER it out of
+            // the open path (a synchronous O(graph) rebuild would blow the
+            // sub-second cold-open budget — ~1.5-2h at 14.27M). Every index
+            // accessor guards on `exact_index_built`; the eventual rebuild goes
+            // through the race-free parallel scan (`rebuildExactNodePropertyIndex`)
+            // and re-persists on the epoch contract (checkpointOneGraph →
+            // saveToFile), so the NEXT reopen reloads it. Crash-safe (rebuild
+            // reads durable pages; epoch/covered-gated by loadFromFile on reopen).
             mg.exact_index_built.store(false, .release);
-            log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild)", .{name});
+
+            // GAP-ENT-0048 Task 5.3b: a TAIL-REJECTED reopen (`.stale` — a
+            // snapshot FILE was present but epoch-mismatched or had a WAL tail
+            // past its covered_lsn) PROACTIVELY drives the rebuild through the
+            // RACE-FREE hydration-scan build on a background thread NOW, rather
+            // than leaving the first client query to pay it INLINE on its handler
+            // (the wedge-prone "85s lazy-on-first-query" path). Best-effort and
+            // idempotent: the build latches `exact_index_built` under the build
+            // mutex, so a concurrent first-access build produces the index exactly
+            // once. Open itself only spawns the thread — server-ready is unchanged.
+            // An `.absent` snapshot (never persisted — legacy / LIGHT-only) is NOT
+            // proactively rebuilt: there is no valid base to restore and eagerly
+            // scanning at every open would fight sub-second cold-open; it stays on
+            // the ordinary lazy first-access rebuild.
+            if (load_outcome == .stale and !eagerExactRebuildOnReopenDisabled()) {
+                self.spawnExactIndexRebuildOnReopen(owned_name);
+                log.info("exact property index deferred for graph '{s}' (stale snapshot → race-free background rebuild)", .{name});
+            } else {
+                log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild)", .{name});
+            }
         }
 
         try self.engines.put(owned_name, mg);
