@@ -211,6 +211,60 @@ test "FIX C: ORDER BY on a fresh store auto-builds the ordered index, then serve
     try testing.expectEqual(@as(u64, 1), adapter_mod.getOrderedIndexBuildsForTesting());
 }
 
+// The canonical real-world shape is `RETURN n.k AS a ORDER BY a LIMIT m` — the
+// ORDER BY references a RETURN ALIAS, not `n.k` directly. FIX C resolves that
+// alias (one hop) so it both TRIGGERS the auto-build and, once built, is served
+// from the ordered index. (Pre-fix this bare-Ident ORDER BY silently fell to the
+// full-sort path.)
+test "FIX C: aliased ORDER BY (RETURN n.k AS a ORDER BY a) auto-builds and is served" {
+    adapter_mod.setOrderedAutobuildDisabledForTest(false);
+    defer adapter_mod.setOrderedAutobuildDisabledForTest(null);
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const n: usize = 300;
+    try seedT(&h, n);
+
+    const adapter = graph_store.getGlobalAdapter().?;
+    const g = graph_store.DEFAULT_GRAPH_NAME;
+    try testing.expect(!adapter.isOrderedIndexRegistered(g, "T", "k"));
+
+    adapter_mod.resetOrderedBuildCompletionsForTesting();
+
+    // First aliased ORDER BY: triggers the build, served from the heap (hits==0),
+    // and correct.
+    execution.resetOrderedScanFastPathHits();
+    {
+        var res = try h.runQuery("MATCH (n:T) RETURN n.k AS a ORDER BY a ASC LIMIT 10");
+        defer res.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(u64, 0), execution.getOrderedScanFastPathHits());
+        try testing.expectEqual(@as(usize, 10), res.rows.len);
+        var buf: [8]u8 = undefined;
+        for (res.rows, 0..) |row, idx| {
+            const want = try std.fmt.bufPrint(&buf, "{d:0>5}", .{idx});
+            try testing.expectEqualStrings(want, row[0].Str);
+        }
+    }
+
+    try waitForOrderedBuildCompletion(1);
+    try testing.expect(adapter.isOrderedIndexRegistered(g, "T", "k"));
+
+    // Second aliased ORDER BY: served from the value-ordered index (hits==1).
+    execution.resetOrderedScanFastPathHits();
+    {
+        var res = try h.runQuery("MATCH (n:T) RETURN n.k AS a ORDER BY a ASC LIMIT 10");
+        defer res.deinit(h.arena.allocator());
+        try testing.expectEqual(@as(u64, 1), execution.getOrderedScanFastPathHits());
+        try testing.expectEqual(@as(usize, 10), res.rows.len);
+        var buf: [8]u8 = undefined;
+        for (res.rows, 0..) |row, idx| {
+            const want = try std.fmt.bufPrint(&buf, "{d:0>5}", .{idx});
+            try testing.expectEqualStrings(want, row[0].Str);
+        }
+    }
+}
+
 // Result parity: the auto-built ordered-index path must return byte-identical
 // rows to the heap scan+sort for the same query. Each label's VERY FIRST ORDER
 // BY is guaranteed heap-served (the index is not registered yet — that query

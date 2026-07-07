@@ -3247,7 +3247,14 @@ pub fn orderedScanFastPath(
     if (order_by.keys.len != 1) return null;
     const ob_key_entry = order_by.keys[0];
     if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
-    const ob_key = extractBoundVarProperty(ob_key_entry.expr, match_var) orelse return null;
+    // GAP-0064 FIX C: resolve the ORDER BY key through a RETURN alias (one hop),
+    // exactly as the GROUP BY fast path does (GAP-ENT-0055). The canonical shape
+    // `RETURN n.<k> AS a ORDER BY a LIMIT m` leaves `ORDER BY a` as a bare Ident,
+    // so `extractBoundVarProperty` returned null and BOTH the ordered fast path
+    // AND the auto-build trigger below were bypassed (silent full-sort fallback).
+    // `resolveGroupKeyProperty` follows the alias to `n.<k>` and is a no-op for
+    // the direct `ORDER BY n.<k>` form (byte-for-byte unaffected).
+    const ob_key = resolveGroupKeyProperty(ob_key_entry.expr, match_var, q.ret.items) orelse return null;
     if (!std.mem.eql(u8, ret_key, ob_key)) return null; // keys must match
     const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
 
