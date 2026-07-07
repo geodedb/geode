@@ -9453,6 +9453,25 @@ pub const GraphStore = struct {
         return entry.failed.load(.acquire);
     }
 
+    /// TEST-ONLY (GAP-0061): force `graph_name`'s deferred-hydration entry into
+    /// the QUARANTINED terminal state (done=true, failed=true) WITHOUT running
+    /// the resident-index scan. This reproduces the production condition where
+    /// the security graph's streaming hydration raises `error.DataCorruption`
+    /// and `ensureGraphHydrated` quarantines the graph, so `getNodesByLabel`
+    /// returns null even though the storage engine still holds intact,
+    /// individually-readable records. Returns false when the graph has no
+    /// pending-hydration entry (already hydrated / never deferred). Not used by
+    /// any production path — only the GAP-0061 crash-auth regression test.
+    pub fn forceHydrationQuarantineForTest(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        entry.done.store(true, .release);
+        entry.failed.store(true, .release);
+        return true;
+    }
+
     /// C-1 (T2b adversarial review): true iff `graph_name` has a deferred-
     /// hydration entry whose build has NOT completed (`done == false`) — a
     /// first-touch hydration is pending or currently BUILDING. The checkpoint

@@ -6867,6 +6867,23 @@ pub fn build(b: *std.Build) void {
     const sec_wal_durability_step = b.step("test-security-wal-durability", "Gap 0026: security-graph mutations crash-durable under GEODE_WAL_SYNC=deferred (per-graph sync_each_commit carve-out)");
     sec_wal_durability_step.dependOn(&run_sec_wal_durability_tests.step);
 
+    // GAP-0061 (fresh 14.27M close-out): CRITICAL crash-recovery auth lockout.
+    // A kill -9 + reopen quarantined the __geode_security in-memory hydration
+    // (streaming slab reader DataCorruption), so the login resolver's
+    // getNodesByLabel returned null and the persisted admin credential could
+    // never load — every query returned "Authentication failed". The engine
+    // still held the record (the bootstrap guard read it), so the fix falls
+    // back to an engine-direct read in findUserByUsernameInGraph /
+    // hasUserRecordsInGraph / listUsersFromGraph.
+    const gap0061_crash_auth_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0061_crash_auth.zig"), .target = target, .optimize = optimize });
+    gap0061_crash_auth_mod.addImport("geode", root_mod);
+    gap0061_crash_auth_mod.addImport("user_storage", user_storage_mod);
+    const gap0061_crash_auth_tests = b.addTest(.{ .root_module = gap0061_crash_auth_mod });
+    const run_gap0061_crash_auth_tests = b.addRunArtifact(gap0061_crash_auth_tests);
+    shardDep(test_step, &run_gap0061_crash_auth_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0061_crash_auth_step = b.step("test-gap0061-crash-auth", "GAP-0061: persisted admin credential loads after kill-9 crash-reopen even when the security-graph hydration is quarantined");
+    gap0061_crash_auth_step.dependOn(&run_gap0061_crash_auth_tests.step);
+
     // Gap 0034 (data-ingest enterprise review): fresh-store FALSE "POSSIBLE
     // TAMPERING" alarms. The periodic HMAC verifier read the AuthChainRoot
     // node body via the non-hydrating getNodePtr; once a bulk ingest evicted
