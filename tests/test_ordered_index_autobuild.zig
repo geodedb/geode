@@ -433,3 +433,122 @@ test "FIX C: ordered index persists and RELOADS on the next reopen (no rebuild)"
         if (prev) |p| allocator.free(p);
     }
 }
+
+// GAP-0064 INTEGRATION (ordered double-build race — the analog of the exact-index
+// CRITICAL). The ORDER-BY auto-build's per-shard ordered rebuild
+// (`adapter.createOrderedIndex` → gs `rebuildOrderedIndex`) and the FULL
+// checkpoint's OWN ordered rebuild (gs `engine_persist.checkpointEx` →
+// `rebuildOrderedIndex`, gated only on `ordered_property_index.count() > 0`)
+// both `clearTrees()` + rescan the SAME per-shard ordered tree. Pre-integration
+// the build took ONLY `shard_locks[i]` (no `rwlock`) while the checkpoint holds
+// `mg.rwlock` EXCLUSIVE with no shard lock → DISJOINT locks → concurrent
+// double-build / torn B-tree. The integration fix brings `createOrderedIndex`
+// under `mg.rwlock` SHARED (per shard) so the checkpoint's EXCLUSIVE hold
+// mutually excludes it.
+//
+// This test drives the build concurrently with a tight FULL-checkpoint loop on
+// the SAME graph and asserts: no crash/corruption, the index ends registered +
+// fresh, and `orderedScan` returns a correct global sort. Run under the thread
+// sanitizer (`zig build test-ordered-index-autobuild-tsan`) it flags the data
+// race pre-fix and is clean post-fix.
+const ConcurrentCtx = struct {
+    adapter: *StorageAdapter,
+    graph: []const u8,
+    label: []const u8,
+    key: []const u8,
+    iters: usize,
+
+    fn buildLoop(ctx: *ConcurrentCtx) void {
+        var i: usize = 0;
+        while (i < ctx.iters) : (i += 1) {
+            // Each call re-registers (idempotent) + rebuilds the ordered tree —
+            // the exact work the background worker's `ensureOrderedIndexForKey`
+            // runs. Best-effort (a transient error must not fail the harness).
+            ctx.adapter.createOrderedIndex(ctx.graph, ctx.label, ctx.key) catch {};
+        }
+    }
+
+    fn checkpointLoop(ctx: *ConcurrentCtx) void {
+        // FULL checkpoints (each rebuilds the registered ordered index in gs),
+        // a fixed count interleaved with the builder so the two ordered-rebuild
+        // paths overlap on the SAME tree. Bounded (no unbounded loop) so the test
+        // duration is deterministic and its race window is the whole run.
+        var i: usize = 0;
+        while (i < ctx.iters) : (i += 1) {
+            ctx.adapter.checkpointAll() catch {};
+        }
+    }
+};
+
+test "FIX C integration: concurrent ordered-index build || FULL checkpoint — no race, correct order" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const graph = "cc_graph";
+    const label = "T";
+    const n: usize = 1000; // gcd(97,1000)=1 => (i*97)%n is a permutation of 0..n-1
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const v: usize = (i * 97) % n;
+        const node_id = try adapter.createNode(graph, &[_][]const u8{label});
+        var buf: [8]u8 = undefined;
+        const s = try std.fmt.bufPrint(&buf, "{d:0>5}", .{v});
+        try adapter.setNodeProperty(graph, node_id, "k", .{ .String = s });
+    }
+
+    // Register the ordered index once up front so the concurrent FULL checkpoints
+    // ALSO rebuild it (count()>0) — this is what makes the two rebuild paths
+    // overlap on the SAME tree (the race under test).
+    try adapter.createOrderedIndex(graph, label, "k");
+    try testing.expect(adapter.isOrderedIndexRegistered(graph, label, "k"));
+
+    var ctx = ConcurrentCtx{
+        .adapter = adapter,
+        .graph = graph,
+        .label = label,
+        .key = "k",
+        .iters = 30,
+    };
+
+    const t_build = try std.Thread.spawn(.{}, ConcurrentCtx.buildLoop, .{&ctx});
+    const t_ckpt = try std.Thread.spawn(.{}, ConcurrentCtx.checkpointLoop, .{&ctx});
+    t_build.join();
+    t_ckpt.join();
+
+    // Post-condition: no corruption. The index is registered + fresh on every
+    // shard, and orderedScan yields a strictly-increasing global sort of the
+    // n distinct string keys "00000".."0(n-1)".
+    try testing.expect(adapter.isOrderedIndexRegistered(graph, label, "k"));
+    try testing.expect(adapter.isOrderedIndexFresh(graph, label, "k"));
+
+    const ids = try adapter.orderedScan(graph, label, "k", .asc, n, allocator);
+    defer allocator.free(ids);
+    try testing.expectEqual(@as(usize, n), ids.len);
+
+    var prev: ?[]u8 = null;
+    for (ids) |node_id| {
+        const pv = (try adapter.getNodeProperty(graph, node_id, "k", allocator)).?;
+        defer switch (pv) {
+            .string => |sv| allocator.free(sv),
+            else => {},
+        };
+        const cur = switch (pv) {
+            .string => |sv| sv,
+            else => return error.UnexpectedType,
+        };
+        if (prev) |p| {
+            try testing.expect(std.mem.order(u8, p, cur) == .lt);
+            allocator.free(p);
+        }
+        prev = try allocator.dupe(u8, cur);
+    }
+    if (prev) |p| allocator.free(p);
+}

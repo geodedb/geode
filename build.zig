@@ -8084,6 +8084,29 @@ pub fn build(b: *std.Build) void {
     const ordered_autobuild_step = b.step("test-ordered-index-autobuild", "GAP-0064 FIX C: ORDER BY fresh-store auto-build + serve + persist/reload");
     ordered_autobuild_step.dependOn(&run_ordered_autobuild_tests.step);
 
+    // GAP-0064 INTEGRATION TSan companion: the same test file compiled with
+    // -fsanitize-thread so the "concurrent ordered-index build || FULL checkpoint"
+    // case exercises the build-vs-checkpoint ordered-rebuild serialization under
+    // the thread sanitizer (flags the double-build race pre-fix; clean post-fix).
+    // Opt-in (not in the default test_step) because TSan adds ~5-8x overhead and
+    // requires libtsan at runtime. Run via: zig build test-ordered-index-autobuild-tsan
+    const ordered_autobuild_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_index_autobuild.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    ordered_autobuild_tsan_mod.addImport("geode", root_mod);
+    ordered_autobuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_autobuild_tsan_tests = b.addTest(.{ .root_module = ordered_autobuild_tsan_mod });
+    const run_ordered_autobuild_tsan_tests = b.addRunArtifact(ordered_autobuild_tsan_tests);
+    const ordered_autobuild_tsan_step = b.step(
+        "test-ordered-index-autobuild-tsan",
+        "TSan companion: concurrent ordered-index build || FULL checkpoint under -fsanitize-thread (race detection)",
+    );
+    ordered_autobuild_tsan_step.dependOn(&run_ordered_autobuild_tsan_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{

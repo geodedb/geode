@@ -5758,12 +5758,43 @@ pub const StorageAdapter = struct {
         const mg = try self.getOrCreateGraph(graph_name);
         const label_id = mg.label_dict.getId(label) orelse try mg.label_dict.getOrCreate(label);
 
-        // Per-shard registration + build-from-live-scan. The engine call
-        // MUTATES the shard (registers the pair, rebuilds the tree, marks it
-        // dirty for the next checkpoint), so take that shard's adapter EXCLUSIVE
-        // lock — the same writer discipline every other per-shard adapter write
-        // uses (e.g. createNode/mergeNode).
+        // Per-shard registration + build-from-live-scan. The engine call MUTATES
+        // the shard (registers the pair, rebuilds the tree via a live scan, marks
+        // it dirty for the next checkpoint).
+        //
+        // GAP-0064 INTEGRATION (ordered double-build race — the analog of the
+        // exact-index CRITICAL): the FULL checkpoint's OWN ordered rebuild lives
+        // INSIDE gs (`engine_persist.checkpointEx` → `rebuildOrderedIndex`, gated
+        // only on `ordered_property_index.count() > 0`) and runs under `mg.rwlock`
+        // EXCLUSIVE with NO shard lock. This background build (and the explicit
+        // `CREATE INDEX` path) previously took ONLY `shard_locks[i]`, so the two
+        // `clearTrees()+rescan` paths mutated the SAME per-shard ordered tree under
+        // DISJOINT locks → double-build / torn B-tree (identical hazard to the
+        // exact-index checkpoint-vs-worker race). Fix: take `mg.rwlock` SHARED (the
+        // same discipline `createNode`/`mergeNode` use) so the checkpoint's
+        // EXCLUSIVE hold mutually excludes this rebuild; the per-shard
+        // `shard_locks[i]` still serializes it against the online write-path
+        // ordered-maintenance and any second concurrent builder. Held+released PER
+        // SHARD (not across the whole 16-shard scan) so a waiting checkpoint /
+        // LIGHT-checkpoint slips in at a shard boundary — bounded hold, no whole-
+        // graph read stall, and the rebuild is idempotent so an interleaved
+        // checkpoint refresh is harmless.
+        //
+        // SHUTDOWN-CANCEL (integration with the CRITICAL shutdown-stall fix): the
+        // ORDER-BY worker REUSES `exact_persist_threads`, and this O(graph)
+        // 16-shard rebuild is otherwise uncancellable — a SIGTERM mid-build would
+        // block `deinit`'s join for the full (multi-minute at 14.27M) build,
+        // re-introducing exactly the stall the CRITICAL closed for the exact index.
+        // Poll `exact_build_shutdown_cancel` at each shard boundary and abort
+        // promptly: the partial registration leaves `isOrderedIndexRegistered`
+        // false (needs ALL shards), so the next reopen's first ORDER BY simply
+        // re-triggers a clean build. Nothing partial is ever served.
         for (mg.engine.shards, 0..) |shard, i| {
+            if (self.exact_build_shutdown_cancel.load(.acquire))
+                return error.OrderedBuildCancelledByShutdown;
+            exclusiveWaitingBackoff(mg); // yield to a pending exclusive (checkpoint / CREATE INDEX).
+            mg.rwlock.lockSharedUncancelable(io);
+            defer mg.rwlock.unlockShared(io);
             mg.shard_locks[i].lockUncancelable(io);
             defer mg.shard_locks[i].unlock(io);
             try shard.createOrderedIndex(label_id, key);
