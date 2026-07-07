@@ -532,6 +532,14 @@ test "throughput floor: streaming hydration >= 20x legacy on the same synthetic 
     _ = unsetenv(KILL_SWITCH);
     _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
     defer _ = unsetenv(PERSIST_KILL_SWITCH);
+    // GAP-0064 FIX A: this test measures the resident HYDRATION scan throughput in
+    // isolation (a regression tripwire). FIX A now spawns a race-free background
+    // exact-index rebuild on every `.absent` reopen, which would compete for the
+    // 16 cores with the measured hydration and skew eff_mbps. Suppress it — the
+    // exact-index build is orthogonal to hydration throughput (its own concurrency
+    // is covered by the FIX A tests + TSAN).
+    geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
