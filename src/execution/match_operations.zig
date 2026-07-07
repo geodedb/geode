@@ -3264,7 +3264,16 @@ pub fn orderedScanFastPath(
     // --- ORDERED-INDEX gate: registered AND eligible on EVERY shard. On ANY
     //     doubt this is false → fall back to the heap (correct rows). ---
     const label = head.labels[0];
-    if (!adapter.isOrderedIndexRegistered(filter_graph, label, ret_key)) return null;
+    if (!adapter.isOrderedIndexRegistered(filter_graph, label, ret_key)) {
+        // GAP-0064 FIX C: a fresh (from-dump / never-CREATE-INDEXed) store has no
+        // value-ordered index for this key. Kick off a ONE-TIME, uncancellable,
+        // deduped BACKGROUND build (register + rebuild + persist) so subsequent
+        // ORDER BY on this key — and the next reopen (gs reloads the persisted
+        // snapshot) — are index-served. Fall back to the heap for THIS query
+        // (correct, slower). Deduped, so this is not a per-query cost.
+        adapter.spawnOrderedIndexBuildAsync(filter_graph, label, ret_key);
+        return null;
+    }
     if (!adapter.isOrderedIndexEligible(filter_graph, label, ret_key)) return null;
     // --- FRESHNESS gate (H3-P4): the value-ordered tree is rebuilt+refreshed
     //     only at the durability boundary (full checkpoint / close), so a

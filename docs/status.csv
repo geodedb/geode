@@ -4102,6 +4102,7 @@ REQ-PERF-QPS-0815,BatchCreateFastPath,HomogeneousDetection,TESTED,,,performance,
 REQ-PERF-QPS-0815,BatchCreateFastPath,HomogeneousNodes,TESTED,,,performance,2026-04-20,tests/test_gap0815_batch_create.zig
 REQ-PERF-QPS-0821,MultiLabelMatchDiagnostic,DiagnosticProbe,TESTED,,,performance,2026-04-20,tests/test_gap0821_multilabel_match_diagnostic.zig
 REQ-PERF-QPS-H3P3,OrderedScanFastPath,PlannerIndexOrdered,TESTED,,,performance,2026-06-29,tests/test_ordered_scan_fastpath.zig
+REQ-PERF-QPS-H3P5,OrderedIndexAutoBuild,FreshStoreOrderBy,TESTED,,,performance,2026-07-07,tests/test_ordered_index_autobuild.zig
 REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,Regression,TESTED,,,engine,2026-04-18,tests/test_query_arena_reuse.zig

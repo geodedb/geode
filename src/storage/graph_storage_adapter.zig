@@ -118,6 +118,16 @@ var g_exact_hydration_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init
 // the first-touch hydration no longer runs the O(graph) build inline on the
 // read path). Bumped only on a successful spawn (thread reserved + started).
 var g_exact_reopen_spawns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX C: number of geode-driven value-ORDERED index builds
+// (`createOrderedIndex` via the auto-build path) run this process. A snapshot
+// RELOAD on reopen (gs GAP-0050) does NOT bump this — a nonzero count means the
+// ordered tree was (re)built from a live scan, not reloaded. Test instrumentation.
+var g_ordered_index_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX C: number of BACKGROUND ordered-index build workers that ran to
+// completion (register+rebuild THEN best-effort persist). Lets a test wait
+// deterministically for the async auto-build (build + checkpoint) to finish
+// before asserting the fast path is served.
+var g_ordered_build_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-0064 FIX A (TEST-ONLY): a gate the background reopen rebuild worker waits
 // on BEFORE it touches any lock or the exact index, so a test can hold the
 // build "in flight" and prove that first-touch reads (count / label scan) return
@@ -178,6 +188,24 @@ fn eagerExactRebuildOnReopenDisabled() bool {
 var g_test_disable_eager_reopen_rebuild: ?bool = null;
 pub fn setEagerExactRebuildOnReopenDisabledForTest(disabled: ?bool) void {
     g_test_disable_eager_reopen_rebuild = disabled;
+}
+
+/// GAP-0064 FIX C: the ORDER-BY auto-build (`spawnOrderedIndexBuildAsync`) is
+/// ALWAYS ON in production. Under `is_test` it defaults to SUPPRESSED so the
+/// existing test corpus — which runs many `ORDER BY <non-indexed> LIMIT` queries
+/// and asserts the heap fallback on later identical queries — is unperturbed;
+/// the dedicated auto-build suite opts IN with `setOrderedAutobuildDisabledForTest(false)`.
+/// `null` restores the per-context default (production ON, tests suppressed).
+var g_test_ordered_autobuild_disabled: ?bool = null;
+pub fn setOrderedAutobuildDisabledForTest(disabled: ?bool) void {
+    g_test_ordered_autobuild_disabled = disabled;
+}
+fn orderedAutobuildDisabled() bool {
+    if (comptime @import("builtin").is_test) {
+        if (g_test_ordered_autobuild_disabled) |d| return d;
+        return true; // tests default to suppressed (production is always ON)
+    }
+    return false;
 }
 var g_exact_persist_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_exact_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -365,6 +393,22 @@ pub fn getExactReopenSpawnsForTesting() u64 {
 }
 pub fn resetExactReopenSpawnsForTesting() void {
     g_exact_reopen_spawns.store(0, .release);
+}
+
+/// GAP-0064 FIX C: geode-driven value-ordered index builds (auto-build path).
+/// 0 after a reopen that RELOADED the persisted ordered snapshot (no rebuild).
+pub fn getOrderedIndexBuildsForTesting() u64 {
+    return g_ordered_index_builds.load(.acquire);
+}
+pub fn resetOrderedIndexBuildsForTesting() void {
+    g_ordered_index_builds.store(0, .release);
+}
+/// GAP-0064 FIX C: background ordered-index build+persist workers completed.
+pub fn getOrderedBuildCompletionsForTesting() u64 {
+    return g_ordered_build_completions.load(.acquire);
+}
+pub fn resetOrderedBuildCompletionsForTesting() void {
+    g_ordered_build_completions.store(0, .release);
 }
 
 /// GAP-0064 FIX A (TEST-ONLY): hold the background reopen rebuild "in flight" so
@@ -2719,6 +2763,13 @@ pub const StorageAdapter = struct {
     exact_persist_threads: std.ArrayList(std.Thread) = .empty,
     exact_persist_mutex: std.Io.Mutex = std.Io.Mutex.init,
     exact_persist_shutdown: bool = false,
+    // GAP-0064 FIX C: dedup set for in-flight BACKGROUND value-ordered index
+    // builds, keyed by "graph\x00label\x00key" (owned). Guards against spawning a
+    // second build for the same (graph,label,key) while one is already running
+    // (the planner re-triggers on every ORDER BY until the index is registered).
+    // Guarded by `exact_persist_mutex` (the same lock that gates spawn lifecycle);
+    // the worker removes+frees its key on completion, deinit frees any remainder.
+    ordered_build_inflight: std.StringHashMapUnmanaged(void) = .{},
 
     /// Create a new `StorageAdapter`.
     ///
@@ -2812,6 +2863,8 @@ pub const StorageAdapter = struct {
             for (persist_threads.items) |t| t.join();
             persist_threads.deinit(self.allocator);
         }
+        // GAP-0064 FIX C: workers are joined; free any leftover in-flight keys.
+        self.freeOrderedBuildInflight();
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
 
         var it = self.engines.iterator();
@@ -2826,6 +2879,16 @@ pub const StorageAdapter = struct {
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
+    }
+
+    /// GAP-0064 FIX C: free every key still in `ordered_build_inflight` and empty
+    /// the map. Called from teardown AFTER all build workers are joined (so no
+    /// worker can concurrently touch the map).
+    fn freeOrderedBuildInflight(self: *StorageAdapter) void {
+        var oit = self.ordered_build_inflight.keyIterator();
+        while (oit.next()) |k| self.allocator.free(k.*);
+        self.ordered_build_inflight.deinit(self.allocator);
+        self.ordered_build_inflight = .{};
     }
 
     /// TEST-ONLY: tear the adapter down as if the process was kill-9'd — each
@@ -2846,6 +2909,7 @@ pub const StorageAdapter = struct {
             for (persist_threads.items) |t| t.join();
             persist_threads.deinit(self.allocator);
         }
+        self.freeOrderedBuildInflight();
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
 
         var it = self.engines.iterator();
@@ -5817,6 +5881,170 @@ pub const StorageAdapter = struct {
             if (!shard.orderedIndexFresh()) return false;
         }
         return true;
+    }
+
+    // ========================================================================
+    // GAP-0064 FIX C: AUTO-BUILD the value-ordered index on a FRESH store.
+    //
+    // The value-ordered index (`createOrderedIndex` / `orderedScan`, GAP-0050)
+    // is only ever registered by an explicit `CREATE INDEX`, so a from-dump /
+    // freshly-ingested store has NONE and `ORDER BY <prop> LIMIT k` falls back
+    // to the full-label top-K heap (the ~6.7 s-at-1M / times-out-at-14.27M path)
+    // even though the planner `orderedScanFastPath` is fully wired.
+    //
+    // FIX C makes it materialize WITHOUT a manual CREATE INDEX: the planner, on
+    // a shape-eligible ORDER-BY-<prop>-LIMIT query whose ordered index is not yet
+    // registered, calls `spawnOrderedIndexBuildAsync`, which builds it exactly
+    // once per (graph,label,key) on a BACKGROUND, uncancellable, deduped worker
+    // (register + rebuild via the same `createOrderedIndex` CREATE INDEX uses,
+    // then a best-effort full checkpoint to persist it). The triggering query is
+    // served from the heap (correct, slower); every later ORDER BY on that prop —
+    // and the NEXT reopen (gs reloads the persisted snapshot on the Path-B
+    // contract) — is index-served. NOT a per-query cost: a re-trigger while a
+    // build is in flight, or after the index is registered, is a no-op.
+    //
+    // SCOPE NOTE: the build is triggered lazily by the FIRST ORDER BY of each
+    // distinct (label,key), so only properties that are actually ordered-by pay
+    // the (one-time) build — never every property. This is the bounded variant
+    // (a graph with N distinct ORDER-BY keys builds N ordered trees, one-time);
+    // auto-building an ordered tree for EVERY indexed property at open would be
+    // N_keys * O(nodes) B-tree inserts, prohibitive at 14.27M.
+    // ========================================================================
+
+    /// GAP-0064 FIX C core: register + build the value-ordered index for
+    /// `(graph,label,key)` SYNCHRONOUSLY and uncancellably (idempotent). No-op
+    /// when the index is already registered. Reuses `createOrderedIndex` (the
+    /// exact path `CREATE INDEX` drives), so registration is global (all shards),
+    /// the trees are rebuilt from a live scan, and gs marks them dirty for the
+    /// next full-checkpoint persist. Bumps the FIX-C build counter on a real build.
+    pub fn ensureOrderedIndexForKey(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) !void {
+        if (self.isOrderedIndexRegistered(graph_name, label, key)) return;
+        try self.createOrderedIndex(graph_name, label, key);
+        _ = g_ordered_index_builds.fetchAdd(1, .monotonic);
+    }
+
+    /// TEST-ONLY alias for `ensureOrderedIndexForKey` — deterministic (no thread)
+    /// synchronous auto-build, exercising the SAME register+rebuild core the
+    /// background worker runs, so a reopen test can assert persist+reload.
+    pub fn buildOrderedIndexSyncForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) !void {
+        try self.ensureOrderedIndexForKey(graph_name, label, key);
+    }
+
+    /// GAP-0064 FIX C: kick off a ONE-TIME, uncancellable, deduped BACKGROUND
+    /// build of the value-ordered index for `(graph,label,key)`. Best-effort and
+    /// non-blocking: the caller (the planner) returns its heap result immediately.
+    ///
+    /// Dedup: no-op when the index is already registered, or when a build for the
+    /// SAME (graph,label,key) is already in flight (the planner re-triggers on
+    /// every matching ORDER BY until the index shows up). The in-flight set +
+    /// thread lifecycle reuse the H4 persist-thread machinery (joined by deinit;
+    /// `exact_persist_shutdown` refuses new spawns once teardown begins).
+    pub fn spawnOrderedIndexBuildAsync(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) void {
+        // GAP-0064 FIX C (TEST-ONLY): allow suppression so heap-fallback tests
+        // for non-indexed props stay deterministic.
+        if (orderedAutobuildDisabled()) return;
+        // Fast pre-check OUTSIDE the lock: already registered -> nothing to do.
+        if (self.isOrderedIndexRegistered(graph_name, label, key)) return;
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.exact_persist_mutex.lockUncancelable(io);
+        defer self.exact_persist_mutex.unlock(io);
+        if (self.exact_persist_shutdown) return;
+
+        // Dedup key "graph\x00label\x00key" (NUL-joined; graph/label/key never
+        // contain NUL, so this is an unambiguous composite key).
+        const dedup_key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph_name, label, key }) catch return;
+        var free_dedup_key = true;
+        defer if (free_dedup_key) self.allocator.free(dedup_key);
+        if (self.ordered_build_inflight.contains(dedup_key)) return; // already building
+
+        // Owned copies for the worker thread (freed by the worker).
+        const graph_copy = self.allocator.dupe(u8, graph_name) catch return;
+        var free_graph = true;
+        defer if (free_graph) self.allocator.free(graph_copy);
+        const label_copy = self.allocator.dupe(u8, label) catch return;
+        var free_label = true;
+        defer if (free_label) self.allocator.free(label_copy);
+        const key_copy = self.allocator.dupe(u8, key) catch return;
+        var free_key = true;
+        defer if (free_key) self.allocator.free(key_copy);
+
+        // Reserve thread + dedup slots BEFORE spawning so a post-spawn OOM can
+        // never leave an unjoinable thread or a stuck dedup entry.
+        self.exact_persist_threads.ensureUnusedCapacity(self.allocator, 1) catch return;
+        self.ordered_build_inflight.put(self.allocator, dedup_key, {}) catch return;
+        var remove_dedup = true;
+        defer if (remove_dedup) {
+            if (self.ordered_build_inflight.fetchRemove(dedup_key)) |kv| self.allocator.free(kv.key);
+        };
+
+        const t = std.Thread.spawn(.{}, orderedIndexBuildWorker, .{ self, graph_copy, label_copy, key_copy }) catch return;
+        self.exact_persist_threads.appendAssumeCapacity(t);
+        // Success: the worker now owns the three copies AND the dedup entry.
+        free_dedup_key = false;
+        free_graph = false;
+        free_label = false;
+        free_key = false;
+        remove_dedup = false;
+    }
+
+    /// GAP-0064 FIX C worker: build the ordered index (uncancellable) then persist
+    /// it with a best-effort full checkpoint, and clear the in-flight dedup entry.
+    /// Owns + frees `graph`, `label`, `key`. Best-effort throughout: any failure
+    /// leaves the index correct-in-memory (or simply un-built, to be re-triggered
+    /// by the next ORDER BY).
+    fn orderedIndexBuildWorker(self: *StorageAdapter, graph: []u8, label: []u8, key: []u8) void {
+        defer {
+            // Clear the dedup entry (free its owned key) under the persist mutex.
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.exact_persist_mutex.lockUncancelable(io);
+            const dedup_key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph, label, key }) catch null;
+            if (dedup_key) |dk| {
+                if (self.ordered_build_inflight.fetchRemove(dk)) |kv| self.allocator.free(kv.key);
+                self.allocator.free(dk);
+            }
+            self.exact_persist_mutex.unlock(io);
+            self.allocator.free(graph);
+            self.allocator.free(label);
+            self.allocator.free(key);
+            _ = g_ordered_build_completions.fetchAdd(1, .monotonic);
+        }
+
+        self.ensureOrderedIndexForKey(graph, label, key) catch |err| {
+            slog.warn("ordered-index auto-build failed; ORDER BY stays heap-served for this key", &.{
+                SAttr.string("graph", graph),
+                SAttr.string("label", label),
+                SAttr.string("key", key),
+                SAttr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        // Persist the freshly-registered ordered index so a reopen RELOADS it
+        // (gs saves the ordered snapshot on the FULL-checkpoint path only; the
+        // periodic LIGHT checkpoint does not). Best-effort: a clean shutdown's
+        // close() persists it regardless, and a crash before then simply
+        // re-triggers the build on the next ORDER BY.
+        self.checkpointGraph(graph) catch |err| {
+            slog.warn("ordered-index auto-build: persist checkpoint failed (index stays memory-only until the next full checkpoint / close)", &.{
+                SAttr.string("graph", graph),
+                SAttr.string("error", @errorName(err)),
+            });
+        };
     }
 
     /// Test-only: force a full rebuild of the exact node-property index for

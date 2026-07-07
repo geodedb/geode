@@ -8067,6 +8067,23 @@ pub fn build(b: *std.Build) void {
     const h3_fastpath_repro_step = b.step("test-h3-fastpath-repro", "Run H3-P3 bench repro (CREATE INDEX before nodes)");
     h3_fastpath_repro_step.dependOn(&run_h3_fastpath_repro_tests.step);
 
+    // GAP-0064 FIX C: ORDER BY on a FRESH store (no CREATE INDEX) auto-builds the
+    // value-ordered index in the background, serves it (hits==1) once built, and
+    // persists+reloads it across a reopen. See tests/test_ordered_index_autobuild.zig.
+    const ordered_autobuild_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_index_autobuild.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    ordered_autobuild_test_mod.addImport("geode", root_mod);
+    ordered_autobuild_test_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_autobuild_tests = b.addTest(.{ .root_module = ordered_autobuild_test_mod });
+    const run_ordered_autobuild_tests = b.addRunArtifact(ordered_autobuild_tests);
+    shardDep(test_step, &run_ordered_autobuild_tests.step, 1, test_shard_loads, test_shard_index);
+    const ordered_autobuild_step = b.step("test-ordered-index-autobuild", "GAP-0064 FIX C: ORDER BY fresh-store auto-build + serve + persist/reload");
+    ordered_autobuild_step.dependOn(&run_ordered_autobuild_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{
