@@ -3237,3 +3237,111 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         graph_store.deinitGlobalStore();
     }
 }
+
+// Adversarial-review CRITICAL regression: a LAZY first-access exact-index build
+// running concurrently with a FULL checkpoint's eager build. The FIX A
+// `exact_rebuild_inflight` guard only made the checkpoint skip when the BACKGROUND
+// WORKER owned the build — it did NOT cover the LAZY build (which never set the
+// flag). Two concurrent `rebuildExactNodePropertyIndex` both call
+// `addEx(assume_new=true)` (dedup-skipping) → duplicated postings → inflated
+// GROUP BY/DISTINCT/WHERE-seek/count. The fix serializes the checkpoint's eager
+// build with worker AND lazy builds via `exact_index_build_mutex.tryLock()`
+// (non-blocking): if a build holds the mutex, the checkpoint SKIPS its eager
+// build. Compiled under -fsanitize-thread via `test-startup-lazy-hydrate-tsan`.
+test "GAP-0064 review CRITICAL: lazy rebuild || FULL checkpoint — checkpoint skips its eager build (no double-insert)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    // Disable the reopen background rebuild so the LAZY first-access build is the
+    // ONLY builder — reproducing the exact lazy-vs-checkpoint race.
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 2000;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    deleteAllPropExactIdx(allocator, data_dir);
+    deleteAllNamed(allocator, data_dir, "idmap.snapshot");
+
+    adapter_mod.resetBuildGateWaitersForTesting();
+    // Hold the (lazy) build in flight the moment it acquires the build mutex.
+    adapter_mod.closeExactBuildGateForTesting();
+    defer adapter_mod.openExactBuildGateForTesting();
+
+    const LazyCtx = struct {
+        adapter: *adapter_mod.StorageAdapter,
+        alloc: std.mem.Allocator,
+        val: []const u8,
+        want: usize,
+        errs: *std.atomic.Value(u32),
+        fn run(ctx: *@This()) void {
+            const got = ctx.adapter.getCandidateNodesByLabelAndProperty("divelife", "Taxon", "source", .{ .String = ctx.val }, ctx.alloc) catch {
+                _ = ctx.errs.fetchAdd(1, .monotonic);
+                return;
+            };
+            defer ctx.alloc.free(got);
+            if (got.len != ctx.want) _ = ctx.errs.fetchAdd(1, .monotonic);
+        }
+    };
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        _ = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+        _ = try adapter.getOrCreateGraph(G); // .absent, NO worker (reopen rebuild disabled)
+
+        var errs = std.atomic.Value(u32).init(0);
+        var ctx = LazyCtx{ .adapter = adapter, .alloc = allocator, .val = sources[1], .want = N / sources.len, .errs = &errs };
+        var lazy_thread = try std.Thread.spawn(.{}, LazyCtx.run, .{&ctx});
+
+        // Wait until the lazy build is parked at the gate HOLDING the build mutex.
+        var waited: usize = 0;
+        while (adapter_mod.getBuildGateWaitersForTesting() == 0 and waited < 30_000) : (waited += 1) {
+            sleepMs(1);
+        }
+        try testing.expect(adapter_mod.getBuildGateWaitersForTesting() >= 1);
+
+        // Run a FULL checkpoint CONCURRENTLY with the in-flight lazy build. It must
+        // NOT run a second (double-inserting) eager rebuild — its build-mutex
+        // tryLock fails (the lazy build holds it), so it SKIPS. Assert no eager
+        // checkpoint build fired (delta == 0). RED (pre-fix): the eager build ran.
+        const eager_before = adapter_mod.getExactEagerCheckpointBuildsForTesting();
+        adapter.checkpointGraph(G) catch {};
+        try testing.expectEqual(eager_before, adapter_mod.getExactEagerCheckpointBuildsForTesting());
+
+        // Release the gate → the lazy build completes; it is the ONLY builder.
+        adapter_mod.openExactBuildGateForTesting();
+        lazy_thread.join();
+        try testing.expectEqual(@as(u32, 0), errs.load(.acquire));
+
+        // The index-served count is CORRECT — no duplicated postings / inflation.
+        // A double-insert would return 2 * (N / |sources|).
+        const n_seek = try adapter.countCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[1] });
+        try testing.expectEqual(@as(usize, N / sources.len), n_seek);
+        const grp = try adapter.collectPropertyPostingSummaries(G, LBL, "source", allocator);
+        defer allocator.free(grp);
+        try testing.expectEqual(@as(usize, sources.len), grp.len); // exactly |sources| distinct values, none duplicated
+        for (grp) |s| try testing.expectEqual(@as(u64, N / sources.len), s.count);
+
+        graph_store.deinitGlobalStore();
+    }
+}

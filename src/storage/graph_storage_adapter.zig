@@ -135,6 +135,11 @@ var g_ordered_build_completions: std.atomic.Value(u64) = std.atomic.Value(u64).i
 // production value — never blocks), non-zero = closed. Only ever consulted from
 // the worker path under `comptime is_test`, so production carries zero overhead.
 var g_test_exact_build_gate: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+// GAP-0064 (adversarial review — TEST-ONLY): number of rebuild threads currently
+// parked at `g_test_exact_build_gate` while HOLDING `exact_index_build_mutex`. A
+// test polls this to know a build (worker or lazy) is mid-flight (mutex held)
+// before it runs the concurrent FULL checkpoint that must skip its eager build.
+var g_test_build_gate_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 // C-1 (T2b adversarial review): number of times a per-graph checkpoint's
 // retired-cache reclaim (the grace window in `checkpointOneGraph`) was
 // SKIPPED because the graph had an unfinished (pending or in-flight)
@@ -419,6 +424,15 @@ pub fn closeExactBuildGateForTesting() void {
 }
 pub fn openExactBuildGateForTesting() void {
     g_test_exact_build_gate.store(0, .release);
+}
+/// GAP-0064 (review — TEST-ONLY): rebuild threads currently parked at the gate
+/// while holding `exact_index_build_mutex`. A test polls `>= 1` to know a build
+/// is mid-flight before running the concurrent checkpoint.
+pub fn getBuildGateWaitersForTesting() u32 {
+    return g_test_build_gate_waiters.load(.acquire);
+}
+pub fn resetBuildGateWaitersForTesting() void {
+    g_test_build_gate_waiters.store(0, .release);
 }
 
 /// GAP-ENT-0048g: aggregate (sum over all shards) of the per-shard
@@ -2477,6 +2491,22 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
     // Double-check under the mutex: a peer first-accessor may have built it
     // while we waited for the lock.
     if (mg.exact_index_built.load(.acquire)) return;
+    // GAP-0064 (adversarial review — TEST-ONLY): hold the LAZY build "in flight"
+    // (mutex held, mid-build) so a test can prove a concurrent FULL checkpoint's
+    // eager build does NOT run a second concurrent rebuild (the lazy-vs-checkpoint
+    // double-insert race). Reuses the same gate the worker path uses; never blocks
+    // in production (gate == 0).
+    if (comptime @import("builtin").is_test) {
+        if (g_test_exact_build_gate.load(.acquire) != 0) {
+            _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
+            const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
+            var gate_rem: std.os.linux.timespec = undefined;
+            while (g_test_exact_build_gate.load(.acquire) != 0) {
+                _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+            }
+            _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
+        }
+    }
     // GAP-ENT-0048 DEFECT B: capture THIS (handler) thread's read-executor
     // cancel flags and hand them to the parallel rebuild, whose per-shard pool
     // workers run on threads that do not inherit the threadlocal read scope. If
@@ -2770,6 +2800,22 @@ pub const StorageAdapter = struct {
     // Guarded by `exact_persist_mutex` (the same lock that gates spawn lifecycle);
     // the worker removes+frees its key on completion, deinit frees any remainder.
     ordered_build_inflight: std.StringHashMapUnmanaged(void) = .{},
+    /// GAP-0064 (adversarial review — shutdown-stall fix): cancel source for any
+    /// in-flight BACKGROUND index build. `deinit` sets it BEFORE joining
+    /// `exact_persist_threads`, so a graceful shutdown shortly after a large
+    /// `.absent` reopen aborts the ~14-min uncancellable O(graph) build at its
+    /// next 256-node poll (`rebuildExactNodePropertyIndex` polls
+    /// `CancelFlags.streamTripped`) instead of blocking teardown for the whole
+    /// build. Wired to the worker's rebuild as the STREAM cancel flag. A cancelled
+    /// build leaves the index deferred (built stays false) → the next reopen
+    /// rebuilds cleanly; nothing partial is ever served (accessors gate on built).
+    ///
+    /// GAP-0064 INTEGRATION: the ORDER-BY ordered-index auto-build worker REUSES
+    /// `exact_persist_threads`, so it too honors this flag — `createOrderedIndex`
+    /// polls it between shards (see there) and aborts the multi-minute 16-shard
+    /// ordered rebuild at a shard boundary, keeping the `deinit` join bounded
+    /// instead of re-introducing the uncancellable shutdown stall for ORDER BY.
+    exact_build_shutdown_cancel: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// Create a new `StorageAdapter`.
     ///
@@ -2847,14 +2893,21 @@ pub const StorageAdapter = struct {
 
     /// Shut down all engines, release every allocation.
     pub fn deinit(self: *StorageAdapter) void {
-        // H4 persist-on-build: join in-flight background index persists
-        // BEFORE any teardown — the workers take `self.mutex` and read the
-        // engines map, so joining after the lock below would deadlock and
-        // joining after teardown would be a use-after-free. New spawns are
-        // refused from here on (`exact_persist_shutdown`). Bounded: each
-        // worker is one bounded-acquire (5 s) graph checkpoint.
+        // H4 persist-on-build + GAP-0064 reopen rebuild: join in-flight background
+        // workers BEFORE any teardown — they take `self.mutex` and read the engines
+        // map, so joining after the lock below would deadlock and joining after
+        // teardown would be a use-after-free. New spawns are refused from here on
+        // (`exact_persist_shutdown`).
+        //
+        // GAP-0064 (adversarial review — shutdown-stall fix): FIX A now spawns the
+        // UNCANCELLABLE O(graph) reopen rebuild for every `.absent` graph, so a
+        // graceful shutdown shortly after a large reopen would otherwise block this
+        // join for the full ~14-min build. Set `exact_build_shutdown_cancel` FIRST
+        // so the in-flight rebuild aborts at its next 256-node poll → the join is
+        // bounded (the persist-after-build workers remain bounded graph checkpoints).
         {
             const io_h4 = std.Io.Threaded.global_single_threaded.io();
+            self.exact_build_shutdown_cancel.store(true, .release);
             self.exact_persist_mutex.lockUncancelable(io_h4);
             self.exact_persist_shutdown = true;
             var persist_threads = self.exact_persist_threads;
@@ -2901,6 +2954,10 @@ pub const StorageAdapter = struct {
     pub fn simulateCrashForTesting(self: *StorageAdapter) void {
         {
             const io_h4 = std.Io.Threaded.global_single_threaded.io();
+            // GAP-0064 INTEGRATION: mirror `deinit` — cancel any in-flight
+            // exact-index / ordered-index build FIRST so the join below is bounded
+            // even when a crash-sim test tears down mid-build.
+            self.exact_build_shutdown_cancel.store(true, .release);
             self.exact_persist_mutex.lockUncancelable(io_h4);
             self.exact_persist_shutdown = true;
             var persist_threads = self.exact_persist_threads;
@@ -7764,52 +7821,19 @@ pub const StorageAdapter = struct {
                 slog.warn("skipping exact-index persist: engine checkpoint failed (tail may remain; not writing a possibly-stale stamp)", &.{
                     SAttr.string("graph", mg.name),
                 });
-            } else if (mg.exact_rebuild_inflight.load(.acquire)) {
-                // GAP-0064 FIX A: a race-free background reopen rebuild
-                // (`spawnExactIndexRebuildOnReopen`) owns this graph's exact-index
-                // build. Do NOT run a SECOND concurrent `rebuildExactNodePropertyIndex`
-                // here — two rebuilds writing the same mutex-sharded index
-                // double-insert postings (logical corruption). And do NOT
-                // invalidate the on-disk file: the worker persists a fresh
-                // (epoch, covered_lsn)-stamped index when it finishes, and any
-                // current on-disk file stays reload-gated on reopen. Read
-                // `inflight` BEFORE `built`/eager-build below: the worker stores
-                // `built = true` (.release) BEFORE clearing `inflight` (.release),
-                // so reaching the `built`/eager branches (inflight == false)
-                // guarantees no concurrent rebuild is running.
-                slog.info("skipping exact-index persist: race-free background reopen rebuild in flight (worker persists on completion)", &.{
-                    SAttr.string("graph", mg.name),
-                });
-            } else if (mg.exact_index_built.load(.acquire)) {
-                mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
-                    log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
-                };
-            } else if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
-                // GAP-ENT-0048 PRIMARY: the exact index was DEFERRED this session
-                // (no/stale snapshot at open) and never built by a query — so the
-                // in-memory index is EMPTY. Rather than invalidate the file and
-                // leave the deferral in place FOREVER (every reopen then re-pays
-                // the O(graph) first-access rebuild, which at 14.27M nodes blows
-                // past the ~60 s proto-reader stall window and wedges the handler
-                // — the escalation's read-path blocker), a FULL checkpoint (clean
-                // shutdown / explicit save) EAGERLY builds the index from the
-                // durable pages IN PARALLEL (reusing rebuildExactNodePropertyIndex's
-                // per-shard thread-pool machinery — we hold mg.rwlock EXCLUSIVE, so
-                // the scan is race-free) and latches `built`. We then fall through
-                // to persist the COMPLETE snapshot below. This also supersedes the
-                // old "never persist an EMPTY snapshot" hazard: we persist a
-                // materialised, non-empty index, not the empty in-memory one.
-                mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
-                    log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
-                };
             } else {
-                // Deferred and NOT eagerly built (empty graph — nothing to build —
-                // or an in-flight first-touch hydration whose pages are mid-write:
-                // scanning them here would be the C-1 use-after-free). Remove any
-                // stale on-disk index so the next open DEFERS + rebuilds lazily
-                // (correct, just not yet fast); the next clean FULL checkpoint of a
-                // hydrated graph will materialise the snapshot.
-                invalidateExactPropertyIndexFile(self.allocator, dir_path);
+                // GAP-0064 (adversarial review — CRITICAL double-insert fix):
+                // build/persist the exact index UNDER the shared
+                // `exact_index_build_mutex` (non-blocking tryLock). This serializes
+                // the checkpoint's eager build with BOTH the background-reopen
+                // worker AND the lazy-first-access build (`ensureExactNodePropertyIndexBuilt`),
+                // closing BOTH double-insert races (two concurrent
+                // `rebuildExactNodePropertyIndex` → `addEx(assume_new=true)` skips
+                // dedup → duplicated postings / inflated GROUP BY/DISTINCT/count).
+                // The prior `exact_rebuild_inflight`-only skip covered only the
+                // worker, not the lazy build. tryLock never blocks, so the
+                // checkpoint (holding mg.rwlock EXCLUSIVE) never waits ~14 min.
+                self.checkpointPersistExactIndexLocked(mg, dir_path);
             }
             self.allocator.free(dir_path);
         } else |err| {
@@ -7930,8 +7954,63 @@ pub const StorageAdapter = struct {
     ///     the mutex entirely avoids it.
     /// So the build fires unconditionally (given durable nodes), concurrent with
     /// any in-flight hydration, and the clean-shutdown checkpoint persists it.
+    /// GAP-0064 (adversarial review — CRITICAL): the FULL-checkpoint exact-index
+    /// build/persist decision, run UNDER the shared `exact_index_build_mutex` so it
+    /// can never run a `rebuildExactNodePropertyIndex` concurrently with the
+    /// background-reopen worker OR the lazy-first-access build (both take the same
+    /// mutex) — the two-concurrent-rebuild double-insert corruption.
+    ///
+    /// Acquires the mutex NON-BLOCKING (`tryLock`): the checkpoint holds mg.rwlock
+    /// EXCLUSIVE, so a blocking acquire against an in-flight ~14-min build would
+    /// stall every operation on the graph for the whole build. On tryLock failure a
+    /// build already owns the index and will persist on completion — skip WITHOUT
+    /// invalidating (dropping its soon-to-be-persisted file would only cost a
+    /// needless reopen rebuild). Caller MUST hold mg.rwlock EXCLUSIVE (the FULL,
+    /// non-light checkpoint path).
+    fn checkpointPersistExactIndexLocked(self: *StorageAdapter, mg: *ManagedGraph, dir_path: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (!mg.exact_index_build_mutex.tryLock()) {
+            // A background-reopen worker or a lazy-first-access build holds the
+            // mutex (it is mid-scan). It latches `built` + persists on completion;
+            // do NOT run a second rebuild here and do NOT invalidate its file.
+            slog.info("skipping exact-index persist: a rebuild holds the build mutex (background worker or lazy first-access) — it persists on completion", &.{
+                SAttr.string("graph", mg.name),
+            });
+            return;
+        }
+        defer mg.exact_index_build_mutex.unlock(io);
+
+        if (mg.exact_index_built.load(.acquire)) {
+            // Built (reloaded at open, or built by a prior touch/this checkpoint).
+            // Persist the current index — under the build mutex, so no concurrent
+            // rebuild mutates it during the save.
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+            };
+            return;
+        }
+
+        // Deferred AND no build in flight (we hold the mutex): materialise it now
+        // from the durable pages — race-free (mg.rwlock EXCLUSIVE drains readers;
+        // the build mutex excludes the worker/lazy builds) — then persist. An empty
+        // (0-node) deferred graph has nothing to build → invalidate any stale file.
+        if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
+            };
+        } else {
+            invalidateExactPropertyIndexFile(self.allocator, dir_path);
+        }
+    }
+
     fn eagerBuildDeferredIndexForFullCheckpoint(self: *StorageAdapter, mg: *ManagedGraph) bool {
         _ = self;
+        // GAP-0064 (adversarial review): now ALWAYS called from
+        // `checkpointPersistExactIndexLocked` while it holds BOTH mg.rwlock
+        // EXCLUSIVE and `exact_index_build_mutex` — so the per-shard scan is
+        // race-free against the background-reopen worker + lazy builds too, not just
+        // live mutations. (Previously called directly from the checkpoint ladder
+        // under mg.rwlock only, which left the lazy-build-vs-eager-build race open.)
         // Nothing to materialise for a graph with no durable nodes.
         var node_count: u64 = 0;
         for (mg.engine.shards) |shard| {
@@ -8031,21 +8110,33 @@ pub const StorageAdapter = struct {
         // test can prove first-touch reads return (via the fold no-op) while the
         // exact index is still building. Never blocks in production (gate == 0).
         if (comptime @import("builtin").is_test) {
-            if (is_background_worker) {
+            if (is_background_worker and g_test_exact_build_gate.load(.acquire) != 0) {
+                _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
                 const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
                 var gate_rem: std.os.linux.timespec = undefined;
                 while (g_test_exact_build_gate.load(.acquire) != 0) {
                     _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
                 }
+                _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
             }
         }
 
         // Lock-free parallel scan of the durable engine stores -> mutex-sharded
-        // exact index. `.{}` cancel flags: a hydration-time build runs to
-        // completion (it is NOT tied to any client connection).
+        // exact index. GAP-0064 (review — shutdown-stall fix): the BACKGROUND
+        // worker's build is cancellable ONLY by process shutdown
+        // (`exact_build_shutdown_cancel`, wired as the STREAM cancel flag that the
+        // rebuild polls every 256 nodes), so a graceful SIGTERM aborts it promptly
+        // instead of stalling teardown ~14 min. The FOLD path stays uncancellable
+        // (`.{}`) — it runs inline on the hydration thread. A shutdown-aborted build
+        // returns here without latching `built`, so the index stays deferred and
+        // the next reopen rebuilds cleanly (accessors gate on `built`).
+        const build_cancel: read_budget.CancelFlags = if (is_background_worker)
+            .{ .cancel = &self.exact_build_shutdown_cancel }
+        else
+            .{};
         const build_start_ns = monoNanosNow();
-        rebuildExactNodePropertyIndex(mg, .{}) catch |err| {
-            log.warn("hydration-time exact-index build failed for graph '{s}': {} — staying deferred", .{ graph_name, err });
+        rebuildExactNodePropertyIndex(mg, build_cancel) catch |err| {
+            log.warn("hydration-time exact-index build failed/cancelled for graph '{s}': {} — staying deferred", .{ graph_name, err });
             return;
         };
         mg.exact_index_built.store(true, .release);
@@ -9038,9 +9129,18 @@ pub const StorageAdapter = struct {
             // wedge). Open itself only SPAWNS the thread — server-ready is
             // unchanged, and the fold (`buildAndPersistExactIndexForHydratedGraph`)
             // no-ops while `exact_rebuild_inflight` is set, so `count(:Taxon)` /
-            // label scans return after resident loop1/loop2 (not after the build);
-            // index-served reads (WHERE-seek / GROUP BY) scan-fallback until the
-            // background build latches `built` + publishes the persisted index.
+            // label scans return after resident loop1/loop2 (not after the build).
+            //
+            // CAVEAT (adversarial review — residual): index-served reads (WHERE-seek
+            // / GROUP BY / DISTINCT) issued DURING the background build do NOT
+            // scan-fallback today — `ensureExactNodePropertyIndexBuilt` acquires the
+            // shared `exact_index_build_mutex` (uncancellable), so such a query
+            // BLOCKS behind the in-flight build until it publishes (up to ~14 min at
+            // 14.27M on the FIRST reopen of a from-dump store). count/label scans are
+            // unaffected. The 2nd reopen reloads the persisted index, so this window
+            // only exists on the one-time first-reopen build. A future refinement
+            // (decline the exact-index fast-path → scan while a build is in flight)
+            // would keep those queries responsive during the build.
             //
             // Was (pre-FIX-A): only `.stale` spawned; `.absent` stayed on the lazy
             // path and its build was folded into hydration (blocking every reader).
