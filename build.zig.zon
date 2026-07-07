@@ -461,8 +461,20 @@
             // getter the adapter's engine handle exposes. Manifest V4:
             // pre-v0.2.29 binaries loudly reject v4 stores. Same transitive
             // deps as v0.2.28 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.34#a09cb503a4cb4f9484378bc306ceae2a01f465fb",
-            .hash = "graph_storage-0.2.34-9UyJSwstHQCXZt0a8tIfrvtBVBSZ4efGq9hlnYoAZd6W",
+            // v0.2.35 (2026-07-07): GAP-0060 EDGE-PROP SLAB PACKING — edge
+            // prop_head widened u32->u64 across the edge index + durable
+            // adjacency (new v3/slab-v3 40B wire formats, edge-index magic
+            // GSEIDX5->GSEIDX6, block-granular read-both, LOUD no-truncate on a
+            // >u32 head into a legacy record). Edge properties now slab-pack via
+            // putPropertyTxn (adapter edge-write sites re-routed, gated on
+            // edge_prop_slab_packing, default ON) — ~8 KB/edge -> ~90 B/edge
+            // (~111 GB -> few GB at 13.6M edges). Bundles GAP-0050: value-ordered
+            // (H3) index on the (checkpoint_epoch,last_checkpoint_lsn) reload
+            // contract. No manifest bump (stays V4; the adjacency entry-format
+            // byte + read-both is the versioning). Same transitive deps as
+            // v0.2.34 (no diamond).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.35#84c028423ef50860bf897ac404adc6a75ddafe7f",
+            .hash = "graph_storage-0.2.35-9UyJS_bEHQB00RZYU4PQrOMGpfnCmusQfEzS1G8d15-f",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

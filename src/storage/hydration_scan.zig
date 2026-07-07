@@ -426,14 +426,19 @@ fn scanAdjacency(
         // a live head that resolves to it MISSES the map and raises
         // DataCorruption below, while an unreachable dead slot is ignored — the
         // same reachability semantics as the legacy per-node engine walk.
-        if (bh.entry_format == gs.edge.ENTRY_FORMAT_SLAB) {
+        if (bh.entry_format == gs.edge.ENTRY_FORMAT_SLAB or
+            bh.entry_format == gs.edge.ENTRY_FORMAT_SLAB_V3)
+        {
             try parseSlabBlock(allocs, data, page_id, tail_reserve, bh, &slab_runs);
             continue;
         }
 
-        // Legacy v1/v2 chain block. entry_format > ENTRY_FORMAT_V2 (and not
-        // SLAB, handled above) is a genuinely unknown format — real corruption.
-        if (bh.entry_format > gs.edge.ENTRY_FORMAT_V2) return error.DataCorruption;
+        // Chain block. GAP-0060 read-both: v1 (24B), v2 (32B) and v3 (40B, wide
+        // u64 prop_head) are all valid chain formats. Any OTHER value (SLAB /
+        // SLAB_V3 handled above) is a genuinely unknown format — real corruption.
+        if (bh.entry_format != gs.edge.ENTRY_FORMAT_V1 and
+            bh.entry_format != gs.edge.ENTRY_FORMAT_V2 and
+            bh.entry_format != gs.edge.ENTRY_FORMAT_V3) return error.DataCorruption;
         if (bh.count > gs.edge.entriesPerBlock(page_size, bh.entry_format)) return error.DataCorruption;
 
         const stride = gs.edge.entrySize(bh.entry_format);
@@ -441,20 +446,11 @@ fn scanAdjacency(
         var i: u16 = 0;
         while (i < bh.count) : (i += 1) {
             const off = PAGE_HEADER_SIZE + block_header_size + @as(u32, i) * stride;
-            if (bh.entry_format == gs.edge.ENTRY_FORMAT_V2) {
-                const bytes = data[off..][0..gs.edge.ENTRY_SIZE_V2];
-                entries[i] = @bitCast(bytes.*);
-            } else {
-                var e = gs.edge.EdgeEntry{
-                    .neighbor = 0,
-                    .edge_id = 0,
-                    .rel_type = 0,
-                    .prop_head = 0,
-                    .public_id = 0,
-                };
-                @memcpy(std.mem.asBytes(&e)[0..gs.edge.ENTRY_SIZE_V1], data[off..][0..gs.edge.ENTRY_SIZE_V1]);
-                entries[i] = e;
-            }
+            // gs.edge.decodeEntry is the versioned wire codec that replaced the
+            // extern-struct @bitCast in gs v0.2.35: it handles v1/v2/v3, widening
+            // a legacy head losslessly (hi=0) and reading the full u64 head from
+            // a v3 record.
+            entries[i] = gs.edge.decodeEntry(data[off..][0..stride], bh.entry_format);
         }
         try blocks.put(allocs.scratch, page_id, .{ .next = bh.next_block, .entries = entries });
     }
@@ -510,7 +506,7 @@ fn scanAdjacency(
 /// Decode every LIVE slot of one adjacency SLAB block into `slab_runs`
 /// (GAP-0062). Mirrors gs `AdjStore.readSlabBlockHeader` (block-level
 /// validation) + `resolveSlabRun` (per-slot bounds) + `readSlabRunEntry`
-/// (v2-strided run entries). Block- or slot-level validation failures SKIP
+/// (format-strided run entries: v2 32B or slab-v3 40B). Block- or slot-level validation failures SKIP
 /// (insert nothing) rather than fail the whole scan: gs only ever reads the
 /// specific slot a live head references, so an unreachable/dead/corrupt slot
 /// that no live head points at is invisible to a healthy read — a live head to
@@ -538,15 +534,17 @@ fn parseSlabBlock(
         // no live head references it. Skip.
         if (s.offset == gs.edge.SLAB_SLOT_TOMBSTONE) continue;
         if (s.offset < gs.edge.SLAB_RUNS_OFFSET) continue;
-        const run_end = @as(u64, s.offset) + @as(u64, s.entry_count) * gs.edge.ENTRY_SIZE_V2;
+        // GAP-0060: slab runs are v2 (32B) OR slab-v3 (40B, wide u64 head)
+        // keyed by the block's entry_format (gs slabEntrySize / readSlabRunEntry).
+        const run_stride = gs.edge.slabEntrySize(bh.entry_format);
+        const run_end = @as(u64, s.offset) + @as(u64, s.entry_count) * @as(u64, run_stride);
         if (run_end > dir_start) continue;
 
-        // Runs are always the v2 32-byte stride (gs readSlabRunEntry).
         const entries = try allocs.scratch.alloc(gs.edge.EdgeEntry, s.entry_count);
         var i: u32 = 0;
         while (i < s.entry_count) : (i += 1) {
-            const off = @as(usize, s.offset) + @as(usize, i) * gs.edge.ENTRY_SIZE_V2;
-            entries[i] = @bitCast(data[off..][0..gs.edge.ENTRY_SIZE_V2].*);
+            const off = @as(usize, s.offset) + @as(usize, i) * @as(usize, run_stride);
+            entries[i] = gs.edge.decodeEntry(data[off..][0..run_stride], bh.entry_format);
         }
         // Key by the canonical tagged head so the per-node walk looks up by
         // `row.out_head` directly (== encodeSlabHead(page_id, slot)).
@@ -634,7 +632,18 @@ fn scanProps(
         if (opts.include_edges) {
             for (row.edges, 0..) |er, ei| {
                 if (er.entry.prop_head == 0) continue;
-                const epage: u64 = er.entry.prop_head; // edge heads are legacy page ids
+                // GAP-0060: an edge prop_head may now be a SLAB head (bit 63),
+                // exactly like a node's — mirror the node branch above and
+                // resolve it to the slab PAGE id. Feeding a raw slab head to the
+                // pager reads a bogus (≥2^63) page that zero-fills, which the
+                // legacy parser then decodes as "0 properties" — a SILENT drop
+                // of every slab-packed edge property (the GAP-0062 failure class,
+                // reintroduced for edges by the v0.2.35 edge-prop slab re-pin).
+                const ehead = er.entry.prop_head;
+                const epage: u64 = if (gs.prop_store.isSlabHead(ehead))
+                    gs.prop_store.slabPageId(ehead)
+                else
+                    ehead;
                 const egop = try wanted.getOrPut(allocs.scratch, epage);
                 if (!egop.found_existing) egop.value_ptr.* = .empty;
                 try egop.value_ptr.append(allocs.scratch, .{
@@ -675,7 +684,17 @@ fn scanProps(
                         }
                         try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted);
                     },
-                    .edge => try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted),
+                    .edge => |e| {
+                        const er = &rows[e.row].edges[e.edge];
+                        // GAP-0060: a slab-packed edge prop is a SINGLE slab blob
+                        // (hops==0), decoded like the node slab path — NOT the
+                        // legacy page-chain parser.
+                        if (gs.prop_store.isSlabHead(er.entry.prop_head) and chain.hops == 0) {
+                            try consumeEdgeSlabBlob(allocs, logical, er, opts, chain);
+                            continue;
+                        }
+                        try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted);
+                    },
                 }
             }
         }
@@ -702,6 +721,28 @@ fn consumeSlabBlob(
         else => return nodeBlobCorrupt(row, opts, chain.saw_internal_id, err),
     };
     row.props = try allocs.node.dupe(PropEntry, chain.entries.items);
+}
+
+/// Decode one slab blob (page already read) into the EDGE row (GAP-0060).
+/// Mirrors `consumeSlabBlob` (node path), but an edge blob has NO resident-mode
+/// torn-page tolerance: a corrupt edge blob fails the whole hydration, exactly
+/// as the legacy edge read did (`consumeLegacyPage`'s `.edge => return err`) and
+/// as `getAllEdgeProperties` did under `try`. Uses the SAME `slabBlobSlice`
+/// validator as the node path, so a genuinely-corrupt slab block/slot (bad
+/// layout version, out-of-range slot, span past the backward-growing directory)
+/// still raises `error.DataCorruption` here rather than being silently accepted.
+fn consumeEdgeSlabBlob(
+    allocs: ScanAllocs,
+    logical: []const u8,
+    er: *EdgeRow,
+    opts: ScanOptions,
+    chain: *PendingChain,
+) !void {
+    const blob = try slabBlobSlice(logical, er.entry.prop_head);
+    if (blob.len < 4) return error.DataCorruption;
+    const entry_count = std.mem.readInt(u32, blob[0..4], .little);
+    try parseEntries(allocs, blob[4..], entry_count, opts.internal_id_key, chain);
+    er.props = try allocs.edge.dupe(PropEntry, chain.entries.items);
 }
 
 /// Validate + slice a slab blob out of a logical slab page. Mirrors

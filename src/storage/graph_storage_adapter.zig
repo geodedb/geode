@@ -6402,12 +6402,17 @@ pub const StorageAdapter = struct {
             // error-policy: A — best-effort rollback on an already-failing path.
             errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
 
-            // GAP-ENT-0020 (P7a): edge prop_heads are packed as u32 in
-            // adjacency entries + the edge index, which cannot represent a
-            // slab head — edge chains must stay LEGACY (one page-chain per
-            // edge) even with slab_packing ON. Node writes keep putPropertyTxn.
-            const new_head_u64 = try from_shard.putPropertyLegacyTxn(@as(u64, found_prop_head), key, storage_val, local_txn);
-            const new_head: u32 = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
+            // GAP-0060: edge prop_heads are now a full u64 in both the
+            // adjacency entry (WIDE v3/slab-v3 record) and the edge index, so
+            // edge property chains slab-pack exactly like node props. Gated on
+            // the SAME shard config flag as gs `engine_edge_props.setEdgeProperty`
+            // (edge_prop_slab_packing, default ON) — a slab head is only ever
+            // produced for a store whose adjacency can hold it. When off, keep
+            // the legacy one-page-per-edge writer (still a u64 head, hi=0).
+            const new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
+                try from_shard.putPropertyTxn(found_prop_head, key, storage_val, local_txn)
+            else
+                try from_shard.putPropertyLegacyTxn(found_prop_head, key, storage_val, local_txn);
 
             if (new_head != found_prop_head) {
                 _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
@@ -6429,7 +6434,7 @@ pub const StorageAdapter = struct {
             if (found_prop_head != 0 and found_prop_head != new_head) {
                 from_shard.property_index.removeChain(found_prop_head);
             }
-            try from_shard.refreshPropertyChainIndex(new_head_u64);
+            try from_shard.refreshPropertyChainIndex(new_head);
             if (own_txn) try from_shard.commitTxn(local_txn);
             return;
         }
@@ -6454,9 +6459,12 @@ pub const StorageAdapter = struct {
         // error-policy: A — best-effort rollback on an already-failing path.
         errdefer from_shard.abortTxn(fb_local_txn) catch {};
 
-        // GAP-ENT-0020 (P7a): edge chains stay legacy — see the txn branch above.
-        const fb_new_head_u64 = try from_shard.putPropertyLegacyTxn(@as(u64, fb_found_prop_head), key, storage_val, fb_local_txn);
-        const fb_new_head: u32 = std.math.cast(u32, fb_new_head_u64) orelse return error.Overflow;
+        // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
+        // config — see the txn branch above.
+        const fb_new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
+            try from_shard.putPropertyTxn(fb_found_prop_head, key, storage_val, fb_local_txn)
+        else
+            try from_shard.putPropertyLegacyTxn(fb_found_prop_head, key, storage_val, fb_local_txn);
 
         if (fb_new_head != fb_found_prop_head) {
             _ = try from_shard.adj_out.updateEdgePropHead(fb_from_rec.out_head, edge_id, fb_new_head);
@@ -6472,7 +6480,7 @@ pub const StorageAdapter = struct {
         if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
             from_shard.property_index.removeChain(fb_found_prop_head);
         }
-        try from_shard.refreshPropertyChainIndex(fb_new_head_u64);
+        try from_shard.refreshPropertyChainIndex(fb_new_head);
         try from_shard.commitTxn(fb_local_txn);
     }
 
@@ -6519,7 +6527,7 @@ pub const StorageAdapter = struct {
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
         const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-        const orig_prop_head: u32 = edge_entry.prop_head;
+        const orig_prop_head: u64 = edge_entry.prop_head;
 
         // R8/R12 parity: one txn on from_shard for all N property writes.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
@@ -6533,8 +6541,8 @@ pub const StorageAdapter = struct {
             from_shard.abortTxn(local_txn) catch {};
         };
 
-        var running_prop_head: u32 = orig_prop_head;
-        var last_new_head_u64: u64 = @as(u64, orig_prop_head);
+        var running_prop_head: u64 = orig_prop_head;
+        var last_new_head_u64: u64 = orig_prop_head;
         for (entries) |entry| {
             const storage_val: gs.PropertyValue = if (entry.value) |val|
                 try toStorageProperty(self.allocator, val)
@@ -6542,10 +6550,13 @@ pub const StorageAdapter = struct {
                 .null;
             defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
 
-            // GAP-ENT-0020 (P7a): edge chains stay legacy (u32 prop_head) —
-            // see setEdgeProperty. Node writes keep the slab-eligible path.
-            const new_head_u64 = try from_shard.putPropertyLegacyTxn(@as(u64, running_prop_head), entry.key, storage_val, local_txn);
-            running_prop_head = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
+            // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
+            // config — see setEdgeProperty.
+            const new_head_u64 = if (from_shard.config.edge_prop_slab_packing)
+                try from_shard.putPropertyTxn(running_prop_head, entry.key, storage_val, local_txn)
+            else
+                try from_shard.putPropertyLegacyTxn(running_prop_head, entry.key, storage_val, local_txn);
+            running_prop_head = new_head_u64;
             last_new_head_u64 = new_head_u64;
         }
 
@@ -6598,7 +6609,8 @@ pub const StorageAdapter = struct {
         from_slot: u64,
         to_slot: u64,
         rel_type: u32,
-        prop_head: u32,
+        // GAP-0060: edge prop_head is a full u64 (may be a slab head, bit 63).
+        prop_head: u64,
         label: []u8,
     };
 
@@ -6922,7 +6934,8 @@ pub const StorageAdapter = struct {
         self: *StorageAdapter,
         graph_name: []const u8,
         from_id: u64,
-        prop_head: u32,
+        // GAP-0060: edge prop_head is a full u64 (may be a slab head, bit 63).
+        prop_head: u64,
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
         const mg = blk: {
@@ -6936,7 +6949,7 @@ pub const StorageAdapter = struct {
 
         if (prop_head == 0) return result;
 
-        const prop_head_u64: u64 = @intCast(prop_head);
+        const prop_head_u64: u64 = prop_head;
 
         // Route via the source node's shard — same per-shard engine
         // that wrote the property pages.

@@ -195,7 +195,8 @@ const PathEdge = struct {
     actual_to_slot: u64,
     next_slot: u64,
     rel_type: gs.LabelId,
-    prop_head: u32,
+    // GAP-0060: edge prop_head is a full u64 (may be a slab head, bit 63).
+    prop_head: u64,
 };
 
 pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, context: ExecutionContext) !?Plan {
