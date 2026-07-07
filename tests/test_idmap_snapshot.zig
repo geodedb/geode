@@ -43,13 +43,14 @@ test "IdMap snapshot: round-trip incl delete-holes (node + edge)" {
     try std.testing.expect(map.removeEdge(edgeUuid(25)));
 
     const counter: u64 = 0xDEAD_BEEF_1234;
-    try map.saveSnapshot(tmp.dir, counter);
+    try map.saveSnapshot(tmp.dir, counter, 424242);
 
     var snap = (try IdMap.loadSnapshot(tmp.dir)).?;
     defer snap.deinit();
 
     // Header / counts preserved.
-    try std.testing.expectEqual(counter, snap.manifest_counter);
+    try std.testing.expectEqual(counter, snap.checkpoint_epoch);
+    try std.testing.expectEqual(@as(u64, 424242), snap.covered_lsn);
     try std.testing.expectEqual(map.next_node_slot, snap.next_node_slot);
     try std.testing.expectEqual(map.next_edge_slot, snap.next_edge_slot);
     try std.testing.expectEqual(@as(u64, map.nodeCount()), snap.node_fwd_count);
@@ -106,7 +107,7 @@ test "IdMap snapshot: CRC corruption -> null" {
     var i: u64 = 0;
     while (i < 10) : (i += 1) _ = try map.insertNode(nodeUuid(i));
     while (i < 16) : (i += 1) _ = try map.insertEdge(edgeUuid(i));
-    try map.saveSnapshot(tmp.dir, 7);
+    try map.saveSnapshot(tmp.dir, 7, 0);
 
     // Flip a byte inside the payload (header region) -> CRC must fail.
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -133,7 +134,7 @@ test "IdMap snapshot: truncation -> null" {
     defer map.deinit();
     var i: u64 = 0;
     while (i < 20) : (i += 1) _ = try map.insertNode(nodeUuid(i));
-    try map.saveSnapshot(tmp.dir, 1);
+    try map.saveSnapshot(tmp.dir, 1, 0);
 
     // Read the file, then rewrite it shorter (truncate by 10 bytes).
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -172,7 +173,7 @@ test "IdMap snapshot: ~100k node + 100k edge round-trip" {
         _ = try map.insertEdge(edgeUuid(i));
     }
 
-    try map.saveSnapshot(tmp.dir, 99);
+    try map.saveSnapshot(tmp.dir, 99, 0);
     var snap = (try IdMap.loadSnapshot(tmp.dir)).?;
     defer snap.deinit();
 

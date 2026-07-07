@@ -9416,8 +9416,14 @@ pub const GraphStore = struct {
             return;
         }
 
-        const counter = adapter.graphManifestCounter(graph_name) orelse return;
-        id_map.saveSnapshot(dir, counter) catch |err| {
+        // GAP-0064 FIX B: stamp on the Path-B (checkpoint_epoch, covered_lsn)
+        // contract (mirrors prop_exact.idx / fa6495bb) instead of manifest.counter,
+        // which recovery.zig bumps on ANY committed WAL-tail replay — needlessly
+        // rejecting a still-valid IdMap snapshot on a deferred-WAL reopen and
+        // forcing a full loop1/loop2 re-scan.
+        const epoch = adapter.graphCheckpointEpoch(graph_name) orelse return;
+        const covered = adapter.graphDurableFrontierLsn(graph_name) orelse return;
+        id_map.saveSnapshot(dir, epoch, covered) catch |err| {
             log.warn("failed to write IdMap snapshot", &.{
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
@@ -9523,7 +9529,10 @@ pub const GraphStore = struct {
     // discipline. Node/edge/adjacency CACHES are deliberately NOT snapshotted
     // (bounded, hydrate-on-miss, correctness never depends on residency).
 
-    const HYDRATION_SNAP_VERSION: u32 = 1;
+    // v2 = GAP-0064 FIX B: (checkpoint_epoch, covered_lsn) stamp replaced the
+    // manifest.counter stamp. The bump makes an old v1 counter-stamped file load
+    // as null on a new binary (rebuild) and vice-versa — never a mis-parse.
+    const HYDRATION_SNAP_VERSION: u32 = 2;
     const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
     const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
     const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";
@@ -9658,10 +9667,16 @@ pub const GraphStore = struct {
 
         if (disabled) return;
 
-        const counter = adapter.graphManifestCounter(graph_name) orelse return;
-        self.saveHydrationCountersSnapshot(dir, graph_name, counter) catch |err| {
+        // GAP-0064 FIX B: stamp the loop2 snapshots on the Path-B
+        // (checkpoint_epoch, covered_lsn) contract (same as the idmap.snapshot +
+        // prop_exact.idx), not manifest.counter — recovery.zig bumps the counter
+        // on any committed WAL-tail replay, which rejected still-valid loop2
+        // snapshots on a deferred-WAL reopen and forced a full loop2 re-scan.
+        const epoch = adapter.graphCheckpointEpoch(graph_name) orelse return;
+        const covered = adapter.graphDurableFrontierLsn(graph_name) orelse return;
+        self.saveHydrationCountersSnapshot(dir, graph_name, epoch, covered) catch |err| {
             // Invalidate rather than leave a possibly half-generation
-            // file set behind (the old file would be counter-stale and
+            // file set behind (the old file would be generation-stale and
             // rejected anyway; deleting removes any doubt).
             hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
             log.warn("failed to write hydration counters snapshot", &.{
@@ -9669,14 +9684,14 @@ pub const GraphStore = struct {
                 Attr.string("error", @errorName(err)),
             });
         };
-        self.saveHydrationLabelsSnapshot(dir, graph_name, counter) catch |err| {
+        self.saveHydrationLabelsSnapshot(dir, graph_name, epoch, covered) catch |err| {
             hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
             log.warn("failed to write hydration label-postings snapshot", &.{
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
             });
         };
-        self.saveHydrationMergeSnapshot(dir, graph_name, counter) catch |err| {
+        self.saveHydrationMergeSnapshot(dir, graph_name, epoch, covered) catch |err| {
             hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
             log.warn("failed to write hydration merge-index snapshot", &.{
                 Attr.string("graph", graph_name),
@@ -9774,7 +9789,8 @@ pub const GraphStore = struct {
         self: *GraphStore,
         dir: std.Io.Dir,
         graph_name: []const u8,
-        counter: u64,
+        checkpoint_epoch: u64,
+        covered_lsn: u64,
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         var w = try hydration_snapshot.AtomicWriter.init(
@@ -9821,7 +9837,7 @@ pub const GraphStore = struct {
             for (entries.items) |en| try w.writeAll(en.key);
         }
 
-        try w.finish(HYDRATION_SNAP_VERSION, counter);
+        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
     }
 
     /// Serialize one hydrated graph's label-index postings. Payload layout:
@@ -9832,7 +9848,8 @@ pub const GraphStore = struct {
         self: *GraphStore,
         dir: std.Io.Dir,
         graph_name: []const u8,
-        counter: u64,
+        checkpoint_epoch: u64,
+        covered_lsn: u64,
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         var w = try hydration_snapshot.AtomicWriter.init(
@@ -9867,7 +9884,7 @@ pub const GraphStore = struct {
             for (posting.list.items) |id| try w.writeInt(u64, id);
         }
 
-        try w.finish(HYDRATION_SNAP_VERSION, counter);
+        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
     }
 
     /// Serialize one hydrated graph's counter products. Payload layout
@@ -9884,7 +9901,8 @@ pub const GraphStore = struct {
         self: *GraphStore,
         dir: std.Io.Dir,
         graph_name: []const u8,
-        counter: u64,
+        checkpoint_epoch: u64,
+        covered_lsn: u64,
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         var w = try hydration_snapshot.AtomicWriter.init(
@@ -9948,7 +9966,7 @@ pub const GraphStore = struct {
         try self.writeHydrationTenantSection(&w, &self.edge_types_by_tenant, graph_name);
         try self.writeHydrationTenantSection(&w, &self.label_properties_by_tenant, graph_name);
 
-        try w.finish(HYDRATION_SNAP_VERSION, counter);
+        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
     }
 
     fn writeHydrationTenantSection(
@@ -10231,14 +10249,24 @@ pub const GraphStore = struct {
 
         var snap = (id_map_mod.IdMap.loadSnapshot(dir) catch return false) orelse return false;
 
-        // Crash-safety gate: the snapshot is valid only if it reflects exactly
-        // the engine's currently-committed state (no committed write since it was
-        // written). Any mismatch/absence => unmap and fall back to scan-rebuild.
-        const cur = adapter.graphManifestCounter(graph_name) orelse {
+        // Crash-safety gate (GAP-0064 FIX B): the snapshot is valid only if it
+        // reflects exactly the engine's currently-committed state — its stamped
+        // `(checkpoint_epoch, covered_lsn)` must equal the engine's CURRENT epoch
+        // AND durable frontier. Epoch match ⟺ no checkpoint since the snapshot;
+        // covered == frontier ⟺ no committed WAL tail advanced past it. This
+        // replaces the manifest.counter gate that recovery.zig bumped on any tail
+        // replay (rejecting a still-valid snapshot → full loop1/loop2 re-scan). A
+        // genuine tail (frontier > covered) still safely rejects → rebuild. Any
+        // mismatch/absence => unmap and fall back to scan-rebuild.
+        const cur_epoch = adapter.graphCheckpointEpoch(graph_name) orelse {
             snap.deinit();
             return false;
         };
-        if (snap.manifest_counter != cur) {
+        const cur_covered = adapter.graphDurableFrontierLsn(graph_name) orelse {
+            snap.deinit();
+            return false;
+        };
+        if (snap.checkpoint_epoch != cur_epoch or snap.covered_lsn != cur_covered) {
             snap.deinit();
             return false;
         }
@@ -10466,7 +10494,10 @@ pub const GraphStore = struct {
         defer self.allocator.free(dir_path);
         var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return out;
         defer dir.close(io);
-        const cur_counter = adapter.graphManifestCounter(graph_name) orelse return out;
+        // GAP-0064 FIX B: gate on the Path-B (checkpoint_epoch, covered_lsn)
+        // contract (same as idmap.snapshot + prop_exact.idx), not manifest.counter.
+        const cur_epoch = adapter.graphCheckpointEpoch(graph_name) orelse return out;
+        const cur_covered = adapter.graphDurableFrontierLsn(graph_name) orelse return out;
 
         counters: {
             var loaded = hydration_snapshot.load(
@@ -10476,9 +10507,10 @@ pub const GraphStore = struct {
                 HYDRATION_SNAP_VERSION,
             ) orelse break :counters;
             defer loaded.deinit();
-            // Crash-safety gate: accept IFF no committed write since the
-            // snapshot was stamped (identical to the IdMap snapshot gate).
-            if (loaded.manifest_counter != cur_counter) break :counters;
+            // Crash-safety gate: accept IFF no checkpoint AND no committed WAL
+            // tail since the snapshot was stamped (identical to the IdMap snapshot
+            // gate — GAP-0064 FIX B).
+            if (loaded.checkpoint_epoch != cur_epoch or loaded.covered_lsn != cur_covered) break :counters;
             if (!validateHydrationCountersPayload(loaded.payload)) break :counters;
             out.node_count = self.applyHydrationCountersSnapshot(graph_name, loaded.payload) catch |err| {
                 log.warn("hydration counters snapshot apply failed; falling back to scan", &.{
@@ -10509,7 +10541,7 @@ pub const GraphStore = struct {
                 HYDRATION_SNAP_VERSION,
             ) orelse break :labels;
             defer loaded.deinit();
-            if (loaded.manifest_counter != cur_counter) break :labels;
+            if (loaded.checkpoint_epoch != cur_epoch or loaded.covered_lsn != cur_covered) break :labels;
             if (!validateHydrationLabelsPayload(loaded.payload)) break :labels;
             self.applyHydrationLabelsSnapshot(graph_name, loaded.payload) catch |err| {
                 log.warn("hydration label-postings snapshot apply failed; falling back to scan", &.{
@@ -10531,7 +10563,7 @@ pub const GraphStore = struct {
                 HYDRATION_SNAP_VERSION,
             ) orelse break :merge;
             defer loaded.deinit();
-            if (loaded.manifest_counter != cur_counter) break :merge;
+            if (loaded.checkpoint_epoch != cur_epoch or loaded.covered_lsn != cur_covered) break :merge;
             if (!validateHydrationMergePayload(loaded.payload)) break :merge;
             // Config gate: which entries the index contains depends on the
             // lean flag / registered keys / composite specs. A mismatch means

@@ -28,11 +28,19 @@ const std = @import("std");
 ///   off  0: magic            [8]u8
 ///   off  8: version          u32
 ///   off 12: reserved/flags   u32 (always 0 for now)
-///   off 16: manifest_counter u64 (engine per-graph counter at write time)
-///   off 24: payload_len      u64
-///   off 32: payload_crc      u32 (CRC32 over the payload bytes only)
-///   off 36: header_crc       u32 (CRC32 over bytes [0..36))
-pub const HEADER_SIZE: usize = 40;
+///   off 16: checkpoint_epoch u64 (GAP-0064 FIX B reload gate part 1)
+///   off 24: covered_lsn      u64 (GAP-0064 FIX B reload gate part 2)
+///   off 32: payload_len      u64
+///   off 40: payload_crc      u32 (CRC32 over the payload bytes only)
+///   off 44: header_crc       u32 (CRC32 over bytes [0..44))
+///
+/// GAP-0064 FIX B: the crash-safety stamp migrated from the engine per-graph
+/// `manifest.counter` to the Path-B `(checkpoint_epoch, covered_lsn)` contract
+/// (mirrors prop_exact.idx / fa6495bb + the idmap.snapshot). recovery.zig bumps
+/// `counter` on ANY committed WAL-tail replay, so a deferred-WAL reopen rejected
+/// still-valid loop2 snapshots and re-scanned. Callers bump the snapshot VERSION
+/// alongside this change so an old counter-stamped file loads as null (rebuild).
+pub const HEADER_SIZE: usize = 48;
 
 const Crc32 = std.hash.crc.Crc32;
 
@@ -44,18 +52,20 @@ pub fn writeHeader(
     buf: *[HEADER_SIZE]u8,
     magic: [8]u8,
     version: u32,
-    manifest_counter: u64,
+    checkpoint_epoch: u64,
+    covered_lsn: u64,
     payload_len: u64,
     payload_crc: u32,
 ) void {
     @memcpy(buf[0..8], &magic);
     std.mem.writeInt(u32, buf[8..12], version, .little);
     std.mem.writeInt(u32, buf[12..16], 0, .little);
-    std.mem.writeInt(u64, buf[16..24], manifest_counter, .little);
-    std.mem.writeInt(u64, buf[24..32], payload_len, .little);
-    std.mem.writeInt(u32, buf[32..36], payload_crc, .little);
-    const hcrc = Crc32.hash(buf[0..36]);
-    std.mem.writeInt(u32, buf[36..40], hcrc, .little);
+    std.mem.writeInt(u64, buf[16..24], checkpoint_epoch, .little);
+    std.mem.writeInt(u64, buf[24..32], covered_lsn, .little);
+    std.mem.writeInt(u64, buf[32..40], payload_len, .little);
+    std.mem.writeInt(u32, buf[40..44], payload_crc, .little);
+    const hcrc = Crc32.hash(buf[0..44]);
+    std.mem.writeInt(u32, buf[44..48], hcrc, .little);
 }
 
 /// Streaming snapshot writer: payload bytes are appended (buffered, with an
@@ -138,7 +148,7 @@ pub const AtomicWriter = struct {
 
     /// Flush the payload, stamp the header, fsync, and atomically publish.
     /// The writer is consumed either way (buffers freed).
-    pub fn finish(self: *AtomicWriter, version: u32, manifest_counter: u64) !void {
+    pub fn finish(self: *AtomicWriter, version: u32, checkpoint_epoch: u64, covered_lsn: u64) !void {
         std.debug.assert(!self.finished);
         const io = ioNow();
         errdefer {
@@ -149,7 +159,7 @@ pub const AtomicWriter = struct {
         }
         try self.flush();
         var hdr: [HEADER_SIZE]u8 = undefined;
-        writeHeader(&hdr, self.magic, version, manifest_counter, self.payload_len, self.crc.final());
+        writeHeader(&hdr, self.magic, version, checkpoint_epoch, covered_lsn, self.payload_len, self.crc.final());
         try self.file.writePositionalAll(io, &hdr, 0);
         try self.file.sync(io);
         self.file.close(io);
@@ -174,7 +184,11 @@ pub const AtomicWriter = struct {
 /// `mapping`; call `deinit` to unmap when the payload has been consumed.
 pub const Loaded = struct {
     mapping: []align(std.heap.page_size_min) const u8,
-    manifest_counter: u64,
+    /// GAP-0064 FIX B Path-B reload gate: the durable checkpoint epoch + covered
+    /// LSN this snapshot was stamped at. Caller reloads iff BOTH equal the
+    /// engine's CURRENT epoch + frontier (no checkpoint AND no tail since).
+    checkpoint_epoch: u64,
+    covered_lsn: u64,
     payload: []const u8,
 
     pub fn deinit(self: *Loaded) void {
@@ -185,9 +199,9 @@ pub const Loaded = struct {
 
 /// Load + structurally validate a snapshot file. Returns null (caller falls
 /// back to the scan) when the file is absent, wrong magic/version, torn, or
-/// fails either CRC. The MANIFEST-COUNTER gate is the caller's job: compare
-/// `Loaded.manifest_counter` against the engine's current per-graph counter
-/// and reject on any mismatch.
+/// fails either CRC. The (epoch, covered_lsn) gate is the caller's job: compare
+/// `Loaded.checkpoint_epoch` + `Loaded.covered_lsn` against the engine's CURRENT
+/// epoch + durable frontier and reject on any mismatch (GAP-0064 FIX B).
 pub fn load(dir: std.Io.Dir, name: []const u8, magic: [8]u8, version: u32) ?Loaded {
     const io = ioNow();
     const file = dir.openFile(io, name, .{}) catch return null;
@@ -230,13 +244,14 @@ pub fn load(dir: std.Io.Dir, name: []const u8, magic: [8]u8, version: u32) ?Load
         std.posix.munmap(mapping);
         return null;
     }
-    const stored_hcrc = std.mem.readInt(u32, mapping[36..40], .little);
-    if (Crc32.hash(mapping[0..36]) != stored_hcrc) {
+    const stored_hcrc = std.mem.readInt(u32, mapping[44..48], .little);
+    if (Crc32.hash(mapping[0..44]) != stored_hcrc) {
         std.posix.munmap(mapping);
         return null;
     }
-    const manifest_counter = std.mem.readInt(u64, mapping[16..24], .little);
-    const payload_len_u64 = std.mem.readInt(u64, mapping[24..32], .little);
+    const checkpoint_epoch = std.mem.readInt(u64, mapping[16..24], .little);
+    const covered_lsn = std.mem.readInt(u64, mapping[24..32], .little);
+    const payload_len_u64 = std.mem.readInt(u64, mapping[32..40], .little);
     const payload_len = std.math.cast(usize, payload_len_u64) orelse {
         std.posix.munmap(mapping);
         return null;
@@ -246,7 +261,7 @@ pub fn load(dir: std.Io.Dir, name: []const u8, magic: [8]u8, version: u32) ?Load
         return null;
     }
     const payload = mapping[HEADER_SIZE..][0..payload_len];
-    const stored_pcrc = std.mem.readInt(u32, mapping[32..36], .little);
+    const stored_pcrc = std.mem.readInt(u32, mapping[40..44], .little);
     if (Crc32.hash(payload) != stored_pcrc) {
         std.posix.munmap(mapping);
         return null;
@@ -254,7 +269,8 @@ pub fn load(dir: std.Io.Dir, name: []const u8, magic: [8]u8, version: u32) ?Load
 
     return .{
         .mapping = mapping,
-        .manifest_counter = manifest_counter,
+        .checkpoint_epoch = checkpoint_epoch,
+        .covered_lsn = covered_lsn,
         .payload = payload,
     };
 }
@@ -323,11 +339,12 @@ test "hydration snapshot: atomic write + load round-trip" {
     for (&block, 0..) |*b, i| b.* = @truncate(i);
     var k: usize = 0;
     while (k < 600) : (k += 1) try w.writeAll(&block);
-    try w.finish(7, 0xABCDEF);
+    try w.finish(7, 0xABCDEF, 0xCAFE);
 
     var loaded = load(tmp.dir, "t.snap", TEST_MAGIC, 7) orelse return error.LoadFailed;
     defer loaded.deinit();
-    try std.testing.expectEqual(@as(u64, 0xABCDEF), loaded.manifest_counter);
+    try std.testing.expectEqual(@as(u64, 0xABCDEF), loaded.checkpoint_epoch);
+    try std.testing.expectEqual(@as(u64, 0xCAFE), loaded.covered_lsn);
 
     var cur = Cursor{ .buf = loaded.payload };
     try std.testing.expectEqual(@as(u64, 42), try cur.readInt(u64));
@@ -347,7 +364,7 @@ test "hydration snapshot: absent / wrong-magic / wrong-version load as null" {
     var w = try AtomicWriter.init(a, tmp.dir, "v.snap.tmp", "v.snap", TEST_MAGIC);
     errdefer w.abort();
     try w.writeInt(u32, 99);
-    try w.finish(3, 5);
+    try w.finish(3, 5, 0);
 
     try std.testing.expect(load(tmp.dir, "v.snap", TEST_MAGIC, 4) == null); // version mismatch
     try std.testing.expect(load(tmp.dir, "v.snap", "WRONGMAG".*, 3) == null); // magic mismatch
@@ -366,7 +383,7 @@ test "hydration snapshot: torn payload and corrupt byte are rejected" {
     errdefer w.abort();
     var i: u64 = 0;
     while (i < 1000) : (i += 1) try w.writeInt(u64, i);
-    try w.finish(1, 11);
+    try w.finish(1, 11, 0);
 
     // Corrupt one payload byte -> payload CRC must reject.
     {

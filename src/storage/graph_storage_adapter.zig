@@ -6941,6 +6941,37 @@ pub const StorageAdapter = struct {
         return mgManifestCounter(mg);
     }
 
+    /// GAP-0064 FIX B: the graph's durable derived-index generation token
+    /// (aggregate `manifest.checkpoint_epoch`), bumped ONLY at checkpoint, never
+    /// by a WAL-tail recovery. Used to stamp + reload-gate the idmap.snapshot and
+    /// the hydration loop2 snapshots on the SAME (epoch, covered_lsn) contract as
+    /// prop_exact.idx (fa6495bb), replacing the manifest.counter that recovery.zig
+    /// bumps on any tail (which needlessly rejected a valid snapshot). See
+    /// `mgCheckpointEpoch`.
+    pub fn graphCheckpointEpoch(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        return mgCheckpointEpoch(mg);
+    }
+
+    /// GAP-0064 FIX B: the graph's DURABLE COMMITTED FRONTIER (aggregate
+    /// `manifest.last_checkpoint_lsn`) — set at checkpoint AND advanced by a
+    /// committed WAL-tail recovery, but left unchanged by a clean reopen that
+    /// replays nothing. Reload gate: `stamped_epoch == graphCheckpointEpoch AND
+    /// stamped_covered == this` ⟺ "no checkpoint AND no tail since the snapshot".
+    /// See `mgDurableFrontierLsn`.
+    pub fn graphDurableFrontierLsn(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        return mgDurableFrontierLsn(mg);
+    }
+
     // ------------------------------------------------------------------
     // Property iteration
     // ------------------------------------------------------------------

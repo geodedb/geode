@@ -25,7 +25,7 @@ fn edgeUuid(i: u64) u128 {
 /// Build a `.mmap_backed` IdMap whose BASE is the saved snapshot of `seed`.
 /// The returned map has an EMPTY overlay (the open-path O(1) shape).
 fn mmapBackedFrom(a: std.mem.Allocator, dir: std.Io.Dir, seed: *IdMap) !IdMap {
-    try seed.saveSnapshot(dir, 0xABCD);
+    try seed.saveSnapshot(dir, 0xABCD, 0);
     const snap = (try IdMap.loadSnapshot(dir)).?;
     var mm = IdMap.init(a);
     mm.adoptSnapshotAsBase(snap);
@@ -270,7 +270,7 @@ test "checkpoint round-trip: mmap_backed + overlay + tombstones -> save -> reloa
     // Serialize the MERGED mmap_backed state and reload into a fresh base.
     var tmp2 = std.testing.tmpDir(.{});
     defer tmp2.cleanup();
-    try mm.saveSnapshot(tmp2.dir, 0x99);
+    try mm.saveSnapshot(tmp2.dir, 0x99, 0);
     var reopened = blk: {
         const snap = (try IdMap.loadSnapshot(tmp2.dir)).?;
         var r = IdMap.init(a);
