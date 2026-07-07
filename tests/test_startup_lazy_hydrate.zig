@@ -1610,6 +1610,247 @@ test "P3: crash before checkpoint — stale loop2 snapshots rejected, scan fallb
     }
 }
 
+// GAP-0065 FIX D: the durability-critical FULL clean-shutdown checkpoint +
+// FIX-B snapshot write is hoisted OUT of the deinit defer (which the server ran
+// AFTER arming the gap-0039 teardown watchdog) into `flushForCleanShutdown`,
+// which the server runs UNBOUNDED before arming the watchdog. These tests model
+// the server sequence at unit scale: a LIGHT checkpoint (stopPersistenceThread)
+// then the FULL flush, and prove the reopen RELOADS instead of re-scanning.
+test "GAP-0065 FIX D: light-checkpoint + flushForCleanShutdown + clean deinit → reopen RELOADS (latch skips redundant checkpoint)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 220;
+    const E: usize = 100;
+    var seed_ids: [220]u64 = undefined;
+
+    // --- Session 1: build, then the SERVER shutdown sequence. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(seed_ids[i], "name", .{ .String = nameFor(&nb, i) });
+        }
+        var e: usize = 0;
+        while (e < E) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        // 1) LIGHT checkpoint — models `stopPersistenceThread` (flush + engine-WAL
+        //    truncate; advances the engine epoch; writes NO FIX-B snapshots).
+        try store.saveToFileEx(true);
+        // 2) FULL clean-shutdown flush BEFORE the watchdog — the FIX. Writes the
+        //    idmap + loop2 snapshots stamped at the now-current (epoch, covered).
+        graph_store.flushForCleanShutdown();
+        // 3) Clean deinit (the production defer). The FIX-D latch makes it SKIP a
+        //    redundant checkpoint and only free — it must not re-open an epoch
+        //    window that invalidates the just-written snapshots.
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // All three loop2 product snapshots + the idmap snapshot are on disk.
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+    try testing.expect(snapshotExists(allocator, data_dir));
+
+    // --- Session 2: reopen. First access RELOADS from snapshots (no re-scan). ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        // idmap reloaded (mmap-in-place); no per-node loop1 engine read.
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        // loop2 RELOADED — the whole-graph scan did NOT run (this is the ~14-min
+        // penalty the fix removes on every restart).
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+        try testing.expect(graph_store.hydrationSnapshotLoadCount() >= 3);
+        try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationStreamingScanCount());
+
+        // Correctness: counts, typed edges, MERGE found + authoritative miss.
+        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb, 11) }, &out));
+        try testing.expectEqual(seed_ids[11], out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.not_found, store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = "no-such-name" }, &out));
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "GAP-0065 FIX D: durability comes from flushForCleanShutdown — force-exit teardown (no clean checkpoint) still RELOADS" {
+    // Discriminating: the teardown here is a CRASH (deinitGlobalStoreForTestCrash
+    // — no clean checkpoint, models the watchdog force-exiting mid-teardown), so
+    // the ONLY durable snapshot write came from `flushForCleanShutdown`. If the
+    // flush were absent (the pre-fix ordering, where the snapshots were written
+    // only under the watchdog), this reopen would find no current snapshots and
+    // re-scan the whole graph.
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const N: usize = 180;
+    var seed_ids: [180]u64 = undefined;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(seed_ids[i], "name", .{ .String = nameFor(&nb, i) });
+        }
+        try store.saveToFileEx(true); // LIGHT (stopPersistenceThread)
+        graph_store.flushForCleanShutdown(); // FULL flush BEFORE the watchdog (the fix)
+        // Watchdog force-exit mid-teardown: NO further durable write happens.
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
+        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapshots, re-scans, FULL-KEY parity (no data loss)" {
+    // Crash-safety (G1/G3): a clean shutdown wrote snapshots @ (E1); a later
+    // session appended committed data past that stamp and was hard-killed WITHOUT
+    // completing the clean checkpoint. The engine advances past the snapshots →
+    // the reopen gate MUST reject them (never serve stale) and re-scan, and the
+    // rebuilt graph must be byte-for-byte complete (every node + edge, incl. the
+    // post-snapshot tail).
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const K: usize = 130; // committed + snapshotted in session 1
+    const P: usize = 70; // appended (committed tail) in session 2, never snapshotted
+    const TOTAL = K + P;
+    const E: usize = 90;
+    var seed_ids: [200]u64 = undefined;
+
+    // --- Session 1: build K, clean shutdown via the FIX-D flush (snapshots @ E1). ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < K) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(seed_ids[i], "name", .{ .String = nameFor(&nb, i) });
+        }
+        graph_store.flushForCleanShutdown();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // --- Session 2: reopen (RELOADS), append P nodes + E edges (committed tail),
+    //     advance the engine with a LIGHT checkpoint, then HARD KILL. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        // touch: reload snapshots (proves session-1 flush produced a reload).
+        try testing.expectEqual(K, store.countNodesForGraph(GRAPH, null));
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+
+        var i: usize = K;
+        while (i < TOTAL) : (i += 1) {
+            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(seed_ids[i], "name", .{ .String = nameFor(&nb, i) });
+        }
+        var e: usize = 0;
+        while (e < E) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
+        }
+        // LIGHT checkpoint: flush pages + advance engine epoch past the stale
+        // snapshots, but do NOT refresh them — exactly the on-disk residue of a
+        // FULL clean-shutdown checkpoint that got cut short (or a hard kill after
+        // committed writes). No FIX-D flush this session → snapshots stay @ E1.
+        try store.saveToFileEx(true);
+        graph_store.deinitGlobalStoreForTestCrash(); // kill-9 (no clean checkpoint)
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // --- Session 3: reopen. Gate REJECTS the stale snapshots → re-scan → all data. ---
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+
+        const got = store.getNodesByLabel(GRAPH, LABEL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(TOTAL, got.len);
+        // Stale snapshots were REJECTED and the scan rebuilt from durable pages.
+        try testing.expect(graph_store.loop2ScanNodeCount() >= TOTAL);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationSnapshotLoadCount());
+        try testing.expect(graph_store.hydrationScanFallbackCount() >= 3);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
+
+        // FULL-KEY PARITY: every node id → name (both snapshotted and tail),
+        // total counts, and every edge. No lost or corrupted record.
+        try testing.expectEqual(TOTAL, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(TOTAL, store.countNodesByLabel(GRAPH, LABEL, null));
+        try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
+        var i: usize = 0;
+        while (i < TOTAL) : (i += 1) {
+            var nb: [32]u8 = undefined;
+            try c3ExpectProp(store, seed_ids[i], "name", nameFor(&nb, i));
+            var out: u64 = 0;
+            var nb2: [32]u8 = undefined;
+            try testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate(GRAPH, LABEL, "name", .{ .String = nameFor(&nb2, i) }, &out));
+            try testing.expectEqual(seed_ids[i], out);
+        }
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
 test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snapshots (never persists empty state)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();

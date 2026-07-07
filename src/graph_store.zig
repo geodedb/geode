@@ -14724,6 +14724,10 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     global_store_allocator = g_test_store_allocator orelse global_allocator();
     global_store = GraphStore.init(global_store_allocator.?) catch @panic("OOM: failed to initialize global graph store");
+    // GAP-0065 FIX D: a fresh store instance has not yet run its clean-shutdown
+    // flush — reset the per-instance latch so `deinitGlobalStoreEx` performs the
+    // durability checkpoint if `flushForCleanShutdown` was never called for it.
+    g_clean_shutdown_flushed.store(false, .release);
     // Set data_dir for per-graph storage
     if (last_data_dir) |dir| {
         global_store.?.data_dir = dir;
@@ -14858,6 +14862,57 @@ pub fn abandonGlobalStoreForCrashSim() void {
     global_vtable = null;
 }
 
+// CANARY: REQ=REQ-STARTUP-COLDOPEN-NOTAIL-001; FEATURE="NoTailCleanShutdown"; ASPECT=DurabilityFlushBeforeWatchdog; STATUS=TESTED; TEST=tests/test_startup_lazy_hydrate.zig; OWNER=storage; UPDATED=2026-07-07
+/// GAP-0065 FIX D: latched once the durability-critical clean-shutdown FULL
+/// checkpoint (per-shard flush + WAL truncate-to-frontier + the FIX-B idmap /
+/// loop2 snapshot writes) has completed for the CURRENT store instance via
+/// `flushForCleanShutdown`. When set, `deinitGlobalStoreEx(true)` SKIPS its own
+/// `saveToFileEx(false)` so the bounded teardown cannot re-open a
+/// (checkpoint_epoch, covered_lsn) window that would invalidate the just-written
+/// snapshots (a second checkpoint bumps the engine epoch; if the teardown
+/// watchdog then cut it short before re-writing the snapshots, the next reopen
+/// would REJECT them and re-scan). Reset when a new global store is initialised
+/// (`getPrimaryGlobalStore`) so it is strictly per-instance.
+var g_clean_shutdown_flushed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// GAP-0065 FIX D: run the durability-critical portion of a clean shutdown —
+/// the FULL engine checkpoint (`adapter.checkpointAll()` → per-shard
+/// `engine.checkpoint()` flushes dirty pages + truncates the engine WAL to the
+/// durable frontier, leaving NO committed tail when writers are quiesced) AND
+/// the FIX-B idmap + loop2 hydration snapshot writes, all stamped at the
+/// post-checkpoint (checkpoint_epoch, covered_lsn).
+///
+/// The server must call this in the UNBOUNDED shutdown region — after the
+/// connection drain (no writers left to race the checkpoint) and BEFORE the
+/// gap-0039 teardown watchdog is armed — so however long the O(graph) checkpoint
+/// takes at 14.27M, the watchdog cannot force-exit mid-checkpoint. With no tail
+/// and snapshots stamped at the truncated-WAL manifest, the next reopen's
+/// epoch/covered gate RELOADS them (O(1) idmap + O(snapshot) loop2) instead of
+/// rejecting a WAL tail and paying the whole-graph re-scan every restart.
+///
+/// On success sets `g_clean_shutdown_flushed` so the subsequent
+/// `deinitGlobalStore` SKIPS its redundant `saveToFileEx(false)` (which would
+/// bump the epoch again and, if the bounded teardown cut it short before
+/// re-stamping the snapshots, leave them stale → reopen REJECT). Idempotent +
+/// best-effort with the same guards as deinit (real adapter + non-empty data
+/// dir). Crash-safety is UNCHANGED: an UNCLEAN shutdown (kill -9) never runs
+/// this, leaving the committed WAL tail for recovery to replay → the reopen gate
+/// correctly REJECTS the (now-uncovered) snapshots and safely re-scans, with no
+/// data loss (G1/G3 — never serve a snapshot across a committed tail).
+pub fn flushForCleanShutdown() void {
+    if (!(initialized.load(.acquire) and global_store != null)) return;
+    if (getGlobalAdapter() == null or global_store.?.data_dir.len == 0) return;
+    global_store.?.saveToFileEx(false) catch |err| {
+        // Do NOT set the latch: leave the (retryable) checkpoint for the deinit
+        // path so a flush failure never downgrades durability.
+        log.err("GAP-0065 clean-shutdown flush failed; teardown will retry the checkpoint", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    g_clean_shutdown_flushed.store(true, .release);
+}
+
 fn deinitGlobalStoreEx(clean: bool) void {
     if (initialized.load(.acquire) and global_store != null) {
         // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
@@ -14871,11 +14926,25 @@ fn deinitGlobalStoreEx(clean: bool) void {
         // pre-snapshot-write behavior (deinit did not save for such stores) while
         // preserving the real-data-dir win: a populated store still writes the snapshot.
         if (clean and getGlobalAdapter() != null and global_store.?.data_dir.len > 0) {
-            global_store.?.saveToFileEx(false) catch |err| {
-                log.err("clean-shutdown IdMap snapshot persist failed", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            if (g_clean_shutdown_flushed.load(.acquire)) {
+                // GAP-0065 FIX D: the durability-critical FULL checkpoint +
+                // FIX-B snapshot write already completed UNBOUNDED
+                // (`flushForCleanShutdown`, before the teardown watchdog armed).
+                // Do NOT re-run saveToFileEx here: it is now under the bounded
+                // watchdog and re-serialising every graph's loop2 snapshots is
+                // O(graph) (minutes at 14.27M) — it would burn the whole teardown
+                // budget, and any checkpoint work it triggers could re-advance the
+                // engine epoch. The store is already durable + reload-ready; the
+                // no-op `adapter.checkpointAll()` inside `deinitGlobalAdapter`
+                // stays as a belt-and-suspenders for any (server-drained-away) late
+                // dirty. Just free memory below.
+            } else {
+                global_store.?.saveToFileEx(false) catch |err| {
+                    log.err("clean-shutdown IdMap snapshot persist failed", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
         }
         global_store.?.deinit();
         global_store = null;

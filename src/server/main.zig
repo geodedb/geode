@@ -3203,6 +3203,21 @@ pub fn main() !void {
         // stuck handler, and before the teardown watchdog is armed. However
         // long the checkpoint takes, the watchdog cannot cut it short.
         graph_store.stopPersistenceThread(gpa);
+        // GAP-0065 FIX D: `stopPersistenceThread` only runs the LIGHT engine
+        // checkpoint (flush + engine-WAL truncate); it does NOT write the FIX-B
+        // idmap/loop2 reload snapshots. Those were written by the FULL
+        // `saveToFileEx(false)` inside the `deinitGlobalStore` defer below — which
+        // runs AFTER the teardown watchdog is armed, so at 14.27M the ~minutes
+        // FULL checkpoint got force-exited mid-write, leaving no reloadable
+        // snapshots (and/or a committed WAL tail) → the next reopen re-scanned the
+        // whole graph EVERY restart (~14–24 min). Do the FULL clean-shutdown
+        // checkpoint (WAL truncate-to-frontier, no committed tail) + snapshot
+        // write HERE, UNBOUNDED, before the watchdog is armed. Connections are
+        // already drained/force-closed above, so no writer can race it; the deinit
+        // defer then only frees memory under the watchdog. On the next reopen the
+        // (checkpoint_epoch, covered_lsn) gate RELOADS the snapshots (sub-second)
+        // instead of rejecting a tail and re-scanning.
+        graph_store.flushForCleanShutdown();
         persistence_flushed_eagerly = true;
         std.debug.print("[shutdown] data flush complete\n", .{});
 
