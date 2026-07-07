@@ -6884,6 +6884,20 @@ pub fn build(b: *std.Build) void {
     const gap0061_crash_auth_step = b.step("test-gap0061-crash-auth", "GAP-0061: persisted admin credential loads after kill-9 crash-reopen even when the security-graph hydration is quarantined");
     gap0061_crash_auth_step.dependOn(&run_gap0061_crash_auth_tests.step);
 
+    // GAP-0062: ROOT CAUSE of the GAP-0061 lockout — the streaming hydration of
+    // __geode_security must NOT quarantine on the slab-packed HAS_ROLE
+    // adjacency (gs v0.2.34 adjacency slab packing). Full security hydration
+    // (users + roles + policies + HAS_ROLE assignments) after clean + kill-9
+    // reopens; roles/policies load, not just the superuser admin.
+    const gap0062_sec_hydration_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0062_security_hydration.zig"), .target = target, .optimize = optimize });
+    gap0062_sec_hydration_mod.addImport("geode", root_mod);
+    gap0062_sec_hydration_mod.addImport("user_storage", user_storage_mod);
+    const gap0062_sec_hydration_tests = b.addTest(.{ .root_module = gap0062_sec_hydration_mod });
+    const run_gap0062_sec_hydration_tests = b.addRunArtifact(gap0062_sec_hydration_tests);
+    shardDep(test_step, &run_gap0062_sec_hydration_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0062_sec_hydration_step = b.step("test-gap0062-security-hydration", "GAP-0062: __geode_security hydrates fully (users/roles/policies/HAS_ROLE) without quarantine on clean + kill-9 reopen (slab-packed adjacency)");
+    gap0062_sec_hydration_step.dependOn(&run_gap0062_sec_hydration_tests.step);
+
     // Gap 0034 (data-ingest enterprise review): fresh-store FALSE "POSSIBLE
     // TAMPERING" alarms. The periodic HMAC verifier read the AuthChainRoot
     // node body via the non-hydrating getNodePtr; once a bulk ingest evicted

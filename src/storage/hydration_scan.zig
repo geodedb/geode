@@ -78,6 +78,21 @@ const PROP_DIR_ENTRY_SIZE: u32 = 4;
 // [PageHeader 32B][next_page u64][data_len u32][data...].
 const VAR_META_SIZE: u32 = 12;
 
+// GAP-0062: var-store SLAB block layout (gs/src/var_store.zig, stable on-disk
+// format; the layout constants there are private, mirrored here exactly like
+// the legacy VAR_META_SIZE above — the marker/next_page checks below are the
+// same defense-in-depth gs's readSlabBlockHeader uses, so a legacy page can
+// never be misread as a slab block or vice versa):
+//   [PageHeader 32B][VarSlab header 16B][byte runs → ...gap... ← slot dir][tail]
+//   VarSlab header: next_page u64 (==0), marker u32 (==VAR_SLAB_MARKER),
+//                   slot_count u32. Slot dir entries are 8B (offset u32,
+//                   byte_len u32) growing backward from (page end - tail).
+const VAR_SLAB_HEADER_SIZE: u32 = 16;
+const VAR_SLAB_RUNS_OFFSET: u32 = PAGE_HEADER_SIZE + VAR_SLAB_HEADER_SIZE;
+const VAR_SLAB_DIR_ENTRY_SIZE: u32 = 8;
+const VAR_SLAB_SLOT_TOMBSTONE: u32 = 0xFFFF_FFFF;
+const VAR_SLAB_MARKER: u32 = 0x5641_5253;
+
 /// One decoded property entry. `key` and any string/ext payload in `value`
 /// are owned by the accumulation arena.
 pub const PropEntry = struct {
@@ -367,14 +382,30 @@ fn scanAdjacency(
     var reader = try makeReader(engine, .adj_out, dirty, page_buf);
     const page_size = engine.buffer_pool.page_size;
     const block_header_size: u32 = @sizeOf(gs.edge.EdgeBlockHeader);
+    // Slab slot directories grow backward from `page_size - tail_reserve`
+    // (the at-rest-encryption tag tail), exactly as gs's AdjStore slab helpers
+    // subtract it — so the streaming reader must use the SAME reserve.
+    const tail_reserve = engine.adj_out.tail_reserve;
 
     // The block map (a full decoded copy of the adjacency store) is SCRATCH:
     // the per-row chain walk below copies each entry by value into the exact-
     // size edge-arena rows, so nothing references the blocks afterwards.
     var blocks: std.AutoHashMapUnmanaged(u64, AdjBlock) = .empty;
+    // GAP-0062: adjacency SLAB packing (gs v0.2.34 `adjacency_slab_packing`,
+    // default ON). A node with a SMALL out-edge chain (e.g. the
+    // `__geode_security` graph's one HAS_ROLE edge per user) has its edge run
+    // packed as a SLOT in a shared slab block (entry_format = ENTRY_FORMAT_SLAB)
+    // and its `out_head` becomes a bit-63-tagged (block, slot) head ref. Slab
+    // runs are decoded here keyed by the canonical bit-63-tagged head ref
+    // (`encodeSlabHead(page, slot)`, i.e. exactly the node's `out_head`); the
+    // per-node walk resolves a slab head against this map. Before this, the sweep
+    // rejected `entry_format == ENTRY_FORMAT_SLAB` as DataCorruption (2 >
+    // ENTRY_FORMAT_V2) and the per-node walk could not resolve a tagged head —
+    // quarantining any small-chain graph (the security-graph auth lockout).
+    var slab_runs: std.AutoHashMapUnmanaged(u64, []gs.edge.EdgeEntry) = .empty;
 
     // Sequential read of every allocated adjacency page. Every reachable
-    // chain block is allocated, so this covers all chains; unreachable
+    // chain/slab block is allocated, so this covers all chains; unreachable
     // allocated blocks (none in a healthy store) are parsed and ignored,
     // exactly as the legacy walk never visited them.
     const total_pages = engine.free_space_adj_out.total_pages;
@@ -384,9 +415,24 @@ fn scanAdjacency(
         const data = try reader.read(page_id);
 
         // Parse the block by ITS entry_format (GAP-ENT-0024 read-both),
-        // mirroring gs.adj_store.readBlockHeader's validation.
+        // mirroring gs.adj_store.readBlockHeader / readSlabBlockHeader.
         const bh_bytes = data[PAGE_HEADER_SIZE..][0..@sizeOf(gs.edge.EdgeBlockHeader)];
         const bh: gs.edge.EdgeBlockHeader = @bitCast(bh_bytes.*);
+
+        // SLAB block (GAP-0062): decode each LIVE slot's run keyed by (page,
+        // slot). Slot validation is deferred to the per-node lookup exactly as
+        // gs's `resolveSlabRun` validates only the slot a live head references:
+        // a tombstoned/out-of-range/overrunning slot is simply not inserted, so
+        // a live head that resolves to it MISSES the map and raises
+        // DataCorruption below, while an unreachable dead slot is ignored — the
+        // same reachability semantics as the legacy per-node engine walk.
+        if (bh.entry_format == gs.edge.ENTRY_FORMAT_SLAB) {
+            try parseSlabBlock(allocs, data, page_id, tail_reserve, bh, &slab_runs);
+            continue;
+        }
+
+        // Legacy v1/v2 chain block. entry_format > ENTRY_FORMAT_V2 (and not
+        // SLAB, handled above) is a genuinely unknown format — real corruption.
         if (bh.entry_format > gs.edge.ENTRY_FORMAT_V2) return error.DataCorruption;
         if (bh.count > gs.edge.entriesPerBlock(page_size, bh.entry_format)) return error.DataCorruption;
 
@@ -419,6 +465,21 @@ fn scanAdjacency(
     // an EXACT-size slice — no ArrayList doubling waste surviving the scan.
     for (rows) |*row| {
         if (row.out_head == 0) continue;
+
+        // GAP-0062: a bit-63-tagged slab head references a SINGLE contiguous
+        // run in one slab block (never a chain). Mirror gs `AdjEdgeIterator`'s
+        // slab mode + `expand`'s F1 guard (a tagged head decoding to page 0 is
+        // corruption) + `resolveSlabRun` (a live head to a missing/dead slot is
+        // corruption).
+        if (gs.adj_store.isSlabHead(row.out_head)) {
+            if (gs.adj_store.slabHeadPageId(row.out_head) == 0) return error.DataCorruption;
+            const run = slab_runs.get(row.out_head) orelse return error.DataCorruption;
+            const edge_rows = try allocs.edge.alloc(EdgeRow, run.len);
+            for (run, 0..) |e, idx| edge_rows[idx] = .{ .entry = e };
+            row.edges = edge_rows;
+            continue;
+        }
+
         var total: usize = 0;
         var current = row.out_head;
         var hops: u32 = 0;
@@ -443,6 +504,53 @@ fn scanAdjacency(
             current = block.next;
         }
         row.edges = edge_rows;
+    }
+}
+
+/// Decode every LIVE slot of one adjacency SLAB block into `slab_runs`
+/// (GAP-0062). Mirrors gs `AdjStore.readSlabBlockHeader` (block-level
+/// validation) + `resolveSlabRun` (per-slot bounds) + `readSlabRunEntry`
+/// (v2-strided run entries). Block- or slot-level validation failures SKIP
+/// (insert nothing) rather than fail the whole scan: gs only ever reads the
+/// specific slot a live head references, so an unreachable/dead/corrupt slot
+/// that no live head points at is invisible to a healthy read — a live head to
+/// such a slot instead MISSES `slab_runs` and raises DataCorruption at lookup,
+/// matching gs's reachability-scoped failure exactly.
+fn parseSlabBlock(
+    allocs: ScanAllocs,
+    data: []const u8,
+    page_id: u64,
+    tail_reserve: u32,
+    bh: gs.edge.EdgeBlockHeader,
+    slab_runs: *std.AutoHashMapUnmanaged(u64, []gs.edge.EdgeEntry),
+) !void {
+    // Block-level validation (gs readSlabBlockHeader): a slab block is NEVER
+    // chained, and its slot directory must fit above the runs region + tail.
+    if (bh.next_block != 0) return;
+    const dir_bytes: u64 = @as(u64, bh.count) * gs.edge.SLAB_DIR_ENTRY_SIZE;
+    if (@as(u64, gs.edge.SLAB_RUNS_OFFSET) + dir_bytes + tail_reserve > data.len) return;
+
+    const dir_start = gs.edge.slabDirStart(data.len, tail_reserve, bh.count);
+    var slot: u32 = 0;
+    while (slot < bh.count) : (slot += 1) {
+        const s = gs.edge.readSlabSlot(data, tail_reserve, slot);
+        // Dead slot (chain graduated to a dedicated block chain, or freed) —
+        // no live head references it. Skip.
+        if (s.offset == gs.edge.SLAB_SLOT_TOMBSTONE) continue;
+        if (s.offset < gs.edge.SLAB_RUNS_OFFSET) continue;
+        const run_end = @as(u64, s.offset) + @as(u64, s.entry_count) * gs.edge.ENTRY_SIZE_V2;
+        if (run_end > dir_start) continue;
+
+        // Runs are always the v2 32-byte stride (gs readSlabRunEntry).
+        const entries = try allocs.scratch.alloc(gs.edge.EdgeEntry, s.entry_count);
+        var i: u32 = 0;
+        while (i < s.entry_count) : (i += 1) {
+            const off = @as(usize, s.offset) + @as(usize, i) * gs.edge.ENTRY_SIZE_V2;
+            entries[i] = @bitCast(data[off..][0..gs.edge.ENTRY_SIZE_V2].*);
+        }
+        // Key by the canonical tagged head so the per-node walk looks up by
+        // `row.out_head` directly (== encodeSlabHead(page_id, slot)).
+        try slab_runs.put(allocs.scratch, gs.adj_store.encodeSlabHead(page_id, slot), entries);
     }
 }
 
@@ -764,6 +872,7 @@ fn scanLabels(
     var reader = try makeReader(engine, .var_store, dirty, page_buf);
     const page_size = engine.buffer_pool.page_size;
     const cap: u32 = page_size - PAGE_HEADER_SIZE - VAR_META_SIZE;
+    const tail_reserve = engine.var_store.tail_reserve;
 
     // Chunk map / rounds / blob assembly are scratch; only the decoded
     // label-id slices (node side) are durable.
@@ -771,9 +880,29 @@ fn scanLabels(
     var round: std.ArrayList(u64) = .empty;
     var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
 
+    // GAP-0062: var-store SLAB packing (gs v0.2.34, unconditional). A node
+    // whose label blob is small (every node — a handful of label ids) has its
+    // label ids packed as a SLOT in a shared var slab block and its
+    // `label_head` is a bit-63-tagged (block, slot) ref. `slab_pages` are the
+    // slab BLOCK pages to read once (ascending); `var_slab_runs` maps each
+    // canonical head (`encodeSlabHead(page, slot)`, i.e. the node's
+    // `label_head`) to its decoded run bytes. Before this, `refFirstPage` on a
+    // slab head (`head >> 16`) decoded to a bogus page the pager zero-filled,
+    // so EVERY node silently hydrated with ZERO labels — the security graph's
+    // :User/:Role/:Policy nodes vanished from `getNodesByLabel` (auth lockout).
+    var slab_pages: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var var_slab_runs: std.AutoHashMapUnmanaged(u64, []const u8) = .empty;
+
     for (rows) |row| {
         if (row.label_head == 0) continue;
         if (row.corrupt_skip) continue;
+        if (gs.var_store.isSlabHead(row.label_head)) {
+            // F1 guard (mirrors VarStore.readSlab): a tagged head decoding to
+            // page 0 is corruption, never silently empty.
+            if (gs.var_store.slabHeadPageId(row.label_head) == 0) return error.DataCorruption;
+            _ = try slab_pages.getOrPut(allocs.scratch, gs.var_store.slabHeadPageId(row.label_head));
+            continue;
+        }
         const first = gs.var_store.VarStore.refFirstPage(row.label_head);
         // Mirrors VarStore.read: a ref whose first page decodes to 0 is
         // invalid (the legacy getNodeLabels raised the same error).
@@ -802,11 +931,35 @@ fn scanLabels(
         round = next_round;
     }
 
-    // Resolve each node's blob from the chunk map and decode the label-id
-    // list with LabelStore.getLabels' exact tolerance semantics.
+    // GAP-0062: read each var slab BLOCK page once (ascending) and decode its
+    // LIVE slots into `var_slab_runs`. Same reachability-scoped leniency as the
+    // adjacency slab parse: a dead/invalid slot no live head references is
+    // ignored; a live head to such a slot MISSES the map at resolve and raises
+    // DataCorruption — exactly gs `VarStore.resolveSlabRun`'s failure.
+    if (slab_pages.size != 0) {
+        var pages = try std.ArrayList(u64).initCapacity(allocs.scratch, slab_pages.size);
+        var kit = slab_pages.keyIterator();
+        while (kit.next()) |k| pages.appendAssumeCapacity(k.*);
+        std.sort.pdq(u64, pages.items, {}, std.sort.asc(u64));
+        for (pages.items) |page_id| {
+            const data = try reader.read(page_id);
+            try parseVarSlabBlock(allocs, data, page_id, tail_reserve, &var_slab_runs);
+        }
+    }
+
+    // Resolve each node's blob and decode the label-id list with
+    // LabelStore.getLabels' exact tolerance semantics.
     for (rows) |*row| {
         if (row.label_head == 0) continue;
         if (row.corrupt_skip) continue;
+
+        // GAP-0062: a slab-headed label ref is a SINGLE run (never a chain).
+        if (gs.var_store.isSlabHead(row.label_head)) {
+            const blob = var_slab_runs.get(row.label_head) orelse return error.DataCorruption;
+            row.label_ids = decodeLabelIds(allocs.node, blob) catch return error.DataCorruption;
+            continue;
+        }
+
         var blob: std.ArrayList(u8) = .empty;
         var current = gs.var_store.VarStore.refFirstPage(row.label_head);
         var hops: u32 = 0;
@@ -817,6 +970,47 @@ fn scanLabels(
             current = chunk.next;
         }
         row.label_ids = decodeLabelIds(allocs.node, blob.items) catch return error.DataCorruption;
+    }
+}
+
+/// Decode every LIVE slot of one var-store SLAB block into `var_slab_runs`
+/// (GAP-0062). Mirrors gs `VarStore.readSlabBlockHeader` (marker/next_page/dir
+/// validation) + `resolveSlabRun` (per-slot bounds). Block/slot validation
+/// failures SKIP (insert nothing) rather than fail the whole scan — a live head
+/// to a skipped slot instead MISSES `var_slab_runs` at resolve and raises
+/// DataCorruption, matching gs's reachability-scoped failure exactly.
+fn parseVarSlabBlock(
+    allocs: ScanAllocs,
+    data: []const u8,
+    page_id: u64,
+    tail_reserve: u32,
+    var_slab_runs: *std.AutoHashMapUnmanaged(u64, []const u8),
+) !void {
+    const off = PAGE_HEADER_SIZE;
+    const next_page = std.mem.readInt(u64, data[off..][0..8], .little);
+    const marker = std.mem.readInt(u32, data[off + 8 ..][0..4], .little);
+    const slot_count = std.mem.readInt(u32, data[off + 12 ..][0..4], .little);
+    // A tagged head must land on a slab block: a wrong marker (or a chained
+    // slab block, or a dir that cannot fit) means this page is not the slab
+    // block the head named — skip so the live head misses -> DataCorruption.
+    if (marker != VAR_SLAB_MARKER) return;
+    if (next_page != 0) return;
+    const dir_bytes: u64 = @as(u64, slot_count) * VAR_SLAB_DIR_ENTRY_SIZE;
+    if (@as(u64, VAR_SLAB_RUNS_OFFSET) + dir_bytes + tail_reserve > data.len) return;
+
+    const dir_start: u64 = @as(u64, data.len) - tail_reserve - dir_bytes;
+    var slot: u32 = 0;
+    while (slot < slot_count) : (slot += 1) {
+        const base = @as(usize, data.len) - tail_reserve - (@as(usize, slot) + 1) * VAR_SLAB_DIR_ENTRY_SIZE;
+        const run_off = std.mem.readInt(u32, data[base..][0..4], .little);
+        const byte_len = std.mem.readInt(u32, data[base + 4 ..][0..4], .little);
+        if (run_off == VAR_SLAB_SLOT_TOMBSTONE) continue;
+        if (run_off < VAR_SLAB_RUNS_OFFSET) continue;
+        if (@as(u64, run_off) + @as(u64, byte_len) > dir_start) continue;
+        const blob = try allocs.scratch.dupe(u8, data[run_off..][0..byte_len]);
+        // Key by the canonical tagged head so the resolve looks up by
+        // `row.label_head` directly (== encodeSlabHead(page_id, slot)).
+        try var_slab_runs.put(allocs.scratch, gs.var_store.encodeSlabHead(page_id, slot), blob);
     }
 }
 
