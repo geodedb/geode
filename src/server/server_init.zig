@@ -48,10 +48,11 @@ pub const EnvironmentConfig = struct {
     inline_results_max_rows: usize = 1000,
     telemetry_paging: bool = false,
     // CANARY: REQ=REQ-QUIC-HC-030; FEATURE="QUIC High-Concurrency Requests"; ASPECT=MultiplexingGate; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-06-10
-    // Default to the measured high-throughput single-stream profile: no idle
-    // per-connection acceptor loop unless an operator explicitly enables
-    // multiplexed streams with GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1.
-    quic_stream_multiplexing_enabled: bool = false,
+    // Stream multiplexing defaults ON for enterprise out-of-box correctness:
+    // a non-multiplexing server hangs the Go client on secondary streams
+    // (verified). Operators can opt out of the per-connection acceptor loop
+    // with GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0.
+    quic_stream_multiplexing_enabled: bool = true,
     // CANARY: REQ=REQ-QUIC-HC-054; FEATURE="QUIC High-Concurrency Requests"; ASPECT=CooperativeFirstStreams; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     // In single-stream high-fanout deployments, service first streams with a
     // bounded cooperative scheduler instead of one persistent worker per live
