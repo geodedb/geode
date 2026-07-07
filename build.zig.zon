@@ -461,8 +461,8 @@
             // getter the adapter's engine handle exposes. Manifest V4:
             // pre-v0.2.29 binaries loudly reject v4 stores. Same transitive
             // deps as v0.2.28 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.33#da71de80f37eb9230c8b7efe2916fb5d5d706907",
-            .hash = "graph_storage-0.2.33-9UyJS9smHQCiq-yka44II41AKU7IBrU-37_rotTGK9ws",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.34#a09cb503a4cb4f9484378bc306ceae2a01f465fb",
+            .hash = "graph_storage-0.2.34-9UyJSwstHQCXZt0a8tIfrvtBVBSZ4efGq9hlnYoAZd6W",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
