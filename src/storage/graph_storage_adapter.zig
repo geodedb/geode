@@ -111,6 +111,20 @@ var g_full_checkpoint_forced_loads: std.atomic.Value(u64) = std.atomic.Value(u64
 // every node lock-free and never holds mg.rwlock, so there is no checkpoint
 // rwlock race and no shutdown-checkpoint dependency). Test instrumentation.
 var g_exact_hydration_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX A: number of reopens that ROUTED the deferred exact-index build
+// through the RACE-FREE background rebuild thread (`spawnExactIndexRebuildOnReopen`
+// succeeded), for BOTH an `.absent` and a `.stale` on-disk index. Test
+// instrumentation: after an `.absent` reopen this must be >= 1 (the un-fold —
+// the first-touch hydration no longer runs the O(graph) build inline on the
+// read path). Bumped only on a successful spawn (thread reserved + started).
+var g_exact_reopen_spawns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX A (TEST-ONLY): a gate the background reopen rebuild worker waits
+// on BEFORE it touches any lock or the exact index, so a test can hold the
+// build "in flight" and prove that first-touch reads (count / label scan) return
+// promptly (the fold no-op) instead of parking behind the build. 0 = open (the
+// production value — never blocks), non-zero = closed. Only ever consulted from
+// the worker path under `comptime is_test`, so production carries zero overhead.
+var g_test_exact_build_gate: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 // C-1 (T2b adversarial review): number of times a per-graph checkpoint's
 // retired-cache reclaim (the grace window in `checkpointOneGraph`) was
 // SKIPPED because the graph had an unfinished (pending or in-flight)
@@ -146,9 +160,24 @@ fn exactIndexPersistOnBuildDisabled() bool {
 /// first-access) for the sub-second-cold-open A/B, where no proactive build is
 /// wanted.
 fn eagerExactRebuildOnReopenDisabled() bool {
+    // GAP-0064 FIX A: a programmatic test override (mirrors setLeanIndexingForTest)
+    // so a test can deterministically exercise the eager-CHECKPOINT-build FALLBACK
+    // (reopen background rebuild suppressed) WITHOUT relying on process-global env
+    // ordering. `null` = consult the env (production behavior).
+    if (comptime @import("builtin").is_test) {
+        if (g_test_disable_eager_reopen_rebuild) |v| return v;
+    }
     const raw_z = std.c.getenv("GEODE_DISABLE_EAGER_EXACT_REBUILD_ON_REOPEN") orelse return false;
     const raw = std.mem.span(raw_z);
     return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+}
+
+/// GAP-0064 FIX A (TEST-ONLY): override `eagerExactRebuildOnReopenDisabled`.
+/// `true` suppresses the reopen background rebuild (so the eager-CHECKPOINT-build
+/// fallback is exercised); `null` restores env-driven production behavior.
+var g_test_disable_eager_reopen_rebuild: ?bool = null;
+pub fn setEagerExactRebuildOnReopenDisabledForTest(disabled: ?bool) void {
+    g_test_disable_eager_reopen_rebuild = disabled;
 }
 var g_exact_persist_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_exact_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -326,6 +355,26 @@ pub fn getExactHydrationBuildsForTesting() u64 {
 }
 pub fn resetExactHydrationBuildsForTesting() void {
     g_exact_hydration_builds.store(0, .release);
+}
+
+/// GAP-0064 FIX A: reopens whose deferred exact-index build was routed through
+/// the race-free background rebuild thread (the un-fold). >= 1 after an `.absent`
+/// or `.stale` reopen; 0 before FIX A for the `.absent` case.
+pub fn getExactReopenSpawnsForTesting() u64 {
+    return g_exact_reopen_spawns.load(.acquire);
+}
+pub fn resetExactReopenSpawnsForTesting() void {
+    g_exact_reopen_spawns.store(0, .release);
+}
+
+/// GAP-0064 FIX A (TEST-ONLY): hold the background reopen rebuild "in flight" so
+/// a test can prove first-touch reads return without waiting on the build. Only
+/// honored in test builds (the worker's wait is `comptime is_test`-guarded).
+pub fn closeExactBuildGateForTesting() void {
+    g_test_exact_build_gate.store(1, .release);
+}
+pub fn openExactBuildGateForTesting() void {
+    g_test_exact_build_gate.store(0, .release);
 }
 
 /// GAP-ENT-0048g: aggregate (sum over all shards) of the per-shard
@@ -1387,6 +1436,25 @@ pub const ManagedGraph = struct {
     /// mutexes here. Only `ensureExactNodePropertyIndexBuilt` ever holds it, so it
     /// participates in no lock-ordering relationship and cannot deadlock.
     exact_index_build_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// GAP-0064 FIX A: `true` while a RACE-FREE background reopen rebuild
+    /// (`spawnExactIndexRebuildOnReopen` → `exactIndexRebuildOnReopenWorker`)
+    /// owns this graph's exact-index build. Set at a successful reopen spawn
+    /// (for an `.absent` OR `.stale` on-disk index), cleared by the worker when
+    /// the build finishes/aborts. Two readers consult it, both non-blocking:
+    ///   * the first-touch hydration FOLD (`buildAndPersistExactIndexForHydratedGraph`
+    ///     called from `GraphStore.ensureGraphHydrated`) NO-OPs when it is set —
+    ///     so hydration returns after resident loop1/loop2 instead of parking
+    ///     every reader (even O(1) count) behind the ~14-min index build; and
+    ///   * `checkpointOneGraph`'s FULL-path exact-index decision SKIPs the eager
+    ///     build + the stale-file invalidation when it is set — so the
+    ///     hydration-completion checkpoint cannot run a SECOND concurrent
+    ///     `rebuildExactNodePropertyIndex` against the background worker's (two
+    ///     concurrent rebuilds double-insert into the mutex-sharded index).
+    /// The worker stores `exact_index_built = true` (.release) BEFORE clearing
+    /// this flag (.release), so an observer that reads `inflight == false` is
+    /// guaranteed to also read `built == true` — the checkpoint ladder relies on
+    /// this to read `inflight` FIRST and treat a cleared flag as "build done".
+    exact_rebuild_inflight: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
     /// May be null if audit init failed (soft failure — graph still usable).
     audit_logger: ?*audit.AuditLogger = null,
@@ -7437,6 +7505,22 @@ pub const StorageAdapter = struct {
                 slog.warn("skipping exact-index persist: engine checkpoint failed (tail may remain; not writing a possibly-stale stamp)", &.{
                     SAttr.string("graph", mg.name),
                 });
+            } else if (mg.exact_rebuild_inflight.load(.acquire)) {
+                // GAP-0064 FIX A: a race-free background reopen rebuild
+                // (`spawnExactIndexRebuildOnReopen`) owns this graph's exact-index
+                // build. Do NOT run a SECOND concurrent `rebuildExactNodePropertyIndex`
+                // here — two rebuilds writing the same mutex-sharded index
+                // double-insert postings (logical corruption). And do NOT
+                // invalidate the on-disk file: the worker persists a fresh
+                // (epoch, covered_lsn)-stamped index when it finishes, and any
+                // current on-disk file stays reload-gated on reopen. Read
+                // `inflight` BEFORE `built`/eager-build below: the worker stores
+                // `built = true` (.release) BEFORE clearing `inflight` (.release),
+                // so reaching the `built`/eager branches (inflight == false)
+                // guarantees no concurrent rebuild is running.
+                slog.info("skipping exact-index persist: race-free background reopen rebuild in flight (worker persists on completion)", &.{
+                    SAttr.string("graph", mg.name),
+                });
             } else if (mg.exact_index_built.load(.acquire)) {
                 mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
                     log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
@@ -7643,11 +7727,35 @@ pub const StorageAdapter = struct {
     /// with the lazy path) makes concurrent first-touch + hydration build exactly
     /// once. Best-effort persist: a save error leaves the index correct in memory.
     pub fn buildAndPersistExactIndexForHydratedGraph(self: *StorageAdapter, graph_name: []const u8) void {
+        // FOLD caller (`GraphStore.ensureGraphHydrated` first-touch). NO-OP when a
+        // race-free background reopen rebuild owns this graph's build (GAP-0064
+        // FIX A) — so hydration returns after resident loop1/loop2 instead of
+        // parking every reader behind the O(graph) index build.
+        self.buildAndPersistExactIndexForHydratedGraphEx(graph_name, false);
+    }
+
+    /// Core of `buildAndPersistExactIndexForHydratedGraph`.
+    ///
+    /// `is_background_worker`:
+    ///   * `false` (the hydration FOLD): NO-OP when `exact_rebuild_inflight` is
+    ///     set — a spawned reopen rebuild already owns this build, and the fold
+    ///     waiting on it would re-couple readers to the ~14-min build. It only
+    ///     runs the build itself when NO background rebuild is in flight (spawn
+    ///     failed / disabled) — the pre-FIX-A fallback.
+    ///   * `true` (the spawned `exactIndexRebuildOnReopenWorker`): bypasses the
+    ///     inflight NO-OP gate (it IS the owner) and CLEARS `exact_rebuild_inflight`
+    ///     when finished/aborted, so `checkpointOneGraph`'s inflight-gated
+    ///     exact-index branch re-opens once the build is done.
+    fn buildAndPersistExactIndexForHydratedGraphEx(self: *StorageAdapter, graph_name: []const u8, is_background_worker: bool) void {
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.requireExistingGraphLocked(graph_name) catch return;
         };
+        // GAP-0064 FIX A: the fold defers to an in-flight background rebuild; the
+        // worker proceeds and clears the flag on every return path below.
+        if (!is_background_worker and mg.exact_rebuild_inflight.load(.acquire)) return;
+        defer if (is_background_worker) mg.exact_rebuild_inflight.store(false, .release);
         if (mg.exact_index_built.load(.acquire)) return;
 
         // Double-checked one-shot latch (the SAME mutex the lazy first-access
@@ -7659,6 +7767,19 @@ pub const StorageAdapter = struct {
         mg.exact_index_build_mutex.lockUncancelable(io);
         defer mg.exact_index_build_mutex.unlock(io);
         if (mg.exact_index_built.load(.acquire)) return;
+
+        // GAP-0064 FIX A (TEST-ONLY): hold the background build "in flight" so a
+        // test can prove first-touch reads return (via the fold no-op) while the
+        // exact index is still building. Never blocks in production (gate == 0).
+        if (comptime @import("builtin").is_test) {
+            if (is_background_worker) {
+                const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
+                var gate_rem: std.os.linux.timespec = undefined;
+                while (g_test_exact_build_gate.load(.acquire) != 0) {
+                    _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+                }
+            }
+        }
 
         // Lock-free parallel scan of the durable engine stores -> mutex-sharded
         // exact index. `.{}` cancel flags: a hydration-time build runs to
@@ -7965,7 +8086,7 @@ pub const StorageAdapter = struct {
     /// the index simply stays deferred and the first access rebuilds it (the
     /// pre-5.3b behaviour). Idempotent against a racing first-access build — both
     /// gate on the `exact_index_built` latch under the build mutex.
-    fn spawnExactIndexRebuildOnReopen(self: *StorageAdapter, graph_name: []const u8) void {
+    fn spawnExactIndexRebuildOnReopen(self: *StorageAdapter, mg: *ManagedGraph, graph_name: []const u8) void {
         const name_copy = self.allocator.dupe(u8, graph_name) catch {
             log.warn("reopen eager exact-index rebuild skipped: OOM duping graph name '{s}'", .{graph_name});
             return;
@@ -7984,12 +8105,20 @@ pub const StorageAdapter = struct {
             log.warn("reopen eager exact-index rebuild skipped: OOM reserving thread slot for '{s}'", .{graph_name});
             return;
         };
+        // GAP-0064 FIX A: publish "a background rebuild owns this build" BEFORE
+        // the worker exists, so the worker (which CLEARS this flag when done) can
+        // never race ahead of this store and leave it stuck true. Cleared again
+        // if the spawn itself fails (below). While set: the hydration fold no-ops
+        // and `checkpointOneGraph` skips the (double-inserting) eager build.
+        mg.exact_rebuild_inflight.store(true, .release);
         const t = std.Thread.spawn(.{}, exactIndexRebuildOnReopenWorker, .{ self, name_copy }) catch |err| {
+            mg.exact_rebuild_inflight.store(false, .release);
             self.allocator.free(name_copy);
             log.warn("reopen eager exact-index rebuild skipped: thread spawn failed for '{s}': {}", .{ graph_name, err });
             return;
         };
         self.exact_persist_threads.appendAssumeCapacity(t);
+        _ = g_exact_reopen_spawns.fetchAdd(1, .monotonic);
     }
 
     /// Worker for `spawnExactIndexRebuildOnReopen`: run the race-free build (which
@@ -7999,7 +8128,9 @@ pub const StorageAdapter = struct {
     /// lookup inside and leaves nothing to build (correct).
     fn exactIndexRebuildOnReopenWorker(self: *StorageAdapter, graph_name: []u8) void {
         defer self.allocator.free(graph_name);
-        self.buildAndPersistExactIndexForHydratedGraph(graph_name);
+        // GAP-0064 FIX A: `true` = the owning background worker — bypass the fold
+        // no-op gate, run the build, and clear `exact_rebuild_inflight` on exit.
+        self.buildAndPersistExactIndexForHydratedGraphEx(graph_name, true);
     }
 
     /// Number of completed `checkpointAll` runs since process start.
@@ -8637,41 +8768,53 @@ pub const StorageAdapter = struct {
             // reads durable pages; epoch/covered-gated by loadFromFile on reopen).
             mg.exact_index_built.store(false, .release);
 
-            // GAP-ENT-0048 Task 5.3b: a TAIL-REJECTED reopen (`.stale` — a
-            // snapshot FILE was present but epoch-mismatched or had a WAL tail
-            // past its covered_lsn) PROACTIVELY drives the rebuild through the
-            // RACE-FREE hydration-scan build on a background thread NOW, rather
-            // than leaving the first client query to pay it INLINE on its handler
-            // (the wedge-prone "85s lazy-on-first-query" path). Best-effort and
-            // idempotent: the build latches `exact_index_built` under the build
-            // mutex, so a concurrent first-access build produces the index exactly
-            // once. Open itself only spawns the thread — server-ready is unchanged.
-            // An `.absent` snapshot (never persisted — legacy / LIGHT-only) is NOT
-            // proactively rebuilt: there is no valid base to restore and eagerly
-            // scanning at every open would fight sub-second cold-open; it stays on
-            // the ordinary lazy first-access rebuild.
-            if (load_outcome == .stale and !eagerExactRebuildOnReopenDisabled()) {
-                // GAP-ENT-0048 crash-reconcile (Phase E2): before the O(graph)
-                // rebuild, attempt an O(tail) RECONCILE of the committed WAL tail
-                // into the persisted snapshot (evict each tail node's OLD postings
-                // via the reverse map + re-derive its CURRENT postings from the
-                // engine). Sound ONLY on the single-recovery gate; on ANY doubt it
-                // returns false and we fall back to the safe full rebuild. Inline
-                // + pre-publish → fully race-free, and O(tail)-bounded.
-                const reconciled = blk: {
-                    const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
-                    defer self.allocator.free(dir_path);
-                    break :blk self.tryReconcileExactIndexOnReopen(mg, dir_path);
-                };
+            // GAP-0064 FIX A: PROACTIVELY drive the deferred rebuild through the
+            // RACE-FREE hydration-scan build on a background thread NOW for BOTH a
+            // `.stale` (snapshot present but epoch-mismatched / WAL-tail-past-covered)
+            // AND an `.absent` (never persisted — from-dump bulk ingest, legacy,
+            // LIGHT-only) reopen, rather than leaving the O(graph) build to be
+            // FOLDED synchronously onto the first-touch hydration read path (the
+            // 14.27M "reopen blocks ALL reads ~30 min" enterprise blocker) or paid
+            // INLINE on the first client query (the "85s lazy-on-first-query"
+            // wedge). Open itself only SPAWNS the thread — server-ready is
+            // unchanged, and the fold (`buildAndPersistExactIndexForHydratedGraph`)
+            // no-ops while `exact_rebuild_inflight` is set, so `count(:Taxon)` /
+            // label scans return after resident loop1/loop2 (not after the build);
+            // index-served reads (WHERE-seek / GROUP BY) scan-fallback until the
+            // background build latches `built` + publishes the persisted index.
+            //
+            // Was (pre-FIX-A): only `.stale` spawned; `.absent` stayed on the lazy
+            // path and its build was folded into hydration (blocking every reader).
+            if (!eagerExactRebuildOnReopenDisabled()) {
+                var reconciled = false;
+                if (load_outcome == .stale) {
+                    // GAP-ENT-0048 crash-reconcile (Phase E2): for a present-but-
+                    // stale snapshot, first attempt an O(tail) RECONCILE of the
+                    // committed WAL tail into it (evict each tail node's OLD
+                    // postings via the reverse map + re-derive its CURRENT postings
+                    // from the engine). Sound ONLY on the single-recovery gate; on
+                    // ANY doubt it returns false and we fall back to the background
+                    // rebuild. Inline + pre-publish → race-free, O(tail)-bounded.
+                    // (`.absent` has no persisted base to reconcile into — skip
+                    // straight to the background rebuild.)
+                    reconciled = blk: {
+                        const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
+                        defer self.allocator.free(dir_path);
+                        break :blk self.tryReconcileExactIndexOnReopen(mg, dir_path);
+                    };
+                }
                 if (reconciled) {
                     mg.exact_index_built.store(true, .release);
                     log.info("exact property index RECONCILED from WAL tail for graph '{s}' (O(tail), no rebuild)", .{name});
                 } else {
-                    self.spawnExactIndexRebuildOnReopen(owned_name);
-                    log.info("exact property index deferred for graph '{s}' (stale snapshot → race-free background rebuild)", .{name});
+                    self.spawnExactIndexRebuildOnReopen(mg, owned_name);
+                    log.info("exact property index deferred for graph '{s}' ({s} → race-free background rebuild)", .{
+                        name,
+                        if (load_outcome == .stale) "stale snapshot" else "absent snapshot",
+                    });
                 }
             } else {
-                log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild)", .{name});
+                log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild; eager reopen rebuild disabled)", .{name});
             }
         }
 

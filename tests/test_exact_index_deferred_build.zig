@@ -201,6 +201,10 @@ test "exact node-property index: deferred at open, built once on first access" {
 // (reloaded == 0, rebuild-runs >= 1). GREEN (post-fix): build+persist -> reload.
 test "exact node-property index: full checkpoint on a deferred graph persists a complete (non-empty) snapshot" {
     const allocator = testing.allocator;
+    // GAP-0064 FIX A: validate the eager-CHECKPOINT-build fallback — suppress the
+    // reopen background rebuild (which would build the deferred index at open).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -706,6 +710,10 @@ test "GAP-ENT-0048 SECONDARY: deferred rebuild is exempt from the proto-reader s
 // (reloaded == 0, rebuild-runs >= 1). GREEN (post-fix): reload, zero rebuild.
 test "GAP-ENT-0048 PRIMARY: deferred graph FULL checkpoint builds+persists so reopen reloads (zero client-facing rebuild)" {
     const allocator = testing.allocator;
+    // GAP-0064 FIX A: validate the eager-CHECKPOINT-build fallback — suppress the
+    // reopen background rebuild (which would build the deferred index at open).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});

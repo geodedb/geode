@@ -2536,6 +2536,11 @@ test "engine-direct single-label count serves the in-memory refcount, never the 
 test "GAP-ENT-0048 lazy-hydration: FULL checkpoint builds+persists a deferred (non-resident, on-disk) graph's exact index" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
+    // GAP-0064 FIX A: this test validates the eager-CHECKPOINT-build FALLBACK, so
+    // suppress the reopen background rebuild (which would otherwise build the
+    // deferred index proactively at open — covered by the FIX A tests).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2655,6 +2660,10 @@ test "GAP-ENT-0048 lazy-hydration: FULL checkpoint builds+persists a deferred (n
 test "GAP-ENT-0048 snapshot-served: FULL checkpoint force-loads + parallel-builds a graph never opened this session" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
+    // GAP-0064 FIX A: validates the eager-CHECKPOINT-build fallback — suppress the
+    // reopen background rebuild (which would build the deferred index at open).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2765,6 +2774,10 @@ test "GAP-ENT-0048 snapshot-served: FULL checkpoint force-loads + parallel-build
 test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_mutex held (in-flight hydration)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
+    // GAP-0064 FIX A: validates the eager-CHECKPOINT-build fallback — suppress the
+    // reopen background rebuild (which would build the deferred index at open).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3026,6 +3039,200 @@ test "GAP-ENT-0048g: prop_exact.idx survives a LIGHT checkpoint and reopen RELOA
         defer allocator.free(seek);
         try testing.expectEqual(@as(usize, N / sources.len), seek.len);
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// ============================================================================
+// GAP-0064 FIX A — un-fold the synchronous first-build so reopen does not block
+// ALL reads.
+//
+// A from-dump / deferred-WAL bulk ingest never materializes `prop_exact.idx`, so
+// the reopen loads it `.absent` and (pre-fix) the O(graph) exact-index build was
+// FOLDED synchronously into first-touch hydration (`graph_store.zig:~10346`,
+// under entry.mutex / hydration_build_mutex). Every first-touch reader — even an
+// O(1) `count(:Taxon)` — parked behind the ~14-min build at 14.27M.
+//
+// FIX A routes the `.absent` first-build through the SAME race-free background
+// rebuild the `.stale` path already used (`spawnExactIndexRebuildOnReopen`) and
+// NO-OPs the fold while a background rebuild is in flight, so hydration returns
+// after resident loop1/loop2 and reads are served promptly; index-served reads
+// scan-fallback until the background build publishes.
+// ============================================================================
+
+test "GAP-0064 FIX A: absent-index reopen routes the exact build through the background rebuild (un-fold)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 2000;
+
+    // Phase 1: ingest + FULL checkpoint, then strip idmap.snapshot + prop_exact.idx
+    // so the reopen is a from-dump-style `.absent` (deferred, no exact snapshot).
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    deleteAllPropExactIdx(allocator, data_dir);
+    deleteAllNamed(allocator, data_dir, "idmap.snapshot");
+    try testing.expectEqual(@as(usize, 0), countPropExactIdx(allocator, data_dir));
+
+    adapter_mod.resetExactReopenSpawnsForTesting();
+    adapter_mod.resetExactHydrationBuildsForTesting();
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.openExactBuildGateForTesting(); // ensure the build is NOT gated here
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        // Open the graph → openGraphLocked sees `.absent` and SPAWNS the race-free
+        // background rebuild. RED pre-FIX-A: `.absent` never spawned → this is 0.
+        _ = try adapter.getOrCreateGraph(G);
+        try testing.expect(adapter_mod.getExactReopenSpawnsForTesting() >= 1);
+
+        // First-touch hydration read returns the FULL label set (not blocked / not
+        // partial). The fold no-ops (background rebuild owns the build).
+        const nodes = store.getNodesByLabel(G, LBL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, nodes.len);
+        try testing.expectEqual(N, store.countNodesByLabel(G, LBL, null));
+
+        // The background rebuild completes + persists the epoch-stamped index.
+        var waited: usize = 0;
+        while (adapter_mod.getExactHydrationBuildsForTesting() == 0 and waited < 20_000) : (waited += 1) {
+            sleepMs(1);
+        }
+        try testing.expect(adapter_mod.getExactHydrationBuildsForTesting() >= 1);
+        try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+
+        // A WHERE-seek is served from the built index with the correct count.
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[1] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// Concurrency contract for the un-fold: while the background exact-index build is
+// held "in flight" (test gate), concurrent first-touch readers (count + label
+// scan) return promptly (NOT parked behind the build) and a concurrent FULL
+// checkpoint does NOT run a second (double-inserting) rebuild — all race-free.
+// Compiled under -fsanitize-thread via `test-startup-lazy-hydrate-tsan`.
+test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return while the build is gated (no park, no race, no deadlock)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 1500;
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+        }
+        try store.saveToFile();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    deleteAllPropExactIdx(allocator, data_dir);
+    deleteAllNamed(allocator, data_dir, "idmap.snapshot");
+
+    adapter_mod.resetExactReopenSpawnsForTesting();
+    adapter_mod.resetExactHydrationBuildsForTesting();
+    // Hold the background build "in flight" BEFORE the reopen spawns the worker,
+    // so the worker blocks at the gate the moment it is spawned.
+    adapter_mod.closeExactBuildGateForTesting();
+    // Safety net: always release the gate so a failed assert cannot wedge teardown.
+    defer adapter_mod.openExactBuildGateForTesting();
+
+    const RCtx = struct {
+        store: *GraphStore,
+        graph: []const u8,
+        label: []const u8,
+        n: usize,
+        errs: *std.atomic.Value(u32),
+        fn run(ctx: *@This()) void {
+            var k: usize = 0;
+            while (k < 40) : (k += 1) {
+                const c = ctx.store.countNodesByLabel(ctx.graph, ctx.label, null);
+                if (c != ctx.n) _ = ctx.errs.fetchAdd(1, .monotonic);
+                if (ctx.store.getNodesByLabel(ctx.graph, ctx.label)) |nodes| {
+                    if (nodes.len != ctx.n) _ = ctx.errs.fetchAdd(1, .monotonic);
+                } else {
+                    _ = ctx.errs.fetchAdd(1, .monotonic);
+                }
+            }
+        }
+    };
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        // Reopen: `.absent` → background rebuild spawned (and immediately gated).
+        _ = try adapter.getOrCreateGraph(G);
+        try testing.expect(adapter_mod.getExactReopenSpawnsForTesting() >= 1);
+
+        var errs = std.atomic.Value(u32).init(0);
+        var ctx = RCtx{ .store = store, .graph = G, .label = LBL, .n = N, .errs = &errs };
+        var threads: [4]std.Thread = undefined;
+        for (&threads) |*t| t.* = try std.Thread.spawn(.{}, RCtx.run, .{&ctx});
+
+        // Concurrent FULL checkpoint while the build is in flight — exercises the
+        // inflight-gated exact-index branch in checkpointOneGraph (must NOT run a
+        // second rebuild and must NOT deadlock). Best-effort (a bounded checkpoint
+        // may report the rwlock busy against the concurrent hydration persist).
+        adapter.checkpointGraph(G) catch {};
+
+        for (&threads) |*t| t.join();
+
+        // Every reader returned the correct count while the build is STILL gated:
+        // the fold did NOT park them behind the O(graph) build.
+        try testing.expectEqual(@as(u32, 0), errs.load(.acquire));
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactHydrationBuildsForTesting());
+
+        // Release the gate → the background build completes + publishes the index.
+        adapter_mod.openExactBuildGateForTesting();
+        var waited: usize = 0;
+        while (adapter_mod.getExactHydrationBuildsForTesting() == 0 and waited < 30_000) : (waited += 1) {
+            sleepMs(1);
+        }
+        try testing.expect(adapter_mod.getExactHydrationBuildsForTesting() >= 1);
+
+        // Index-served WHERE-seek is correct after the background build.
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[2] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
 
         graph_store.deinitGlobalStore();
     }
