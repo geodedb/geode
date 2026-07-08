@@ -7953,7 +7953,7 @@ pub fn build(b: *std.Build) void {
     const hydration_stream_tests = b.addTest(.{ .root_module = hydration_stream_test_mod });
     const run_hydration_stream_tests = b.addRunArtifact(hydration_stream_tests);
     shardDep(test_step, &run_hydration_stream_tests.step, 1, test_shard_loads, test_shard_index);
-    const hydration_stream_step = b.step("test-hydration-stream-scan", "GAP hydration fast-scan: streaming loop2 parity + >=20x throughput floor");
+    const hydration_stream_step = b.step("test-hydration-stream-scan", "GAP hydration fast-scan: streaming loop2 parity (throughput floor is opt-in via GEODE_HYDRATION_PERF_FLOOR=1)");
     hydration_stream_step.dependOn(&run_hydration_stream_tests.step);
 
     // GAP (write-path OOM, 2026-07-04): engine-direct point writes (exact-index

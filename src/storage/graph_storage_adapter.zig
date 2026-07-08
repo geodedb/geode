@@ -10226,10 +10226,28 @@ fn findNodeMatchingMergeProps(
     if (graph_store.compositeKeyIndexForFilters(props)) |composite_idx| {
         var cid: u64 = 0;
         switch (store.lookupCompositeMergeCandidate(graph_name, label, composite_idx, props, &cid)) {
-            .found => return cid,
-            .not_found => return null,
+            // The composite merge index is a MAINTAINED, EXACT node-property
+            // index keyed on ALL merge props (see registerCompositeMergeKey /
+            // addNodeCompositeMergeEntries). An authoritative composite probe is
+            // therefore an exact node-property index SEEK — the indexed dedup
+            // fast path, NOT a label scan. Count it toward the same instrument
+            // the single-prop (getCandidateNodesByLabelAndProperty) and the
+            // exact-fallback (copySmallestMergePropCandidates) probes bump, so a
+            // caller (REQ-QUIC-HC-109) can assert the fast indexed path was taken
+            // (getExactNodePropertyLookupCount > 0) and no label scan happened
+            // (getLabelScanLookupCount == 0). Instrumentation only — the dedup
+            // result and durability are unchanged.
+            .found => {
+                _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+                return cid;
+            },
+            .not_found => {
+                _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+                return null;
+            },
             // Value type can't be encoded into the composite key — fall through
-            // to the exact-index candidate seek (guarded + eviction-safe below).
+            // to the exact-index candidate seek (guarded + eviction-safe below),
+            // which bumps the exact-lookup instrument itself.
             .not_indexable => {},
         }
     }
