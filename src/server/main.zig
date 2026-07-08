@@ -759,6 +759,11 @@ fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
     g_shutdown_requested.store(true, .release);
 }
 
+/// GAP-0065 FIX D liveness: set true once the durability flush
+/// (`graph_store.flushForCleanShutdown`) has returned, so the first-stage flush
+/// watchdog disarms instead of force-exiting a completed shutdown.
+var g_shutdown_flush_done = std.atomic.Value(bool).init(false);
+
 fn compat_sleepMs(ms: u64) void {
     if (comptime @import("builtin").os.tag == .linux) {
         var req = std.os.linux.timespec{
@@ -786,13 +791,16 @@ fn compat_sleepMs(ms: u64) void {
 /// handler wedged the whole LIFO defer unwind (observed live: >= 10 min at
 /// ~1.75 cores, listener still answering handshakes, until SIGKILL).
 ///
-/// The watchdog is armed AFTER the final data flush / WAL checkpoint has
-/// completed (that path stays UNBOUNDED — data safety), so by the time it can
-/// fire, everything durable is already on disk and WAL replay makes the next
-/// open clean. It then gives the remaining teardown (pool joins, store free,
-/// transport deinit) a bounded budget and force-exits rc=0 if the budget
-/// lapses — a stalled QUIC handler must never turn a graceful shutdown into
-/// a SIGKILL-only hang.
+/// This tight watchdog is armed AFTER the durability flush / WAL checkpoint has
+/// completed, so by the time it can fire, everything durable is already on disk
+/// and WAL replay makes the next open clean. It then gives the remaining
+/// teardown (pool joins, store free, transport deinit) a bounded budget and
+/// force-exits rc=0 if the budget lapses — a stalled QUIC handler must never
+/// turn a graceful shutdown into a SIGKILL-only hang. (GAP-0065 FIX D moved the
+/// FULL checkpoint before this arm point to guarantee the reload snapshots are
+/// written; its own — much more generous — first-stage watchdog,
+/// `shutdownFlushWatchdogMain`, bounds that checkpoint against a lock wedge so
+/// the shutdown can never hang forever.)
 fn shutdownTeardownWatchdogMain(budget_ms: u64) void {
     var remaining = budget_ms;
     while (remaining > 0) {
@@ -813,6 +821,56 @@ fn shutdownTeardownWatchdogMain(budget_ms: u64) void {
 fn armShutdownTeardownWatchdog(budget_ms: u64) void {
     const t = std.Thread.spawn(.{}, shutdownTeardownWatchdogMain, .{budget_ms}) catch |err| {
         log.warn("Failed to arm shutdown teardown watchdog; teardown is unbounded this run", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    t.detach();
+}
+
+/// GAP-0065 FIX D liveness: FIRST-STAGE shutdown watchdog, armed BEFORE the
+/// durability flush (`graph_store.flushForCleanShutdown`). The flush runs the
+/// FULL checkpoint (`checkpointAll` → `checkpointOneGraph`) whose `tryLock`
+/// retry on `mg.rwlock` has NO deadline — it spins unbounded if a genuinely
+/// wedged connection handler still holds the lock (`forceCloseConnections` only
+/// flips a flag; quic.zig relies on this watchdog for that case). Because FIX D
+/// runs that flush before the gap-0039 teardown watchdog is armed, a wedge would
+/// otherwise HANG THE PROCESS FOREVER (only external SIGKILL ends it). This
+/// watchdog force-exits rc=0 if the flush has not completed within a GENEROUS
+/// budget (default 30 min, `GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS`) — comfortably
+/// longer than a legitimate full 14.27M checkpoint + snapshot write, so a normal
+/// clean shutdown is NEVER prematurely killed; a genuine deadlock still
+/// terminates → the next reopen replays the WAL tail and rebuilds (no data
+/// loss, the pre-FIX-D safety net restored). It disarms the instant the flush
+/// completes (`g_shutdown_flush_done`) and emits a periodic heartbeat so a
+/// long-but-legitimate flush is visible instead of a silent hang.
+fn shutdownFlushWatchdogMain(budget_ms: u64) void {
+    const tick_ms: u64 = 30_000;
+    var elapsed: u64 = 0;
+    while (elapsed < budget_ms) {
+        const slice = @min(tick_ms, budget_ms - elapsed);
+        compat_sleepMs(slice);
+        elapsed += slice;
+        if (g_shutdown_flush_done.load(.acquire)) return; // flush completed → disarm
+        std.debug.print(
+            "[shutdown] durability flush still in progress ({d}s / {d}s budget, GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS) — large-graph checkpoint or a wedged lock holder\n",
+            .{ elapsed / 1000, budget_ms / 1000 },
+        );
+    }
+    if (g_shutdown_flush_done.load(.acquire)) return;
+    std.debug.print(
+        "[shutdown] durability flush exceeded {d}ms budget (GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS) — a graph-lock holder is wedged; force-exiting rc=0. The next reopen replays the WAL tail and rebuilds (no data loss).\n",
+        .{budget_ms},
+    );
+    std.process.exit(0);
+}
+
+/// Spawn the detached GAP-0065 first-stage flush watchdog. Best-effort: if the
+/// thread cannot be spawned we proceed with the (unbounded) flush rather than
+/// failing shutdown — matching `armShutdownTeardownWatchdog`.
+fn armShutdownFlushWatchdog(budget_ms: u64) void {
+    const t = std.Thread.spawn(.{}, shutdownFlushWatchdogMain, .{budget_ms}) catch |err| {
+        log.warn("Failed to arm shutdown flush watchdog; the durability flush is unbounded this run", &.{
             Attr.string("error", @errorName(err)),
         });
         return;
@@ -3212,12 +3270,32 @@ pub fn main() !void {
         // snapshots (and/or a committed WAL tail) → the next reopen re-scanned the
         // whole graph EVERY restart (~14–24 min). Do the FULL clean-shutdown
         // checkpoint (WAL truncate-to-frontier, no committed tail) + snapshot
-        // write HERE, UNBOUNDED, before the watchdog is armed. Connections are
+        // write HERE, before the tight teardown watchdog is armed. Connections are
         // already drained/force-closed above, so no writer can race it; the deinit
-        // defer then only frees memory under the watchdog. On the next reopen the
-        // (checkpoint_epoch, covered_lsn) gate RELOADS the snapshots (sub-second)
-        // instead of rejecting a tail and re-scanning.
+        // defer then only frees memory under the teardown watchdog. On the next
+        // reopen the (checkpoint_epoch, covered_lsn) gate RELOADS the snapshots
+        // (sub-second) instead of rejecting a tail and re-scanning.
+        //
+        // GAP-0065 FIX D liveness: the FULL checkpoint's `tryLock(mg.rwlock)` retry
+        // has NO deadline and spins forever if a genuinely-wedged handler holds the
+        // lock. Since this flush now runs before the teardown watchdog, arm a
+        // GENEROUS first-stage watchdog around it so a wedge still force-exits
+        // (→ rebuild-on-restart, no data loss) instead of hanging the process
+        // forever. The budget must comfortably exceed a legitimate full 14.27M
+        // checkpoint+snapshot write, so a normal clean shutdown is never killed.
+        const flush_budget_ms = envUsize(gpa, "GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS", 1_800_000, 5_000, 86_400_000);
+        g_shutdown_flush_done.store(false, .release);
+        armShutdownFlushWatchdog(flush_budget_ms);
+        // TEST/chaos hook (off by default; production never sets it): stall the
+        // durability-flush region to deterministically exercise the first-stage
+        // watchdog's force-exit path (simulates a wedged mg.rwlock holder).
+        const flush_stall_ms = envUsize(gpa, "GEODE_TEST_SHUTDOWN_FLUSH_STALL_MS", 0, 0, 86_400_000);
+        if (flush_stall_ms > 0) {
+            std.debug.print("[shutdown] TEST: stalling durability flush {d}ms (GEODE_TEST_SHUTDOWN_FLUSH_STALL_MS) to exercise the liveness watchdog\n", .{flush_stall_ms});
+            compat_sleepMs(flush_stall_ms);
+        }
         graph_store.flushForCleanShutdown();
+        g_shutdown_flush_done.store(true, .release); // disarm the first-stage watchdog
         persistence_flushed_eagerly = true;
         std.debug.print("[shutdown] data flush complete\n", .{});
 
