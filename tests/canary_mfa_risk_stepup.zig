@@ -30,7 +30,7 @@ test "RFC6238_TOTP_SHA1_vector_T59_6digit" {
     // secret in base32; timestamp_ms=59000 → timestep=floor(59000/30000)=1
     var ctx = risk.StepUpContext{
         .allocator = alloc,
-        .secret_base32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+        .secret_base32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", // gitleaks:allow — RFC 6238 Appendix B test vector (synthetic "12345678901234567890" seed)
         .timestamp_ms = 59000,
         .step_seconds = 30,
         .digits = 6,
@@ -46,7 +46,7 @@ test "RFC6238_TOTP_SHA1_vector_T59_8digit" {
     // 8-digit variant of the same vector: 94287082
     var ctx = risk.StepUpContext{
         .allocator = alloc,
-        .secret_base32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+        .secret_base32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", // gitleaks:allow — RFC 6238 Appendix B test vector (synthetic "12345678901234567890" seed)
         .timestamp_ms = 59000,
         .step_seconds = 30,
         .digits = 8,
